@@ -8,9 +8,9 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from PIL import Image, ImageDraw
-from unittest.mock import Mock, patch
 
 from scripts.ci.visual_regression import (
     VisualCaptureFailure, assert_split_pdf_ownership, collect,
@@ -100,7 +100,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         with (
             patch("scripts.ci.visual_regression.AppServer") as server_type,
             patch("scripts.ci.visual_regression.require_chromium") as browsers,
-            patch("scripts.ci.visual_regression.PageCollector"),
+            patch("scripts.ci.visual_regression.PageCollector") as collector_type,
             patch("scripts.ci.visual_regression.capture", return_value={
                 "width": 1400, "height": 900, "rgb48x30_zlib": "",
             }),
@@ -119,12 +119,17 @@ class LocalVisualBaselineTests(unittest.TestCase):
                 "mainTabId": "main-tab",
                 "secondaryTree": {"tabId": "secondary-tab"},
             }
+            # unittest.mock rejects attributes starting with "assert_" unless
+            # explicitly configured. This fixture must model a *clean* real
+            # PageCollector or it masks the cleanup error we're verifying.
+            collector_type.return_value.assert_clean = Mock()
             ctx.close.side_effect = ValueError("private-context-info")
             with self.assertRaises(VisualCaptureFailure) as caught:
                 collect(Path(td))
             self.assertEqual(caught.exception.stage, "close_context")
             self.assertEqual(caught.exception.cause_type, "ValueError")
             self.assertNotIn("private", str(caught.exception))
+            collector_type.return_value.assert_clean.assert_called_once_with()
             browser.close.assert_called_once()
             browser_api.stop.assert_called_once()
             server.stop.assert_called_once()
