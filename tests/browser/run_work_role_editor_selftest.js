@@ -129,10 +129,13 @@ async function roleModalCatalogsLoadConcurrently() {
         replace('personDisplayName', p => p.first_name + ' ' + p.last_name);
         if (!global.location) global.location = {};
         global.location.hash = '#/works/work-a';
-        const pending = actualPrepareRoleModal();
+        let settled = false;
+        const pending = actualPrepareRoleModal().then(() => { settled = true; });
         assert('role modal starts both independent catalog reads before awaiting',
             starts.join(',') === 'people,works', starts.join(','));
         peopleRelease({ value: [{ id: 'person-1', first_name: 'Ada', last_name: 'Offline' }] });
+        await Promise.resolve();
+        assert('role modal does not settle before the Work catalog is ready', !settled);
         worksRelease({ value: [{ id: 'work-a', title: 'Work A' }] });
         await pending;
         assert('role modal selects the current Work from the projected catalog',
@@ -141,6 +144,47 @@ async function roleModalCatalogsLoadConcurrently() {
         assert('role modal keeps the effective People catalog',
             Array.isArray(global.allPersons) && global.allPersons.length === 1 &&
             global.allPersons[0].id === 'person-1');
+
+        // The initial network/cache projections may be unavailable. Keep the
+        // ordinary fallback functions and the focused Work as an independent
+        // preselection source; concurrency must not drop either.
+        let fallbackPeople = 0;
+        let fallbackWorks = 0;
+        global.prksOfflinePeopleFetch = async () => ({ source: 'unavailable', value: null });
+        global.prksOfflineWorksBrowseFetch = async () => ({ source: 'unavailable', value: null });
+        global.fetchPersons = async () => {
+            fallbackPeople += 1;
+            return [{ id: 'person-1', first_name: 'Ada', last_name: 'Offline' }];
+        };
+        global.fetchWorks = async () => {
+            fallbackWorks += 1;
+            return [{ id: 'work-b', title: 'Other Work' }];
+        };
+        await actualPrepareRoleModal();
+        assert('role modal preserves both unavailable-catalog fallbacks',
+            fallbackPeople === 1 && fallbackWorks === 1,
+            'people=' + fallbackPeople + ' works=' + fallbackWorks);
+        assert('role modal falls back to its focused Work when catalog lacks it',
+            document.getElementById('role-work-id').value === 'work-a' &&
+            document.getElementById('role-work-search').value === 'Focused Work');
+
+        // A Person route should preselect that Person even without a focused
+        // Work, while never guessing a Work association for the new link.
+        global.prksOfflinePeopleFetch = async () => ({
+            value: [{ id: 'person-1', first_name: 'Ada', last_name: 'Offline' }],
+        });
+        global.prksOfflineWorksBrowseFetch = async () => ({ value: [] });
+        global.prksParseRoute = () => ({ name: 'person', params: { personId: 'person-1' } });
+        global.prksFocusedEntity = () => null;
+        global.location.hash = '#/people/person-1';
+        await actualPrepareRoleModal();
+        assert('role modal retains Person-route preselection',
+            document.getElementById('role-person-id').value === 'person-1' &&
+            document.getElementById('role-person-search').value === 'Ada Offline');
+        assert('role modal does not invent a selected Work on the Person route',
+            document.getElementById('role-work-id').value === '');
+        assert('valid projected catalogs do not fall back to network fetches',
+            fallbackPeople === 1 && fallbackWorks === 1);
     } finally {
         for (const [key, value] of Object.entries(originals)) global[key] = value;
         if (global.location) global.location.hash = previousHash || '#/folders';
