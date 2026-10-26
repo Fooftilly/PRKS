@@ -24,16 +24,16 @@ Conservative list of the installed lockfile production graph (which includes som
 | `@tanstack/query-core` | `5.104.3` | `MIT` |
 | `@tanstack/vue-query` | `5.104.3` | `MIT` |
 | `@types/web-bluetooth` | `0.0.21` | `MIT` |
-| `@vue/compiler-core` | `3.5.43` | `MIT` |
-| `@vue/compiler-dom` | `3.5.43` | `MIT` |
-| `@vue/compiler-sfc` | `3.5.43` | `MIT` |
-| `@vue/compiler-ssr` | `3.5.43` | `MIT` |
+| `@vue/compiler-core` | `3.5.44` | `MIT` |
+| `@vue/compiler-dom` | `3.5.44` | `MIT` |
+| `@vue/compiler-sfc` | `3.5.44` | `MIT` |
+| `@vue/compiler-ssr` | `3.5.44` | `MIT` |
 | `@vue/devtools-api` | `6.6.4` | `MIT` |
-| `@vue/reactivity` | `3.5.43` | `MIT` |
-| `@vue/runtime-core` | `3.5.43` | `MIT` |
-| `@vue/runtime-dom` | `3.5.43` | `MIT` |
-| `@vue/server-renderer` | `3.5.43` | `MIT` |
-| `@vue/shared` | `3.5.43` | `MIT` |
+| `@vue/reactivity` | `3.5.44` | `MIT` |
+| `@vue/runtime-core` | `3.5.44` | `MIT` |
+| `@vue/runtime-dom` | `3.5.44` | `MIT` |
+| `@vue/server-renderer` | `3.5.44` | `MIT` |
+| `@vue/shared` | `3.5.44` | `MIT` |
 | `@vueuse/core` | `13.9.0` | `MIT` |
 | `@vueuse/metadata` | `13.9.0` | `MIT` |
 | `@vueuse/shared` | `13.9.0` | `MIT` |
@@ -49,7 +49,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `remove-accents` | `0.5.0` | `MIT` |
 | `source-map-js` | `1.2.2` | `BSD-3-Clause` |
 | `typescript` | `5.9.2` | `Apache-2.0` |
-| `vue` | `3.5.43` | `MIT` |
+| `vue` | `3.5.44` | `MIT` |
 | `vue-demi` | `0.14.10` | `MIT` |
 <!-- END GENERATED PRODUCTION DEPENDENCY INVENTORY -->
 ## Original license and copyright notices of primary bundled runtime libraries

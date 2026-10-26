@@ -172,11 +172,11 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "76311ffe71f73f183ec7117ce43bad2f63276f35b7756768f314c229d7e41dbe"
+          "sha256": "a3a3472f346eea68f9c208ab5047924cfc64936c5fd02db2757df28c01d835bf"
         }
       ],
       "source_category": "npm:frontend-app",
-      "version": "3.5.43"
+      "version": "3.5.44"
     },
     {
       "name": "prks-work-route-projection",
