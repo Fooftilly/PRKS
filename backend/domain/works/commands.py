@@ -160,12 +160,13 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
     if new.asset is not None:
         _insert_asset(scope, ids, new.asset)
     if new.research_note:
-        # As every Research Note writer does (``notes``): a Concept or
-        # Argument delete overlapping this create then sees the note's
-        # references.
+        # As every Research Note writer does (``notes``): the Concepts it
+        # names are created when missing, and a Concept or Argument delete
+        # overlapping this create then sees the note's references. (SQLite's
+        # ``add_work`` stores the note without creating them.)
         from backend.domain.research import arguments, concepts, reindex
 
-        concepts.share_referenced(scope, new.research_note)
+        concepts.ensure_referenced(scope, new.research_note)
         arguments.share_referenced(scope, new.research_note)
         reindex.enqueue(scope, new.work_id)
     for kind, body in (("research", new.research_note), ("private", new.private_note)):

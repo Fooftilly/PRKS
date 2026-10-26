@@ -178,6 +178,10 @@ class MentionTests(ResearchIndexTestCase):
         self.run_jobs()
         self.assertEqual(self.mentions(work), {"concepts": [], "arguments": [], "state": reindex.content_hash("")})
         self.assertEqual(self.refs(work), {"concepts": [], "arguments": [], "pending": False})
+        # A Work created with a note naming an unknown Concept creates it, as a note write does.
+        novel = self.library.add_work("Novel", text_content="[[concept:Novel topic]]")
+        self.run_jobs()
+        self.assertEqual(self.mentions(novel)["concepts"], [(self.concept_ids()["Novel topic"], 0, 23)])
         # A Work never given a note has nothing to wait for.
         self.assertEqual(self.refs(self.library.add_work("Plain"))["pending"], False)
         self.assertIsNone(self.refs("W-" + "0" * 32))
