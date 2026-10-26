@@ -214,6 +214,13 @@ _RESEARCH_NOTES_SQL: LiteralString = """
 SELECT body FROM prks.work_notes
 WHERE library_id = %(library_id)s AND kind = 'research' AND strpos(body, '[[concept:') > 0
 """
+_SHARE_REFERENCED_SQL: LiteralString = """
+SELECT c.id FROM prks.concepts c
+WHERE c.library_id = %(library_id)s AND c.id IN (
+  SELECT k.concept_id FROM prks.concept_keys k
+  WHERE k.library_id = %(library_id)s AND k.key IN (SELECT prks.identity_key(n) FROM unnest(%(names)s::text[]) AS n))
+ORDER BY c.id COLLATE "C" FOR KEY SHARE
+"""
 _REFERENCED_SQL: LiteralString = """
 SELECT 1 AS found FROM prks.concept_keys
 WHERE library_id = %(library_id)s AND concept_id = %(concept_id)s
@@ -352,25 +359,22 @@ def insert(scope: LibraryScope, concept_id: str, name: Any, description: Any = "
     clean = network._concept_name(name)
     text = network._optional_markdown(description, max_len=network.CONCEPT_DEFINITION_MAX)
     values = {"concept_id": concept_id, "name": clean, "description": text}
-    # Twice: the winner of a same-id race can be deleted between its COMMIT
-    # and this hold, and then the id is free again.
+    # The id is decided before the name: an id of another Library is refused
+    # as such (unledgered), never answered with this Library's name. Twice:
+    # the winner of a same-id race can be deleted between its COMMIT and
+    # this hold, and then the id is free again.
     for _ in range(2):
-        if resolve(scope, clean) is not None:
-            # A same-id create that committed since this command looked is
-            # converged on, whatever this payload asked for.
-            if share(scope, [concept_id]):
-                return False
-            raise _refuse(_EXISTS)
         if scope.execute(_INSERT_SQL, values).fetchone() is None:
             if share(scope, [concept_id]):
                 return False
             continue
         if scope.execute(_INSERT_NAME_KEY_SQL, {"concept_id": concept_id}).fetchone() is not None:
             return True
-        # A concurrent writer committed the key first: give the Concept up.
+        # Another Concept holds the key (a concurrent writer may have committed
+        # it while this insert waited): give the Concept up.
         scope.execute(_DELETE_SQL, {"concept_id": concept_id})
         raise _refuse(_EXISTS)
-    # Neither this Library's id nor its name: the id is another Library's.
+    # The id is taken, but not by this Library.
     raise ForeignConceptId(concept_id)
 
 
@@ -596,6 +600,23 @@ def apply_parents_operation(scope: LibraryScope, concept_id: str, desired: list[
 # -- delete -----------------------------------------------------------------------
 
 
+def _reference_names(text: str) -> list[str]:
+    return sorted({ref.name for ref in parse_research_markup(text).concept_refs})
+
+
+def share_referenced(scope: LibraryScope, text: str) -> None:
+    """Hold the Concepts a Research Note's markup names ``FOR KEY SHARE`` until COMMIT.
+
+    Every writer of a Research Note calls it before the note is stored, so a
+    Concept delete (``FOR UPDATE``) that overlaps the write waits for it and
+    then finds the reference, or the write waits for the delete and the name
+    resolves to nothing. The notes slice resolves (and creates) them.
+    """
+    names = _reference_names(text)
+    if names:
+        scope.execute(_SHARE_REFERENCED_SQL, {"names": names}).fetchall()
+
+
 def _referenced_by_notes(scope: LibraryScope, concept_id: str) -> bool:
     """``_canonical_notes_reference_concept``: a Research Note names it by name or alias.
 
@@ -604,7 +625,7 @@ def _referenced_by_notes(scope: LibraryScope, concept_id: str) -> bool:
     """
     names: set[str] = set()
     for note in scope.execute(_RESEARCH_NOTES_SQL):
-        names.update(ref.name for ref in parse_research_markup(str(note["body"])).concept_refs)
+        names.update(_reference_names(str(note["body"])))
     if not names:
         return False
     return scope.execute(_REFERENCED_SQL, {"concept_id": concept_id,

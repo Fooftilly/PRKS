@@ -19,9 +19,12 @@ commands that share rows queue instead of deadlocking:
    a delete of one waits for the command or the command finds it gone;
 4. revision scopes, sorted (``backend.domain.works.revisions.lock_many``).
 
-No Concept command locks a Work, a Tag or a Folder. The notes slice will
-hold the Concepts a note names ``FOR KEY SHARE`` after its Work row, which
-composes with this order because no Concept command waits on a Work.
+No Concept command locks a Work, a Tag or a Folder. A Research Note
+write holds the Concepts its markup names ``FOR KEY SHARE`` after its Work
+row and note scope (``concepts.share_referenced``), which composes with
+this order because no Concept command waits on a Work or a note scope; a
+delete's ``FOR UPDATE`` therefore never misses a note committed alongside
+it (``CONCEPT_IN_USE``).
 """
 
 from backend.db import register_constraint

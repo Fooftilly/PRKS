@@ -80,6 +80,13 @@ class CreateTests(ConceptSyncTestCase):
             self.send(self.create("Mine", theirs))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
         self.assertEqual((len(self.ledger()), self.library.list_concepts()), (before, []))
+        # The id is decided before the name: a name this Library holds does
+        # not turn the foreign id into a ledgered CONCEPT_EXISTS.
+        self.create_concept("Taken")
+        before = len(self.ledger())
+        with self.assertRaises(AccessRefused):
+            self.send(self.create("TAKEN", theirs))
+        self.assertEqual(len(self.ledger()), before)
 
     def test_nul_and_malformed_payloads_are_invalid_envelopes(self) -> None:
         for data in (self.create("a\x00b"), self.create("x" * 161), self.create("  "),

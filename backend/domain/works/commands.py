@@ -159,6 +159,12 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
     })
     if new.asset is not None:
         _insert_asset(scope, ids, new.asset)
+    if new.research_note:
+        # As every Research Note writer does (``notes``): a Concept delete
+        # overlapping this create then sees the note's references.
+        from backend.domain.research import concepts
+
+        concepts.share_referenced(scope, new.research_note)
     for kind, body in (("research", new.research_note), ("private", new.private_note)):
         if body:
             scope.execute(_INSERT_NOTE, {"work_id": new.work_id, "kind": kind, "body": body})

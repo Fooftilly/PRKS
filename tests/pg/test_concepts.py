@@ -305,3 +305,27 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertIsNone(contender)
         self.assertEqual(self.revisions("concept-identity"), {ethics: 2})
         self.assert_integrity()
+
+    def test_a_delete_racing_a_research_note_that_names_it(self) -> None:
+        ethics = self.concept("Ethics")
+        work = self.library.add_work("W")
+        holder, contender = self.race(
+            lambda scope: notes.set_note(scope, work, notes.RESEARCH, "On [[concept:ETHICS]]."),
+            lambda: self.library.delete_concept(ethics))
+        self.assertEqual(holder, (True, 1))
+        self.assertIsInstance(contender, ResearchError)
+        self.assertEqual(contender.code, "concept_in_use")
+        self.assertEqual(self.library.get_concept(ethics)["name"], "Ethics")
+
+    def test_a_research_note_racing_a_delete_of_a_concept_it_names(self) -> None:
+        ethics = self.concept("Ethics")
+        work = self.library.add_work("W")
+        holder, contender = self.race(
+            lambda scope: concepts.remove(scope, ethics),
+            lambda: self.run_command(lambda scope: notes.set_note(scope, work, notes.RESEARCH,
+                                                                  "On [[concept:Ethics]].")))
+        self.assertIsNone(holder)
+        # The note waited for the delete, then was stored; the notes slice
+        # resolves (and creates) the names it holds.
+        self.assertEqual(contender, (True, 1))
+        self.assertIsNone(self.library.get_concept(ethics))
