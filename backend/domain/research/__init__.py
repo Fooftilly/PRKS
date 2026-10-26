@@ -15,9 +15,14 @@ commands that share rows queue instead of deadlocking:
    a parent edge (a parent change, a delete);
 2. the Concept row the command changes: ``FOR UPDATE`` for a delete,
    ``FOR NO KEY UPDATE`` otherwise;
-3. the other Concepts it names (new parents), by id, ``FOR KEY SHARE``, so
+3. the Library's Concept key lock, for an identity write (a rename, an
+   alias set), so two writers never take each other's keys in opposite
+   orders;
+4. the other Concepts it names (new parents), by id, ``FOR KEY SHARE``, so
    a delete of one waits for the command or the command finds it gone;
-4. revision scopes, sorted (``backend.domain.works.revisions.lock_many``).
+5. revision scopes, sorted (``backend.domain.works.revisions.lock_many``).
+
+A create writes one key and holds no other, so it takes no key lock.
 
 No Concept command locks a Work, a Tag or a Folder. A Research Note
 write holds the Concepts its markup names ``FOR KEY SHARE`` after its Work

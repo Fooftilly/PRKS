@@ -68,6 +68,12 @@ _CYCLE = ("concept_cycle", "That parent would create a Concept hierarchy cycle."
 _HIERARCHY_LOCK_SQL: LiteralString = (
     "SELECT pg_advisory_xact_lock(hashtextextended('prks.concept_parents:' || %(library_id)s, 0))"
 )
+# Identity writes take every key they write under this lock: a rename and an
+# alias set write several keys, and two writers taking each other's keys in
+# opposite orders would otherwise deadlock on the key index.
+_KEYS_LOCK_SQL: LiteralString = (
+    "SELECT pg_advisory_xact_lock(hashtextextended('prks.concept_keys:' || %(library_id)s, 0))"
+)
 # SQLite's LOWER() folds ASCII letters only; an ASCII-only translate() under
 # COLLATE "C" is the same order.
 _NAME_ORDER: LiteralString = (
@@ -248,6 +254,11 @@ def _usable(concept_id: str) -> bool:
 def lock_hierarchy(scope: LibraryScope) -> None:
     """Serialize this Library's parent-edge changes until the transaction ends."""
     scope.execute(_HIERARCHY_LOCK_SQL)
+
+
+def lock_keys(scope: LibraryScope) -> None:
+    """Hold the Library's Concept key lock until COMMIT (identity writes)."""
+    scope.execute(_KEYS_LOCK_SQL)
 
 
 def lock(scope: LibraryScope, concept_id: str, *, key: bool = False) -> Optional[str]:
@@ -470,6 +481,9 @@ def set_identity(scope: LibraryScope, concept_id: str, name: Any, aliases: Seque
         raise _refuse(_NOT_FOUND)
     new_name = network._concept_name(name)
     cleaned = [network._concept_name(raw) for raw in aliases]
+    # Before the owners are read: the check and the writes are one step for
+    # every other identity write of this Library.
+    lock_keys(scope)
     keys = _keys(scope, [new_name, old_name, *cleaned])
     new_key, old_key = keys[0], keys[1]
     wanted: list[tuple[str, str]] = []

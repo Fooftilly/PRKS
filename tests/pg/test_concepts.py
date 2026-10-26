@@ -252,6 +252,26 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(self.library.get_concept(second)["name"], "Second")
         self.assert_integrity()
 
+    def test_identity_writes_of_one_library_queue_on_its_key_lock(self) -> None:
+        ethics, morals = self.concept("Ethics"), self.concept("Morals")
+        holder, contender = self.race(lambda scope: concepts.replace_aliases(scope, ethics, ["Virtue"]),
+                                      lambda: self.library.replace_concept_aliases(morals, ["Duty"]))
+        self.assertEqual(holder["aliases"], ["Virtue"])
+        self.assertEqual(contender["aliases"], ["Duty"])
+        self.assert_integrity()
+
+    def test_two_identity_writes_taking_each_others_keys(self) -> None:
+        # Without the key lock each writer would hold one key the other wants.
+        a, b = self.concept("Alpha"), self.concept("Beta")
+        holder, contender = self.race(
+            lambda scope: concepts.set_identity(scope, a, "Duty", ["Virtue"]),
+            lambda: self.run_command(lambda scope: concepts.set_identity(scope, b, "Virtue", ["Duty"])))
+        self.assertEqual(holder, (True, 1))
+        self.assertIsInstance(contender, ResearchError)
+        self.assertEqual(contender.code, "concept_exists")
+        self.assertEqual(self.library.get_concept(b)["name"], "Beta")
+        self.assert_integrity()
+
     def test_an_alias_racing_a_create_of_the_same_name(self) -> None:
         ethics = self.concept("Ethics")
         holder, contender = self.race(lambda scope: concepts.replace_aliases(scope, ethics, ["Morals"]),
