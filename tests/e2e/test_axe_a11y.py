@@ -79,6 +79,18 @@ class AxeAccessibilityPilotTests(unittest.TestCase):
         page.keyboard.press("Enter")
         page.locator("#settings-modal:not(.hidden)").wait_for(state="visible")
         surfaces.append(scan(page, "#settings-modal:not(.hidden)", "settings-dialog"))
+        # openModal can leave focus on the Settings opener. Ensure the test
+        # actually exercises a return *from inside the dialog*, rather than
+        # succeeding even if the close handler never restores focus.
+        page.locator("#prks-settings-tab-general").focus()
+        self.assertTrue(
+            page.evaluate(
+                "() => !!document.activeElement && "
+                "document.activeElement.id === 'prks-settings-tab-general' && "
+                "!!document.activeElement.closest('#settings-modal:not(.hidden)')"
+            ),
+            "Settings keyboard check must begin with focus inside the open dialog",
+        )
         report_path = os.environ.get("PRKS_AXE_REPORT_PATH")
         if report_path:
             write_report(surfaces, Path(report_path))
