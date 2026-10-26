@@ -117,6 +117,11 @@ class OfflinePersonCreateTests(unittest.TestCase):
             result.click()
         with profile_e2e_phase("person_create_link_save"):
             page.locator('#save-role-btn').click()
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.some("
+                "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))",
+                message='the link was never recorded durably')
 
     # ---- the slice ----------------------------------------------------------
 
@@ -149,11 +154,6 @@ class OfflinePersonCreateTests(unittest.TestCase):
 
         with profile_e2e_phase("person_create_role_link"):
             self.link_as_author(page, WORK_A_TITLE, 'Ada Offline')
-            wait_for_async(
-                page,
-                "() => prksSync.store.listOperations().then(rows => rows.some("
-                "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))",
-                message='the link was never recorded durably')
 
         with profile_e2e_phase("person_create_dependency_check"):
             rows = {op: (entity, status, deps) for op, entity, status, deps in self.operations(page)}
