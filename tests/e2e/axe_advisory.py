@@ -120,6 +120,35 @@ def sanitized_report(label: str, raw: dict) -> dict:
     }
 
 
+def verify_missing_button_name_canary(page) -> None:
+    """Prove injected axe actually finds a fixture-only accessibility defect.
+
+    An intentionally nameless button exists only for this short check. It is
+    removed in JavaScript's finally branch before the actual PRKS scan, so
+    it cannot become a real app violation or contaminate the report.
+    """
+    detected = page.evaluate(
+        """async () => {
+            if (!window.axe || typeof window.axe.run !== 'function') return false;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.setAttribute('data-prks-axe-test-canary', '1');
+            document.body.appendChild(button);
+            try {
+                const result = await window.axe.run(button, {
+                    runOnly: { type: 'rule', values: ['button-name'] }
+                });
+                return result.violations.some(rule =>
+                    rule.id === 'button-name' && rule.nodes.length > 0);
+            } finally {
+                button.remove();
+            }
+        }"""
+    )
+    if detected is not True:
+        raise AssertionError("axe-core failed synthetic missing-button-name canary")
+
+
 def scan(page, selector: str, label: str) -> dict:
     """Perform an actual axe-core scan on an app DOM subtree."""
     if not AXE_JS.is_file():
@@ -128,6 +157,8 @@ def scan(page, selector: str, label: str) -> dict:
         )
     if not page.evaluate("() => !!(window.axe && window.axe.run)"):
         page.add_script_tag(path=str(AXE_JS))
+    if label == "shell":
+        verify_missing_button_name_canary(page)
     return sanitized_report(label, page.evaluate(AXE_QUERY, selector))
 
 
