@@ -3494,6 +3494,61 @@ class PRKSDatabase:
         from backend import research_network
         research_network.delete_concept(self, concept_id)
 
+    # Positions, Arguments and Stances, likewise (L-R-1 PR 3).
+
+    def list_positions(self) -> List[dict]:
+        from backend import research_network
+        return research_network.list_positions(self)
+
+    def get_position(self, position_id: str) -> Optional[dict]:
+        from backend import research_network
+        return research_network.get_position(self, position_id)
+
+    def create_position(self, name, description: str = "") -> dict:
+        from backend import research_network
+        return research_network.create_position(self, name, description)
+
+    def update_position(self, position_id: str, *, name=None, description=None) -> dict:
+        from backend import research_network
+        return research_network.update_position(self, position_id, name=name, description=description)
+
+    def delete_position(self, position_id: str) -> None:
+        from backend import research_network
+        research_network.delete_position(self, position_id)
+
+    def list_verdicts(self) -> List[dict]:
+        from backend import research_network
+        return research_network.list_verdicts(self)
+
+    def list_arguments(self, kind: Optional[str] = None) -> List[dict]:
+        from backend import research_network
+        return research_network.list_arguments(self, kind=kind)
+
+    def get_argument(self, argument_id: str) -> Optional[dict]:
+        from backend import research_network
+        return research_network.get_argument(self, argument_id)
+
+    def create_argument(self, *, name, kind, main_text: str = "", sources=None, targets=None) -> dict:
+        from backend import research_network
+        return research_network.create_argument(self, name=name, kind=kind, main_text=main_text,
+                                                sources=sources, targets=targets)
+
+    def update_argument(self, argument_id: str, *, name=None, kind=None, main_text=None) -> dict:
+        from backend import research_network
+        return research_network.update_argument(self, argument_id, name=name, kind=kind, main_text=main_text)
+
+    def replace_argument_sources(self, argument_id: str, sources) -> dict:
+        from backend import research_network
+        return research_network.replace_argument_sources(self, argument_id, sources)
+
+    def replace_argument_targets(self, argument_id: str, targets) -> dict:
+        from backend import research_network
+        return research_network.replace_argument_targets(self, argument_id, targets)
+
+    def delete_argument(self, argument_id: str) -> None:
+        from backend import research_network
+        research_network.delete_argument(self, argument_id)
+
     def get_playlist_sync_state(self, playlist_id: str) -> Optional[dict]:
         """Field revisions and the order revision for one Playlist."""
         with self.connection() as conn:
