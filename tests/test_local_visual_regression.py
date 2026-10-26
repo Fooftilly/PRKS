@@ -10,6 +10,9 @@ import zlib
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+from unittest.mock import Mock
+
+from scripts.ci.visual_regression import assert_split_pdf_ownership
 
 from tests.visual.compare import (
     FORMAT,
@@ -33,6 +36,31 @@ def png_sample(*, invert: bool = False) -> bytes:
 
 
 class LocalVisualBaselineTests(unittest.TestCase):
+    def test_split_capture_requires_distinct_work_and_pdf_ownership(self):
+        page = Mock()
+        assert_split_pdf_ownership(
+            page, main_tab="main-tab", secondary_tab="secondary-tab",
+            main_work="work-a", secondary_work="work-b",
+        )
+        page.wait_for_function.assert_called_once()
+        args, kwargs = page.wait_for_function.call_args
+        predicate = args[0]
+        self.assertIn("mainTab === secondaryTab", predicate)
+        self.assertIn("String(mainWork) === String(secondaryWork)", predicate)
+        self.assertIn("a.getEntity('work')", predicate)
+        self.assertIn("b.getEntity('work')", predicate)
+        self.assertIn("String(wa.id) === String(mainWork)", predicate)
+        self.assertIn("String(wb.id) === String(secondaryWork)", predicate)
+        self.assertIn("a.getResource('pdf')", predicate)
+        self.assertIn("b.getResource('pdf')", predicate)
+        self.assertIn("String(pa.workId) === String(mainWork)", predicate)
+        self.assertIn("String(pb.workId) === String(secondaryWork)", predicate)
+        self.assertEqual(kwargs["arg"], {
+            "mainTab": "main-tab", "secondaryTab": "secondary-tab",
+            "mainWork": "work-a", "secondaryWork": "work-b",
+        })
+        self.assertEqual(kwargs["timeout"], 30000)
+
     def test_equal_pixels_pass_and_major_layout_deviation_fails(self):
         original = fingerprint(png_sample())
         self.assertTrue(compare(original, original)["passed"])
