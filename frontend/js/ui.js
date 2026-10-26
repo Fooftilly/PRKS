@@ -1901,14 +1901,20 @@ async function prepareRoleModal() {
      * impossible to perform precisely when it matters. Creating a NEW Person
      * is also durable (`CREATE_PERSON`) from this modal.
      */
-    const people = typeof prksOfflinePeopleFetch === 'function'
-        ? await prksOfflinePeopleFetch() : null;
+    /* The People and Work catalogs are independent projections. Initiate
+     * both reads together rather than serializing their offline transport
+     * fallback waits. Resolve the same validated/overlaid results and retain
+     * each catalog's existing fallback and selected-entity semantics. */
+    const [people, works] = await Promise.all([
+        typeof prksOfflinePeopleFetch === 'function'
+            ? prksOfflinePeopleFetch() : null,
+        typeof prksOfflineWorksBrowseFetch === 'function'
+            ? prksOfflineWorksBrowseFetch() : null,
+    ]);
     allPersons = people && Array.isArray(people.value) ? people.value : await fetchPersons();
     /* The same for files: `fetchWorks()` returns an empty list offline, which
      * left the modal unable to name the Work the user opened it from. The
      * browse catalog carries id and title, which is all this picker reads. */
-    const works = typeof prksOfflineWorksBrowseFetch === 'function'
-        ? await prksOfflineWorksBrowseFetch() : null;
     allWorks = works && Array.isArray(works.value) ? works.value : await fetchWorks();
     window.allPersons = allPersons;
 
