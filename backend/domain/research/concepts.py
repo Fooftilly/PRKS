@@ -639,8 +639,9 @@ def ensure_referenced(scope: LibraryScope, text: str) -> None:
     transaction, so a Concept auto-created for a note that then fails to
     save is rolled back with it. Each missing identity key gets one Concept
     named by the reference that first spells it, as SQLite does, created in
-    key order so two notes creating the same names never wait on each other
-    in opposite orders; a key a concurrent writer committed first is that
+    key order under the Library's Concept key lock (:func:`lock_keys`), so
+    neither another note nor an identity write ever waits on these keys in
+    the opposite order; a key a concurrent writer committed first is that
     writer's Concept. Then every named Concept is held as
     :func:`share_referenced` holds it. No revision is advanced
     (``insert_concept_on_conn``).
@@ -653,7 +654,13 @@ def ensure_referenced(scope: LibraryScope, text: str) -> None:
     for name, key in zip(names, _keys(scope, names) if names else []):
         first.setdefault(key, name)
     owners = _owners(scope, list(first)) if first else {}
-    for key in sorted(key for key in first if key not in owners):
+    missing = sorted(key for key in first if key not in owners)
+    if missing:
+        # Several keys are written: under the key lock, as an identity write
+        # takes its keys, or a rename taking two of them in the other order
+        # would deadlock with this note on the key index.
+        lock_keys(scope)
+    for key in missing:
         try:
             insert(scope, generate_id("C"), first[key])
         except ResearchError as exc:

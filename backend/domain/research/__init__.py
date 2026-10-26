@@ -38,8 +38,8 @@ Argument before it exists.
 
 No Research command locks a Tag or a Folder. A Research Note write, after
 its Work row and note scope, creates the Concepts its markup names that do
-not exist yet (in key order, holding no key lock, as a Concept create does)
-and holds them and the Arguments it names ``FOR KEY SHARE``
+not exist yet (under the Concept key lock, in key order, since it may write
+several keys) and holds them and the Arguments it names ``FOR KEY SHARE``
 (``concepts.ensure_referenced``, ``arguments.share_referenced``), which
 composes with this order because no Research command waits on a note scope,
 and the only Work it waits on is a cited one, before any Research row; a

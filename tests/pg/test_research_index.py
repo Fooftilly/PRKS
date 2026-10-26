@@ -12,6 +12,7 @@ Research-ACK fence and Library isolation.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -19,7 +20,8 @@ from typing import Any
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
-from backend.domain.research import reindex
+from backend.domain.research import concepts, reindex
+from backend.research_network import ResearchError
 from backend.domain.works import commands, notes
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
@@ -296,6 +298,44 @@ class ConcurrencyTests(ResearchIndexTestCase):
         self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])  # the delete's job
         self.assertIs(run_job(self.db, stale, lease=LEASE), Outcome.SUCCEEDED)
         self.assertEqual(self.derived_rows(work), 0)
+
+    def test_a_note_creating_several_concepts_and_a_rename_take_the_key_lock_first(self) -> None:
+        # The note writes keys "a" and "z"; a rename to "Z" with alias "A" wants
+        # both. Taking them in opposite orders on the key index would deadlock,
+        # so the rename waits on the Library's key lock before it writes any.
+        other = self.concept("Other")
+        work = self.library.add_work("W")
+        held, release = threading.Event(), threading.Event()
+
+        def note(scope: LibraryScope) -> None:
+            notes.set_note(scope, work, notes.RESEARCH, "[[concept:A]] [[concept:Z]]")
+            held.set()
+            release.wait(10)
+
+        writer, written = self.in_thread(lambda: self.run_command(note))
+        try:
+            self.assertTrue(held.wait(10))
+            renamer, renamed = self.in_thread(lambda: self.run_command(
+                lambda scope: concepts.set_identity(scope, other, "Z", ["A"])))
+            self.wait_for_advisory_waiter()
+        finally:
+            release.set()
+        writer.join(10)
+        renamer.join(10)
+        self.assertEqual(written, [None])
+        self.assertIsInstance(renamed[0], ResearchError)
+        self.assertEqual(renamed[0].code, "concept_exists")
+        self.assertEqual(sorted(self.concept_ids()), ["A", "Other", "Z"])
+
+    def wait_for_advisory_waiter(self) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            rows = self.sql("SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database()"
+                            " AND wait_event_type = 'Lock' AND wait_event = 'advisory'")
+            if rows[0]["n"]:
+                return
+            time.sleep(0.02)
+        self.fail("the rename never waited on the key lock")
 
 
 class FenceTests(ResearchIndexTestCase):
