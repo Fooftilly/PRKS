@@ -54,6 +54,17 @@ class WorkRoleEditorContractTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_role_modal_catalogs_start_concurrently_and_preserve_fallbacks(self):
+        proc = subprocess.run(
+            ["node", str(_PROJECT / "tests" / "browser" / "run_role_modal_prepare_selftest.js")],
+            cwd=_PROJECT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("Role modal parallel catalog checks passed", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
