@@ -4785,7 +4785,7 @@ function renderPlaylistSummarySidebarHtml(pl, editing) {
     const desc = escapeHtml(pl.description || '').trim();
     const originalUrl = String(pl.original_url || '').trim();
     const originalUrlHtml = originalUrl
-        ? `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> <a href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrl)}</a></p>`
+        ? prksOriginalUrlRowHtml('Original playlist URL', originalUrl, { compact: true })
         : '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>';
     const count = Array.isArray(pl.items) ? pl.items.length : 0;
     const editLabel = editing ? 'Done' : 'Edit';
@@ -5414,7 +5414,7 @@ function prksWorkPanelViewShellHtml(work, parts) {
         ? `<p class="meta-row"><strong>Published:</strong> ${escapeHtml(typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date)}</p>`
         : '';
     const originalUrl = parts && parts.originalUrlPdf
-        ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(parts.originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(parts.originalUrlPdf)}</a></p>`
+        ? prksOriginalUrlRowHtml('Original URL', parts.originalUrlPdf)
         : '';
     const abstractRow = work.abstract
         ? `<p class="meta-row"><strong>Abstract:</strong> ${escapeHtml(work.abstract)}</p>`
@@ -5579,11 +5579,7 @@ function renderWorkMetaTab(work, mode = 'view') {
             ${renderRow('Year', work.year)}
             ${showPublishedDate ? renderRow('Published', typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date) : ''}
             <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
-            ${
-                originalUrlPdf
-                    ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrlPdf)}</a></p>`
-                    : ''
-            }
+            ${prksOriginalUrlRowHtml('Original URL', originalUrlPdf)}
             ${renderRow('Abstract', work.abstract)}
             ${!hasMetadata ? '<p class="meta-row meta-row--muted-italic" data-prks-role="work-meta-empty">No metadata available.</p>' : ''}
             <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm copy-bibtex-btn" aria-live="polite">${typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : ''} Copy BibTeX</button>
@@ -5724,7 +5720,7 @@ function renderFolderTagsChipsHtml(folder) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
+                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(prksSafeTagColorCss(t.color))};" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
                 `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
                 `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
@@ -5745,6 +5741,44 @@ function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* Tag colors land inside a style attribute, where escapeHtml leaves `;` and
+ * `url(...)` live. Only a strict color shape may reach it; anything else gets
+ * the default accent. */
+function prksSafeTagColorCss(value) {
+    const color = String(value == null ? '' : value).trim();
+    if (/^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)) return color;
+    return '#6d6cf7';
+}
+
+/* original_url/source_url render as href targets. Only absolute http(s)
+ * addresses may become links; anything else renders as plain text so a
+ * stored javascript:/data: URL can never navigate. */
+function prksSafeHttpUrl(value) {
+    const url = String(value == null ? '' : value).trim();
+    if (!url) return '';
+    let parsed = null;
+    try {
+        parsed = new URL(url);
+    } catch (_e) {
+        return '';
+    }
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return url;
+    return '';
+}
+
+/* One "<label>: <value-or-link>" meta row for original_url/source_url. The
+ * value only becomes a link when prksSafeHttpUrl accepts its scheme. */
+function prksOriginalUrlRowHtml(label, rawUrl, opts) {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    const cls = opts && opts.compact ? 'meta-row meta-row--compact' : 'meta-row';
+    const href = prksSafeHttpUrl(value);
+    const rendered = href
+        ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>`
+        : escapeHtml(value);
+    return `<p class="${cls}"><strong>${escapeHtml(label)}:</strong> ${rendered}</p>`;
 }
 
 function prksEscapeAttr(s) {

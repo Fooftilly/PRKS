@@ -134,7 +134,8 @@ function publisherHref(value: string): string {
   <Teleport v-if="slots.source" to="[data-prks-role='work-panel-source']">
     <p v-if="model.display.showOriginalUrl" class="meta-row">
       <strong>Original URL:</strong>
-      <a :href="model.display.sourceUrl" target="_blank" rel="noopener noreferrer">{{ model.display.sourceUrl }}</a>
+      <a v-if="model.display.sourceUrlHref" :href="model.display.sourceUrlHref" target="_blank" rel="noopener noreferrer">{{ model.display.sourceUrl }}</a>
+      <template v-else>{{ model.display.sourceUrl }}</template>
     </p>
     <p v-if="model.display.abstract" class="meta-row"><strong>Abstract:</strong> {{ model.display.abstract }}</p>
     <p

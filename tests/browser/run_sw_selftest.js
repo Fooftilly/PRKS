@@ -297,6 +297,20 @@ async function run() {
         const res = await handlers.handleNavigation(fakeRequest({ mode: 'navigate' }));
         assertEq('handleNavigation offline with no cached shell returns 503', res.status, 503);
     }
+    {
+        const cacheStorage = makeFakeCacheStorage();
+        const handlers = sw.createHandlers({
+            caches: cacheStorage,
+            fetchImpl: function () {
+                return Promise.resolve(new Response('{"ok":true}', { status: 200 }));
+            },
+        });
+        await handlers.handleNavigation(
+            fakeRequest({ mode: 'navigate', url: 'https://prks.example/api/app-settings' })
+        );
+        const shellCache = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
+        assert('handleNavigation does not store a non-shell path as the shell', !(await shellCache.match('/')));
+    }
 
     /* ---- handlePdfRequest: whole-file caching + offline Range slicing ---- */
     {

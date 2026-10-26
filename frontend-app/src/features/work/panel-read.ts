@@ -65,6 +65,8 @@ export interface WorkPanelDisplay {
   readonly authorText: string
   readonly thumbPage: string
   readonly sourceUrl: string
+  /** Empty unless sourceUrl is an absolute http(s) URL; only it may be a link. */
+  readonly sourceUrlHref: string
   readonly showOriginalUrl: boolean
   readonly hasBibliographicText: boolean
   readonly people: readonly WorkPanelPerson[]
@@ -223,6 +225,21 @@ function docTypeOf(input: WorkPanelReadInput, raw: string): WorkPanelDocType {
   })
 }
 
+/* source_url renders as an href target on the read panel. Only absolute
+ * http(s) addresses may become links; anything else stays plain text so a
+ * stored javascript:/data: URL can never navigate. */
+export function safeHttpUrl(value: string): string {
+  const url = String(value || '').trim()
+  if (!url) return ''
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return ''
+  }
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? url : ''
+}
+
 export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadModel {
   const work = record(input.work)
   const effective = record(input.effectiveWork) ?? work
@@ -286,6 +303,7 @@ export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadMo
     authorText,
     thumbPage,
     sourceUrl,
+    sourceUrlHref: safeHttpUrl(sourceUrl),
     showOriginalUrl,
     hasBibliographicText,
     people: Object.freeze(people),

@@ -242,6 +242,28 @@ describe('projectWorkPanelRead', () => {
     ])
   })
 
+  it('only links an absolute http(s) source url', () => {
+    for (const [sourceUrl, href] of [
+      ['https://example.test/a.pdf', 'https://example.test/a.pdf'],
+      ['http://localhost/doc', 'http://localhost/doc'],
+      ['javascript:alert(1)', ''],
+      ['data:text/html,x', ''],
+      ['relative/path.pdf', ''],
+      ['', ''],
+    ] as const) {
+      const model = projectWorkPanelRead({
+        ownerTabId: 'main',
+        ownerGeneration: 1,
+        workId: 'w',
+        work: { id: 'w', title: 'Doc' },
+        effectiveWork: { id: 'w', source_url: sourceUrl },
+        tags: [],
+        sourceKind: 'pdf',
+      })
+      expect(model.display.sourceUrlHref).toBe(href)
+    }
+  })
+
   it('does not link a folder that has a title and no id', () => {
     const model = projectWorkPanelRead({
       ownerTabId: 'main',
