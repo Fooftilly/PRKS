@@ -10,9 +10,11 @@ import zlib
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from scripts.ci.visual_regression import assert_split_pdf_ownership
+from scripts.ci.visual_regression import (
+    VisualCaptureFailure, assert_split_pdf_ownership, collect,
+)
 
 from tests.visual.compare import (
     FORMAT,
@@ -60,6 +62,72 @@ class LocalVisualBaselineTests(unittest.TestCase):
             "mainWork": "work-a", "secondaryWork": "work-b",
         })
         self.assertEqual(kwargs["timeout"], 30000)
+
+    def test_visual_capture_errors_label_scene_without_private_browser_text(self):
+        from tempfile import TemporaryDirectory
+
+        with (
+            patch("scripts.ci.visual_regression.AppServer") as server_type,
+            patch("scripts.ci.visual_regression.require_chromium") as browsers,
+            patch("scripts.ci.visual_regression.PageCollector"),
+            patch("scripts.ci.visual_regression.capture") as capture_scene,
+            TemporaryDirectory() as td,
+        ):
+            server = server_type.return_value
+            server.origin = "http://127.0.0.1:1234"
+            browser_api, browser = Mock(), Mock()
+            browsers.return_value = (browser_api, browser)
+            ctx = browser.new_context.return_value
+
+            capture_scene.side_effect = ValueError("private-document-title")
+            server.stop.side_effect = RuntimeError("secondary-private-error")
+            with self.assertRaises(VisualCaptureFailure) as caught:
+                collect(Path(td))
+            self.assertEqual(caught.exception.stage, "capture_folders")
+            self.assertEqual(caught.exception.cause_type, "ValueError")
+            self.assertEqual(
+                str(caught.exception), "visual/capture_folders (ValueError)",
+            )
+            self.assertNotIn("private", str(caught.exception))
+            ctx.close.assert_called_once()
+            browser.close.assert_called_once()
+            browser_api.stop.assert_called_once()
+            server.stop.assert_called_once()
+
+    def test_visual_cleanup_error_fails_only_when_no_primary_failure(self):
+        from tempfile import TemporaryDirectory
+
+        with (
+            patch("scripts.ci.visual_regression.AppServer") as server_type,
+            patch("scripts.ci.visual_regression.require_chromium") as browsers,
+            patch("scripts.ci.visual_regression.PageCollector"),
+            patch("scripts.ci.visual_regression.capture", return_value={
+                "width": 1400, "height": 900, "rgb48x30_zlib": "",
+            }),
+            patch("scripts.ci.visual_regression._wait_pdf_viewer"),
+            patch("scripts.ci.visual_regression._wait_pdf_tab"),
+            TemporaryDirectory() as td,
+        ):
+            server = server_type.return_value
+            server.origin = "http://127.0.0.1:1234"
+            server.ids = {"work_a": "work-a", "work_b": "work-b"}
+            browser_api, browser = Mock(), Mock()
+            browsers.return_value = (browser_api, browser)
+            ctx = browser.new_context.return_value
+            page = ctx.new_page.return_value
+            page.evaluate.return_value = {
+                "mainTabId": "main-tab",
+                "secondaryTree": {"tabId": "secondary-tab"},
+            }
+            ctx.close.side_effect = ValueError("private-context-info")
+            with self.assertRaises(VisualCaptureFailure) as caught:
+                collect(Path(td))
+            self.assertEqual(caught.exception.stage, "close_context")
+            self.assertEqual(caught.exception.cause_type, "ValueError")
+            self.assertNotIn("private", str(caught.exception))
+            browser.close.assert_called_once()
+            browser_api.stop.assert_called_once()
+            server.stop.assert_called_once()
 
     def test_equal_pixels_pass_and_major_layout_deviation_fails(self):
         original = fingerprint(png_sample())
