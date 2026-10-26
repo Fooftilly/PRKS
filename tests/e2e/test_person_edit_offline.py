@@ -487,26 +487,33 @@ class OfflinePersonEditTests(unittest.TestCase):
 
             person = self.create_person(page, 'Grace', 'Chained')
         with profile_e2e_phase("person_edit_role_link"):
-            o._open_work_from_home(page, WORK_A_TITLE)
-            o._open_details_drawer_if_tiled(page)
-            page.wait_for_selector('.work-detail')
-            page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
-            page.wait_for_function(
-                "() => { const b = document.querySelector('.work-link-person-btn');"
-                "        return !!b && !b.disabled; }")
-            page.locator('.work-link-person-btn').click()
-            page.wait_for_selector('#role-modal:not(.hidden)')
-            page.wait_for_function(
-                "() => typeof document.getElementById('role-person-search').oninput === 'function'")
-            page.locator('#role-person-search').fill('Grace Chained')
-            result = page.locator('#role-person-results .result-item--person-pick').first
-            result.wait_for(state='visible')
-            result.click()
-            page.locator('#save-role-btn').click()
-            wait_for_async(
-                page,
-                "() => prksSync.store.listOperations().then(rows => rows.some("
-                "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))")
+            # Five nested diagnostic timers preserve the real browser and
+            # offline queue path. Don't add them to this inclusive parent.
+            with profile_e2e_phase("person_edit_link_nav"):
+                o._open_work_from_home(page, WORK_A_TITLE)
+            with profile_e2e_phase("person_edit_link_panel"):
+                o._open_details_drawer_if_tiled(page)
+                page.wait_for_selector('.work-detail')
+                page.evaluate("() => { void prksSetWorkDetailsMode('people'); }")
+                page.wait_for_function(
+                    "() => { const b = document.querySelector('.work-link-person-btn');"
+                    "        return !!b && !b.disabled; }")
+            with profile_e2e_phase("person_edit_link_modal"):
+                page.locator('.work-link-person-btn').click()
+                page.wait_for_selector('#role-modal:not(.hidden)')
+                page.wait_for_function(
+                    "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+            with profile_e2e_phase("person_edit_link_search"):
+                page.locator('#role-person-search').fill('Grace Chained')
+                result = page.locator('#role-person-results .result-item--person-pick').first
+                result.wait_for(state='visible')
+                result.click()
+            with profile_e2e_phase("person_edit_link_save"):
+                page.locator('#save-role-btn').click()
+                wait_for_async(
+                    page,
+                    "() => prksSync.store.listOperations().then(rows => rows.some("
+                    "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))")
 
         with profile_e2e_phase("person_edit_profile_edit"):
             o._open_person(page, person)
