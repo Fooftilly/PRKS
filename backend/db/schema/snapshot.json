@@ -26,7 +26,8 @@
     "040_sync.sql",
     "100_works.sql",
     "110_people.sql",
-    "120_organization.sql"
+    "120_organization.sql",
+    "130_research.sql"
   ],
   "schemas": [
     "derived",
@@ -34,6 +35,388 @@
     "prks"
   ],
   "tables": {
+    "derived.argument_mentions": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "work_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "argument_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "start_offset",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "name": "end_offset",
+          "not_null": true,
+          "type": "integer"
+        }
+      ],
+      "constraints": {
+        "argument_mentions_argument_id_not_null": "NOT NULL argument_id",
+        "argument_mentions_end_offset_not_null": "NOT NULL end_offset",
+        "argument_mentions_library_id_not_null": "NOT NULL library_id",
+        "argument_mentions_offsets_check": "CHECK (start_offset >= 0 AND end_offset > start_offset)",
+        "argument_mentions_pkey": "PRIMARY KEY (work_id, start_offset)",
+        "argument_mentions_start_offset_not_null": "NOT NULL start_offset",
+        "argument_mentions_work_id_not_null": "NOT NULL work_id"
+      },
+      "indexes": {
+        "argument_mentions_argument": "CREATE INDEX argument_mentions_argument ON derived.argument_mentions USING btree (library_id, argument_id)",
+        "argument_mentions_pkey": "CREATE UNIQUE INDEX argument_mentions_pkey ON derived.argument_mentions USING btree (work_id, start_offset)"
+      }
+    },
+    "derived.concept_mentions": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "work_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "concept_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "start_offset",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "name": "end_offset",
+          "not_null": true,
+          "type": "integer"
+        }
+      ],
+      "constraints": {
+        "concept_mentions_concept_id_not_null": "NOT NULL concept_id",
+        "concept_mentions_end_offset_not_null": "NOT NULL end_offset",
+        "concept_mentions_library_id_not_null": "NOT NULL library_id",
+        "concept_mentions_offsets_check": "CHECK (start_offset >= 0 AND end_offset > start_offset)",
+        "concept_mentions_pkey": "PRIMARY KEY (work_id, start_offset)",
+        "concept_mentions_start_offset_not_null": "NOT NULL start_offset",
+        "concept_mentions_work_id_not_null": "NOT NULL work_id"
+      },
+      "indexes": {
+        "concept_mentions_concept": "CREATE INDEX concept_mentions_concept ON derived.concept_mentions USING btree (library_id, concept_id)",
+        "concept_mentions_pkey": "CREATE UNIQUE INDEX concept_mentions_pkey ON derived.concept_mentions USING btree (work_id, start_offset)"
+      }
+    },
+    "derived.work_note_state": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "work_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "content_hash",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "work_note_state_content_hash_check": "CHECK (length(content_hash) > 0)",
+        "work_note_state_content_hash_not_null": "NOT NULL content_hash",
+        "work_note_state_library_id_not_null": "NOT NULL library_id",
+        "work_note_state_pkey": "PRIMARY KEY (work_id)",
+        "work_note_state_work_id_not_null": "NOT NULL work_id"
+      },
+      "indexes": {
+        "work_note_state_library": "CREATE INDEX work_note_state_library ON derived.work_note_state USING btree (library_id, work_id)",
+        "work_note_state_pkey": "CREATE UNIQUE INDEX work_note_state_pkey ON derived.work_note_state USING btree (work_id)"
+      }
+    },
+    "prks.argument_sources": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "argument_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "order_index",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "name": "work_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "manifestation_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "pages",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "argument_sources_argument_fkey": "FOREIGN KEY (library_id, argument_id) REFERENCES prks.arguments(library_id, id) ON DELETE CASCADE",
+        "argument_sources_argument_id_not_null": "NOT NULL argument_id",
+        "argument_sources_citation_key": "UNIQUE NULLS NOT DISTINCT (argument_id, work_id, manifestation_id, pages)",
+        "argument_sources_created_at_not_null": "NOT NULL created_at",
+        "argument_sources_library_id_not_null": "NOT NULL library_id",
+        "argument_sources_manifestation_fkey": "FOREIGN KEY (library_id, manifestation_id, work_id) REFERENCES prks.manifestations(library_id, id, work_id) ON UPDATE CASCADE",
+        "argument_sources_order_index_check": "CHECK (order_index >= 0)",
+        "argument_sources_order_index_not_null": "NOT NULL order_index",
+        "argument_sources_pages_check": "CHECK (char_length(pages) <= 100 AND pages = btrim(pages) AND pages !~ '[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]'::text)",
+        "argument_sources_pages_not_null": "NOT NULL pages",
+        "argument_sources_pkey": "PRIMARY KEY (argument_id, order_index)",
+        "argument_sources_work_fkey": "FOREIGN KEY (library_id, work_id) REFERENCES prks.works(library_id, id)",
+        "argument_sources_work_id_not_null": "NOT NULL work_id"
+      },
+      "indexes": {
+        "argument_sources_citation_key": "CREATE UNIQUE INDEX argument_sources_citation_key ON prks.argument_sources USING btree (argument_id, work_id, manifestation_id, pages) NULLS NOT DISTINCT",
+        "argument_sources_manifestation": "CREATE INDEX argument_sources_manifestation ON prks.argument_sources USING btree (library_id, manifestation_id) WHERE (manifestation_id IS NOT NULL)",
+        "argument_sources_pkey": "CREATE UNIQUE INDEX argument_sources_pkey ON prks.argument_sources USING btree (argument_id, order_index)",
+        "argument_sources_work": "CREATE INDEX argument_sources_work ON prks.argument_sources USING btree (library_id, work_id)"
+      }
+    },
+    "prks.argument_target_arguments": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "argument_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "target_argument_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "verdict_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "0",
+          "name": "order_index",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "argument_target_arguments_argument_fkey": "FOREIGN KEY (library_id, argument_id) REFERENCES prks.arguments(library_id, id) ON DELETE CASCADE",
+        "argument_target_arguments_argument_id_not_null": "NOT NULL argument_id",
+        "argument_target_arguments_check": "CHECK (argument_id <> target_argument_id)",
+        "argument_target_arguments_created_at_not_null": "NOT NULL created_at",
+        "argument_target_arguments_library_id_not_null": "NOT NULL library_id",
+        "argument_target_arguments_order_index_check": "CHECK (order_index >= 0)",
+        "argument_target_arguments_order_index_not_null": "NOT NULL order_index",
+        "argument_target_arguments_pkey": "PRIMARY KEY (argument_id, target_argument_id)",
+        "argument_target_arguments_target_argument_id_not_null": "NOT NULL target_argument_id",
+        "argument_target_arguments_target_fkey": "FOREIGN KEY (library_id, target_argument_id) REFERENCES prks.arguments(library_id, id)",
+        "argument_target_arguments_verdict_id_fkey": "FOREIGN KEY (verdict_id) REFERENCES prks.argument_verdicts(id)",
+        "argument_target_arguments_verdict_id_not_null": "NOT NULL verdict_id"
+      },
+      "indexes": {
+        "argument_target_arguments_pkey": "CREATE UNIQUE INDEX argument_target_arguments_pkey ON prks.argument_target_arguments USING btree (argument_id, target_argument_id)",
+        "argument_target_arguments_target": "CREATE INDEX argument_target_arguments_target ON prks.argument_target_arguments USING btree (library_id, target_argument_id)"
+      }
+    },
+    "prks.argument_target_positions": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "argument_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "position_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "verdict_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "0",
+          "name": "order_index",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "argument_target_positions_argument_fkey": "FOREIGN KEY (library_id, argument_id) REFERENCES prks.arguments(library_id, id) ON DELETE CASCADE",
+        "argument_target_positions_argument_id_not_null": "NOT NULL argument_id",
+        "argument_target_positions_created_at_not_null": "NOT NULL created_at",
+        "argument_target_positions_library_id_not_null": "NOT NULL library_id",
+        "argument_target_positions_order_index_check": "CHECK (order_index >= 0)",
+        "argument_target_positions_order_index_not_null": "NOT NULL order_index",
+        "argument_target_positions_pkey": "PRIMARY KEY (argument_id, position_id)",
+        "argument_target_positions_position_fkey": "FOREIGN KEY (library_id, position_id) REFERENCES prks.positions(library_id, id)",
+        "argument_target_positions_position_id_not_null": "NOT NULL position_id",
+        "argument_target_positions_verdict_id_fkey": "FOREIGN KEY (verdict_id) REFERENCES prks.argument_verdicts(id)",
+        "argument_target_positions_verdict_id_not_null": "NOT NULL verdict_id"
+      },
+      "indexes": {
+        "argument_target_positions_pkey": "CREATE UNIQUE INDEX argument_target_positions_pkey ON prks.argument_target_positions USING btree (argument_id, position_id)",
+        "argument_target_positions_position": "CREATE INDEX argument_target_positions_position ON prks.argument_target_positions USING btree (library_id, position_id)"
+      }
+    },
+    "prks.argument_verdicts": {
+      "columns": [
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "label",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "sort_order",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "default": "true",
+          "name": "enabled",
+          "not_null": true,
+          "type": "boolean"
+        }
+      ],
+      "constraints": {
+        "argument_verdicts_enabled_not_null": "NOT NULL enabled",
+        "argument_verdicts_id_check": "CHECK (id ~ '^[a-z][a-z_]{0,31}$'::text)",
+        "argument_verdicts_id_not_null": "NOT NULL id",
+        "argument_verdicts_label_check": "CHECK (length(btrim(label)) > 0)",
+        "argument_verdicts_label_not_null": "NOT NULL label",
+        "argument_verdicts_pkey": "PRIMARY KEY (id)",
+        "argument_verdicts_sort_order_not_null": "NOT NULL sort_order"
+      },
+      "indexes": {
+        "argument_verdicts_pkey": "CREATE UNIQUE INDEX argument_verdicts_pkey ON prks.argument_verdicts USING btree (id)"
+      }
+    },
+    "prks.arguments": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "kind",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "main_text",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "arguments_created_at_not_null": "NOT NULL created_at",
+        "arguments_id_check": "CHECK (id ~ '^A-[0-9A-F]{32}$'::text)",
+        "arguments_id_not_null": "NOT NULL id",
+        "arguments_kind_check": "CHECK (kind = ANY (ARRAY['argument'::text, 'stance'::text]))",
+        "arguments_kind_not_null": "NOT NULL kind",
+        "arguments_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id)",
+        "arguments_library_id_id_key": "UNIQUE (library_id, id)",
+        "arguments_library_id_not_null": "NOT NULL library_id",
+        "arguments_main_text_check": "CHECK (char_length(main_text) <= 100000 AND main_text !~ '[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]'::text)",
+        "arguments_main_text_not_null": "NOT NULL main_text",
+        "arguments_name_check": "CHECK (char_length(name) >= 1 AND char_length(name) <= 200 AND name = btrim(name) AND name !~ '[\\x01-\\x1f\\x7f\\x85\\xA0\\x1680\\x2000-\\x200A\\x2028\\x2029\\x202F\\x205F\\x3000]|  '::text)",
+        "arguments_name_not_null": "NOT NULL name",
+        "arguments_pkey": "PRIMARY KEY (id)",
+        "arguments_updated_at_not_null": "NOT NULL updated_at"
+      },
+      "indexes": {
+        "arguments_library_id_id_key": "CREATE UNIQUE INDEX arguments_library_id_id_key ON prks.arguments USING btree (library_id, id)",
+        "arguments_pkey": "CREATE UNIQUE INDEX arguments_pkey ON prks.arguments USING btree (id)"
+      }
+    },
     "prks.assets": {
       "columns": [
         {
@@ -281,6 +664,218 @@
         "bootstrap_tokens_one_outstanding": "CREATE UNIQUE INDEX bootstrap_tokens_one_outstanding ON prks.bootstrap_tokens USING btree ((true)) WHERE ((consumed_at IS NULL) AND (revoked_at IS NULL))",
         "bootstrap_tokens_pkey": "CREATE UNIQUE INDEX bootstrap_tokens_pkey ON prks.bootstrap_tokens USING btree (id)",
         "bootstrap_tokens_token_sha256_key": "CREATE UNIQUE INDEX bootstrap_tokens_token_sha256_key ON prks.bootstrap_tokens USING btree (token_sha256)"
+      }
+    },
+    "prks.concept_aliases": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "concept_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "alias",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "generated": "prks.identity_key(alias)",
+          "name": "alias_key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'alias'::text",
+          "name": "key_kind",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "concept_aliases_alias_check": "CHECK (char_length(alias) >= 1 AND char_length(alias) <= 160 AND (alias IS NFC NORMALIZED) AND alias = btrim(alias) AND alias !~ '[\\x01-\\x1f\\x7f\\x85\\xA0\\x1680\\x2000-\\x200A\\x2028\\x2029\\x202F\\x205F\\x3000]|  '::text)",
+        "concept_aliases_alias_key_check": "CHECK (length(alias_key) > 0)",
+        "concept_aliases_alias_key_fkey": "FOREIGN KEY (library_id, alias_key, concept_id, key_kind) REFERENCES prks.concept_keys(library_id, key, concept_id, kind) DEFERRABLE INITIALLY DEFERRED",
+        "concept_aliases_alias_key_not_null": "NOT NULL alias_key",
+        "concept_aliases_alias_not_null": "NOT NULL alias",
+        "concept_aliases_concept_fkey": "FOREIGN KEY (library_id, concept_id) REFERENCES prks.concepts(library_id, id) ON DELETE CASCADE",
+        "concept_aliases_concept_id_not_null": "NOT NULL concept_id",
+        "concept_aliases_created_at_not_null": "NOT NULL created_at",
+        "concept_aliases_key_kind_check": "CHECK (key_kind = 'alias'::text)",
+        "concept_aliases_key_kind_not_null": "NOT NULL key_kind",
+        "concept_aliases_library_id_not_null": "NOT NULL library_id",
+        "concept_aliases_pkey": "PRIMARY KEY (library_id, concept_id, alias_key)"
+      },
+      "indexes": {
+        "concept_aliases_pkey": "CREATE UNIQUE INDEX concept_aliases_pkey ON prks.concept_aliases USING btree (library_id, concept_id, alias_key)"
+      }
+    },
+    "prks.concept_keys": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "concept_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "alias_key",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "generated": "\nCASE\n    WHEN (alias_key IS NULL) THEN 'name'::text\n    ELSE 'alias'::text\nEND",
+          "name": "kind",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "concept_keys_alias_fkey": "FOREIGN KEY (library_id, concept_id, alias_key) REFERENCES prks.concept_aliases(library_id, concept_id, alias_key) ON DELETE CASCADE",
+        "concept_keys_check": "CHECK (alias_key = key)",
+        "concept_keys_concept_fkey": "FOREIGN KEY (library_id, concept_id) REFERENCES prks.concepts(library_id, id) ON DELETE CASCADE",
+        "concept_keys_concept_id_not_null": "NOT NULL concept_id",
+        "concept_keys_key_check": "CHECK (length(key) > 0)",
+        "concept_keys_key_not_null": "NOT NULL key",
+        "concept_keys_kind_not_null": "NOT NULL kind",
+        "concept_keys_library_id_not_null": "NOT NULL library_id",
+        "concept_keys_pkey": "PRIMARY KEY (library_id, key)",
+        "concept_keys_ref_key": "UNIQUE (library_id, key, concept_id, kind)"
+      },
+      "indexes": {
+        "concept_keys_one_name": "CREATE UNIQUE INDEX concept_keys_one_name ON prks.concept_keys USING btree (library_id, concept_id) WHERE (alias_key IS NULL)",
+        "concept_keys_pkey": "CREATE UNIQUE INDEX concept_keys_pkey ON prks.concept_keys USING btree (library_id, key)",
+        "concept_keys_ref_key": "CREATE UNIQUE INDEX concept_keys_ref_key ON prks.concept_keys USING btree (library_id, key, concept_id, kind)"
+      }
+    },
+    "prks.concept_parents": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "child_concept_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "parent_concept_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "concept_parents_check": "CHECK (child_concept_id <> parent_concept_id)",
+        "concept_parents_child_concept_id_not_null": "NOT NULL child_concept_id",
+        "concept_parents_child_fkey": "FOREIGN KEY (library_id, child_concept_id) REFERENCES prks.concepts(library_id, id)",
+        "concept_parents_created_at_not_null": "NOT NULL created_at",
+        "concept_parents_library_id_not_null": "NOT NULL library_id",
+        "concept_parents_parent_concept_id_not_null": "NOT NULL parent_concept_id",
+        "concept_parents_parent_fkey": "FOREIGN KEY (library_id, parent_concept_id) REFERENCES prks.concepts(library_id, id)",
+        "concept_parents_pkey": "PRIMARY KEY (child_concept_id, parent_concept_id)"
+      },
+      "indexes": {
+        "concept_parents_parent": "CREATE INDEX concept_parents_parent ON prks.concept_parents USING btree (library_id, parent_concept_id)",
+        "concept_parents_pkey": "CREATE UNIQUE INDEX concept_parents_pkey ON prks.concept_parents USING btree (child_concept_id, parent_concept_id)"
+      }
+    },
+    "prks.concepts": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "generated": "prks.identity_key(name)",
+          "name": "name_key",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'name'::text",
+          "name": "key_kind",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "description",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "concepts_created_at_not_null": "NOT NULL created_at",
+        "concepts_description_check": "CHECK (char_length(description) <= 100000 AND description !~ '[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]'::text)",
+        "concepts_description_not_null": "NOT NULL description",
+        "concepts_id_check": "CHECK (id ~ '^C-[0-9A-F]{32}$'::text)",
+        "concepts_id_not_null": "NOT NULL id",
+        "concepts_key_kind_check": "CHECK (key_kind = 'name'::text)",
+        "concepts_key_kind_not_null": "NOT NULL key_kind",
+        "concepts_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id)",
+        "concepts_library_id_id_key": "UNIQUE (library_id, id)",
+        "concepts_library_id_not_null": "NOT NULL library_id",
+        "concepts_name_check": "CHECK (char_length(name) >= 1 AND char_length(name) <= 160 AND (name IS NFC NORMALIZED) AND name = btrim(name) AND name !~ '[\\x01-\\x1f\\x7f\\x85\\xA0\\x1680\\x2000-\\x200A\\x2028\\x2029\\x202F\\x205F\\x3000]|  '::text)",
+        "concepts_name_key_check": "CHECK (length(name_key) > 0)",
+        "concepts_name_key_fkey": "FOREIGN KEY (library_id, name_key, id, key_kind) REFERENCES prks.concept_keys(library_id, key, concept_id, kind) DEFERRABLE INITIALLY DEFERRED",
+        "concepts_name_key_not_null": "NOT NULL name_key",
+        "concepts_name_not_null": "NOT NULL name",
+        "concepts_pkey": "PRIMARY KEY (id)",
+        "concepts_updated_at_not_null": "NOT NULL updated_at"
+      },
+      "indexes": {
+        "concepts_library_id_id_key": "CREATE UNIQUE INDEX concepts_library_id_id_key ON prks.concepts USING btree (library_id, id)",
+        "concepts_pkey": "CREATE UNIQUE INDEX concepts_pkey ON prks.concepts USING btree (id)"
       }
     },
     "prks.devices": {
@@ -1608,6 +2203,61 @@
       "indexes": {
         "playlists_library_id_id_key": "CREATE UNIQUE INDEX playlists_library_id_id_key ON prks.playlists USING btree (library_id, id)",
         "playlists_pkey": "CREATE UNIQUE INDEX playlists_pkey ON prks.playlists USING btree (id)"
+      }
+    },
+    "prks.positions": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "description",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "positions_created_at_not_null": "NOT NULL created_at",
+        "positions_description_check": "CHECK (char_length(description) <= 100000 AND description !~ '[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]'::text)",
+        "positions_description_not_null": "NOT NULL description",
+        "positions_id_check": "CHECK (id ~ '^P-[0-9A-F]{32}$'::text)",
+        "positions_id_not_null": "NOT NULL id",
+        "positions_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id)",
+        "positions_library_id_id_key": "UNIQUE (library_id, id)",
+        "positions_library_id_not_null": "NOT NULL library_id",
+        "positions_name_check": "CHECK (char_length(name) >= 1 AND char_length(name) <= 240 AND name = btrim(name) AND name !~ '[\\x01-\\x1f\\x7f\\x85\\xA0\\x1680\\x2000-\\x200A\\x2028\\x2029\\x202F\\x205F\\x3000]|  '::text)",
+        "positions_name_not_null": "NOT NULL name",
+        "positions_pkey": "PRIMARY KEY (id)",
+        "positions_updated_at_not_null": "NOT NULL updated_at"
+      },
+      "indexes": {
+        "positions_library_id_id_key": "CREATE UNIQUE INDEX positions_library_id_id_key ON prks.positions USING btree (library_id, id)",
+        "positions_pkey": "CREATE UNIQUE INDEX positions_pkey ON prks.positions USING btree (id)"
       }
     },
     "prks.publisher_aliases": {

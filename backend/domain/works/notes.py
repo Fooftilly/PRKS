@@ -74,6 +74,12 @@ def _set_locked(scope: LibraryScope, work_id: str, kind: str, text: str) -> tupl
     revision = revisions.lock(scope, _SCOPE_TYPES[kind], work_id)
     if _current(scope, work_id, kind) == text:
         return False, revision
+    if kind == RESEARCH:
+        # Held until COMMIT, so a Concept delete that reads the notes after
+        # this one commits sees its references (CONCEPT_IN_USE).
+        from backend.domain.research import concepts
+
+        concepts.share_referenced(scope, text)
     params = {"work_id": work_id, "kind": kind, "body": text}
     scope.execute(_UPSERT if text else _DELETE, params)
     scope.execute(_TOUCH_WORK, params)

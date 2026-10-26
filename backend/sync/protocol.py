@@ -236,7 +236,7 @@ def _dependencies_satisfied(scope: LibraryScope, op: dict[str, Any]) -> bool:
 # Registration is explicit, as in the SQLite protocol: the families PostgreSQL
 # accepts are readable in one place. Later lanes add theirs here.
 from backend.sync.handlers import (  # noqa: E402
-    folder, person, person_group, playlist, tag, tag_link, work_lifecycle, work_metadata,
+    concept, folder, person, person_group, playlist, tag, tag_link, work_lifecycle, work_metadata,
     work_notes, work_open, work_role, work_source,
 )
 
@@ -274,3 +274,8 @@ register("SET_PLAYLIST_FIELD", playlist.FIELD_HANDLER)
 register("SET_WORK_PLAYLIST", playlist.WORK_PLAYLIST_HANDLER)
 register("REORDER_PLAYLIST_ITEMS", playlist.ORDER_HANDLER)
 register("DELETE_PLAYLIST", playlist.DELETE_HANDLER)
+register("CREATE_CONCEPT", concept.CREATE_HANDLER)
+register("SET_CONCEPT_FIELD", concept.FIELD_HANDLER)
+register("SET_CONCEPT_IDENTITY", concept.IDENTITY_HANDLER)
+register("SET_CONCEPT_PARENTS", concept.PARENTS_HANDLER)
+register("DELETE_CONCEPT", concept.DELETE_HANDLER)

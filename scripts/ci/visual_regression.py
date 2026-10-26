@@ -49,6 +49,38 @@ def capture(page, name: str, output: Path, selector: str | None = None) -> dict:
     return fingerprint(png)
 
 
+def assert_split_pdf_ownership(page, *, main_tab: str, secondary_tab: str,
+                               main_work: str, secondary_work: str) -> None:
+    """An attractive screenshot is not proof that both panes mounted distinct Works.
+
+    Fail before capturing a visual baseline if tab routing, Work resources, or
+    PDF ownership silently point at the same document.
+    """
+    page.wait_for_function(
+        """({mainTab, secondaryTab, mainWork, secondaryWork}) => {
+            if (!mainTab || !secondaryTab || mainTab === secondaryTab ||
+                String(mainWork) === String(secondaryWork)) return false;
+            const get = window.prksGetTabContext;
+            const a = get && get(mainTab);
+            const b = get && get(secondaryTab);
+            const wa = a && a.getEntity && a.getEntity('work');
+            const wb = b && b.getEntity && b.getEntity('work');
+            const pa = a && a.getResource && a.getResource('pdf');
+            const pb = b && b.getResource && b.getResource('pdf');
+            return !!(wa && wb && pa && pb &&
+                String(wa.id) === String(mainWork) &&
+                String(wb.id) === String(secondaryWork) &&
+                String(pa.workId) === String(mainWork) &&
+                String(pb.workId) === String(secondaryWork));
+        }""",
+        arg={
+            "mainTab": main_tab, "secondaryTab": secondary_tab,
+            "mainWork": main_work, "secondaryWork": secondary_work,
+        },
+        timeout=30000,
+    )
+
+
 def collect(output: Path) -> dict[str, dict]:
     # Never reads a live library. AppServer creates a fresh temporary PRKS
     # storage directory, binds loopback and deletes it on close.
@@ -97,6 +129,12 @@ def collect(output: Path) -> dict[str, dict]:
         ids = page.evaluate("() => window.prksWorkspaceSnapshot()")
         _wait_pdf_tab(page, ids["mainTabId"])
         _wait_pdf_tab(page, ids["secondaryTree"]["tabId"])
+        assert_split_pdf_ownership(
+            page, main_tab=ids["mainTabId"],
+            secondary_tab=ids["secondaryTree"]["tabId"],
+            main_work=server.ids["work_a"],
+            secondary_work=server.ids["work_b"],
+        )
         page.locator(".prks-tile--secondary .CodeMirror").wait_for(
             state="visible", timeout=30000
         )

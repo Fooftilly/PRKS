@@ -123,6 +123,12 @@ RELATIONSHIPS: tuple[Relationship, ...] = (
                  OnSourceDelete.REFUSED, "L-O-1", peer=True),
     Relationship("playlist_items", "playlist_items_work_fkey", "works", Disposition.TARGET_WINS,
                  OnSourceDelete.REFUSED, "L-O-1", peer=True),
+    # Work-level citations are re-pointed; only exactly identical ones collapse, and
+    # every changed Argument's argument-sources revision advances (#60 §8.5).
+    Relationship("argument_sources", "argument_sources_work_fkey", "works", Disposition.UNION,
+                 OnSourceDelete.REFUSED, "L-R-1", peer=True),
+    Relationship("argument_sources", "argument_sources_manifestation_fkey", "manifestations",
+                 Disposition.FOLLOWS, OnSourceDelete.NOT_REACHED, "L-R-1", peer=True),
 )
 
 
@@ -134,10 +140,6 @@ class Deferred:
 
 
 DEFERRED: tuple[Deferred, ...] = (
-    Deferred("argument_sources", "L-R-1 (#634)",
-             "re-points Work-level citations; pinned ones follow their Manifestation; only exactly "
-             "identical citations collapse, and every changed Argument's argument-sources revision "
-             "advances (§8.5)"),
     Deferred("processing_files", "L-PR-1",
              "re-points imported_work_id, which ON DELETE SET NULL would otherwise drop"),
     Deferred("annotations", "L-A-1",
@@ -172,6 +174,8 @@ PEER_WRITERS: frozenset[str] = frozenset({
     "SET_WORK_FOLDER",          # folder_files
     "SET_WORK_PLAYLIST",        # playlist_items
     "ADD_WORK_PERSON_ROLE",     # roles
+    # argument_sources: the Research lane (L-R-1 #634) adds CREATE_ARGUMENT and
+    # SET_ARGUMENT_SOURCES here with their PostgreSQL handlers.
 })
 
 
@@ -223,6 +227,12 @@ class MergePlan:
     roles_moved: tuple[tuple[str, str], ...]       # (person, role_type)
     roles_collapsed: tuple[tuple[str, str], ...]
     role_collisions: tuple[RoleCollision, ...]
+    # Arguments citing the source (any Version): each list changes, so each
+    # argument-sources revision advances.
+    citing_arguments: tuple[str, ...]
+    # (argument, pages): Work-level citations of the source the target already
+    # has exactly, which collapse.
+    citations_collapsed: tuple[tuple[str, str], ...]
     folder: Side
     playlist: Side
     notes: dict[str, Side]                          # "research" / "private" -> bodies ("" when absent)
@@ -283,6 +293,11 @@ SELECT person_id, role_type, credit_name, work_id = %(target)s AS on_target FROM
 WHERE library_id = %(library_id)s AND work_id = ANY(ARRAY[%(source)s, %(target)s])
   AND manifestation_id IS NULL
 ORDER BY person_id COLLATE "C", role_type COLLATE "C"
+"""
+_CITATIONS: LiteralString = """
+SELECT argument_id, manifestation_id, pages, work_id = %(target)s AS on_target FROM prks.argument_sources
+WHERE library_id = %(library_id)s AND work_id = ANY(ARRAY[%(source)s, %(target)s])
+ORDER BY argument_id COLLATE "C", order_index
 """
 _FOLDERS: LiteralString = """
 SELECT work_id, folder_id FROM prks.folder_files
@@ -368,6 +383,15 @@ def prepare(scope: LibraryScope, source_id: str, target_id: str) -> MergePlan:
                        for (person, role), sides in roles.items()
                        if set(sides) == {False, True} and sides[False] != sides[True])
 
+    citations = scope.execute(_CITATIONS, pair).fetchall()
+    on_target = {(str(row["argument_id"]), str(row["pages"])) for row in citations
+                 if row["on_target"] and row["manifestation_id"] is None}
+    citing = tuple(dict.fromkeys(str(row["argument_id"]) for row in citations if not row["on_target"]))
+    citations_collapsed = tuple(
+        (str(row["argument_id"]), str(row["pages"])) for row in citations
+        if not row["on_target"] and row["manifestation_id"] is None
+        and (str(row["argument_id"]), str(row["pages"])) in on_target)
+
     def sides(sql: LiteralString, column: str) -> Side:
         found = {str(row["work_id"]): row[column] for row in scope.execute(sql, pair)}
         return Side(found.get(source_id), found.get(target_id))
@@ -392,6 +416,7 @@ def prepare(scope: LibraryScope, source_id: str, target_id: str) -> MergePlan:
         tags_added=tuple(tag for tag, where in tags.items() if where == {False}),
         tags_collapsed=tuple(tag for tag, where in tags.items() if where == {False, True}),
         roles_moved=moved, roles_collapsed=collapsed, role_collisions=collisions,
+        citing_arguments=citing, citations_collapsed=citations_collapsed,
         folder=sides(_FOLDERS, "folder_id"), playlist=sides(_PLAYLISTS, "playlist_id"),
         notes={kind: Side(by_work.get(source_id, ""), by_work.get(target_id, ""))
                for kind, by_work in notes.items()},

@@ -170,9 +170,53 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 if isinstance(node, ast.FunctionDef) and node.name == method_name
             ]
             self.assertEqual(len(methods), 1, target)
+            # The create scenario invokes a shared UI helper; its nested
+            # role-link stages are deliberately outside the selected test body.
+            nodes = list(methods)
+            if mode == "create":
+                # The helper's timers belong to this *inclusive* phase only.
+                # Merely finding the helper definition would not ensure the
+                # measured test still calls it under person_create_role_link.
+                link_scopes = [
+                    node for node in ast.walk(methods[0])
+                    if isinstance(node, ast.With)
+                    and any(
+                        isinstance(item.context_expr, ast.Call)
+                        and isinstance(item.context_expr.func, ast.Name)
+                        and item.context_expr.func.id == "profile_e2e_phase"
+                        and len(item.context_expr.args) == 1
+                        and isinstance(item.context_expr.args[0], ast.Constant)
+                        and item.context_expr.args[0].value == "person_create_role_link"
+                        for item in node.items
+                    )
+                ]
+                self.assertEqual(len(link_scopes), 1, target)
+                def is_link_call(node):
+                    return (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "self"
+                        and node.func.attr == "link_as_author"
+                    )
+                all_calls = [node for node in ast.walk(methods[0])
+                             if is_link_call(node)]
+                scoped_calls = [
+                    node for stmt in link_scopes[0].body
+                    for node in ast.walk(stmt) if is_link_call(node)
+                ]
+                self.assertEqual(len(all_calls), 1, target)
+                self.assertEqual(len(scoped_calls), 1, target)
+                helpers = [
+                    node for node in classes[0].body
+                    if isinstance(node, ast.FunctionDef) and node.name == "link_as_author"
+                ]
+                self.assertEqual(len(helpers), 1, target)
+                nodes += helpers
             phases = {
                 call.args[0].value
-                for call in ast.walk(methods[0])
+                for node in nodes
+                for call in ast.walk(node)
                 if isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Name)
                 and call.func.id == "profile_e2e_phase"
