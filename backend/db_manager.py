@@ -3463,6 +3463,37 @@ class PRKSDatabase:
             conn.execute("BEGIN")
             return concept_sync.get_concept_state_on_conn(conn, concept_id)
 
+    # Concepts, as library methods the PostgreSQL facade ports
+    # (backend/pg_facade/research.py); the rules stay in research_network.
+
+    def list_concepts(self) -> List[dict]:
+        from backend import research_network
+        return research_network.list_concepts(self)
+
+    def get_concept(self, concept_id: str) -> Optional[dict]:
+        from backend import research_network
+        return research_network.get_concept(self, concept_id)
+
+    def create_concept(self, name, description: str = "") -> dict:
+        from backend import research_network
+        return research_network.create_concept(self, name, description)
+
+    def update_concept(self, concept_id: str, *, name=None, description=None) -> dict:
+        from backend import research_network
+        return research_network.update_concept(self, concept_id, name=name, description=description)
+
+    def replace_concept_aliases(self, concept_id: str, aliases) -> dict:
+        from backend import research_network
+        return research_network.replace_concept_aliases(self, concept_id, aliases)
+
+    def replace_concept_parents(self, concept_id: str, parent_ids) -> dict:
+        from backend import research_network
+        return research_network.replace_concept_parents(self, concept_id, parent_ids)
+
+    def delete_concept(self, concept_id: str) -> None:
+        from backend import research_network
+        research_network.delete_concept(self, concept_id)
+
     def get_playlist_sync_state(self, playlist_id: str) -> Optional[dict]:
         """Field revisions and the order revision for one Playlist."""
         with self.connection() as conn:

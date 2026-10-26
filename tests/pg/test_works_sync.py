@@ -176,8 +176,8 @@ class LedgerTests(SyncTestCase):
     def test_families_without_a_handler_are_not_ported(self) -> None:
         work_id = self.library.add_work("Work")
         with self.assertRaises(NotPortedError):
-            self.send(self.envelope("DELETE_CONCEPT", "C-" + uuid.uuid4().hex.upper(), {},
-                                    entity_type="concept"))
+            self.send(self.envelope("DELETE_POSITION", "P-" + uuid.uuid4().hex.upper(), {},
+                                    entity_type="position"))
         self.assertEqual(self.send(self.envelope("NO_SUCH_OPERATION", work_id, {})),
                          (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.ledger(), [])
