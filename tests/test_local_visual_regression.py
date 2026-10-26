@@ -49,6 +49,8 @@ class LocalVisualBaselineTests(unittest.TestCase):
         self.assertIn("String(mainWork) === String(secondaryWork)", predicate)
         self.assertIn("a.getEntity('work')", predicate)
         self.assertIn("b.getEntity('work')", predicate)
+        self.assertIn("String(wa.id) === String(mainWork)", predicate)
+        self.assertIn("String(wb.id) === String(secondaryWork)", predicate)
         self.assertIn("a.getResource('pdf')", predicate)
         self.assertIn("b.getResource('pdf')", predicate)
         self.assertIn("String(pa.workId) === String(mainWork)", predicate)
