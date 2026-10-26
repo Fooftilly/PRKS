@@ -35,6 +35,15 @@ STYLE = (
 )
 
 
+class VisualCaptureFailure(RuntimeError):
+    """Only a bounded, fixture-known capture stage and exception class."""
+
+    def __init__(self, stage: str, cause_type: str) -> None:
+        self.stage = stage
+        self.cause_type = cause_type
+        super().__init__(f"visual/{stage} ({cause_type})")
+
+
 def capture(page, name: str, output: Path, selector: str | None = None) -> dict:
     if name not in SCENES:
         raise AssertionError("unknown visual scene")
@@ -88,9 +97,14 @@ def collect(output: Path) -> dict[str, dict]:
     browser_api = None
     browser = None
     context = None
+    samples = None
+    failure = None
+    stage = "server_start"
     try:
         server.start()
+        stage = "browser_start"
         browser_api, browser = require_chromium()
+        stage = "page_start"
         context = browser.new_context(
             viewport={"width": 1400, "height": 900},
             device_scale_factor=1,
@@ -102,18 +116,24 @@ def collect(output: Path) -> dict[str, dict]:
         )
         page = context.new_page()
         collector = PageCollector(page, server.origin)
+        stage = "folders_ready"
         page.goto(server.origin + "/#/folders", wait_until="domcontentloaded")
         page.locator("#sidebar").wait_for(state="visible")
         page.locator("[data-prks-folder-library-view]").wait_for(state="visible")
+        stage = "capture_folders"
         samples = {"folders": capture(page, "folders", output)}
 
+        stage = "work_ready"
         page.evaluate("id => window.prksNavigate('#/works/' + id)", server.ids["work_a"])
         page.locator(".work-detail").first.wait_for(state="visible", timeout=20000)
         page.locator(".CodeMirror").first.wait_for(state="visible", timeout=30000)
         _wait_pdf_viewer(page)
+        stage = "capture_work"
         samples["work"] = capture(page, "work", output)
+        stage = "capture_pdf"
         samples["pdf"] = capture(page, "pdf", output, '[data-prks-role="pdf-viewer"]')
 
+        stage = "split_ready"
         page.evaluate(
             "id => window.prksNavigate('#/works/' + id, { target: 'tile' })",
             server.ids["work_b"],
@@ -145,22 +165,44 @@ def collect(output: Path) -> dict[str, dict]:
             "() => Array.from(document.querySelectorAll('.work-detail'))"
             ".filter(el => el.getBoundingClientRect().width > 0).length >= 2"
         )
+        stage = "capture_split"
         samples["split"] = capture(page, "split", output)
 
+        stage = "settings_ready"
         settings = page.locator("button.settings-btn")
         settings.click()
         page.locator("#settings-modal:not(.hidden)").wait_for(state="visible")
+        stage = "capture_settings"
         samples["settings"] = capture(page, "settings", output)
+        stage = "browser_errors"
         collector.assert_clean()
-        return samples
+    except Exception as exc:
+        # Playwright errors can contain routes, selectors and DOM text. Never
+        # leak the raw exception into CI; preserve a useful fixed scene label.
+        failure = VisualCaptureFailure(stage, type(exc).__name__)
     finally:
-        if context is not None:
-            context.close()
-        if browser is not None:
-            browser.close()
-        if browser_api is not None:
-            browser_api.stop()
-        server.stop()
+        # Cleanup must not replace the primary scene failure. Nonetheless an
+        # otherwise successful run fails if a resource cannot be released.
+        for cleanup_stage, resource, method in (
+            ("close_context", context, "close"),
+            ("close_browser", browser, "close"),
+            ("stop_playwright", browser_api, "stop"),
+            ("stop_server", server, "stop"),
+        ):
+            if resource is None:
+                continue
+            try:
+                getattr(resource, method)()
+            except Exception as exc:
+                if failure is None:
+                    failure = VisualCaptureFailure(
+                        cleanup_stage, type(exc).__name__,
+                    )
+    if failure is not None:
+        raise failure from None
+    if samples is None:
+        raise VisualCaptureFailure("internal_result", "RuntimeError")
+    return samples
 
 
 def prove_mutation_detection(sample: dict) -> None:
