@@ -160,11 +160,13 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
     if new.asset is not None:
         _insert_asset(scope, ids, new.asset)
     if new.research_note:
-        # As every Research Note writer does (``notes``): a Concept delete
-        # overlapping this create then sees the note's references.
-        from backend.domain.research import concepts
+        # As every Research Note writer does (``notes``): a Concept or
+        # Argument delete overlapping this create then sees the note's
+        # references.
+        from backend.domain.research import arguments, concepts
 
         concepts.share_referenced(scope, new.research_note)
+        arguments.share_referenced(scope, new.research_note)
     for kind, body in (("research", new.research_note), ("private", new.private_note)):
         if body:
             scope.execute(_INSERT_NOTE, {"work_id": new.work_id, "kind": kind, "body": body})
@@ -293,7 +295,8 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     Work leaves its Folder and its Playlist (``folders.release_work``,
     ``playlists.release_work``, which advances the Playlist's order), its roles
     (``roles.drop_work_roles``, which tombstones their Manifestation scopes),
-    notes, Assets, Manifestations and the Work are deleted level by level
+    its citations (``arguments.release_work``, which advances each citing
+    Argument's ``argument-sources``), notes, Assets, Manifestations and the Work are deleted level by level
     (relations and identifiers go with their Manifestation), and every
     revision scope of the Work is tombstoned (§5.2): each one this Work ever
     advanced, and every fixed scope (``work_scopes``) even if never edited, so
@@ -316,6 +319,11 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     playlists.release_work(scope, work_id)
     # Roles first: a Manifestation-scoped role holds its Manifestation (§5.2).
     roles.drop_work_roles(scope, work_id)
+    # Citations too (a pinned one holds its Manifestation), advancing each
+    # citing Argument's list.
+    from backend.domain.research import arguments
+
+    arguments.release_work(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:
         scope.execute(statement, {"work_id": work_id})
     # A scope no edit ever touched has no row and reads as revision 0, the

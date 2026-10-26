@@ -174,8 +174,8 @@ PEER_WRITERS: frozenset[str] = frozenset({
     "SET_WORK_FOLDER",          # folder_files
     "SET_WORK_PLAYLIST",        # playlist_items
     "ADD_WORK_PERSON_ROLE",     # roles
-    # argument_sources: the Research lane (L-R-1 #634) adds CREATE_ARGUMENT and
-    # SET_ARGUMENT_SOURCES here with their PostgreSQL handlers.
+    "CREATE_ARGUMENT",          # argument_sources
+    "SET_ARGUMENT_SOURCES",     # argument_sources
 })
 
 

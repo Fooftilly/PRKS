@@ -1,35 +1,47 @@
 """Research lane (L-R-1, #634; ``docs/postgresql-architecture.md`` §6.5, §7.1, §8.1, §8.4).
 
-Concepts, their aliases and hierarchy (``concepts``) on PostgreSQL. The
-schema is ``backend/db/schema/130_research.sql``; the sync handlers are
-``backend/sync/handlers/concept.py``. Positions, Arguments, note markup and
-derived mentions are later slices of this lane.
+Concepts, their aliases and hierarchy (``concepts``), Positions
+(``positions``), and Arguments and Stances with their targets and cited
+sources (``arguments``) on PostgreSQL. The schema is
+``backend/db/schema/130_research.sql``; the sync handlers are
+``backend/sync/handlers/concept.py``, ``position.py`` and ``argument.py``.
+Note markup and derived mentions are later slices of this lane.
 
 Nothing in the running application imports this package yet: SQLite stays
 the only backend until the cutover slices (§15.3).
 
-**Lock order.** Every Concept command takes its locks in one order, so two
+**Lock order.** Every Research command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
 
-1. the Library's Concept hierarchy lock, for a command that adds or removes
-   a parent edge (a parent change, a delete);
-2. the Concept row the command changes: ``FOR UPDATE`` for a delete,
-   ``FOR NO KEY UPDATE`` otherwise;
-3. the Library's Concept key lock, for an identity write (a rename, an
+1. the Works a citation list names, by id, ``FOR KEY SHARE`` (an Argument
+   create or a source change), the order a Work delete takes them in: the
+   Work ``FOR UPDATE``, then the Arguments citing it;
+2. the Library's Concept hierarchy lock, for a command that adds or removes
+   a parent edge (a parent change, a Concept delete), or its Argument
+   target lock, for a target change;
+3. the Concept, Position or Argument row the command changes: ``FOR
+   UPDATE`` for a delete, ``FOR NO KEY UPDATE`` otherwise (a Work delete:
+   every Argument citing the Work, by id);
+4. the Library's Concept key lock, for an identity write (a rename, an
    alias set), so two writers never take each other's keys in opposite
    orders;
-4. the other Concepts it names (new parents), by id, ``FOR KEY SHARE``, so
-   a delete of one waits for the command or the command finds it gone;
-5. revision scopes, sorted (``backend.domain.works.revisions.lock_many``).
+5. the other rows it names (new parents, the Positions and Arguments a
+   target list names), by id, ``FOR KEY SHARE``, so a delete of one waits
+   for the command or the command finds it gone;
+6. revision scopes, sorted (``backend.domain.works.revisions.lock_many``).
 
-A create writes one key and holds no other, so it takes no key lock.
+A Concept create writes one key and holds no other, so it takes no key
+lock, and an Argument create needs no target lock: nothing can answer an
+Argument before it exists.
 
-No Concept command locks a Work, a Tag or a Folder. A Research Note
-write holds the Concepts its markup names ``FOR KEY SHARE`` after its Work
-row and note scope (``concepts.share_referenced``), which composes with
-this order because no Concept command waits on a Work or a note scope; a
-delete's ``FOR UPDATE`` therefore never misses a note committed alongside
-it (``CONCEPT_IN_USE``).
+No Research command locks a Tag or a Folder. A Research Note write holds the
+Concepts and Arguments its markup names ``FOR KEY SHARE`` after its Work
+row and note scope (``concepts.share_referenced``,
+``arguments.share_referenced``), which composes with this order because no
+Research command waits on a note scope, and the only Work it waits on is a
+cited one, before any Research row; a delete's ``FOR UPDATE`` therefore
+never misses a note committed alongside it (``CONCEPT_IN_USE``,
+``ARGUMENT_IN_USE``).
 """
 
 from backend.db import register_constraint

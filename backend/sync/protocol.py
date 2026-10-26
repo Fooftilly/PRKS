@@ -31,7 +31,8 @@ single writer:
    is not ledgered (an unsatisfied dependency) rolls the claim back. An
    operation on a Work (``entity_type`` ``work``) whose id was merged away
    is not applied: it is ledgered ``WORK_MERGED`` with the target
-   (:func:`backend.domain.works.lifecycle.guard`), whatever its family.
+   (:func:`backend.domain.works.lifecycle.guard`), whatever its family, and
+   so is a playlist reorder or a citation list naming one.
 4. When a constraint the family names (``retry_constraints``) refuses the
    transaction, a concurrent writer won a race the index or key arbitrates
    (§7.1). The whole operation runs once more: its claim was rolled back,
@@ -204,6 +205,13 @@ def _claim_and_apply(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any
             merged = lifecycle.guard(scope, work_id, op["operation"])
             if merged is not None:
                 break
+    if merged is None and op["operation"] in argument.CITING:
+        # A citation list names Works the same way (the entity is the
+        # Argument); a merged-away one is never cited in the target's place.
+        for work_id in argument.cited_work_ids(op):
+            merged = lifecycle.guard(scope, work_id, op["operation"])
+            if merged is not None:
+                break
     if merged is None and not _dependencies_satisfied(scope, op):
         raise _NotLedgered(400, {"code": "UNSATISFIED_DEPENDENCY"})
     if merged is not None:
@@ -236,8 +244,8 @@ def _dependencies_satisfied(scope: LibraryScope, op: dict[str, Any]) -> bool:
 # Registration is explicit, as in the SQLite protocol: the families PostgreSQL
 # accepts are readable in one place. Later lanes add theirs here.
 from backend.sync.handlers import (  # noqa: E402
-    concept, folder, person, person_group, playlist, tag, tag_link, work_lifecycle, work_metadata,
-    work_notes, work_open, work_role, work_source,
+    argument, concept, folder, person, person_group, playlist, position, tag, tag_link, work_lifecycle,
+    work_metadata, work_notes, work_open, work_role, work_source,
 )
 
 register("MARK_WORK_OPENED", work_open.HANDLER)
@@ -279,3 +287,11 @@ register("SET_CONCEPT_FIELD", concept.FIELD_HANDLER)
 register("SET_CONCEPT_IDENTITY", concept.IDENTITY_HANDLER)
 register("SET_CONCEPT_PARENTS", concept.PARENTS_HANDLER)
 register("DELETE_CONCEPT", concept.DELETE_HANDLER)
+register("CREATE_POSITION", position.CREATE_HANDLER)
+register("SET_POSITION_FIELD", position.FIELD_HANDLER)
+register("DELETE_POSITION", position.DELETE_HANDLER)
+register("CREATE_ARGUMENT", argument.CREATE_HANDLER)
+register("SET_ARGUMENT_FIELD", argument.FIELD_HANDLER)
+register("SET_ARGUMENT_SOURCES", argument.SOURCES_HANDLER)
+register("SET_ARGUMENT_TARGETS", argument.TARGETS_HANDLER)
+register("DELETE_ARGUMENT", argument.DELETE_HANDLER)

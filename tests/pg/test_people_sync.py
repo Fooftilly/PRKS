@@ -132,11 +132,12 @@ class IsolationDeclarationTests(unittest.TestCase):
         serializable = {operation for operation, handler in protocol._HANDLERS.items()
                         if handler.isolation is Isolation.SERIALIZABLE}
         # The Tag merge's peer-table writers (L-O-1) are listed too, and the
-        # Work merge's (a Work filed in a Folder, a first note).
+        # Work merge's (a Work filed in a Folder, a first note, a citation).
         self.assertEqual(serializable, {"DELETE_PERSON", "ADD_WORK_PERSON_ROLE", "ADD_PERSON_GROUP_MEMBER",
                                         "CREATE_WORK", "CREATE_TAG", "MERGE_TAG", "ADD_WORK_TAG",
                                         "ADD_FOLDER_TAG", "SET_WORK_FOLDER", "SET_WORK_PLAYLIST",
-                                        "SET_WORK_RESEARCH_NOTE", "SET_WORK_PRIVATE_NOTE"})
+                                        "SET_WORK_RESEARCH_NOTE", "SET_WORK_PRIVATE_NOTE",
+                                        "CREATE_ARGUMENT", "SET_ARGUMENT_SOURCES"})
 
 
 class LedgerTests(PeopleSyncTestCase):
