@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 AXE_JS = REPO / "frontend-app" / "node_modules" / "axe-core" / "axe.min.js"
-AXE_PIN = "4.13.0"
+AXE_PIN = "4.14.0"
 MAX_RULES = 18
 MAX_TARGETS = 2
 MAX_SELECTOR = 100
