@@ -82,7 +82,7 @@ class MergeTestCase(SyncTestCase):
 
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         tables = ("works", "manifestations", "assets", "work_notes", "work_tags", "roles", "folder_files",
-                  "playlist_items", "entity_revisions", "sync_work_lifecycle")
+                  "playlist_items", "argument_sources", "entity_revisions", "sync_work_lifecycle")
         return {table: self.sql(f"SELECT * FROM prks.{table} ORDER BY 1, 2, 3") for table in tables}
 
 
@@ -398,6 +398,29 @@ class PlanTests(MergeTestCase):
         self.assertTrue(edited and edited <= set(plan.source_scopes))
         self.assertFalse(any(target in scope_id for _, scope_id in plan.source_scopes))
 
+    def test_the_plan_names_every_citing_argument_and_the_citations_that_collapse(self) -> None:
+        source, target = self.library.add_work("Source"), self.library.add_work("Target")
+        pinned = self.add_manifestation(source)
+        both, only_source, pinned_only, only_target = (
+            "A-" + uuid.uuid4().hex.upper() for _ in range(4))
+        for argument_id in (both, only_source, pinned_only, only_target):
+            self.sql("INSERT INTO prks.arguments (library_id, id, name, kind) VALUES (%s, %s, 'A', 'argument')",
+                     (self.actor.library_id, argument_id))
+        cite = ("INSERT INTO prks.argument_sources (library_id, argument_id, order_index, work_id,"
+                " manifestation_id, pages) VALUES (%s, %s, %s, %s, %s, %s)")
+        for argument_id, order, work_id, manifestation_id, pages in (
+                (both, 0, source, None, "514a"), (both, 1, target, None, "514a"),
+                (both, 2, source, None, "12"), (only_source, 0, source, None, ""),
+                (pinned_only, 0, source, pinned, ""), (pinned_only, 1, target, None, ""),
+                (only_target, 0, target, None, "")):
+            self.sql(cite, (self.actor.library_id, argument_id, order, work_id, manifestation_id, pages))
+
+        plan = self.prepare(source, target)
+
+        self.assertEqual(set(plan.citing_arguments), {both, only_source, pinned_only})
+        # A pinned citation keeps its Version, so only Work-level twins collapse.
+        self.assertEqual(plan.citations_collapsed, ((both, "514a"),))
+
     def test_a_plain_pair_has_nothing_to_choose_and_nothing_blocked(self) -> None:
         source, target = self.library.add_work("Same"), self.library.add_work("Same")
         plan = self.prepare(source, target)
@@ -532,7 +555,8 @@ class RegistryTests(MergeTestCase):
     def test_the_peer_tables_are_the_architectures(self) -> None:
         # docs/postgresql-architecture.md §7.1, less the tables still deferred.
         self.assertEqual({r.table for r in merge.RELATIONSHIPS if r.peer},
-                         {"manifestations", "work_notes", "work_tags", "folder_files", "playlist_items", "roles"})
+                         {"manifestations", "work_notes", "work_tags", "folder_files", "playlist_items", "roles",
+                          "argument_sources"})
 
 
 class IsolationTests(MergeTestCase):
