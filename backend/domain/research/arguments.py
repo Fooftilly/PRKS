@@ -178,8 +178,10 @@ ORDER BY s.argument_id COLLATE "C", s.order_index, COALESCE(m.title, w.title) CO
 _AUTHORS_SQL: LiteralString = """
 SELECT r.work_id, p.id, p.first_name, p.last_name, r.role_type, r.credit_name, r.order_index
 FROM prks.roles r
+JOIN prks.works w ON w.library_id = r.library_id AND w.id = r.work_id
 JOIN prks.persons p ON p.library_id = r.library_id AND p.id = r.person_id
 WHERE r.library_id = %(library_id)s AND r.work_id = ANY(%(ids)s) AND r.role_type = 'Author'
+  AND (r.manifestation_id IS NULL OR r.manifestation_id = w.primary_manifestation_id)
 ORDER BY r.work_id COLLATE "C", r.order_index, p.last_name COLLATE "C", r.seq
 """
 _CITING_SQL: LiteralString = """

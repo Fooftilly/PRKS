@@ -203,6 +203,20 @@ class ArgumentTests(ResearchTestCase):
 
 
 class CitationTests(ResearchTestCase):
+    def test_a_citation_credits_the_authors_of_the_primary_version(self) -> None:
+        # The Work's own credits (roles.credits_by_work): Work-scoped roles
+        # and the primary Version's, never another Version's.
+        work = self.library.add_work("W")
+        other = self.add_manifestation(work)
+        ada, bea = self.library.add_person("Ada", "A"), self.library.add_person("Bea", "B")
+        for order, (person, manifestation) in enumerate(((ada, self.primary(work)), (bea, other))):
+            self.sql("INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index,"
+                     " manifestation_id) VALUES (%s, %s, %s, 'Author', %s, %s)",
+                     (self.actor.library_id, work, person, order, manifestation))
+        a = self.argument("A", sources=[source(work)])
+        self.assertEqual([author["id"] for author in self.library.get_argument(a)["sources"][0]["authors"]],
+                         [ada])
+
     def test_a_pinpoint_pins_the_only_version_and_a_bare_entry_cites_the_work(self) -> None:
         work = self.library.add_work("W")
         a = self.argument("A", sources=[source(work, "12")])
