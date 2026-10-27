@@ -152,22 +152,26 @@ _MENTION_COUNT_SQL: dict[str, LiteralString] = {
     "concept": """
 SELECT count(*) AS count FROM derived.concept_mentions m
 JOIN prks.works w ON w.library_id = m.library_id AND w.id = m.work_id
+JOIN prks.concepts c ON c.library_id = m.library_id AND c.id = m.concept_id
 WHERE m.library_id = %(library_id)s AND m.concept_id = %(record_id)s
 """,
     "argument": """
 SELECT count(*) AS count FROM derived.argument_mentions m
 JOIN prks.works w ON w.library_id = m.library_id AND w.id = m.work_id
+JOIN prks.arguments a ON a.library_id = m.library_id AND a.id = m.argument_id
 WHERE m.library_id = %(library_id)s AND m.argument_id = %(record_id)s
 """,
 }
 _BACKLINK_ROWS_SQL: dict[str, LiteralString] = {
     "concept": """
 SELECT m.work_id, m.start_offset, m.end_offset FROM derived.concept_mentions m
+JOIN prks.concepts c ON c.library_id = m.library_id AND c.id = m.concept_id
 WHERE m.library_id = %(library_id)s AND m.concept_id = %(record_id)s
 ORDER BY m.work_id COLLATE "C", m.start_offset
 """,
     "argument": """
 SELECT m.work_id, m.start_offset, m.end_offset FROM derived.argument_mentions m
+JOIN prks.arguments a ON a.library_id = m.library_id AND a.id = m.argument_id
 WHERE m.library_id = %(library_id)s AND m.argument_id = %(record_id)s
 ORDER BY m.work_id COLLATE "C", m.start_offset
 """,

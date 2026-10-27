@@ -105,8 +105,22 @@ class StaleRowTests(GraphReadTestCase):
         self.library.delete_concept(temp)
         self.assertEqual(self.mentions(work)["concepts"][0][0], temp)  # stale until the job runs
         self.assertEqual(self.index.concept_mention_counts(), {})
+        self.assertEqual(self.index.mention_count_for_concept(temp), 0)
+        self.assertEqual(self.index.concept_backlinks(temp, None), [])
         self.assertEqual(self.graph()["edges"], [])
         self.assertEqual(self.index.work_research_refs(work, None)["concepts"], [])
+
+    def test_an_argument_deleted_before_the_reindex_of_its_last_note_runs_leaves_the_reads(self) -> None:
+        claim = self.argument("Claim")
+        work = self.library.add_work("W")
+        self.research_note(work, f"[[argument:{claim}]]")
+        self.run_jobs()
+        self.research_note(work, "")
+        self.library.delete_argument(claim)
+        self.assertEqual(self.index.argument_mention_counts(), {})
+        self.assertEqual(self.index.mention_count_for_argument(claim), 0)
+        self.assertEqual(self.index.argument_backlinks(claim, None), [])
+        self.assertEqual(self.graph()["edges"], [])
 
 
 class IsolationTests(GraphReadTestCase):
