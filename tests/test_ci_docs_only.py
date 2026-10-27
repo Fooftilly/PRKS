@@ -183,7 +183,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
             end = block.find("\n      - name: ", start + 1)
             return block[start:end if end >= 0 else len(block)].split(
                 "\n", 1
-            )[1]
+            )[1].rstrip()
 
         self.assertEqual(
             script(plan, "Classify docs-only scope for PostgreSQL jobs (fail closed)"),
