@@ -490,7 +490,7 @@ class OfflinePersonEditTests(unittest.TestCase):
             # Five nested diagnostic timers preserve the real browser and
             # offline queue path. Don't add them to this inclusive parent.
             with profile_e2e_phase("person_edit_link_nav"):
-                o._open_work_from_home(page, WORK_A_TITLE)
+                o._open_work_from_home(page, WORK_A_TITLE, profile_prefix="person_edit")
             with profile_e2e_phase("person_edit_link_panel"):
                 o._open_details_drawer_if_tiled(page)
                 page.wait_for_selector('.work-detail')
