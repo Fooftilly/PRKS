@@ -47,6 +47,8 @@ pip-wheel-metadata/
 # E2E per-test timing history (runner metadata; machine-specific)
 /.tests/
 .pytest_cache/
+# Mutmut's disposable mutated copies and generated execution data
+/mutants/
 .coverage
 .coverage.*
 coverage.xml
