@@ -37,14 +37,18 @@ lock, and an Argument create needs no target lock: nothing can answer an
 Argument before it exists.
 
 No Research command locks a Tag or a Folder. A Research Note write, after
-its Work row and note scope, creates the Concepts its markup names that do
-not exist yet (under the Concept key lock, in key order, since it may write
-several keys) and holds them and the Arguments it names ``FOR KEY SHARE``
-(``concepts.ensure_referenced``, ``arguments.share_referenced``), which
-composes with this order because no Research command waits on a note scope,
-and the only Work it waits on is a cited one, before any Research row; a
-delete's ``FOR UPDATE`` therefore never misses a note committed alongside
-it (``CONCEPT_IN_USE``, ``ARGUMENT_IN_USE``).
+its Work row and note scope, holds the Concepts its markup names ``FOR KEY
+SHARE`` (a name counts as existing only once its Concept is held), creates
+the rest under the Concept key lock, in key order, and holds them too, then
+holds the Arguments it names (``concepts.ensure_referenced``,
+``arguments.share_referenced``). This composes with this order because no
+Research command waits on a note scope, the only Work it waits on is a
+cited one, before any Research row, and a command holding the key lock
+(an identity write) holds its Concept ``FOR NO KEY UPDATE``, which a ``FOR
+KEY SHARE`` never waits for; a delete's ``FOR UPDATE`` therefore never
+misses a note committed alongside it (``CONCEPT_IN_USE``,
+``ARGUMENT_IN_USE``), and a Concept deleted before the note holds it is
+created again.
 
 ``research.reindex_work`` takes the Work's reindex lock, the Work row ``FOR
 KEY SHARE``, then its note ``FOR SHARE``, and writes only ``derived`` rows,

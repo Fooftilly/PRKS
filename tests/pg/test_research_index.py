@@ -16,15 +16,17 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
+from unittest import mock
 
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.research import concepts, reindex
-from backend.research_network import ResearchError
 from backend.domain.works import commands, notes
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
+from backend.pg_facade import context as facade_context
+from backend.research_network import ResearchError
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_arguments_sync import ResearchSyncTestCase
 
@@ -298,6 +300,72 @@ class ConcurrencyTests(ResearchIndexTestCase):
         self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])  # the delete's job
         self.assertIs(run_job(self.db, stale, lease=LEASE), Outcome.SUCCEEDED)
         self.assertEqual(self.derived_rows(work), 0)
+
+    @contextmanager
+    def note_paused_at_its_hold(self, work_id: str, text: str, *, before: bool) -> Iterator[list[Any]]:
+        """A note write paused just ``before`` (or after) it holds the Concepts it names.
+
+        The block runs while it is paused; on leaving, the write resumes and
+        commits. Yields the write's outcome list (``[None]`` once it committed).
+        """
+        paused, resume = threading.Event(), threading.Event()
+        share_keys = concepts._share_keys
+        calls = 0
+
+        def pausing(scope: LibraryScope, keys: list[str]) -> set[str]:
+            nonlocal calls
+            calls += 1
+            if calls == 1 and before:
+                paused.set()
+                resume.wait(10)
+            held = share_keys(scope, keys)
+            if calls == 1 and not before:
+                paused.set()
+                resume.wait(10)
+            return held
+
+        with mock.patch.object(concepts, "_share_keys", pausing):
+            writer, out = self.in_thread(lambda: self.research_note(work_id, text))
+            try:
+                self.assertTrue(paused.wait(10))
+                yield out
+            finally:
+                resume.set()
+                writer.join(10)
+
+    def delete_concept_as_actor(self, concept_id: str) -> Any:
+        with facade_context.acting_as(self.actor.context):
+            return self.library.delete_concept(concept_id)
+
+    def test_a_concept_delete_after_a_note_write_holds_it_is_refused(self) -> None:
+        topic = self.concept("Topic")
+        work = self.library.add_work("W")
+        with self.note_paused_at_its_hold(work, "[[concept:Topic]]", before=False) as written:
+            # The note has resolved Topic by holding it: the delete waits for the note.
+            deleter, deleted = self.in_thread(lambda: self.delete_concept_as_actor(topic))
+            self.wait_for_lock_waiter()
+            self.assertEqual(deleted, [])
+        deleter.join(10)
+        self.assertEqual(written, [None])
+        self.assertIsInstance(deleted[0], ResearchError)
+        self.assertEqual(deleted[0].code, "concept_in_use")
+        self.run_jobs()
+        self.assertEqual(self.mentions(work)["concepts"], [(topic, 0, 17)])
+        self.assertEqual(self.refs(work)["pending"], False)
+
+    def test_a_concept_deleted_before_a_note_write_holds_it_is_created_again(self) -> None:
+        topic = self.concept("Topic")
+        work = self.library.add_work("W")
+        with self.note_paused_at_its_hold(work, "[[concept:Topic]]", before=True) as written:
+            # The note has parsed its references but holds nothing yet: the delete commits.
+            self.library.delete_concept(topic)
+            self.assertEqual(written, [])
+        self.assertEqual(written, [None])
+        recreated = self.concept_ids()["Topic"]
+        self.assertNotEqual(recreated, topic)
+        self.run_jobs()
+        self.assertEqual(self.mentions(work)["concepts"], [(recreated, 0, 17)])
+        self.assertEqual(self.refs(work)["pending"], False)
 
     def test_a_note_creating_several_concepts_and_a_rename_take_the_key_lock_first(self) -> None:
         # The note writes keys "a" and "z"; a rename to "Z" with alias "A" wants
