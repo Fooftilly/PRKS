@@ -55,5 +55,6 @@ class WorkRoleEditorContractTests(unittest.TestCase):
         self.assertIn("checks passed", proc.stdout)
 
 
+
 if __name__ == "__main__":
     unittest.main()
