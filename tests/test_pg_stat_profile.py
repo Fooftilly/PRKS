@@ -137,7 +137,7 @@ class ProfileSafetyTests(unittest.TestCase):
             "total_exec_ms": 12.346,
         })
         self.assertIn("pg_stat_statements(false)", stats.statement)
-        self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\\bquery\\b")
+        self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\bquery\b")
         self.assertNotIn("PRIVATE SQL", json.dumps(result))
 
     def test_bounded_ascending_fixture_tiers(self):
