@@ -233,14 +233,6 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertGreaterEqual(outcome["first_observed_call_ms"], 0)
         self.assertTrue(outcome["top_statements"])
         self.assertEqual(outcome["sql_rollup"]["total_sql_calls"], 9)
-        with (
-            patch("scripts.pg_stat_profile.snapshot", side_effect=[[], results]),
-            patch("scripts.pg_stat_profile.statement_rollup", return_value={
-                "distinct_statement_count": 1, "total_sql_calls": 2, "total_exec_ms": 5.12,
-            }),
-            self.assertRaisesRegex(RuntimeError, "accounting"),
-        ):
-            benchmark(Dummy(), operation, 4, lambda x: assert_works_count(x, 1))
         bad = []
         def invalid():
             bad.append(1)
@@ -249,6 +241,32 @@ class ProfileSafetyTests(unittest.TestCase):
             benchmark(Dummy(), invalid, 4, lambda x: assert_works_count(x, 1))
         self.assertEqual(len(bad), 1)
         self.assertEqual(calls, ["reset"], "a failing first call must not reset SQL stats")
+
+    def test_incomplete_sql_accounting_fails_without_publishing_timings(self):
+        class Stats:
+            def __init__(self):
+                self.resets = 0
+
+            def execute(self, _query):
+                self.resets += 1
+
+        reads = []
+        def operation():
+            reads.append(1)
+            return [{"id": "WORK-A"}]
+
+        stats = Stats()
+        top_five = [{"query_fingerprint": "private", "calls": 5}]
+        with (
+            patch("scripts.pg_stat_profile.snapshot", side_effect=[[], top_five]),
+            patch("scripts.pg_stat_profile.statement_rollup", return_value={
+                "distinct_statement_count": 1, "total_sql_calls": 2, "total_exec_ms": 5.12,
+            }),
+            self.assertRaisesRegex(RuntimeError, "accounting"),
+        ):
+            benchmark(stats, operation, 4, lambda x: assert_works_count(x, 1))
+        self.assertEqual(len(reads), 7)
+        self.assertEqual(stats.resets, 1)
 
     def test_report_is_numeric_only_even_if_sql_in_row(self):
         probe_literal = "example select payload MUST NOT appear in profile output"
