@@ -203,7 +203,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
                 job = match.group(1)
                 self.assertIn("name: " + required_name, job)
                 self.assertIn("needs: docs-only-plan", job)
-                self.assertIn("always() && github.event_name != 'schedule'", job)
+                self.assertIn("!cancelled() && github.event_name != 'schedule'", job)
                 self.assertIn("needs.docs-only-plan.result != 'success'", job)
                 self.assertIn("needs.docs-only-plan.outputs.docs_only != 'true'", job)
                 self.assertIn("services:\n      postgres:", job)
