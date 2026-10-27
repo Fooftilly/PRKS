@@ -48,6 +48,7 @@ from backend import concept_sync as rules
 from backend import research_network as network
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
+from backend.entity_ids import generate as generate_id
 from backend.research_markup import parse_research_markup
 from backend.research_network import ResearchError
 
@@ -226,6 +227,14 @@ WHERE c.library_id = %(library_id)s AND c.id IN (
   SELECT k.concept_id FROM prks.concept_keys k
   WHERE k.library_id = %(library_id)s AND k.key IN (SELECT prks.identity_key(n) FROM unnest(%(names)s::text[]) AS n))
 ORDER BY c.id COLLATE "C" FOR KEY SHARE
+"""
+# The Concepts holding these keys, held ``FOR KEY SHARE`` in id order; the
+# keys held. A Concept a delete removes while this waits is not returned.
+_SHARE_KEYS_SQL: LiteralString = """
+SELECT k.key FROM prks.concept_keys k
+JOIN prks.concepts c ON c.library_id = k.library_id AND c.id = k.concept_id
+WHERE k.library_id = %(library_id)s AND k.key = ANY(%(keys)s)
+ORDER BY c.id COLLATE "C" FOR KEY SHARE OF c
 """
 _REFERENCED_SQL: LiteralString = """
 SELECT 1 AS found FROM prks.concept_keys
@@ -629,6 +638,54 @@ def share_referenced(scope: LibraryScope, text: str) -> None:
     names = _reference_names(text)
     if names:
         scope.execute(_SHARE_REFERENCED_SQL, {"names": names}).fetchall()
+
+
+def _share_keys(scope: LibraryScope, keys: list[str]) -> set[str]:
+    """Hold the Concepts owning ``keys`` ``FOR KEY SHARE`` until COMMIT; the keys whose owner is held."""
+    return {str(row["key"]) for row in scope.execute(_SHARE_KEYS_SQL, {"keys": keys})}
+
+
+def ensure_referenced(scope: LibraryScope, text: str) -> None:
+    """``ensure_concepts_for_names``: create the Concepts a Research Note names that do not exist yet.
+
+    A note command calls it before the note is stored, in its own
+    transaction, so a Concept auto-created for a note that then fails to
+    save is rolled back with it. Each missing identity key gets one Concept
+    named by the reference that first spells it, as SQLite does. No
+    revision is advanced (``insert_concept_on_conn``).
+
+    A Concept counts as existing only once it is held ``FOR KEY SHARE``
+    (as :func:`share_referenced` holds it), never because a read saw it: a
+    delete that commits between a read and the hold would otherwise leave
+    the note naming nothing, with an index that looks settled. The held
+    keys are taken first; the rest are created in key order under the
+    Library's Concept key lock (:func:`lock_keys`), so neither another note
+    nor an identity write waits on these keys in the opposite order, then
+    held. A key a concurrent writer committed first is that writer's
+    Concept, held like the others; one deleted again before it is held is
+    created once more.
+    """
+    first: dict[str, str] = {}
+    names = [network.canonical_concept_name(ref.name) for ref in parse_research_markup(text).concept_refs]
+    for name in names:
+        if not name or len(name) > network.CONCEPT_NAME_MAX:
+            raise ResearchError("invalid_concept", "Concept reference is invalid.")
+    for name, key in zip(names, _keys(scope, names) if names else []):
+        first.setdefault(key, name)
+    missing = sorted(set(first) - _share_keys(scope, list(first))) if first else []
+    if missing:
+        # Several keys are written: under the key lock, as an identity write
+        # takes its keys, or a rename taking two of them in the other order
+        # would deadlock with this note on the key index.
+        lock_keys(scope)
+    while missing:
+        for key in missing:
+            try:
+                insert(scope, generate_id("C"), first[key])
+            except ResearchError as exc:
+                if exc.code != _EXISTS[0]:
+                    raise
+        missing = sorted(set(missing) - _share_keys(scope, missing))
 
 
 def _referenced_by_notes(scope: LibraryScope, concept_id: str) -> bool:

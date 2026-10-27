@@ -8,10 +8,12 @@ the bare Work id, as on SQLite. A body is validated by the same function
 a change advances its revision; a stale base conflicts only when the bodies
 differ, and a conflict reports sizes, never prose.
 
-Research markup side effects (Concept auto-creation, mentions) are the
-Research lane's (L-R-1, ``research.reindex_work`` enqueued in this same
-transaction, ``docs/postgresql-architecture.md`` §8.4); until it lands a
-Research Note is stored as text only.
+A Research Note change has SQLite's markup side effect, the Concepts it
+names created when missing (``concepts.ensure_referenced``), and enqueues
+``research.reindex_work`` in the same transaction, which rebuilds the
+derived mentions after COMMIT (``backend.domain.research.reindex``,
+``docs/postgresql-architecture.md`` §8.4). A note left as it was enqueues
+nothing.
 """
 
 from __future__ import annotations
@@ -75,13 +77,16 @@ def _set_locked(scope: LibraryScope, work_id: str, kind: str, text: str) -> tupl
     if _current(scope, work_id, kind) == text:
         return False, revision
     if kind == RESEARCH:
-        # Held until COMMIT, so a Concept or Argument delete that reads the
-        # notes after this one commits sees its references (CONCEPT_IN_USE,
+        # SQLite's markup side effect: the Concepts the note names are
+        # created when missing. They and the Arguments it names are held
+        # until COMMIT, so a Concept or Argument delete that reads the notes
+        # after this one commits sees its references (CONCEPT_IN_USE,
         # ARGUMENT_IN_USE).
-        from backend.domain.research import arguments, concepts
+        from backend.domain.research import arguments, concepts, reindex
 
-        concepts.share_referenced(scope, text)
+        concepts.ensure_referenced(scope, text)
         arguments.share_referenced(scope, text)
+        reindex.enqueue(scope, work_id)
     params = {"work_id": work_id, "kind": kind, "body": text}
     scope.execute(_UPSERT if text else _DELETE, params)
     scope.execute(_TOUCH_WORK, params)
