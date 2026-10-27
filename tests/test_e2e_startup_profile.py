@@ -156,6 +156,27 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         self.assertEqual({mode for mode, _ in targets}, {"create", "edit"})
         self.assertEqual(len(targets), 2)
         names = set(re.findall(r'"(person_(?:create|edit)_[a-z_]+)"', workflow))
+        helper_tree = ast.parse(
+            (root / "tests/e2e/test_app.py").read_text(encoding="utf-8")
+        )
+        nav_helpers = [
+            node for node in helper_tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_open_work_from_home"
+        ]
+        self.assertEqual(len(nav_helpers), 1)
+        helper_stages = [
+            call.args[0].value
+            for call in ast.walk(nav_helpers[0])
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "stage"
+            and len(call.args) == 1
+            and isinstance(call.args[0], ast.Constant)
+        ]
+        self.assertEqual(
+            helper_stages, ["folders", "recent", "card_click", "work_ready"]
+        )
         for mode, target in targets:
             module, class_name, method_name = target.rsplit(".", 2)
             file = root.joinpath(*module.split(".")).with_suffix(".py")
@@ -223,8 +244,50 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 and call.args
                 and isinstance(call.args[0], ast.Constant)
             }
+            nav_names = {
+                name for name in names
+                if name.startswith(f"person_{mode}_link_nav_")
+            }
             self.assertEqual(
-                phases, {name for name in names if name.startswith(f"person_{mode}_")},
+                nav_names,
+                {
+                    f"person_{mode}_link_nav_{stage}"
+                    for stage in ("folders", "recent", "card_click", "work_ready")
+                },
+                target,
+            )
+            # The helper constructs its stage names from the opt-in prefix, so
+            # their literals live in test_app rather than either test method.
+            self.assertEqual(
+                phases,
+                {name for name in names if name.startswith(f"person_{mode}_")} - nav_names,
+                target,
+            )
+            nav_scopes = [
+                node for parent in nodes for node in ast.walk(parent)
+                if isinstance(node, ast.With)
+                and any(
+                    isinstance(item.context_expr, ast.Call)
+                    and isinstance(item.context_expr.func, ast.Name)
+                    and item.context_expr.func.id == "profile_e2e_phase"
+                    and len(item.context_expr.args) == 1
+                    and isinstance(item.context_expr.args[0], ast.Constant)
+                    and item.context_expr.args[0].value == f"person_{mode}_link_nav"
+                    for item in node.items
+                )
+            ]
+            self.assertEqual(len(nav_scopes), 1, target)
+            nav_calls = [
+                call for stmt in nav_scopes[0].body for call in ast.walk(stmt)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "_open_work_from_home"
+            ]
+            self.assertEqual(len(nav_calls), 1, target)
+            self.assertEqual(
+                [(kw.arg, kw.value.value) for kw in nav_calls[0].keywords
+                 if isinstance(kw.value, ast.Constant)],
+                [("profile_prefix", f"person_{mode}")],
                 target,
             )
 
