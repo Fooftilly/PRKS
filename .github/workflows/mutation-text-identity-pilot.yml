@@ -81,7 +81,7 @@ jobs:
                   raise SystemExit("Mutation experiment incomplete: invalid count")
               clean[key] = value
           if clean["total"] < 1 or clean["killed"] < 1:
-              raise SystemExit("Mutation experiment produced no verified killed mutants")
+              raise SystemExit("Mutation experiment produced no killed outcomes")
           if sum(value for key, value in clean.items() if key != "total") != clean["total"]:
               raise SystemExit("Mutation experiment incomplete: unaccounted mutants")
           if clean["check_was_interrupted_by_user"] or clean["segfault"]:
@@ -91,7 +91,9 @@ jobs:
               "",
               "Scope: `backend/domain/text_identity.py` only, with existing "
               "synthetic Unicode text vectors. Mutmut 3.8.0 / Python 3.12.",
-              "Counts describe mutants, not source coverage or bugs.",
+              "Counts describe mutant test-process outcomes, not proven bugs.",
+              "Killed means a nonzero mutant-test exit (assertion OR runner error).",
+              "Review individual mutants before treating a killed outcome as a test-quality signal.",
               "",
               "| Outcome | Count |",
               "| --- | ---: |",
