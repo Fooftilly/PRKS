@@ -64,6 +64,22 @@ class TextIdentityVectorTests(unittest.TestCase):
         else:
             self.assertEqual(identity_key(chr(0xA7CB)), chr(0x0264))
 
+    def test_refusal_messages_identify_the_rejected_code_point(self) -> None:
+        # The diagnostic distinguishes unknown Unicode data from values
+        # PostgreSQL cannot store, without echoing the entire supplied name.
+        for bad_char, reason in (
+            (chr(0x0378), "not assigned in Unicode"),
+            (chr(0), "cannot be stored as PostgreSQL text"),
+            (chr(0xD800), "cannot be stored as PostgreSQL text"),
+        ):
+            with self.subTest(codepoint=hex(ord(bad_char))):
+                with self.assertRaises(UnsupportedTextError) as caught:
+                    identity_key("prefix" + bad_char + "suffix")
+                self.assertIn(f"U+{ord(bad_char):04X}", str(caught.exception))
+                self.assertIn(reason, str(caught.exception))
+                self.assertNotIn("prefix", str(caught.exception))
+                self.assertNotIn("suffix", str(caught.exception))
+
     def test_text_postgresql_cannot_store_is_refused(self) -> None:
         for value in ("a\x00b", "a" + chr(0xD800), chr(0xDFFF)):
             with self.subTest(codepoints=[hex(ord(c)) for c in value]):
