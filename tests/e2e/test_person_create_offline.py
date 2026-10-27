@@ -97,7 +97,7 @@ class OfflinePersonCreateTests(unittest.TestCase):
         # Nested diagnosis inside person_create_role_link. These timings
         # explain the parent's cost and must not be added to it.
         with profile_e2e_phase("person_create_link_nav"):
-            o._open_work_from_home(page, work_title)
+            o._open_work_from_home(page, work_title, profile_prefix="person_create")
         with profile_e2e_phase("person_create_link_panel"):
             o._open_details_drawer_if_tiled(page)
             page.wait_for_selector('.work-detail')

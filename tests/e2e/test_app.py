@@ -6,6 +6,7 @@ import json
 import re
 import time
 import unittest
+from contextlib import nullcontext
 from urllib.parse import unquote, urlparse
 
 from tests.e2e.fixtures import (
@@ -150,17 +151,30 @@ def _server_work_title(server, work_id):
     return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root)).get_work(work_id)["title"]
 
 
-def _open_work_from_home(page, title):
-    page.locator('#sidebar a.nav-link[href="#/folders"]').click()
-    page.wait_for_function("() => location.hash === '#/folders'")
-    page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
-    page.locator(".card-title", has_text=title).wait_for()
-    page.locator(".card-title", has_text=title).click()
-    page.wait_for_function(
-        "title => decodeURIComponent(location.hash).indexOf('/works/') !== -1 && document.body.innerText.indexOf(title) !== -1",
-        arg=title,
-    )
+def _open_work_from_home(page, title, *, profile_prefix=None):
+    """Use the real Folders → Recently Added → Work UI path.
 
+    A supplied prefix opts this one invocation into navigation subphase
+    diagnostics; ordinary callers use the identical interactions unprofiled.
+    """
+    def stage(name):
+        if profile_prefix is None:
+            return nullcontext()
+        return profile_e2e_phase(f"{profile_prefix}_link_nav_{name}")
+
+    with stage("folders"):
+        page.locator('#sidebar a.nav-link[href="#/folders"]').click()
+        page.wait_for_function("() => location.hash === '#/folders'")
+    with stage("recent"):
+        page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
+        page.locator(".card-title", has_text=title).wait_for()
+    with stage("card_click"):
+        page.locator(".card-title", has_text=title).click()
+    with stage("work_ready"):
+        page.wait_for_function(
+            "title => decodeURIComponent(location.hash).indexOf('/works/') !== -1 && document.body.innerText.indexOf(title) !== -1",
+            arg=title,
+        )
 
 _PW = None
 _BROWSER = None
