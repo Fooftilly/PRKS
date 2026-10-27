@@ -58,6 +58,20 @@ class FenceTests(GraphReadTestCase):
         self.assertEqual(self.edges("mentions_concept")[mention]["count"], 2)
         self.assertEqual([len(row["occurrences"]) for row in self.index.concept_backlinks(ethics, None)], [2])
 
+    def test_a_pending_edit_cuts_no_snippet_from_the_new_note(self) -> None:
+        ethics = self.concept("Ethics")
+        work = self.library.add_work("W")
+        self.research_note(work, "[[concept:Ethics]] opens the note.")
+        self.run_jobs()
+        self.research_note(work, "An unrelated opening sentence, then [[concept:Ethics]].")
+        # The indexed offsets are the old note's: no snippet is cut from the new one.
+        [row] = self.index.concept_backlinks(ethics, None)
+        self.assertEqual(row["occurrences"], [{"start": 0, "end": 18, "snippet": ""}])
+        self.run_jobs()
+        [row] = self.index.concept_backlinks(ethics, None)
+        self.assertEqual(row["occurrences"][0]["start"], 36)
+        self.assertIn("[[concept:Ethics]]", row["occurrences"][0]["snippet"])
+
     def test_a_work_that_does_not_exist_has_no_references(self) -> None:
         self.assertEqual(self.index.work_research_refs("W-" + "0" * 32, None),
                          {"concepts": [], "arguments": [], "pending": False})

@@ -172,13 +172,14 @@ WHERE m.library_id = %(library_id)s AND m.argument_id = %(record_id)s
 ORDER BY m.work_id COLLATE "C", m.start_offset
 """,
 }
-# The title the Work projection gives (the primary Version's) and the note
-# the offsets index.
+# The title the Work projection gives (the primary Version's), the note and
+# the hash of the note the offsets index.
 _BACKLINK_WORKS_SQL: LiteralString = """
-SELECT w.id, coalesce(mf.title, w.title) AS title, n.body
+SELECT w.id, coalesce(mf.title, w.title) AS title, n.body, s.content_hash AS indexed_hash
 FROM prks.works w
 JOIN prks.manifestations mf ON mf.library_id = w.library_id AND mf.id = w.primary_manifestation_id
 LEFT JOIN prks.work_notes n ON n.library_id = w.library_id AND n.work_id = w.id AND n.kind = 'research'
+LEFT JOIN derived.work_note_state s ON s.library_id = w.library_id AND s.work_id = w.id
 WHERE w.library_id = %(library_id)s AND w.id = ANY(%(work_ids)s)
 """
 
@@ -281,13 +282,20 @@ def backlinks(scope: LibraryScope, kind: str, record_id: str) -> list[dict[str, 
 
     ``{work_id, title, occurrences: [{start, end, snippet}]}``; the snippet is
     cut from the Research Note as SQLite cuts it, and a Work gone since it
-    was indexed is left out.
+    was indexed is left out. While a Work's reindex is pending the offsets
+    belong to the note it replaced, so its snippets are empty until the job
+    runs (SQLite indexes in the same request and has no such window).
     """
     rows = scope.execute(_BACKLINK_ROWS_SQL[kind], {"record_id": record_id}).fetchall()
     if not rows:
         return []
     work_ids = list(dict.fromkeys(str(row["work_id"]) for row in rows))
     works = {str(row["id"]): row for row in scope.execute(_BACKLINK_WORKS_SQL, {"work_ids": work_ids})}
+    # The note each Work's offsets index, or None while its reindex is pending.
+    bodies: dict[str, str | None] = {}
+    for wid, work in works.items():
+        body = str(work["body"] or "")
+        bodies[wid] = body if work["indexed_hash"] == content_hash(body) else None
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
         wid = str(row["work_id"])
@@ -295,7 +303,8 @@ def backlinks(scope: LibraryScope, kind: str, record_id: str) -> list[dict[str, 
         if work is None:
             continue
         bucket = grouped.setdefault(wid, {"work_id": wid, "title": work["title"] or "", "occurrences": []})
+        body = bodies[wid]
         start, end = int(row["start_offset"]), int(row["end_offset"])
-        bucket["occurrences"].append({"start": start, "end": end,
-                                      "snippet": note_snippet(str(work["body"] or ""), start, end)})
+        snippet = note_snippet(body, start, end) if body is not None else ""
+        bucket["occurrences"].append({"start": start, "end": end, "snippet": snippet})
     return [grouped[wid] for wid in work_ids if wid in grouped]
