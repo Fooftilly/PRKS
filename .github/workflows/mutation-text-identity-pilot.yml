@@ -54,6 +54,11 @@ jobs:
           # vectors, mutmut results prints bounded non-killed mutant IDs,
           # not raw application data or unreviewed document contents.
           mutmut results
+          # Temporary fixture-only diagnostic: inspect the exact four
+          # surviving text-normalization edits before adding test cases.
+          for mutant in 7 16 26 32; do
+            mutmut show "backend.domain.text_identity.x_identity_key__mutmut_${mutant}"
+          done
 
       - name: Record private-data-free advisory result
         shell: bash
