@@ -65,18 +65,27 @@ jobs:
           stats = json.loads(file.read_text(encoding="utf-8"))
           if not isinstance(stats, dict):
               raise SystemExit("Mutation experiment incomplete: invalid stats")
+          # These keys are mutmut 3.8.0's export-cicd-stats JSON
+          # schema, not human-readable names from its CLI progress.
           keys = (
               "total", "killed", "survived", "timeout", "skipped",
-              "suspicious", "no tests", "not checked",
+              "suspicious", "no_tests", "segfault",
+              "check_was_interrupted_by_user",
           )
+          if set(stats) != set(keys):
+              raise SystemExit("Mutation experiment incomplete: unexpected stats schema")
           clean = {}
           for key in keys:
-              value = stats.get(key, 0)
+              value = stats[key]
               if type(value) is not int or value < 0:
                   raise SystemExit("Mutation experiment incomplete: invalid count")
               clean[key] = value
           if clean["total"] < 1 or clean["killed"] < 1:
               raise SystemExit("Mutation experiment produced no verified killed mutants")
+          if sum(value for key, value in clean.items() if key != "total") != clean["total"]:
+              raise SystemExit("Mutation experiment incomplete: unaccounted mutants")
+          if clean["check_was_interrupted_by_user"] or clean["segfault"]:
+              raise SystemExit("Mutation experiment incomplete: interrupted or crashed mutants")
           lines = [
               "## PRKS text-identity mutation pilot (advisory)",
               "",
