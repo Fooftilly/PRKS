@@ -194,9 +194,13 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
             ("backend-parity", "Backend parity (SQLite + PostgreSQL)"),
         ):
             with self.subTest(job_id=job_id):
-                job = workflow.split("  " + job_id + ":\n", 1)[1].split(
-                    "\n  ", 1
-                )[0]
+                match = re.search(
+                    r"(?ms)^  " + re.escape(job_id)
+                    + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
+                    workflow,
+                )
+                self.assertIsNotNone(match)
+                job = match.group(1)
                 self.assertIn("name: " + required_name, job)
                 self.assertIn("needs: docs-only-plan", job)
                 self.assertIn("always() && github.event_name != 'schedule'", job)
