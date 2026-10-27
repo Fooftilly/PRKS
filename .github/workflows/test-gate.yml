@@ -188,7 +188,7 @@ jobs:
     # A missing/failed classifier must NEVER skip code/database validation.
     # GitHub considers deliberately skipped required jobs successful checks.
     if: >-
-      always() && github.event_name != 'schedule' &&
+      !cancelled() && github.event_name != 'schedule' &&
       (needs.docs-only-plan.result != 'success' ||
        needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
@@ -242,7 +242,7 @@ jobs:
     # A missing/failed classifier must NEVER skip code/database validation.
     # GitHub considers deliberately skipped required jobs successful checks.
     if: >-
-      always() && github.event_name != 'schedule' &&
+      !cancelled() && github.event_name != 'schedule' &&
       (needs.docs-only-plan.result != 'success' ||
        needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
