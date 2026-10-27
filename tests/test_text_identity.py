@@ -68,9 +68,9 @@ class TextIdentityVectorTests(unittest.TestCase):
         # The diagnostic distinguishes unknown Unicode data from values
         # PostgreSQL cannot store, without echoing the entire supplied name.
         for bad_char, reason in (
-            ("\\u0378", "not assigned in Unicode"),
-            ("\\x00", "cannot be stored as PostgreSQL text"),
-            ("\\ud800", "cannot be stored as PostgreSQL text"),
+            (chr(0x0378), "not assigned in Unicode"),
+            (chr(0), "cannot be stored as PostgreSQL text"),
+            (chr(0xD800), "cannot be stored as PostgreSQL text"),
         ):
             with self.subTest(codepoint=hex(ord(bad_char))):
                 with self.assertRaises(UnsupportedTextError) as caught:
