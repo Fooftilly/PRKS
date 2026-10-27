@@ -1433,6 +1433,7 @@ async function prksOfflineListFetch(listKey, path, signal, options) {
         signal: signal,
         domain: opts.domain,
         validate: opts.validate,
+        preferCacheWhenOffline: opts.preferCacheWhenOffline === true,
     });
 }
 
@@ -2539,11 +2540,15 @@ function prksResolveOfflineWorksBrowse(result) {
     );
 }
 
-/** Home -> Recently added. Its own snapshot for the same reason as Recent. */
+/** Home -> Recently added. Only this projection opts into confirmed-offline
+ * cache-first reads; all other browse lists remain server-first. */
 async function prksOfflineRecentlyAddedFetch(signal) {
-    return await prksOfflineBrowseFetch(
-        PRKS_RECENTLY_ADDED_LIST_KEY, PRKS_RECENTLY_ADDED_DOMAIN, '/api/recently-added',
-        prksIsRecentlyAddedIndexShape, signal
+    return await prksOfflineListFetch(
+        PRKS_RECENTLY_ADDED_LIST_KEY, '/api/recently-added', signal, {
+            domain: PRKS_RECENTLY_ADDED_DOMAIN,
+            validate: prksIsRecentlyAddedIndexShape,
+            preferCacheWhenOffline: true,
+        }
     );
 }
 

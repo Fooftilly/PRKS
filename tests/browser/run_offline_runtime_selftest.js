@@ -1500,6 +1500,212 @@ async function run() {
         assertEq('list fallback returns the cached snapshot', result.value, { ids: ['W-1', 'W-2'] });
     }
 
+
+    /* ---- confirmed-offline cache-first LIST reads: Recently Added only ---- */
+    {
+        const key = 'recently-added:index';
+        const path = '/api/recently-added';
+        const domain = 'recently-added';
+        const rows = [{ id: 'W-1', title: 'Acknowledged Work' }];
+        const validate = value => Array.isArray(value) &&
+            value.every(row => row && typeof row.id === 'string');
+        const readOpts = { domain, validate, preferCacheWhenOffline: true };
+        function makeRuntime(store, request) {
+            return mod.createPrksOfflineRuntime({
+                store, prksRequest: request,
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+        }
+
+        // A real request failure confirms offline; subsequent validated reads
+        // use the stored projection and do not enter the coordinator retry lane.
+        {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.reject(new Error('network unreachable'));
+            });
+            runtime.noteRequestFailure();
+            const cached = await runtime.readThroughList(key, path, readOpts);
+            assertEq('confirmed-offline Recently Added comes from validated cache', cached.source, 'cache');
+            assertEq('confirmed-offline Recently Added preserves rows', cached.value, rows);
+            assertEq('confirmed-offline Recently Added makes no request', requests, 0);
+            assertEq('confirmed-offline Recently Added preserves provenance timestamp', cached.cachedAt, 9999);
+            const normal = await runtime.readThroughList(key, path, { domain, validate });
+            assertEq('non-opt-in list stays server-first offline', requests, 1);
+            assertEq('non-opt-in list can still fall back to cache', normal.source, 'cache');
+            const cold = await runtime.readThroughList('recently-added:missing', path, readOpts);
+            assertEq('missing list still makes normal network attempt', requests, 2);
+            assertEq('missing list is unavailable, not fabricated', cold.source, 'unavailable');
+        }
+
+        // Initial/reconnecting/online reads never trust even a valid cache.
+        {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.resolve(okJsonResponse([{ id: 'W-fresh', title: 'Server Work' }]));
+            });
+            const online = await runtime.readThroughList(key, path, readOpts);
+            assertEq('initial online list remains server-first', online.source, 'server');
+            assertEq('initial online list uses server version', online.value[0].id, 'W-fresh');
+            assertEq('initial online list performs request', requests, 1);
+        }
+
+        // Invalid cached shape cannot skip the server, and a reachable 4xx
+        // remains a domain error rather than becoming cached success.
+        {
+            const store = makeFakeStore();
+            await store.putList(key, [{ title: 'invalid, missing ID' }], '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.resolve(domainErrorResponse(403));
+            });
+            runtime.noteRequestFailure();
+            let error = null;
+            try { await runtime.readThroughList(key, path, readOpts); }
+            catch (err) { error = err; }
+            assertEq('malformed cache goes through server-first path', requests, 1);
+            assert('malformed cache does not mask HTTP 403', error && error.status === 403);
+            assertEq('HTTP domain error proves server reachability', runtime.getState(), 'online');
+        }
+
+        // Failed cache access must not prevent an authoritative server read.
+        {
+            const store = makeFakeStore({ getList: () => Promise.reject(Error('IDB failure')) });
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.resolve(okJsonResponse(rows));
+            });
+            runtime.noteRequestFailure();
+            const result = await runtime.readThroughList(key, path, readOpts);
+            assertEq('IndexedDB error falls back to authoritative request', result.source, 'server');
+            assertEq('IndexedDB error does not block server request', requests, 1);
+        }
+
+        // A blocked domain must refuse its old row even when a failed sweep
+        // leaves bytes present on disk.
+        {
+            const store = makeFakeStore({ deleteList: async () => false });
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.reject(new Error('offline'));
+            });
+            runtime.noteRequestFailure();
+            runtime.markDomainChanged(domain, { listKeys: [key] });
+            await runtime._domainCleanup(domain);
+            const blocked = await runtime.readThroughList(key, path, readOpts);
+            assertEq('failed domain sweep leaves list blocked', runtime.isDomainBlocked(domain), true);
+            assertEq('blocked list cannot render old snapshot', blocked.source, 'unavailable');
+            assertEq('blocked list uses normal request attempt', requests, 1);
+        }
+
+        // Pause precisely after IndexedDB captures an acknowledged row.
+        // Every asynchronous completion must re-evaluate connectivity,
+        // coherence and route cancellation before releasing that row.
+        async function pausedFastList(request, extraOpts) {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            const originalGet = store.getList.bind(store);
+            let resume = null;
+            let cacheReads = 0;
+            store.getList = function (k) {
+                cacheReads++;
+                if (cacheReads !== 1) return originalGet(k);
+                const snapshot = originalGet(k);
+                return new Promise(resolve => {
+                    resume = () => { void snapshot.then(resolve); };
+                });
+            };
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return request();
+            });
+            runtime.noteRequestFailure();
+            const pending = runtime.readThroughList(key, path,
+                Object.assign({}, readOpts, extraOpts || {}));
+            assert('cache-first list enters asynchronous IDB read', typeof resume === 'function');
+            return { runtime, store, resume, pending, getRequests: () => requests };
+        }
+        {
+            const f = await pausedFastList(() => Promise.reject(Error('offline')));
+            f.resume();
+            const result = await f.pending;
+            assertEq('stable paused list returns cached projection', result.source, 'cache');
+            assertEq('stable paused list never requests server', f.getRequests(), 0);
+        }
+        {
+            const f = await pausedFastList(() => Promise.reject(Error('offline')));
+            f.runtime.markDomainChanged(domain, { listKeys: [key] });
+            await f.runtime._domainCleanup(domain);
+            f.resume();
+            const result = await f.pending;
+            assertEq('completed sweep cannot resurrect pending list read', result.source, 'unavailable');
+            assertEq('invalidated pending list uses normal transport', f.getRequests(), 1);
+        }
+        {
+            const f = await pausedFastList(() =>
+                Promise.resolve(okJsonResponse([{ id: 'W-live', title: 'Fresh' }])));
+            f.runtime.noteRequestSuccess();
+            f.resume();
+            const result = await f.pending;
+            assertEq('reconnection during IDB read returns server row', result.value[0].id, 'W-live');
+            assertEq('reconnection during IDB read keeps server provenance', result.source, 'server');
+            assertEq('reconnection during IDB read requests server', f.getRequests(), 1);
+        }
+        {
+            const f = await pausedFastList(() =>
+                Promise.resolve(okJsonResponse([{ id: 'W-cycle', title: 'New' }])));
+            f.runtime.noteRequestSuccess();
+            f.runtime.noteRequestFailure();
+            f.resume();
+            const result = await f.pending;
+            assertEq('online/offline cycle fences stale list cache', result.value[0].id, 'W-cycle');
+            assertEq('online/offline cycle invokes server read', f.getRequests(), 1);
+        }
+        {
+            const controller = new AbortController();
+            const f = await pausedFastList(() => Promise.reject(Error('must not request')),
+                { signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('route abort while IndexedDB pending rejects AbortError',
+                error && error.name, 'AbortError');
+            assertEq('aborted list does not send request', f.getRequests(), 0);
+        }
+        {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.reject(Error('must not request'));
+            });
+            runtime.noteRequestFailure();
+            const controller = new AbortController();
+            controller.abort();
+            let error = null;
+            try {
+                await runtime.readThroughList(key, path,
+                    Object.assign({}, readOpts, { signal: controller.signal }));
+            } catch (err) { error = err; }
+            assertEq('pre-aborted list read returns AbortError', error && error.name, 'AbortError');
+            assertEq('pre-aborted list read does not reach network', requests, 0);
+        }
+    }
+
     /* ---- mutation guard: blocked while offline, shows the standard message, never queues ---- */
     {
         const alerts = [];
