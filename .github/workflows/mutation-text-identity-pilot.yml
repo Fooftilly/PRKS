@@ -49,6 +49,11 @@ jobs:
           # mutation experiment a completed score.
           timeout --signal=TERM --kill-after=10s 360s mutmut run
           mutmut export-cicd-stats
+          # The numeric summary alone does not identify what the existing
+          # tests missed. With one allowlisted source and only synthetic
+          # vectors, mutmut results prints bounded non-killed mutant IDs,
+          # not raw application data or unreviewed document contents.
+          mutmut results
 
       - name: Record private-data-free advisory result
         shell: bash
