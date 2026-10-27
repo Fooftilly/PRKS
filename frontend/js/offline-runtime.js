@@ -3028,6 +3028,7 @@
             const domain = options2.domain ? String(options2.domain) : '';
             const domainToken = currentDomainGeneration(domain);
             const connectionToken = connectivityGeneration;
+            throwIfSignalAborted(options2.signal);
 
             // Explicit opt-in for a validated browse projection, never the default.
             // A CONFIRMED offline state can use a previously acknowledged list
