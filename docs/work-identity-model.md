@@ -1764,7 +1764,7 @@ for the fixture library. The legacy dict gains only **additive** fields:
 | `POST /api/works/:id/pdf` (materialization) | the **working slot** of the primary Asset (§9.4). The client must send `asset_id` once more than one exists. Without it the request is refused (`ASSET_AMBIGUOUS`) rather than guessed. |
 | Annotation endpoints | the annotation's own Asset. A new annotation needs the displayed `asset_id`, which defaults to the primary only while exactly one PDF Asset exists. |
 | `/api/bibtex/:id` | `citation_record(citation_target(work))`, which is the primary while `citation_manifestation_id` is NULL (§8.3, §8.6) |
-| Argument sources `[{work_id, pages}]` (HTTP and `argument-sources` sync) | kept pins are preserved. Otherwise a new entry is pinned to the only Manifestation, or refused with `ARGUMENT_SOURCE_VERSION_REQUIRED` when the Work has several (§8.5) |
+| Argument sources `[{work_id, pages}]` (HTTP and `argument-sources` sync) | kept pins are preserved. Otherwise a new entry is pinned to the only Manifestation, or refused with `ARGUMENT_SOURCE_VERSION_REQUIRED` when the Work has several (§8.5). The Version-aware shape `[{work_id, manifestation_id, pages}]` names each pin explicitly (`null` = the Work in general); on PostgreSQL it is accepted by the same facade methods and sync operations (L-R-1 PR 6, `backend/domain/research/arguments.py`) |
 
 ### 13.3 New API surface (typed, #185 pattern)
 

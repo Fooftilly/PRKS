@@ -41,6 +41,12 @@ each deliberate:
   an entry the legacy shape cannot pin (it matches several stored rows, or
   its Work has several Versions) refuses the list with
   ``argument_source_version_required`` (409). SQLite pins the primary.
+- ``create_argument`` and ``replace_argument_sources`` also take a
+  Version-aware list, ``[{work_id, manifestation_id, pages}]``
+  (``manifestation_id`` null for the Work in general), which may cite one
+  Work several times and refuses ``argument_source_version_not_found``
+  (404) and ``argument_source_version_mismatch`` (409); every citation row
+  read back carries ``manifestation_id`` (:mod:`backend.domain.research.arguments`).
 - A Work delete removes its citations and advances each citing Argument's
   ``argument-sources`` (SQLite's cascade advances nothing).
 - A delete of a Position or an Argument leaves every scope it owned one
