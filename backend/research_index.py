@@ -465,7 +465,7 @@ class PRKSResearchIndex:
             text = work.get("text_content") or ""
             start = int(r["start_offset"])
             end = int(r["end_offset"])
-            snippet = _snippet(text, start, end)
+            snippet = note_snippet(text, start, end)
             bucket["occurrences"].append(
                 {"start": start, "end": end, "snippet": snippet}
             )
@@ -516,7 +516,8 @@ class PRKSResearchIndex:
         return summary
 
 
-def _snippet(text: str, start: int, end: int) -> str:
+def note_snippet(text: str, start: int, end: int) -> str:
+    """The text around a mention, as a backlink shows it (shared with PostgreSQL)."""
     if not text:
         return ""
     a = max(0, start - _SNIPPET_RADIUS)

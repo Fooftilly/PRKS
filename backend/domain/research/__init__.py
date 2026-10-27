@@ -6,7 +6,9 @@ sources (``arguments``) on PostgreSQL. The schema is
 ``backend/db/schema/130_research.sql``; the sync handlers are
 ``backend/sync/handlers/concept.py``, ``position.py`` and ``argument.py``.
 A Research Note's derived mentions are rebuilt by the
-``research.reindex_work`` job (``reindex``, §8.4).
+``research.reindex_work`` job (``reindex``, §8.4), which also answers the
+mention reads; ``graph`` projects the Research Graph from the canonical
+tables and those mentions (read only).
 
 The running application imports only ``reindex`` (the jobs worker, to
 register its handler): SQLite stays the only backend until the cutover

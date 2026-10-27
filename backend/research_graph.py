@@ -87,7 +87,7 @@ def _norm_label(label: str) -> str:
     return (label or "").casefold()
 
 
-def _person_label(first_name, last_name) -> str:
+def person_label(first_name, last_name) -> str:
     parts = []
     if first_name:
         parts.append(str(first_name).strip())
@@ -96,7 +96,7 @@ def _person_label(first_name, last_name) -> str:
     return " ".join(p for p in parts if p)
 
 
-def _node(
+def graph_node(
     node_type: str,
     record_id: str,
     label: str,
@@ -115,7 +115,7 @@ def _node(
     return item
 
 
-def _edge(edge_type: str, source: str, target: str, extra: Optional[dict] = None) -> dict:
+def graph_edge(edge_type: str, source: str, target: str, extra: Optional[dict] = None) -> dict:
     item = {
         "id": graph_edge_id(edge_type, source, target),
         "type": edge_type,
@@ -125,6 +125,32 @@ def _edge(edge_type: str, source: str, target: str, extra: Optional[dict] = None
     if extra:
         item.update(extra)
     return item
+
+
+def finish_snapshot(
+    nodes: Dict[str, dict],
+    edges: Dict[str, dict],
+    *,
+    derived_note_edges_available: bool,
+    people_included: bool,
+) -> GraphSnapshot:
+    """Order the nodes and edges and enforce the size bounds (shared with PostgreSQL)."""
+    node_list = sorted(
+        nodes.values(),
+        key=lambda n: (n["type"], _norm_label(n["label"]), n["record_id"], n["id"]),
+    )
+    edge_list = sorted(
+        edges.values(),
+        key=lambda e: (e["type"], e["source"], e["target"], e["id"]),
+    )
+    if len(node_list) > MAX_GRAPH_NODES or len(edge_list) > MAX_GRAPH_EDGES:
+        raise GraphTooLargeError(len(node_list), len(edge_list))
+    return GraphSnapshot(
+        nodes=node_list,
+        edges=edge_list,
+        derived_note_edges_available=derived_note_edges_available,
+        people_included=people_included,
+    )
 
 
 class ResearchGraphBuilder:
@@ -194,7 +220,7 @@ class ResearchGraphBuilder:
 
             for row in concept_rows:
                 cid = row["id"]
-                nodes[_nid("concept", cid)] = _node(
+                nodes[_nid("concept", cid)] = graph_node(
                     "concept",
                     cid,
                     row["name"] or cid,
@@ -202,7 +228,7 @@ class ResearchGraphBuilder:
                 )
             for row in position_rows:
                 pid = row["id"]
-                nodes[_nid("position", pid)] = _node(
+                nodes[_nid("position", pid)] = graph_node(
                     "position",
                     pid,
                     row["name"] or pid,
@@ -211,7 +237,7 @@ class ResearchGraphBuilder:
             for row in argument_rows:
                 aid = row["id"]
                 kind = row["kind"] if row["kind"] in ("argument", "stance") else "argument"
-                nodes[_nid("argument", aid)] = _node(
+                nodes[_nid("argument", aid)] = graph_node(
                     "argument",
                     aid,
                     row["name"] or aid,
@@ -228,7 +254,7 @@ class ResearchGraphBuilder:
                     continue
                 self._put_edge(
                     edges,
-                    _edge("concept_parent", child, parent),
+                    graph_edge("concept_parent", child, parent),
                 )
 
             for row in arg_pos_rows:
@@ -239,7 +265,7 @@ class ResearchGraphBuilder:
                 vid = row["verdict_id"]
                 self._put_edge(
                     edges,
-                    _edge(
+                    graph_edge(
                         "argument_position",
                         src,
                         tgt,
@@ -258,7 +284,7 @@ class ResearchGraphBuilder:
                 vid = row["verdict_id"]
                 self._put_edge(
                     edges,
-                    _edge(
+                    graph_edge(
                         "argument_argument",
                         src,
                         tgt,
@@ -310,7 +336,7 @@ class ResearchGraphBuilder:
                 extra = {}
                 if row["doc_type"]:
                     extra["doc_type"] = row["doc_type"]
-                nodes[_nid("work", wid)] = _node(
+                nodes[_nid("work", wid)] = graph_node(
                     "work",
                     wid,
                     row["title"] or wid,
@@ -328,7 +354,7 @@ class ResearchGraphBuilder:
                 pages = row["pages"] or ""
                 if pages:
                     extra["pages"] = pages
-                self._put_edge(edges, _edge("argument_source", src, tgt, extra or None))
+                self._put_edge(edges, graph_edge("argument_source", src, tgt, extra or None))
 
             if derived_ok:
                 for row in mention_concept_rows:
@@ -341,7 +367,7 @@ class ResearchGraphBuilder:
                         continue
                     self._put_edge(
                         edges,
-                        _edge(
+                        graph_edge(
                             "mentions_concept",
                             _nid("work", wid),
                             tgt,
@@ -358,7 +384,7 @@ class ResearchGraphBuilder:
                         continue
                     self._put_edge(
                         edges,
-                        _edge(
+                        graph_edge(
                             "mentions_argument",
                             _nid("work", wid),
                             tgt,
@@ -390,8 +416,8 @@ class ResearchGraphBuilder:
                     )
                     for prow in person_rows:
                         pid = prow["id"]
-                        label = _person_label(prow["first_name"], prow["last_name"]) or pid
-                        person_present[pid] = _node(
+                        label = person_label(prow["first_name"], prow["last_name"]) or pid
+                        person_present[pid] = graph_node(
                             "person",
                             pid,
                             label,
@@ -405,26 +431,16 @@ class ResearchGraphBuilder:
                         continue
                     self._put_edge(
                         edges,
-                        _edge(
+                        graph_edge(
                             "work_author",
                             _nid("person", pid),
                             _nid("work", wid),
                         ),
                     )
 
-        node_list = sorted(
-            nodes.values(),
-            key=lambda n: (n["type"], _norm_label(n["label"]), n["record_id"], n["id"]),
-        )
-        edge_list = sorted(
-            edges.values(),
-            key=lambda e: (e["type"], e["source"], e["target"], e["id"]),
-        )
-        if len(node_list) > MAX_GRAPH_NODES or len(edge_list) > MAX_GRAPH_EDGES:
-            raise GraphTooLargeError(len(node_list), len(edge_list))
-        return GraphSnapshot(
-            nodes=node_list,
-            edges=edge_list,
+        return finish_snapshot(
+            nodes,
+            edges,
             derived_note_edges_available=derived_ok,
             people_included=bool(include_people),
         )

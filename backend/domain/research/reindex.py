@@ -35,6 +35,12 @@ whatever order duplicate or retried jobs run, and running one again changes
 nothing. Concept references resolve through the ``concept_keys`` index in
 one query; Argument references are recorded as written, as on SQLite.
 
+**Reads.** :func:`mention_counts`, :func:`mention_count` and
+:func:`backlinks` answer ``PRKSResearchIndex``'s mention reads from these
+rows, joined to the live Works, Concepts and Arguments (rows a pending
+reindex has not removed yet are left out); ``graph`` reads them for the
+Research Graph.
+
 **The fence.** A Research Note ACK no longer waits for the index (§8.4):
 :func:`research_refs` reports ``pending`` while the stored state is not the
 current note's, which is what a client waits on before refreshing Concept,
@@ -52,6 +58,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.jobs import queue
 from backend.jobs.handlers import handler
 from backend.jobs.runner import JobRun
+from backend.research_index import note_snippet
 from backend.research_markup import parse_research_markup
 
 KIND = "research.reindex_work"
@@ -123,6 +130,56 @@ FROM (SELECT argument_id, min(start_offset) AS first FROM derived.argument_menti
       WHERE library_id = %(library_id)s AND work_id = %(work_id)s GROUP BY argument_id) m
 JOIN prks.arguments a ON a.library_id = %(library_id)s AND a.id = m.argument_id
 ORDER BY m.first
+"""
+
+# Mention reads (``PRKSResearchIndex``'s): rows of a deleted Work (its
+# reindex not run yet) and of a deleted record are left out by the joins.
+_MENTION_COUNTS_SQL: dict[str, LiteralString] = {
+    "concept": """
+SELECT m.concept_id AS record_id, count(*) AS count FROM derived.concept_mentions m
+JOIN prks.works w ON w.library_id = m.library_id AND w.id = m.work_id
+JOIN prks.concepts c ON c.library_id = m.library_id AND c.id = m.concept_id
+WHERE m.library_id = %(library_id)s GROUP BY m.concept_id
+""",
+    "argument": """
+SELECT m.argument_id AS record_id, count(*) AS count FROM derived.argument_mentions m
+JOIN prks.works w ON w.library_id = m.library_id AND w.id = m.work_id
+JOIN prks.arguments a ON a.library_id = m.library_id AND a.id = m.argument_id
+WHERE m.library_id = %(library_id)s GROUP BY m.argument_id
+""",
+}
+_MENTION_COUNT_SQL: dict[str, LiteralString] = {
+    "concept": """
+SELECT count(*) AS count FROM derived.concept_mentions m
+JOIN prks.works w ON w.library_id = m.library_id AND w.id = m.work_id
+WHERE m.library_id = %(library_id)s AND m.concept_id = %(record_id)s
+""",
+    "argument": """
+SELECT count(*) AS count FROM derived.argument_mentions m
+JOIN prks.works w ON w.library_id = m.library_id AND w.id = m.work_id
+WHERE m.library_id = %(library_id)s AND m.argument_id = %(record_id)s
+""",
+}
+_BACKLINK_ROWS_SQL: dict[str, LiteralString] = {
+    "concept": """
+SELECT m.work_id, m.start_offset, m.end_offset FROM derived.concept_mentions m
+WHERE m.library_id = %(library_id)s AND m.concept_id = %(record_id)s
+ORDER BY m.work_id COLLATE "C", m.start_offset
+""",
+    "argument": """
+SELECT m.work_id, m.start_offset, m.end_offset FROM derived.argument_mentions m
+WHERE m.library_id = %(library_id)s AND m.argument_id = %(record_id)s
+ORDER BY m.work_id COLLATE "C", m.start_offset
+""",
+}
+# The title the Work projection gives (the primary Version's) and the note
+# the offsets index.
+_BACKLINK_WORKS_SQL: LiteralString = """
+SELECT w.id, coalesce(mf.title, w.title) AS title, n.body
+FROM prks.works w
+JOIN prks.manifestations mf ON mf.library_id = w.library_id AND mf.id = w.primary_manifestation_id
+LEFT JOIN prks.work_notes n ON n.library_id = w.library_id AND n.work_id = w.id AND n.kind = 'research'
+WHERE w.library_id = %(library_id)s AND w.id = ANY(%(work_ids)s)
 """
 
 
@@ -206,3 +263,39 @@ def research_refs(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any]]
     arguments = [{"id": str(row["id"]), "name": str(row["name"])}
                  for row in scope.execute(_ARGUMENT_REFS_SQL, params)]
     return {"concepts": concepts, "arguments": arguments, "pending": bool(state["pending"])}
+
+
+def mention_counts(scope: LibraryScope, kind: str) -> dict[str, int]:
+    """``concept_mention_counts`` / ``argument_mention_counts`` (``kind``): record id -> mentions."""
+    return {str(row["record_id"]): int(row["count"]) for row in scope.execute(_MENTION_COUNTS_SQL[kind])}
+
+
+def mention_count(scope: LibraryScope, kind: str, record_id: str) -> int:
+    """``mention_count_for_concept`` / ``mention_count_for_argument``."""
+    row = scope.execute(_MENTION_COUNT_SQL[kind], {"record_id": record_id}).fetchone()
+    return int(row["count"]) if row is not None else 0
+
+
+def backlinks(scope: LibraryScope, kind: str, record_id: str) -> list[dict[str, Any]]:
+    """``concept_backlinks`` / ``argument_backlinks``: per Work, by id, its occurrences in note order.
+
+    ``{work_id, title, occurrences: [{start, end, snippet}]}``; the snippet is
+    cut from the Research Note as SQLite cuts it, and a Work gone since it
+    was indexed is left out.
+    """
+    rows = scope.execute(_BACKLINK_ROWS_SQL[kind], {"record_id": record_id}).fetchall()
+    if not rows:
+        return []
+    work_ids = list(dict.fromkeys(str(row["work_id"]) for row in rows))
+    works = {str(row["id"]): row for row in scope.execute(_BACKLINK_WORKS_SQL, {"work_ids": work_ids})}
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        wid = str(row["work_id"])
+        work = works.get(wid)
+        if work is None:
+            continue
+        bucket = grouped.setdefault(wid, {"work_id": wid, "title": work["title"] or "", "occurrences": []})
+        start, end = int(row["start_offset"]), int(row["end_offset"])
+        bucket["occurrences"].append({"start": start, "end": end,
+                                      "snippet": note_snippet(str(work["body"] or ""), start, end)})
+    return [grouped[wid] for wid in work_ids if wid in grouped]
