@@ -92,8 +92,10 @@ _TEST_GATE_DOCS_RUNS = {
         "", 'python -m scripts.ci.check_docs_only --base "$PRKS_PR_BASE_SHA"'
     ),
 }
+_TEST_GATE_PG_SCOPE_PLAN_STEP = "Classify docs-only scope for PostgreSQL jobs (fail closed)"
 _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
     {
+        _TEST_GATE_PG_SCOPE_PLAN_STEP,
         _TEST_GATE_APPROVED_INSTALL_STEP,
         _TEST_GATE_RUN_TESTS_STEP,
         *_TEST_GATE_DOCS_RUNS,
@@ -436,6 +438,12 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     docs_present = {
         name for name, _style, _body in run_steps if name in _TEST_GATE_DOCS_RUNS
     }
+    # The additional standalone plan is permitted only as an exact copy of
+    # the trusted-base classifier. Do not allow a custom shell command to
+    # become a CI cost-based bypass for the required PostgreSQL tests.
+    pg_plan_present = count_test_gate_steps_named(workflow, _TEST_GATE_PG_SCOPE_PLAN_STEP)
+    if pg_plan_present > 1:
+        raise ValueError("duplicate PostgreSQL docs-only plan step")
     # Initial fixtures predate the docs-only pilot. For production workflows,
     # require all three guarded docs commands or none; partial setup fails.
     if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
@@ -444,6 +452,16 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
         if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
             label = name if name else "<unnamed step>"
             raise ValueError(f"disallowed run step: {label}")
+        if name == _TEST_GATE_PG_SCOPE_PLAN_STEP:
+            expected_style, expected_body = _TEST_GATE_DOCS_RUNS[
+                "Classify documentation-only PR (fail closed)"
+            ]
+            normalized = (
+                _test_gate_run_body_without_shell_comments(body)
+                if style == "|" else body.strip()
+            )
+            if style != expected_style or normalized != expected_body:
+                raise ValueError("unreviewed PostgreSQL docs-only plan command")
         if name in _TEST_GATE_DOCS_RUNS:
             expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
             normalized = (
@@ -452,7 +470,8 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
             )
             if style != expected_style or normalized != expected_body:
                 raise ValueError(f"unreviewed docs-only CI command: {name}")
-    expected = 2 + 2 * sum(pair is not None for pair in pairs) + len(docs_present)
+    expected = (2 + 2 * sum(pair is not None for pair in pairs)
+                + len(docs_present) + pg_plan_present)
     if len(run_steps) != expected:
         raise ValueError(
             f"test-gate must have exactly {expected} approved run steps; "
