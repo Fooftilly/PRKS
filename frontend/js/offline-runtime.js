@@ -3027,6 +3027,36 @@
             const options2 = opts && typeof opts === 'object' ? opts : {};
             const domain = options2.domain ? String(options2.domain) : '';
             const domainToken = currentDomainGeneration(domain);
+            const connectionToken = connectivityGeneration;
+
+            // Explicit opt-in for a validated browse projection, never the default.
+            // A CONFIRMED offline state can use a previously acknowledged list
+            // without repeatedly retrying an already-failing request. Recheck
+            // every fence after IndexedDB: a reconnect, domain mutation/sweep,
+            // or abort while the cache read is pending must not show stale rows.
+            if (options2.preferCacheWhenOffline === true &&
+                state === STATE_OFFLINE && store &&
+                typeof store.getList === 'function' &&
+                typeof options2.validate === 'function' &&
+                !(options2.signal && options2.signal.aborted) &&
+                !isDomainBlocked(domain)) {
+                let cached = null;
+                try { cached = await store.getList(listKey); }
+                catch (_e) { /* Cache failure keeps the normal server-first path. */ }
+                throwIfSignalAborted(options2.signal);
+                let valid = false;
+                if (cached) {
+                    try { valid = !!options2.validate(cached.value); }
+                    catch (_e) { /* Corrupt snapshots never take the fast path. */ }
+                }
+                if (valid && state === STATE_OFFLINE &&
+                    connectivityGeneration === connectionToken &&
+                    currentDomainGeneration(domain) === domainToken &&
+                    !isDomainBlocked(domain)) {
+                    return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
+                }
+            }
+
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);

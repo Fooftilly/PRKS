@@ -1226,6 +1226,25 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         folders = _read(os.path.join(_FRONTEND, "js", "components", "folders.js"))
         self.assertNotIn("Recently added requires a connection", folders)
 
+    def test_recently_added_alone_opts_into_validated_confirmed_offline_list_cache(self):
+        """Scope cache-first to one validated projection; other browse lists stay server-first."""
+        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
+        runtime = _read(_RUNTIME)
+        start = app.index("async function prksOfflineRecentlyAddedFetch(")
+        end = app.index("function prksResolveOfflineRecentlyAdded(", start)
+        recent = app[start:end]
+        self.assertIn("preferCacheWhenOffline: true", recent)
+        self.assertIn("validate: prksIsRecentlyAddedIndexShape", recent)
+        self.assertIn("PRKS_RECENTLY_ADDED_DOMAIN", recent)
+        self.assertIn("preferCacheWhenOffline: opts.preferCacheWhenOffline === true", app)
+        # Default browse/read lists never opt in implicitly.
+        browse_start = app.index("async function prksOfflineBrowseFetch(")
+        browse_end = app.index("async function prksOfflineListFetch(", browse_start)
+        self.assertNotIn("preferCacheWhenOffline", app[browse_start:browse_end])
+        self.assertIn("state === STATE_OFFLINE", runtime)
+        self.assertIn("connectivityGeneration === connectionToken", runtime)
+        self.assertIn("currentDomainGeneration(domain) === domainToken", runtime)
+
     def test_home_glance_never_warms_independent_browse_domains(self):
         """Boot on #/folders must not populate works-browse:index or recent:index
         as a side effect of At-a-glance — those missing snapshots are the
