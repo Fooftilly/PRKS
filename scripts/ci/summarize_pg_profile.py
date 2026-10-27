@@ -25,8 +25,9 @@ REQUIRED_KEYS = frozenset((
     "fixture_works", "operation", "repetitions", "completed_samples",
     "correctness_checks", "warmup_calls", "first_observed_call_ms",
     "first_call_context", "call_wall_p50_ms", "call_wall_p95_ms",
-    "top_statements",
+    "top_statements", "sql_rollup",
 ))
+ROLLUP_KEYS = frozenset(("distinct_statement_count", "total_sql_calls", "total_exec_ms"))
 
 
 def nonnegative(value: object, label: str) -> float:
@@ -106,6 +107,15 @@ def validate_row(record: dict, tiers: list[int]) -> tuple[int, str]:
         raise ValueError("unobserved SQL is not a successful measurement")
     for item in statements:
         validate_statement(item)
+    rollup = record["sql_rollup"]
+    if not isinstance(rollup, dict) or set(rollup) != ROLLUP_KEYS:
+        raise ValueError("incomplete SQL roll-up or possible private field disclosure")
+    count, calls = rollup["distinct_statement_count"], rollup["total_sql_calls"]
+    if type(count) is not int or count < len(statements):
+        raise ValueError("invalid distinct SQL statement count")
+    if type(calls) is not int or calls < 1 or calls < sum(item["calls"] for item in statements):
+        raise ValueError("SQL call roll-up cannot cover reported top statements")
+    nonnegative(rollup["total_exec_ms"], "total_exec_ms")
     return works, operation
 
 
@@ -137,16 +147,20 @@ def render(data: dict) -> str:
         "",
         "First recorded call is the **first call of each operation**; previous operations and seeding may have warmed caches, so none is a process/DB cold start. "
         "Warm p50/p95 exclude it and two warmups. "
-        "Single-run runner noise is not proof of a regression.",
+        "Single-run runner noise is not proof of a regression. "
+        "SQL calls/read counts all instrumented statements across measured calls, "
+        "not only the five most expensive SQL shapes; it is not HTTP latency.",
         "",
-        "| Works | Facade read | First operation call ms | Warm p50 ms | Warm p95 ms | Samples |",
-        "| ---: | --- | ---: | ---: | ---: | ---: |",
+        "| Works | Facade read | First operation call ms | Warm p50 ms | Warm p95 ms | Samples | SQL calls/read | SQL shapes |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for x in rows:
         lines.append(
             f"| {x['fixture_works']} | {x['operation']} | "
             f"{x['first_observed_call_ms']:.3f} | {x['call_wall_p50_ms']:.3f} | "
-            f"{x['call_wall_p95_ms']:.3f} | {x['completed_samples']} |"
+            f"{x['call_wall_p95_ms']:.3f} | {x['completed_samples']} | "
+            f"{x['sql_rollup']['total_sql_calls'] / x['completed_samples']:.2f} | "
+            f"{x['sql_rollup']['distinct_statement_count']} |"
         )
     lines += ["", "No query text, SQL literals, user documents or DB connection strings were retained."]
     return "\n".join(lines) + "\n"
