@@ -7,6 +7,11 @@
       "key": "plato"
     },
     {
+      "note": "keep meaningful X boundaries after trimming whitespace",
+      "input": "  XX Research X  ",
+      "key": "xx research x"
+    },
+    {
       "note": "trim and collapse ASCII whitespace",
       "input": "  Plato \t\n Republic  ",
       "key": "plato republic"
