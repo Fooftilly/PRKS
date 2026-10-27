@@ -35,6 +35,18 @@ WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 ORDER BY total_exec_time DESC, calls DESC
 LIMIT 5
 """
+# Aggregate ALL distinct statements, not merely the top five expensive ones.
+# The profiler connection has tracking disabled, so these reads do not skew
+# the counted workload; the query text column is never requested.
+_ROLLUP_SQL = """
+SELECT COUNT(*)::bigint AS distinct_statement_count,
+       COALESCE(SUM(calls), 0)::bigint AS total_sql_calls,
+       COALESCE(SUM(total_exec_time), 0) AS total_exec_time
+FROM public.pg_stat_statements(false)
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+  AND userid = (SELECT usesysid FROM pg_user WHERE usename = current_user)
+  AND queryid IS NOT NULL AND calls > 0
+"""
 _RESET_SQL = """
 SELECT public.pg_stat_statements_reset(
     0::oid, (SELECT oid FROM pg_database WHERE datname = current_database()), 0::bigint
@@ -88,6 +100,18 @@ def snapshot(stats: Any) -> list[dict[str, Any]]:
     return [project_statement(row) for row in stats.execute(_SNAPSHOT_SQL).fetchall()]
 
 
+def statement_rollup(stats: Any) -> dict[str, Any]:
+    """Numeric totals across ALL recorded workload SQL, including statements
+    outside the top-five ranking. No raw SQL, query IDs, or literals are read.
+    """
+    row = stats.execute(_ROLLUP_SQL).fetchone()
+    return {
+        "distinct_statement_count": int(row["distinct_statement_count"]),
+        "total_sql_calls": int(row["total_sql_calls"]),
+        "total_exec_ms": round(float(row["total_exec_time"]), 3),
+    }
+
+
 def benchmark(
     stats: Any, operation: Any, repetitions: int, verify_result: Any
 ) -> dict[str, Any]:
@@ -115,6 +139,10 @@ def benchmark(
     statements = snapshot(stats)
     if not statements:
         raise RuntimeError("profile contained no observed workload SQL")
+    totals = statement_rollup(stats)
+    if (totals["distinct_statement_count"] < len(statements)
+            or totals["total_sql_calls"] < sum(row["calls"] for row in statements)):
+        raise RuntimeError("incomplete SQL statement accounting")
     return {
         "repetitions": repetitions,
         "completed_samples": len(durations),
@@ -125,6 +153,7 @@ def benchmark(
         "call_wall_p50_ms": percentile(durations, 0.5),
         "call_wall_p95_ms": percentile(durations, 0.95),
         "top_statements": statements,
+        "sql_rollup": totals,
     }
 
 
