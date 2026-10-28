@@ -89,6 +89,15 @@ class LocalVisualBaselineTests(unittest.TestCase):
                 str(caught.exception), "visual/capture_folders (ValueError)",
             )
             self.assertNotIn("private", str(caught.exception))
+            failure = json.loads((Path(td) / "prks-visual-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure, {
+                "format": "prks-local-visual-failure-v1",
+                "status": "capture_failed",
+                "stage": "capture_folders",
+                "exception_type": "ValueError",
+                "completed_scenes": [],
+            })
+            self.assertNotIn("private", json.dumps(failure))
             ctx.close.assert_called_once()
             browser.close.assert_called_once()
             browser_api.stop.assert_called_once()
@@ -129,6 +138,11 @@ class LocalVisualBaselineTests(unittest.TestCase):
             self.assertEqual(caught.exception.stage, "close_context")
             self.assertEqual(caught.exception.cause_type, "ValueError")
             self.assertNotIn("private", str(caught.exception))
+            failure = json.loads((Path(td) / "prks-visual-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["stage"], "close_context")
+            self.assertEqual(failure["exception_type"], "ValueError")
+            self.assertEqual(failure["completed_scenes"], list(SCENES))
+            self.assertNotIn("private", json.dumps(failure))
             collector_type.return_value.assert_clean.assert_called_once_with()
             browser.close.assert_called_once()
             browser_api.stop.assert_called_once()
@@ -140,6 +154,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         inverse = fingerprint(png_sample(invert=True))
         changed = compare(inverse, original)
         self.assertFalse(changed["passed"])
+        self.assertEqual(changed["reason"], "mean_and_hot")
         self.assertGreater(changed["mean_delta"], 9)
         self.assertGreater(changed["hot_fraction"], 0.06)
 
@@ -155,6 +170,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         result = compare(after, before)
         self.assertFalse(result["passed"])
         self.assertEqual(result["hot_fraction"], 0)
+        self.assertEqual(result["reason"], "mean_delta")
         self.assertGreater(result["mean_delta"], 9)
 
     def test_small_high_contrast_region_fails_on_hot_without_mean(self):
@@ -168,6 +184,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         result = compare(after, before)
         self.assertFalse(result["passed"])
         self.assertLess(result["mean_delta"], 9)
+        self.assertEqual(result["reason"], "hot_fraction")
         self.assertGreater(result["hot_fraction"], 0.06)
 
     def test_dimensions_are_exact_even_when_mean_sample_matches(self):
@@ -175,6 +192,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         altered = {**identical, "width": 481}
         result = compare(altered, identical)
         self.assertFalse(result["passed"])
+        self.assertEqual(result["reason"], "dimensions")
         self.assertTrue(result["size_changed"])
 
     def test_bounded_noise_tolerated_by_quantized_samples(self):
@@ -184,7 +202,9 @@ class LocalVisualBaselineTests(unittest.TestCase):
         png.putpixel((300, 150), (250, 250, 250))
         out = io.BytesIO()
         png.save(out, format="PNG")
-        self.assertTrue(compare(fingerprint(out.getvalue()), sample)["passed"])
+        result = compare(fingerprint(out.getvalue()), sample)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["reason"], "within_tolerance")
 
     def test_missing_metadata_or_unreviewed_scene_fails_closed(self):
         base = fingerprint(png_sample())
