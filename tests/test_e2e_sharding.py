@@ -326,12 +326,26 @@ class ShardAssignmentTests(unittest.TestCase):
             estimate_seconds("tests.e2e.test_offline.Case.test_1", merged), 8.0
         )
 
-    def test_committed_baseline_file_contains_only_prefix_keys(self):
+    def test_committed_baseline_includes_calibrated_exact_ids_and_prefix_fallback(self):
         repo = Path(_PROJECT_DIR)
         baseline = load_timings(repo / BASELINE_TIMINGS_PATH)
         self.assertTrue(baseline, "committed timing-baseline.json should not be empty")
-        for key in baseline:
-            self.assertTrue(is_baseline_prefix_key(key), key)
+        prefix = [k for k in baseline if is_baseline_prefix_key(k)]
+        exact = [k for k in baseline if not is_baseline_prefix_key(k)]
+        self.assertTrue(prefix)
+        self.assertGreaterEqual(len(exact), 800)
+        for key in exact:
+            self.assertTrue(key.startswith("tests.e2e."), key)
+            self.assertGreaterEqual(len(key.split(".")), 5, key)
+        sample = exact[0]
+        self.assertEqual(
+            estimate_seconds(sample, merge_timing_sources(baseline, {sample: 1.234})),
+            1.234,
+        )
+        self.assertEqual(
+            estimate_seconds("tests.e2e.test_app.FutureClass.test_new", baseline),
+            baseline["tests.e2e.test_app.*"],
+        )
 
     def test_shards_keep_each_module_contiguous(self):
         # These modules launch Chromium in setUpModule; unittest re-runs a module
@@ -1367,6 +1381,38 @@ class TimingBaselineUpdateTests(unittest.TestCase):
             # Exact IDs must not land in the committed-shaped output.
             self.assertFalse(any(not k.endswith("*") for k in written))
 
+    def test_cli_include_exact_median_and_module_fallback(self):
+        from tests.e2e import update_timing_baseline as cli
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            first = root / "run-1.json"
+            second = root / "run-2.json"
+            first.write_text(json.dumps({
+                "tests.e2e.demo.C.test_a": 2.0,
+                "tests.e2e.demo.C.test_b": 6.0,
+            }))
+            second.write_text(json.dumps({
+                "tests.e2e.demo.C.test_a": 6.0,
+                "tests.e2e.demo.C.test_b": 10.0,
+            }))
+            out = root / "combined.json"
+            self.assertEqual(
+                cli.main([
+                    "--from", str(first), "--from", str(second),
+                    "--include-exact", "--output", str(out),
+                ]),
+                0,
+            )
+            weights = json.loads(out.read_text())
+            self.assertEqual(weights["tests.e2e.demo.C.test_a"], 4.0)
+            self.assertEqual(weights["tests.e2e.demo.C.test_b"], 8.0)
+            self.assertIn("tests.e2e.demo.*", weights)
+            self.assertEqual(
+                estimate_seconds("tests.e2e.demo.C.test_future", weights),
+                weights["tests.e2e.demo.*"],
+            )
+
     def test_cli_dry_run_prints_json_and_requires_from(self):
         from tests.e2e import update_timing_baseline as cli
 
@@ -1415,7 +1461,7 @@ class TimingBaselineUpdateTests(unittest.TestCase):
                 err = io.StringIO()
                 with contextlib.redirect_stderr(err):
                     code = cli.main(
-                        ["--from", str(measurements), "--write"],
+                        ["--from", str(measurements), "--write", "--include-exact"],
                         discover_ids=lambda: discovered,
                     )
             self.assertEqual(code, 2)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate ``tests/e2e/timing-baseline.json`` from representative measurements.
 
-The committed baseline is coarse ``prefix.*`` scheduling metadata for fresh
-checkouts (especially cloud agents). Machine-local exact timings in
+The committed baseline supports coarse ``prefix.*`` fallback and opt-in
+calibrated exact test weights from full CI runs. Machine-local exact timings in
 ``.tests/e2e-timings.json`` remain the authority on a given machine and always
 override the baseline at schedule time.
 
@@ -65,7 +65,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="tests/e2e/update_timing_baseline.py",
         description=(
-            "Build committed coarse E2E timing-baseline.json from representative "
+            "Build committed E2E timing-baseline.json from representative "
             "exact per-test measurements. Does not use machine-local "
             ".tests/e2e-timings.json unless you pass it explicitly via --from. "
             "Overwriting the committed baseline requires full-suite coverage "
@@ -107,6 +107,15 @@ def build_parser():
             "Permit writing even when measurements miss discovered modules or "
             "exact test IDs. Required to overwrite the committed baseline from a "
             "partial export; alternate --output paths allow partial by default."
+        ),
+    )
+    parser.add_argument(
+        "--include-exact",
+        action="store_true",
+        help=(
+            "Include median-calibrated exact test-ID weights alongside coarse "
+            "module/class fallback prefixes (requires complete coverage when writing "
+            "the committed baseline). Default is prefix-only for compatibility."
         ),
     )
     parser.add_argument(
@@ -235,6 +244,16 @@ def main(argv=None, *, discover_ids=None) -> int:
         print("error: aggregation produced an empty baseline", file=sys.stderr)
         return 2
 
+    if args.include_exact:
+        # Exact bootstrap weights are scheduling hints, not observed run data.
+        # combine_measurement_timings already excludes prefixes and bad values.
+        baseline.update({
+            key: round(value, 3)
+            for key, value in combined.items()
+            if key.startswith("tests.e2e.") and len(key.split(".")) >= 5
+        })
+        baseline = dict(sorted(baseline.items()))
+
     write_path = None
     if args.output is not None:
         # Always resolve so non-normalized absolute paths / symlink checkouts
@@ -280,7 +299,7 @@ def main(argv=None, *, discover_ids=None) -> int:
         print("error: failed to write %s" % write_path, file=sys.stderr)
         return 1
     print(
-        "wrote %d baseline prefixes to %s (from %d exact measurements)"
+        "wrote %d baseline entries to %s (from %d exact measurements)"
         % (len(baseline), write_path, len(combined)),
         file=sys.stderr,
     )
