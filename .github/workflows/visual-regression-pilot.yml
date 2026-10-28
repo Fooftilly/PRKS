@@ -1,7 +1,8 @@
 name: Advisory local Playwright visual comparison
 
-# Manual or changed pilot code only: no duplicate full E2E or external
-# screenshot service. Baseline generation is a candidate until reviewed.
+# Advisory only: run for UI/runtime asset changes, pilot code, or manual
+# dispatch. Do not run on backend-only, dependency-only or test-only PRs.
+# No duplicate full E2E or external screenshot service.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +16,17 @@ on:
       - "scripts/ci/visual_regression.py"
       - "tests/visual/**"
       - "tests/test_local_visual_regression.py"
+      # These paths render the five currently approved fixture scenes.
+      # Keep unit-test-only changes out of this extra Chromium job.
+      - "frontend/**"
+      - "frontend-app/src/**"
+      - "!frontend-app/src/**/*.test.ts"
+      - "!frontend-app/src/**/*.spec.ts"
+      - "!frontend-app/src/**/*.test.tsx"
+      - "!frontend-app/src/**/*.spec.tsx"
+      - "frontend-app/index.html"
+      - "frontend-app/public/**"
+      - "frontend-app/vite.config.ts"
 
 permissions:
   contents: read
