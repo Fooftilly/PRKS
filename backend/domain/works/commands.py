@@ -258,6 +258,15 @@ _DELETE_WORK_LEVELS: tuple[LiteralString, ...] = (
     "DELETE FROM prks.manifestations WHERE library_id = %(library_id)s AND work_id = %(work_id)s",
     "DELETE FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s",
 )
+# Every key the Work's Assets name, working and pristine, read before they go.
+_WORK_LOCATORS: LiteralString = """
+SELECT storage_locator AS name FROM prks.assets
+WHERE library_id = %(library_id)s AND work_id = %(work_id)s AND storage_locator IS NOT NULL
+UNION
+SELECT source_locator FROM prks.assets
+WHERE library_id = %(library_id)s AND work_id = %(work_id)s AND source_locator IS NOT NULL
+ORDER BY 1
+"""
 _LOCATOR_STILL_USED: LiteralString = """
 SELECT 1 FROM prks.assets
 WHERE library_id = %(library_id)s AND storage_locator = %(locator)s
@@ -291,7 +300,7 @@ def work_scopes(work_id: str) -> list[tuple[str, str]]:
             (playlist_sync.WORK_SCOPE_TYPE, work_id)]
 
 
-def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
+def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) -> Optional[DeletedWork]:
     """Delete a Work and everything it owns; None when there is no such Work.
 
     The Work row is locked first (the order every Works command uses), the
@@ -306,9 +315,12 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     a base taken before the delete is stale on a Work recreated under the id.
     A ``research.reindex_work`` enqueued here drops the Work's derived
     mentions once the delete commits (§8.4).
-    A managed file no other Asset of the Library names gets a cleanup claim
-    in this transaction (``objects.lifecycle.release``, §11.2); its bytes
-    are removed later, by a settle that finds nothing naming them. The
+    Every stored key of the Work's Assets (working and pristine) that no
+    other Asset of the Library names gets a cleanup claim in this
+    transaction (``objects.lifecycle.release``, §11.2); the bytes are
+    removed later, by a settle that finds nothing naming them.
+    ``claim_files=False`` (undoing a create that adopted existing bytes,
+    ``work_deletion.delete_work(keep_managed_pdf=True)``) records none. The
     record reports the Work's ``/api/pdfs/`` path and whether another Asset
     of the Library still names the same storage key.
     """
@@ -318,6 +330,7 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     if row is None:
         return None
     locator = row["storage_locator"] if row["asset_kind"] == "managed_file" else None
+    stored = [str(found["name"]) for found in scope.execute(_WORK_LOCATORS, {"work_id": work_id}).fetchall()]
     # Filing is construction (no `work-folder` or `work-playlist` row need
     # exist), so the Folder and Playlist rows go here and the scopes are
     # tombstoned with the fixed ones below.
@@ -342,8 +355,9 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     revisions.tombstone_work_scopes(scope, work_id)
     still_used = locator is not None and scope.execute(
         _LOCATOR_STILL_USED, {"locator": locator}).fetchone() is not None
-    if locator is not None and not still_used:
-        lifecycle.release(scope, StorageKey(NAMESPACE_ASSET_OBJECTS, locator))
+    if claim_files:
+        for name in stored:
+            lifecycle.release(scope, StorageKey(NAMESPACE_ASSET_OBJECTS, name))
     return DeletedWork(work_id=work_id,
                        file_path="/api/pdfs/" + str(locator) if locator else "",
                        managed_pdf_still_referenced=still_used)

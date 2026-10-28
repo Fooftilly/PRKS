@@ -1881,7 +1881,7 @@
       "constraints": {
         "object_cleanup_claims_hold_not_null": "NOT NULL hold",
         "object_cleanup_claims_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE SET NULL",
-        "object_cleanup_claims_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
+        "object_cleanup_claims_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND name !~ '^\\s|\\s$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
         "object_cleanup_claims_name_not_null": "NOT NULL name",
         "object_cleanup_claims_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text]))",
         "object_cleanup_claims_namespace_not_null": "NOT NULL namespace",
@@ -2493,7 +2493,7 @@
         }
       ],
       "constraints": {
-        "restore_run_objects_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
+        "restore_run_objects_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND name !~ '^\\s|\\s$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
         "restore_run_objects_name_not_null": "NOT NULL name",
         "restore_run_objects_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text]))",
         "restore_run_objects_namespace_not_null": "NOT NULL namespace",

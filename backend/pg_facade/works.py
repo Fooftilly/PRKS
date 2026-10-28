@@ -421,16 +421,17 @@ class WorksMixin(FacadeMixin):
     def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
         """Delete the Work and what it owns, claiming its managed file for cleanup.
 
-        ``claim_pdf`` is accepted for the signature. The delete records the
-        cleanup claim of a managed file no other Asset names in its own
-        transaction (``objects.lifecycle.release``); the bytes stay until a
-        settle finds nothing naming them (L-A-1, §11.2).
+        The delete records the cleanup claims of the stored files no other
+        Asset names in its own transaction (``objects.lifecycle.release``);
+        the bytes stay until a settle finds nothing naming them (L-A-1,
+        §11.2). ``claim_pdf=False`` (undoing a create that adopted existing
+        bytes) records none; bytes nothing names are still orphans to the
+        sweep after its grace period.
         """
         from backend.db_manager import DeletedWorkRecord
         from backend.domain.works import commands
 
-        del claim_pdf
-        deleted = self._command(lambda scope: commands.delete_work(scope, work_id))
+        deleted = self._command(lambda scope: commands.delete_work(scope, work_id, claim_files=claim_pdf))
         if deleted is None:
             return None
         return DeletedWorkRecord(work_id=deleted.work_id, file_path=deleted.file_path,

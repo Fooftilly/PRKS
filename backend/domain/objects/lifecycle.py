@@ -57,6 +57,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
+    InvalidStorageKey,
     ObjectIntegrityError,
     StorageBackend,
     StorageKey,
@@ -95,6 +96,11 @@ _NAMED_BY_ANOTHER_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.assets
 WHERE library_id <> %(library_id)s AND (storage_locator = %(name)s OR source_locator = %(name)s)
 LIMIT 1
+"""
+# A key another Library released is not this Library's to adopt either.
+_CLAIMED_BY_ANOTHER_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.object_cleanup_claims
+WHERE namespace = %(namespace)s AND name = %(name)s AND library_id <> %(library_id)s
 """
 _NAMED_IN_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.assets
@@ -168,7 +174,7 @@ class Settled(Enum):
     UNKNOWN = "unknown"  # references unknown: kept, claim kept
     FAILED = "failed"  # the bytes could not be removed: claim kept
     HELD = "held"  # a hold claim: never settled automatically
-    BUSY = "busy"  # the Library's objects lock is held (a backup): try later
+    BUSY = "busy"  # the Library's objects lock is held (a backup): try later, after the others
     ABSENT = "absent"  # no such claim
 
 
@@ -200,11 +206,15 @@ def adopt(scope: LibraryScope, storage: StorageBackend, obj: StoredObject) -> No
     before it names the key (§11.2). The lock is held until the caller's
     transaction ends. Raises :class:`ObjectMissing` when the bytes are gone
     or have another size (a settle unlinked them first), or when another
-    Library already names the key.
+    Library names the key or released it. So no key is ever named by two
+    Libraries, and the claim's Library is the only one whose backups can
+    hold it in a snapshot.
     """
     scope.execute_unscoped(OBJECT_LOCK_SQL, (str(obj.key),))
     if obj.key.namespace == NAMESPACE_ASSET_OBJECTS and scope.execute(
             _NAMED_BY_ANOTHER_LIBRARY, {"name": obj.key.name}).fetchone() is not None:
+        raise ObjectMissing()
+    if scope.execute(_CLAIMED_BY_ANOTHER_LIBRARY, _key_params(obj.key)).fetchone() is not None:
         raise ObjectMissing()
     try:
         info = storage.stat(obj.key)
@@ -269,6 +279,9 @@ def settle(db: Database, storage: StorageBackend, key: StorageKey) -> Settled:
         if claim["library_id"] is not None:
             locked = tx.execute(_TRY_OBJECTS_LOCK_SQL, (claim["library_id"],)).fetchone()
             if locked is None or not locked["locked"]:
+                # Stamped like an attempt, so the bounded pass rotates past
+                # a Library under backup instead of retrying it first.
+                tx.execute(_NOTE_ATTEMPT, params)
                 return Settled.BUSY
         referenced = references(tx, key)
         if referenced:
@@ -294,9 +307,18 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
     """One bounded pass over due claims (never-attempted first), each settled in its own transaction."""
     if limit < 1:
         raise ValueError("limit must be at least 1")
-    due = db.query(lambda tx: [StorageKey(row["namespace"], row["name"]) for row in tx.execute(
+    rows = db.query(lambda tx: [(row["namespace"], row["name"]) for row in tx.execute(
         _DUE_CLAIMS, {"library_id": library_id, "limit": limit}).fetchall()])
-    return Counter(settle(db, storage, key) for key in due)
+    outcomes: Counter[Settled] = Counter()
+    for namespace, name in rows:
+        try:
+            key = StorageKey(namespace, name)
+        except InvalidStorageKey:
+            # Never a key PRKS wrote; skipped so it cannot stall the pass.
+            LOGGER.warning("object_cleanup_invalid_claim namespace=%s", namespace)
+            continue
+        outcomes[settle(db, storage, key)] += 1
+    return outcomes
 
 
 def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_SWEEP_GRACE,

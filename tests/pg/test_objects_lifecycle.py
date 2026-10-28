@@ -154,6 +154,37 @@ class ClaimTests(ObjectsTestCase):
         self.assertEqual(self.claims(), {})
         self.assertIs(self.settle(obj.key), Settled.ABSENT)
 
+    def test_a_work_delete_claims_every_key_its_assets_name(self) -> None:
+        primary, attachment, pristine = self.put(), self.put(), self.put()
+        work_id = self.work_with(primary)
+        manifestation = self.sql("SELECT primary_manifestation_id AS id FROM prks.works WHERE id = %s",
+                                 (work_id,))[0]["id"]
+        self.sql("INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, role, "
+                 "storage_locator, source_locator, content_sha256, origin) "
+                 "VALUES (%s, %s, %s, %s, 'managed_file', 'attachment', %s, %s, %s, 'upload')",
+                 (self.actor.library_id, generate("AS"), manifestation, work_id, attachment.key.name,
+                  pristine.key.name, attachment.sha256))
+        self.library.delete_work_record(work_id)
+        self.assertEqual(set(self.claims()), {primary.key.name, attachment.key.name, pristine.key.name})
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 3})
+
+    def test_undoing_a_create_that_adopted_existing_bytes_claims_nothing(self) -> None:
+        obj = self.put()
+        work_id = self.work_with(obj)
+        self.library.delete_work_record(work_id, claim_pdf=False)
+        self.assertEqual(self.count("works"), 0)
+        self.assertEqual(self.claims(), {})
+        self.assertTrue(self.stored(obj.key.name))
+
+    def test_names_no_key_could_have_are_refused(self) -> None:
+        for name in (" paper.pdf", "paper.pdf ", "a/b.pdf", "..", ".prks-write-1.tmp"):
+            with self.subTest(name=name):
+                with self.assertRaises(psycopg.errors.CheckViolation):
+                    with psycopg.connect(self.harness.conninfo(self.sql(
+                            "SELECT current_database() AS n")[0]["n"]), autocommit=True) as conn:
+                        conn.execute("INSERT INTO prks.object_cleanup_claims (namespace, name) "
+                                     "VALUES ('asset-objects', %s)", (name,))
+
     def test_a_key_another_asset_names_is_kept(self) -> None:
         shared = self.put()
         first, second = self.work_with(shared), self.work_with(shared)
@@ -368,6 +399,15 @@ class IsolationTests(ObjectsTestCase):
         self.assertTrue(self.stored(obj.key.name))
         self.assertEqual(self.asset_of(work_id)["storage_locator"], obj.key.name)
 
+    def test_a_key_another_library_released_cannot_be_adopted(self) -> None:
+        obj = self.put()
+        self.library.delete_work_record(self.work_with(obj))
+        other = self.other_actor()
+        with self.assertRaises(ObjectMissing):
+            self.create(obj, ctx=other.context)
+        self.assertEqual(self.claims()[obj.key.name]["library_id"], self.actor.library_id)
+        self.create(obj)  # the Library that released it may name it again
+
     def test_a_reader_cannot_release_a_key(self) -> None:
         obj = self.put()
         from backend.domain.identity.authorization import AccessRefused
@@ -436,10 +476,13 @@ class BackupLockTests(ObjectsTestCase):
         with psycopg.connect(self.harness.conninfo(self._db_name()), autocommit=True) as backup:
             backup.execute("SELECT pg_advisory_lock_shared(" + lifecycle.OBJECTS_LOCK_KEY_SQL + ")",
                            (self.actor.library_id,))
-            self.assertIs(self.settle(obj.key), Settled.BUSY)
+            # Bounded passes rotate past the busy claim to the others.
+            self.assertEqual(lifecycle.retry_claims(self.db, self.objects, limit=1), {Settled.BUSY: 1})
             self.assertTrue(self.stored(obj.key.name))
-            self.assertIsNone(self.claims()[obj.key.name]["last_attempt_at"], "busy is not an attempt")
-            self.assertIs(self.settle(orphan.key), Settled.REMOVED, "an orphan no snapshot names")
+            self.assertIsNotNone(self.claims()[obj.key.name]["last_attempt_at"])
+            self.assertEqual(lifecycle.retry_claims(self.db, self.objects, limit=1), {Settled.REMOVED: 1},
+                             "an orphan no snapshot names")
+            self.assertFalse(self.stored(orphan.key.name))
             backup.execute("SELECT pg_advisory_unlock_all()")
         self.assertIs(self.settle(obj.key), Settled.REMOVED)
 

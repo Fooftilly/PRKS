@@ -32,7 +32,7 @@ CREATE TABLE prks.restore_run_objects (
   namespace text NOT NULL CHECK (namespace IN ('asset-objects', 'portraits')),
   name      text NOT NULL,
   CONSTRAINT restore_run_objects_name_check CHECK (
-    name ~ '^[^/\\]+$' AND name NOT IN ('.', '..') AND octet_length(name) <= 255
+    name ~ '^[^/\\]+$' AND name !~ '^\s|\s$' AND name NOT IN ('.', '..') AND octet_length(name) <= 255
     AND left(name, 6) <> '.prks-' AND left(name, 12) <> '.linearized_'),
   PRIMARY KEY (run_id, namespace, name)
 );
@@ -55,7 +55,7 @@ CREATE TABLE prks.object_cleanup_claims (
   last_attempt_at timestamptz,
   hold            boolean NOT NULL DEFAULT false,
   CONSTRAINT object_cleanup_claims_name_check CHECK (
-    name ~ '^[^/\\]+$' AND name NOT IN ('.', '..') AND octet_length(name) <= 255
+    name ~ '^[^/\\]+$' AND name !~ '^\s|\s$' AND name NOT IN ('.', '..') AND octet_length(name) <= 255
     AND left(name, 6) <> '.prks-' AND left(name, 12) <> '.linearized_'),
   PRIMARY KEY (namespace, name)
 );
