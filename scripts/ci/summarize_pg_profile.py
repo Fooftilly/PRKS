@@ -14,7 +14,7 @@ from pathlib import Path
 
 OPERATIONS = frozenset((
     "works_list", "works_browse", "work_detail",
-    "works_recent_bounded", "works_batch_by_ids",
+    "works_recent_bounded", "works_batch_by_ids", "concept_hierarchy_graph",
 ))
 STAT_KEYS = frozenset((
     "query_fingerprint", "calls", "total_exec_ms", "mean_exec_ms", "rows",
@@ -53,10 +53,10 @@ def validate_scope(data: dict) -> list[int]:
     if nonnegative(data.get("server_version_num"), "server_version_num") < 180000:
         raise ValueError("PostgreSQL 18 required")
     expected = {
-        "backend": "postgresql_facade",
-        "fixture": "synthetic_works_only",
-        "fixture_version": "works-v1",
-        "measurement": "warm_facade_calls_not_http",
+        "backend": "postgresql_read_adapters",
+        "fixture": "synthetic_works_and_concept_chain",
+        "fixture_version": "works-concepts-v2",
+        "measurement": "warm_pg_read_adapter_calls_not_http",
         "readiness": "disposable_pg18_identity_verified",
         "query_fingerprints": "run_local_only; no SQL text is collected",
     }
@@ -139,8 +139,9 @@ def render(data: dict) -> str:
     lines = [
         "## Synthetic PostgreSQL application read baseline (advisory)",
         "",
-        "Backend: **PostgreSQL facade**, **not authenticated HTTP/API**. "
-        "All measurements are successful validated synthetic read calls.",
+        "Backend: **PostgreSQL facade and Research Graph read adapter**, **not authenticated HTTP/API**. "
+        "All measurements are successful validated synthetic reads; each Work tier "
+        "also has the same number of linked Concepts in one parent chain.",
         f"PostgreSQL server version: {data['server_version_num']} · "
         f"Fixture: {data['fixture_version']} · "
         f"Tiers: {', '.join(str(x) for x in data['fixture_tiers'])} Works",
@@ -151,7 +152,7 @@ def render(data: dict) -> str:
         "SQL calls/read counts all instrumented statements across measured calls, "
         "not only the five most expensive SQL shapes; it is not HTTP latency.",
         "",
-        "| Works | Facade read | First operation call ms | Warm p50 ms | Warm p95 ms | Samples | SQL calls/read | SQL shapes |",
+        "| Works + Concepts | PG read operation | First operation call ms | Warm p50 ms | Warm p95 ms | Samples | SQL calls/read | SQL shapes |",
         "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for x in rows:
