@@ -62,15 +62,40 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
 
     def test_class_locality_is_manual_only_and_never_changes_default_gate(self):
         workflow = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("      class_locality:", workflow)
-        self.assertIn("        default: false", workflow)
-        shard = job_source(workflow, "e2e")
-        self.assertIn(
-            "github.event_name == 'workflow_dispatch' && inputs.class_locality",
-            shard,
+        # Check the actual input, not some other input's default: false.
+        inputs = re.findall(
+            r"(?m)^      class_locality:\n((?:^        [^\n]*\n)+)",
+            workflow,
         )
-        self.assertIn("args+=(--class-locality-pilot)", shard)
-        self.assertIn('if [[ "$mode" != "full" ]]; then', shard)
+        self.assertEqual(len(inputs), 1, "expected exactly one class_locality input")
+        self.assertIn("        type: boolean\n", inputs[0])
+        self.assertIn("        default: false\n", inputs[0])
+
+        shard = job_source(workflow, "e2e")
+        step = named_upload_step(shard, "Run E2E selection shard")
+        self.assertIn(
+            "PRKS_E2E_CLASS_LOCALITY_PILOT: ${{ "
+            "github.event_name == 'workflow_dispatch' && inputs.class_locality "
+            "&& '1' || '0' }}",
+            step,
+        )
+        # The flag must remain INSIDE the manual-only condition, after the
+        # full-suite guard. An unguarded flag would alter protected PR/push CI.
+        guarded_command = (
+            '          if [[ "${PRKS_E2E_CLASS_LOCALITY_PILOT}" == "1" ]]; then\n'
+            '            if [[ "$mode" != "full" ]]; then\n'
+            '              echo "::error::class locality pilot requires full suite"\n'
+            '              exit 1\n'
+            '            fi\n'
+            '            args+=(--class-locality-pilot)\n'
+            '          fi\n'
+        )
+        self.assertIn(guarded_command, step)
+        self.assertEqual(step.count("args+=(--class-locality-pilot)"), 1)
+        self.assertEqual(
+            step.count('if [[ "${PRKS_E2E_CLASS_LOCALITY_PILOT}" == "1" ]]; then'),
+            1,
+        )
 
     def test_manual_packaged_full_and_compare_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
