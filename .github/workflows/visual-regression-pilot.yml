@@ -78,6 +78,7 @@ jobs:
           path = Path(os.environ["RUNNER_TEMP"])
           approved = Path("tests/visual/baseline.json").is_file()
           checks = path / "prks-visual-results.json"
+          failure = path / "prks-visual-failure.json"
           lines = [
               "## Local Playwright visual pilot (synthetic, advisory)",
               "",
@@ -87,13 +88,28 @@ jobs:
           ]
           if checks.exists():
               results = json.loads(checks.read_text(encoding="utf-8"))
-              lines.extend(["| Scene | Result | Mean channel delta | Changed sampled pixels |",
-                            "| --- | --- | ---: | ---: |"])
+              lines.extend(["| Scene | Result | Reason | Mean channel delta | Changed sampled pixels |",
+                            "| --- | --- | --- | ---: | ---: |"])
               for scene, entry in results.items():
                   lines.append(
                       f"| {scene} | {'PASS' if entry['passed'] else 'DIFF'} | "
-                      f"{entry['mean_delta']} | {entry['hot_fraction']} |"
+                      f"{entry['reason']} | {entry['mean_delta']} | {entry['hot_fraction']} |"
                   )
+          elif failure.exists():
+              detail = json.loads(failure.read_text(encoding="utf-8"))
+              lines.append(
+                  "**Capture failed:** stage `" + detail["stage"] + "` "
+                  "(`" + detail["exception_type"] + "`). "
+                  "The capture stopped before pixel comparison."
+              )
+              lines.append("Completed scenes: " + ", ".join(detail["completed_scenes"] or ["none"]) + ".")
+              lines.append(
+                  "Replay from your local PRKS checkout root, after installing its "
+                  "pinned E2E prerequisites and Chromium: "
+                  "`repo=\"$(pwd)\"; temp=\"$(mktemp -d)\"; "
+                  "(cd \"$temp\" && python \"$repo/scripts/ci/visual_regression.py\" --mode check)` "
+                  "(use the same commit and browser revision as CI)."
+              )
           elif approved and os.environ["PROPOSE"] != "1":
               lines.append(
                   "**Comparison incomplete:** approved baseline.json exists, but "
@@ -119,5 +135,6 @@ jobs:
             ${{ runner.temp }}/prks-visual-*.png
             ${{ runner.temp }}/prks-visual-candidate.json
             ${{ runner.temp }}/prks-visual-results.json
+            ${{ runner.temp }}/prks-visual-failure.json
           retention-days: 7
           if-no-files-found: warn

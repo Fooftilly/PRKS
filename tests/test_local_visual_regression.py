@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 from PIL import Image, ImageDraw
 
 from scripts.ci.visual_regression import (
-    VisualCaptureFailure, assert_split_pdf_ownership, collect,
+    VisualCaptureFailure, assert_split_pdf_ownership, collect, main,
 )
 
 from tests.visual.compare import (
@@ -38,6 +38,40 @@ def png_sample(*, invert: bool = False) -> bytes:
 
 
 class LocalVisualBaselineTests(unittest.TestCase):
+    def test_replay_discards_old_outputs_before_capture_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            stale = ["prks-visual-candidate.json", "prks-visual-results.json",
+                     "prks-visual-failure.json"]
+            stale += [f"prks-visual-{name}.png" for name in SCENES]
+            for name in stale:
+                (root / name).write_text("stale result", encoding="utf-8")
+            unrelated = root / "keep.txt"
+            unrelated.write_text("unchanged", encoding="utf-8")
+            with (patch("scripts.ci.visual_regression.Path.cwd", return_value=root),
+                  patch("scripts.ci.visual_regression.collect",
+                        side_effect=VisualCaptureFailure("capture_pdf", "TimeoutError"))):
+                with self.assertRaises(VisualCaptureFailure):
+                    main(["--mode", "check"])
+            for name in stale:
+                with self.subTest(name=name):
+                    self.assertFalse((root / name).exists())
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "unchanged")
+
+    def test_replay_writes_only_this_runs_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "prks-visual-results.json").write_text("stale", encoding="utf-8")
+            (root / "prks-visual-failure.json").write_text("stale", encoding="utf-8")
+            sample = fingerprint(png_sample())
+            with (patch("scripts.ci.visual_regression.Path.cwd", return_value=root),
+                  patch("scripts.ci.visual_regression.collect",
+                        return_value={scene: sample for scene in SCENES})):
+                self.assertEqual(main(["--mode", "propose"]), 0)
+            self.assertTrue((root / "prks-visual-candidate.json").exists())
+            self.assertFalse((root / "prks-visual-results.json").exists())
+            self.assertFalse((root / "prks-visual-failure.json").exists())
+
     def test_split_capture_requires_distinct_work_and_pdf_ownership(self):
         page = Mock()
         assert_split_pdf_ownership(
@@ -89,6 +123,15 @@ class LocalVisualBaselineTests(unittest.TestCase):
                 str(caught.exception), "visual/capture_folders (ValueError)",
             )
             self.assertNotIn("private", str(caught.exception))
+            failure = json.loads((Path(td) / "prks-visual-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure, {
+                "format": "prks-local-visual-failure-v1",
+                "status": "capture_failed",
+                "stage": "capture_folders",
+                "exception_type": "ValueError",
+                "completed_scenes": [],
+            })
+            self.assertNotIn("private", json.dumps(failure))
             ctx.close.assert_called_once()
             browser.close.assert_called_once()
             browser_api.stop.assert_called_once()
@@ -129,6 +172,11 @@ class LocalVisualBaselineTests(unittest.TestCase):
             self.assertEqual(caught.exception.stage, "close_context")
             self.assertEqual(caught.exception.cause_type, "ValueError")
             self.assertNotIn("private", str(caught.exception))
+            failure = json.loads((Path(td) / "prks-visual-failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["stage"], "close_context")
+            self.assertEqual(failure["exception_type"], "ValueError")
+            self.assertEqual(failure["completed_scenes"], list(SCENES))
+            self.assertNotIn("private", json.dumps(failure))
             collector_type.return_value.assert_clean.assert_called_once_with()
             browser.close.assert_called_once()
             browser_api.stop.assert_called_once()
@@ -140,6 +188,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         inverse = fingerprint(png_sample(invert=True))
         changed = compare(inverse, original)
         self.assertFalse(changed["passed"])
+        self.assertEqual(changed["reason"], "mean_and_hot")
         self.assertGreater(changed["mean_delta"], 9)
         self.assertGreater(changed["hot_fraction"], 0.06)
 
@@ -155,6 +204,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         result = compare(after, before)
         self.assertFalse(result["passed"])
         self.assertEqual(result["hot_fraction"], 0)
+        self.assertEqual(result["reason"], "mean_delta")
         self.assertGreater(result["mean_delta"], 9)
 
     def test_small_high_contrast_region_fails_on_hot_without_mean(self):
@@ -168,6 +218,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         result = compare(after, before)
         self.assertFalse(result["passed"])
         self.assertLess(result["mean_delta"], 9)
+        self.assertEqual(result["reason"], "hot_fraction")
         self.assertGreater(result["hot_fraction"], 0.06)
 
     def test_dimensions_are_exact_even_when_mean_sample_matches(self):
@@ -175,6 +226,7 @@ class LocalVisualBaselineTests(unittest.TestCase):
         altered = {**identical, "width": 481}
         result = compare(altered, identical)
         self.assertFalse(result["passed"])
+        self.assertEqual(result["reason"], "dimensions")
         self.assertTrue(result["size_changed"])
 
     def test_bounded_noise_tolerated_by_quantized_samples(self):
@@ -184,7 +236,9 @@ class LocalVisualBaselineTests(unittest.TestCase):
         png.putpixel((300, 150), (250, 250, 250))
         out = io.BytesIO()
         png.save(out, format="PNG")
-        self.assertTrue(compare(fingerprint(out.getvalue()), sample)["passed"])
+        result = compare(fingerprint(out.getvalue()), sample)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["reason"], "within_tolerance")
 
     def test_missing_metadata_or_unreviewed_scene_fails_closed(self):
         base = fingerprint(png_sample())

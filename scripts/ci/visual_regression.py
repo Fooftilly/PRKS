@@ -199,6 +199,19 @@ def collect(output: Path) -> dict[str, dict]:
                         cleanup_stage, type(exc).__name__,
                     )
     if failure is not None:
+        # Persist only fixed stage/exception identifiers and scene names.
+        # Playwright's raw error, DOM text, IDs, paths and URLs are forbidden.
+        # A failed write must never mask the original capture failure.
+        try:
+            write_json(output / "prks-visual-failure.json", {
+                "format": "prks-local-visual-failure-v1",
+                "status": "capture_failed",
+                "stage": failure.stage,
+                "exception_type": failure.cause_type,
+                "completed_scenes": [name for name in SCENES if samples and name in samples],
+            })
+        except OSError:
+            pass
         raise failure from None
     if samples is None:
         raise VisualCaptureFailure("internal_result", "RuntimeError")
@@ -219,6 +232,19 @@ def prove_mutation_detection(sample: dict) -> None:
         raise AssertionError("controlled visual deviation was not detected")
 
 
+def clear_previous_run(work: Path) -> None:
+    """Discard only known output artifacts so an old result cannot mask a new failure.
+
+    Visual runs may reuse a temporary directory during local debugging;
+    stale PNGs are just as misleading as stale JSON results when uploaded.
+    """
+    for name in ("prks-visual-candidate.json", "prks-visual-results.json",
+                 "prks-visual-failure.json"):
+        (work / name).unlink(missing_ok=True)
+    for scene in SCENES:
+        (work / f"prks-visual-{scene}.png").unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("auto", "propose", "check"), default="auto")
@@ -227,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     # Artifacts must be written only into the caller's disposable directory.
     if work.resolve() == ROOT.resolve():
         raise RuntimeError("run visual capture from a disposable directory, not the repo root")
+    clear_previous_run(work)
     mode = args.mode
     if mode == "auto":
         mode = "check" if BASELINE.is_file() else "propose"
@@ -247,7 +274,8 @@ def main(argv: list[str] | None = None) -> int:
     write_json(work / "prks-visual-results.json", outcomes)
     for name, result in outcomes.items():
         print(f"[visual] {name}: {'PASS' if result['passed'] else 'DIFF'} "
-              f"mean={result['mean_delta']} hot={result['hot_fraction']} size_changed={result['size_changed']}")
+              f"reason={result['reason']} mean={result['mean_delta']} "
+              f"hot={result['hot_fraction']} size_changed={result['size_changed']}")
     return 0 if all(result["passed"] for result in outcomes.values()) else 1
 
 

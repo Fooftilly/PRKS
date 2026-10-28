@@ -47,7 +47,10 @@ def compare(actual: dict, expected: dict) -> dict:
     if (actual["width"], actual["height"]) != (
         expected["width"], expected["height"]
     ):
-        return {"passed": False, "size_changed": True, "mean_delta": None, "hot_fraction": None}
+        return {
+            "passed": False, "reason": "dimensions", "size_changed": True,
+            "mean_delta": None, "hot_fraction": None,
+        }
 
     def pixels(entry: dict) -> bytes:
         compressed = base64.b64decode(entry["rgb48x30_zlib"], validate=True)
@@ -62,8 +65,17 @@ def compare(actual: dict, expected: dict) -> dict:
         max(abs(left[i + c] - right[i + c]) for c in range(3)) > HOT_CHANNEL_DELTA
         for i in range(0, len(left), 3)
     ) / (len(left) // 3)
+    mean_failed = mean > MEAN_DELTA_LIMIT
+    hot_failed = hot > HOT_FRACTION_LIMIT
+    reason = (
+        "mean_and_hot" if mean_failed and hot_failed else
+        "mean_delta" if mean_failed else
+        "hot_fraction" if hot_failed else
+        "within_tolerance"
+    )
     return {
-        "passed": not (mean > MEAN_DELTA_LIMIT or hot > HOT_FRACTION_LIMIT),
+        "passed": not (mean_failed or hot_failed),
+        "reason": reason,
         "size_changed": False,
         "mean_delta": round(mean, 3),
         "hot_fraction": round(hot, 4),
