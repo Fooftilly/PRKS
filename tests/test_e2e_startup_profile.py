@@ -175,7 +175,33 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
             and isinstance(call.args[0], ast.Constant)
         ]
         self.assertEqual(
-            helper_stages, ["folders", "recent", "card_click", "work_ready"]
+            helper_stages, ["folders", "recent", "recent_click", "recent_card", "card_click", "work_ready"]
+        )
+        recent_scopes = [
+            node for node in ast.walk(nav_helpers[0])
+            if isinstance(node, ast.With)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+                and len(item.context_expr.args) == 1
+                and isinstance(item.context_expr.args[0], ast.Constant)
+                and item.context_expr.args[0].value == "recent"
+                for item in node.items
+            )
+        ]
+        self.assertEqual(len(recent_scopes), 1)
+        self.assertEqual(
+            [
+                item.context_expr.args[0].value
+                for node in recent_scopes[0].body
+                if isinstance(node, ast.With)
+                for item in node.items
+                if isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+            ],
+            ["recent_click", "recent_card"],
         )
         for mode, target in targets:
             module, class_name, method_name = target.rsplit(".", 2)
@@ -252,7 +278,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 nav_names,
                 {
                     f"person_{mode}_link_nav_{stage}"
-                    for stage in ("folders", "recent", "card_click", "work_ready")
+                    for stage in ("folders", "recent", "recent_click", "recent_card", "card_click", "work_ready")
                 },
                 target,
             )
