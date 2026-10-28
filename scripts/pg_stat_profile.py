@@ -221,6 +221,42 @@ def assert_ordered_work_ids(value: Any, expected: tuple[str, ...]) -> None:
         raise RuntimeError("synthetic batch lookup returned wrong or reordered IDs")
 
 
+def assert_concept_parent_graph(value: Any, concept_ids: Sequence[str]) -> None:
+    """A complete, correctly linked PG concept hierarchy, not an empty graph.
+
+    The synthetic Concept count matches the current Work tier. We verify all
+    node IDs, order by known fixture labels, every parent edge and the absence
+    of invented Work/people/mention nodes.
+    """
+    if not (isinstance(getattr(value, "nodes", None), list)
+            and isinstance(getattr(value, "edges", None), list)
+            and getattr(value, "people_included", None) is False
+            and getattr(value, "derived_note_edges_available", None) is True):
+        raise RuntimeError("synthetic Research Graph has invalid snapshot metadata")
+    expected_nodes = [f"concept:{cid}" for cid in concept_ids]
+    actual_nodes = value.nodes
+    if len(actual_nodes) != len(expected_nodes) or [
+        node.get("id") if isinstance(node, dict) else None for node in actual_nodes
+    ] != expected_nodes:
+        raise RuntimeError("synthetic Research Graph nodes are missing, duplicated or out of order")
+    for i, node in enumerate(actual_nodes):
+        if (node.get("type") != "concept" or node.get("record_id") != concept_ids[i]
+                or node.get("label") != f"Profile Concept {i:04d}"):
+            raise RuntimeError("synthetic Research Graph node identity is incorrect")
+    expected_edges = {
+        (f"concept:{child}", f"concept:{parent}")
+        for child, parent in zip(concept_ids[1:], concept_ids)
+    }
+    edges = value.edges
+    actual_edges = [
+        (edge.get("source"), edge.get("target"))
+        if isinstance(edge, dict) and edge.get("type") == "concept_parent"
+        else (None, None) for edge in edges
+    ]
+    if len(edges) != len(expected_edges) or set(actual_edges) != expected_edges:
+        raise RuntimeError("synthetic Research Graph hierarchy is incorrect")
+
+
 def verify_disposable_cluster(stats: Any, nonce: str) -> int:
     """Refuse an unproven server before profile DDL, resets or test DB creation."""
     cluster = stats.execute("SHOW cluster_name").fetchone()["cluster_name"]
@@ -265,6 +301,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     from backend.db.database import Database
     from backend.pg_facade import PostgresLibrary
     from backend.pg_facade import context as facade_context
+    from backend.pg_facade.research_index import PostgresResearchIndex
     from backend.storage.config import StorageConfig
     from tests.pg.facade_context import provision_actor
     from tests.pg.harness import get_harness
@@ -291,17 +328,28 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                     storage = StorageConfig.for_testing(temp)
                     os.makedirs(storage.pdfs_dir, exist_ok=True)
                     library = PostgresLibrary(database, storage=storage)
+                    research_index = PostgresResearchIndex(database)
                     fixture_ids: list[str] = []
+                    concept_ids: list[str] = []
                     output = []
                     with facade_context.acting_as(actor.context):
                         for size in sizes:
                             for i in range(len(fixture_ids), size):
                                 fixture_ids.append(library.add_work(f"Fixture Work {i:04d}"))
-                            # These are real PG facade read paths. The fixture is
+                            # Same-sized connected synthetic Concept network.
+                            # Seed before reset; all graph reads below use the
+                            # genuinely ported PG adapter, never the SQLite graph.
+                            for i in range(len(concept_ids), size):
+                                cid = library.create_concept(f"Profile Concept {i:04d}")["id"]
+                                if concept_ids:
+                                    library.replace_concept_parents(cid, [concept_ids[-1]])
+                                concept_ids.append(cid)
+                            # These are real PG adapter reads. The fixture is
                             # deterministic, isolated, synthetic and disposable.
                             work_id = fixture_ids[-1]
-                            # T07: only profile read paths already ported to the PG facade.
-                            # Search, graph and generic offset pagination are NOT ported.
+                            # T07: only real PostgreSQL reads. Graph has been
+                            # ported as a ResearchIndex adapter (PR #946);
+                            # search and generic offset pagination are not ported.
                             bounded_limit = min(size, 10)
                             # Capture the already-timed first list result in its
                             # verifier: do not pre-read the catalog and turn the
@@ -340,6 +388,9 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                 ("works_batch_by_ids",
                                  lambda: library.get_work_summaries_by_ids_ordered(list(batch_ids)),
                                  lambda value: assert_ordered_work_ids(value, batch_ids)),
+                                ("concept_hierarchy_graph",
+                                 research_index.build_graph,
+                                 lambda value: assert_concept_parent_graph(value, concept_ids)),
                             )
                             for label, operation, verify in workloads:
                                 result = benchmark(stats, operation, repetitions, verify)
@@ -347,11 +398,11 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                     return {
                         "tool": "pg_stat_statements",
                         "server_version_num": int(version),
-                        "fixture": "synthetic_works_only",
-                        "fixture_version": "works-v1",
+                        "fixture": "synthetic_works_and_concept_chain",
+                        "fixture_version": "works-concepts-v2",
                         "fixture_tiers": list(sizes),
-                        "backend": "postgresql_facade",
-                        "measurement": "warm_facade_calls_not_http",
+                        "backend": "postgresql_read_adapters",
+                        "measurement": "warm_pg_read_adapter_calls_not_http",
                         "readiness": "disposable_pg18_identity_verified",
                         "query_fingerprints": "run_local_only; no SQL text is collected",
                         "profiles": output,
