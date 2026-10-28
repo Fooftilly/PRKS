@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.pg_stat_profile import (
-    assert_bounded_works, assert_ordered_work_ids, assert_work_detail,
+    assert_bounded_works, assert_concept_parent_graph, assert_ordered_work_ids, assert_work_detail,
     expected_recent_work_ids,
     assert_works_count, benchmark, create_verified_profile_database, percentile,
     project_statement, run, sizes_arg, snapshot, statement_rollup, verify_disposable_cluster,
@@ -114,6 +114,42 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertEqual(snapshot(stats), [])
         self.assertIn("pg_stat_statements(false)", stats.statement)
         self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\bquery\b")
+
+    def test_real_concept_graph_checks_nodes_order_and_parent_edges(self):
+        from types import SimpleNamespace
+
+        ids = ("C-1", "C-2", "C-3")
+        nodes = [
+            {"id": f"concept:{cid}", "record_id": cid,
+             "type": "concept", "label": f"Profile Concept {i:04d}"}
+            for i, cid in enumerate(ids)
+        ]
+        edges = [
+            {"type": "concept_parent", "source": "concept:C-2", "target": "concept:C-1"},
+            {"type": "concept_parent", "source": "concept:C-3", "target": "concept:C-2"},
+        ]
+        good = SimpleNamespace(
+            nodes=nodes, edges=edges,
+            derived_note_edges_available=True, people_included=False,
+        )
+        assert_concept_parent_graph(good, ids)
+        bad_cases = (
+            {"nodes": nodes[:-1]},
+            {"nodes": [nodes[1], nodes[0], nodes[2]]},
+            {"nodes": [nodes[0], nodes[0], nodes[2]]},
+            {"nodes": [nodes[0], {**nodes[1], "label": "Wrong"}, nodes[2]]},
+            {"edges": edges[:-1]},
+            {"edges": [edges[0], edges[0]]},
+            {"edges": [{**edges[0], "target": "concept:C-3"}, edges[1]]},
+            {"edges": [{**edges[0], "type": "work_author"}, edges[1]]},
+            {"people_included": True},
+            {"derived_note_edges_available": False},
+        )
+        for delta in bad_cases:
+            with self.subTest(delta=delta), self.assertRaisesRegex(RuntimeError, "Graph"):
+                assert_concept_parent_graph(
+                    SimpleNamespace(**{**vars(good), **delta}), ids
+                )
 
     def test_all_statement_rollup_never_requests_sql_text(self):
         class FakeStats:
