@@ -137,6 +137,14 @@ WHERE NOT hold AND (%(library_id)s::text IS NULL OR library_id = %(library_id)s)
 ORDER BY last_attempt_at NULLS FIRST, recorded_at, namespace, name
 LIMIT %(limit)s
 """
+# A rewrite locks the Asset's Work first, the order every Works command uses,
+# so a Work delete either sees the new key or finds the Work already gone.
+_LOCK_ASSET_WORK: LiteralString = """
+SELECT w.id FROM prks.works w
+JOIN prks.assets a ON a.library_id = w.library_id AND a.work_id = w.id
+WHERE w.library_id = %(library_id)s AND a.id = %(asset_id)s
+FOR UPDATE OF w
+"""
 _LOCK_ASSET_OBJECT: LiteralString = """
 SELECT storage_locator FROM prks.assets
 WHERE library_id = %(library_id)s AND id = %(asset_id)s AND kind = 'managed_file'
@@ -230,7 +238,13 @@ def release(scope: LibraryScope, key: StorageKey, *, hold: bool = False) -> bool
     Called in the transaction that stops naming the key, after its last
     change. Returns whether a claim is recorded (or already was). ``hold``
     keeps the bytes until someone releases the hold (restore, §11.4).
+
+    Takes the per-object lock first: two transactions that each drop one of
+    the Library's last two names of a key then check in turn, so the second
+    sees the first's delete committed and records the claim. A caller
+    releasing several keys releases them in a fixed order.
     """
+    scope.execute_unscoped(OBJECT_LOCK_SQL, (str(key),))
     if key.namespace == NAMESPACE_ASSET_OBJECTS and scope.execute(
             _NAMED_IN_LIBRARY, {"name": key.name}).fetchone() is not None:
         return False
@@ -242,7 +256,7 @@ def replace_object(scope: LibraryScope, storage: StorageBackend, asset_id: str,
                    obj: StoredObject) -> Optional[str]:
     """Point a managed-file Asset at the new object ``obj`` (a rewrite, §11.2).
 
-    Locks the Asset row, adopts the new key, switches ``storage_locator``,
+    Locks the Asset's Work, then the Asset row (the Works order), adopts the new key, switches ``storage_locator``,
     ``content_sha256`` and ``byte_size``, and releases the old key, all in
     the caller's transaction. Returns the old key's name, or None when this
     Library has no such managed-file Asset. Checking the annotation revision
@@ -250,6 +264,8 @@ def replace_object(scope: LibraryScope, storage: StorageBackend, asset_id: str,
     """
     if obj.key.namespace != NAMESPACE_ASSET_OBJECTS:
         raise ValueError("an Asset's bytes live in the asset-objects namespace")
+    if scope.execute(_LOCK_ASSET_WORK, {"asset_id": asset_id}).fetchone() is None:
+        return None
     row = scope.execute(_LOCK_ASSET_OBJECT, {"asset_id": asset_id}).fetchone()
     if row is None:
         return None
@@ -314,8 +330,12 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
         try:
             key = StorageKey(namespace, name)
         except InvalidStorageKey:
-            # Never a key PRKS wrote; skipped so it cannot stall the pass.
+            # Never a key PRKS wrote. Stamped like an attempt, so it rotates
+            # behind the valid claims instead of filling every pass.
             LOGGER.warning("object_cleanup_invalid_claim namespace=%s", namespace)
+            db.command(lambda tx, params={"namespace": namespace, "name": name}: tx.execute(
+                _NOTE_ATTEMPT, params))
+            outcomes[Settled.FAILED] += 1
             continue
         outcomes[settle(db, storage, key)] += 1
     return outcomes

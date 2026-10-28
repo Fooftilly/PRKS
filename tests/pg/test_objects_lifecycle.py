@@ -17,6 +17,7 @@ import time
 import uuid
 from collections.abc import Callable
 from typing import Any, Optional
+from unittest import mock
 
 import psycopg
 
@@ -467,6 +468,18 @@ class RetryTests(ObjectsTestCase):
                          {Settled.REMOVED: 1})
         self.assertEqual(set(self.claims()), {mine.key.name})
 
+    def test_an_invalid_claim_rotates_behind_valid_ones(self) -> None:
+        # The table's whitespace check is narrower than Python's strip(): a
+        # name only StorageKey refuses must not hold every bounded pass.
+        self.sql("INSERT INTO prks.object_cleanup_claims (namespace, name) VALUES ('asset-objects', %s)",
+                 ("\x1cstray.pdf",))
+        orphan = self.put()
+        self.claim(orphan.key)
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects, limit=1), {Settled.FAILED: 1})
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects, limit=1), {Settled.REMOVED: 1})
+        self.assertFalse(self.stored(orphan.key.name))
+        self.assertEqual(set(self.claims()), {"\x1cstray.pdf"})
+
 
 class BackupLockTests(ObjectsTestCase):
     def test_settle_waits_out_a_backup_of_the_claims_library(self) -> None:
@@ -558,6 +571,65 @@ class InterleavingTests(ObjectsTestCase):
         self.assertEqual(len(written), 1)
         self.assertIsInstance(written[0], ObjectMissing)
         self.assertEqual((self.count("works"), self.count("assets")), (0, 0))
+
+    def row_lock_waiters(self) -> int:
+        return int(self.sql("SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                            "AND pid <> pg_backend_pid()")[0]["n"])
+
+    def test_a_rewrite_meeting_a_work_delete_in_flight_strands_nothing(self) -> None:
+        old = self.put(b"old bytes")
+        work_id = self.work_with(old)
+        asset_id = self.asset_of(work_id)["id"]
+        new = self.put(b"rewritten bytes")
+        enumerated, release = threading.Event(), threading.Event()
+        release_work = commands.folders.release_work
+
+        def pause_after_enumeration(scope: LibraryScope, paused_work_id: str) -> Any:
+            # delete_work has read its Assets' keys and not yet deleted them.
+            enumerated.set()
+            release.wait(30)
+            return release_work(scope, paused_work_id)
+
+        with mock.patch.object(commands.folders, "release_work", pause_after_enumeration):
+            deleter, deleted = self.run_in_thread(
+                lambda: self.command(lambda scope: commands.delete_work(scope, work_id)))
+            self.assertTrue(enumerated.wait(30))
+            writer, written = self.run_in_thread(lambda: self.command(
+                lambda scope: lifecycle.replace_object(scope, self.objects, asset_id, new)))
+            self.wait_until(lambda: self.row_lock_waiters() == 1, "the rewrite to wait on the Work")
+            release.set()
+            self.join(deleter)
+            self.join(writer)
+        self.assertEqual(len(deleted), 1)
+        self.assertNotIsInstance(deleted[0], BaseException)
+        self.assertEqual(written, [None], "the rewrite finds the Work gone and commits nothing")
+        self.assertEqual(set(self.claims()), {old.key.name})
+        # The new bytes were never adopted: an interrupted write, which the sweep claims.
+        self.assertEqual(self.sweep(), 1)
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 2})
+
+    def test_two_deletes_dropping_a_shared_keys_last_names_leave_a_claim(self) -> None:
+        shared = self.put()
+        first, second = self.work_with(shared), self.work_with(shared)
+        deleted_first, release = threading.Event(), threading.Event()
+
+        def delete_and_pause(scope: LibraryScope) -> Any:
+            gone = commands.delete_work(scope, first)
+            deleted_first.set()
+            release.wait(30)
+            return gone
+
+        one, _ = self.run_in_thread(lambda: self.command(delete_and_pause))
+        self.assertTrue(deleted_first.wait(30))
+        other, _ = self.run_in_thread(
+            lambda: self.command(lambda scope: commands.delete_work(scope, second)))
+        self.wait_until(lambda: self.lock_waiters() == 1, "the second release to wait on the object lock")
+        release.set()
+        self.join(one)
+        self.join(other)
+        self.assertEqual(self.count("assets"), 0)
+        self.assertEqual(set(self.claims()), {shared.key.name}, "the last release sees the first committed")
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 1})
 
     def test_two_works_adopting_one_key_both_commit(self) -> None:
         obj = self.put()
