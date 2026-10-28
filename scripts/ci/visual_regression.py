@@ -232,6 +232,19 @@ def prove_mutation_detection(sample: dict) -> None:
         raise AssertionError("controlled visual deviation was not detected")
 
 
+def clear_previous_run(work: Path) -> None:
+    """Discard only known output artifacts so an old result cannot mask a new failure.
+
+    Visual runs may reuse a temporary directory during local debugging;
+    stale PNGs are just as misleading as stale JSON results when uploaded.
+    """
+    for name in ("prks-visual-candidate.json", "prks-visual-results.json",
+                 "prks-visual-failure.json"):
+        (work / name).unlink(missing_ok=True)
+    for scene in SCENES:
+        (work / f"prks-visual-{scene}.png").unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("auto", "propose", "check"), default="auto")
@@ -240,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     # Artifacts must be written only into the caller's disposable directory.
     if work.resolve() == ROOT.resolve():
         raise RuntimeError("run visual capture from a disposable directory, not the repo root")
+    clear_previous_run(work)
     mode = args.mode
     if mode == "auto":
         mode = "check" if BASELINE.is_file() else "propose"
