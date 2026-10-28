@@ -40,7 +40,8 @@ def png_sample(*, invert: bool = False) -> bytes:
 class LocalVisualBaselineTests(unittest.TestCase):
     def test_advisory_workflow_rebuilds_and_checks_vue_before_capture(self):
         workflow = (
-            ROOT / ".github" / "workflows" / "visual-regression-pilot.yml"
+            Path(__file__).resolve().parents[1]
+            / ".github" / "workflows" / "visual-regression-pilot.yml"
         ).read_text(encoding="utf-8")
         build = workflow.index("      - name: Verify fresh Vue build matches checked-in runtime assets")
         capture = workflow.index("      - name: Capture and compare five synthetic app surfaces")
