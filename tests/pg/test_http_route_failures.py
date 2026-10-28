@@ -56,6 +56,7 @@ class RouteFailureTests(ResearchHttpTestCase):
         self.assertEqual(res.status, 409, res.raw)
         self.assertEqual((res.body["error"], res.body["code"]), ("LIBRARY_EPOCH_CHANGED",) * 2)
         self.assertEqual(res.body["message"], Refusal.LIBRARY_EPOCH_CHANGED.message)
+        self.assertEqual(res.header("PRKS-Library-Epoch"), [])  # admission's epoch is stale now
         self.assertEqual(self.concept_names(), [])
 
     def test_a_demotion_between_admission_and_the_route_is_forbidden(self) -> None:
@@ -86,6 +87,7 @@ class RouteFailureTests(ResearchHttpTestCase):
         res = self.get("/api/arguments")
         self.assertEqual((res.status, res.body["code"]), (503, "RETRY"), res.raw)
         self.assertEqual(res.header("Retry-After"), ["1"])
+        self.assertEqual(res.header("PRKS-Library-Epoch"), [str(self.library_epoch())])
 
     def test_an_unmapped_database_error_stays_a_logged_500(self) -> None:
         self.raises("list_positions", UnmappedDatabaseError(sqlstate="XX000"))

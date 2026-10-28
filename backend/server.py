@@ -754,9 +754,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # An admitted PostgreSQL request: a refusal or a mapped database
             # error raised in the route keeps its own status (§5.4, §9.4).
             from backend.api import session as session_api
+            from backend.domain.identity.authorization import AccessRefused
 
             reply = session_api.route_failure(exc)
             if reply is not None:
+                if isinstance(exc, AccessRefused):
+                    # Admission's epoch may be stale by now (a restore since);
+                    # the client re-reads it from /api/session.
+                    self._prks_library_epoch = None
                 self._send_session_reply(reply)
                 return
         ctx = self._request_context()
