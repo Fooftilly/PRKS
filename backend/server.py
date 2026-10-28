@@ -750,6 +750,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         }
 
     def _send_internal_error(self, exc: Exception | None = None):
+        if exc is not None and getattr(self, "_prks_request_context", None) is not None:
+            # An admitted PostgreSQL request: a refusal or a mapped database
+            # error raised in the route keeps its own status (§5.4, §9.4).
+            from backend.api import session as session_api
+            from backend.domain.identity.authorization import AccessRefused
+
+            reply = session_api.route_failure(exc)
+            if reply is not None:
+                if isinstance(exc, AccessRefused):
+                    # Admission's epoch may be stale by now (a restore since);
+                    # the client re-reads it from /api/session.
+                    self._prks_library_epoch = None
+                self._send_session_reply(reply)
+                return
         ctx = self._request_context()
         if exc is not None:
             LOGGER.exception(
@@ -882,23 +896,28 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self._prks_request_context = outcome.context
             return True
         if isinstance(outcome, session_api.Reply):
-            if outcome.status >= 400:
-                LOGGER.info(
-                    "request_rejected reason=%s request_id=%s",
-                    safe_log_label(str(outcome.body.get("error", ""))),
-                    safe_log_id(self._prks_request_id),
-                )
-            body = b"" if method == "HEAD" else json.dumps(outcome.body).encode("utf-8")
-            self.send_response(outcome.status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            for name, value in outcome.headers:
-                self.send_header(name, value)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            if body:
-                self.wfile.write(body)
+            self._send_session_reply(outcome)
         return False
+
+    def _send_session_reply(self, reply) -> None:
+        """Answer with a ``backend.api.session.Reply`` (no body for HEAD)."""
+        if reply.status >= 400:
+            LOGGER.info(
+                "request_rejected reason=%s request_id=%s",
+                safe_log_label(str(reply.body.get("error", ""))),
+                safe_log_id(self._prks_request_id),
+            )
+        method = (getattr(self, "command", "") or "").upper()
+        body = b"" if method == "HEAD" else json.dumps(reply.body).encode("utf-8")
+        self.send_response(reply.status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        for name, value in reply.headers:
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
 
     def _read_json_body(self):
         types = self.headers.get_all("Content-Type") or []
