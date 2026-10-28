@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from scripts.pg_stat_profile import (
-    assert_bounded_works, assert_concept_parent_graph, assert_ordered_work_ids, assert_work_detail,
+    assert_bounded_works, assert_concept_parent_graph, assert_indexed_note_graph,
+    assert_ordered_work_ids, assert_work_detail,
     expected_recent_work_ids,
     assert_works_count, benchmark, create_verified_profile_database, percentile,
     project_statement, run, sizes_arg, snapshot, statement_rollup, verify_disposable_cluster,
@@ -150,6 +151,49 @@ class ProfileSafetyTests(unittest.TestCase):
                 assert_concept_parent_graph(
                     SimpleNamespace(**{**vars(good), **delta}), ids
                 )
+
+    def test_indexed_note_graph_must_include_correct_derived_edges(self):
+        from types import SimpleNamespace
+
+        concepts = ("C-1", "C-2")
+        works = ("W-1", "W-2")
+        nodes = [
+            {"id": f"concept:{c}", "record_id": c, "type": "concept",
+             "label": f"Profile Indexed Concept {i:04d}"}
+            for i, c in enumerate(concepts)
+        ] + [
+            {"id": f"work:{w}", "record_id": w, "type": "work",
+             "label": f"Profile Indexed Work {i:04d}"}
+            for i, w in enumerate(works)
+        ]
+        edges = [
+            {"type": "mentions_concept", "source": f"work:{w}",
+             "target": f"concept:{c}", "count": 1}
+            for w, c in zip(works, concepts)
+        ]
+        valid = SimpleNamespace(
+            nodes=nodes, edges=edges,
+            people_included=False, derived_note_edges_available=True,
+        )
+        assert_indexed_note_graph(valid, concepts, works)
+        for change in (
+            {"nodes": nodes[:-1]},
+            {"nodes": [nodes[1], nodes[0], *nodes[2:]]},
+            {"nodes": [nodes[0], {**nodes[1], "label": "Wrong"}, *nodes[2:]]},
+            {"edges": edges[:-1]},
+            {"edges": [edges[0], edges[0]]},
+            {"edges": [{**edges[0], "count": 2}, edges[1]]},
+            {"edges": [{**edges[0], "target": "concept:C-2"}, edges[1]]},
+            {"edges": [{**edges[0], "type": "argument_source"}, edges[1]]},
+            {"derived_note_edges_available": False},
+            {"people_included": True},
+        ):
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                assert_indexed_note_graph(
+                    SimpleNamespace(**{**vars(valid), **change}), concepts, works
+                )
+        with self.assertRaisesRegex(RuntimeError, "fixture"):
+            assert_indexed_note_graph(valid, concepts, works[:-1])
 
     def test_all_statement_rollup_never_requests_sql_text(self):
         class FakeStats:
