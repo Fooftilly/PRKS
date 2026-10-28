@@ -26,16 +26,33 @@ What moves:
   gone. A Research Note writer holds the Arguments its markup names the
   same way (:func:`share_referenced`), so ``ARGUMENT_IN_USE`` sees every
   note committed before the delete.
-- **Citations carry a Version** (``docs/work-identity-model.md`` §8.5). The
-  list keeps SQLite's wire shape, ``[{work_id, pages}]``. A replaced entry
-  matching exactly one stored row by ``(work_id, pages)`` keeps that row's
-  Version; a new one with a pinpoint is pinned to the Work's only Version
-  (SQLite's trigger pins the primary, which is the only one a legacy
-  client can reach). An entry whose Version the legacy shape cannot name,
-  because it matches several stored rows or its Work has several Versions,
-  refuses the whole list: ``argument_source_version_required``
-  (``ARGUMENT_SOURCE_VERSION_REQUIRED``). A pinned citation follows its
-  Version when the Version moves to another Work (``ON UPDATE CASCADE``).
+- **Citations carry a Version** (``docs/work-identity-model.md`` §8.5). A
+  list comes in one of two shapes, told apart by whether its entries carry
+  ``manifestation_id``:
+
+  - **Version-aware**, ``[{work_id, manifestation_id, pages}]``: every entry
+    names its Version (``null`` cites the Work in general), and the list is
+    stored as given. One Work may be cited several times (the Work, several
+    of its Versions, several pinpoints); only an exact repeat of ``(work_id,
+    manifestation_id, pages)`` is refused (``invalid_sources``). A Version
+    no Version of this Library has is ``argument_source_version_not_found``
+    (404), one of another Work ``argument_source_version_mismatch`` (409).
+    A list mixing the two shapes is ``invalid_sources``.
+  - **Legacy**, SQLite's ``[{work_id, pages}]``: a replaced entry matching
+    exactly one stored row by ``(work_id, pages)`` keeps that row's
+    Version; a new one with a pinpoint is pinned to the Work's only Version
+    (SQLite's trigger pins the primary, which is the only one a legacy
+    client can reach). An entry whose Version the legacy shape cannot name,
+    because it matches several stored rows or its Work has several
+    Versions, refuses the whole list: ``argument_source_version_required``
+    (``ARGUMENT_SOURCE_VERSION_REQUIRED``). A Work named twice is refused as
+    on SQLite, so a legacy client cannot rewrite a list that cites one Work
+    twice; it can still clear it.
+
+  The Versions a list names are held ``FOR KEY SHARE`` with its Works, so a
+  Version's delete or move waits for the command. A pinned citation follows
+  its Version when the Version moves to another Work (``ON UPDATE
+  CASCADE``), and a Version a citation pins cannot be deleted.
 - **A Work delete removes its citations** (:func:`release_work`) and
   advances ``argument-sources`` of each Argument that cited it. SQLite's
   cascade removes them without advancing, so a client holding the list
@@ -68,13 +85,18 @@ TARGETS_SCOPE_TYPE = rules.TARGETS_SCOPE_TYPE
 _NOT_FOUND = ("not_found", "Argument not found.", 404)
 _VERSION_REQUIRED = ("argument_source_version_required",
                      "Choose which Version of the Work this citation cites.", 409)
+_VERSION_NOT_FOUND = ("argument_source_version_not_found", "Source Version not found.", 404)
+_VERSION_MISMATCH = ("argument_source_version_mismatch", "That Version belongs to another Work.", 409)
 _IN_USE = ("argument_in_use", "This Argument is still referenced in research notes.", 409)
 _TARGETED = ("argument_targeted", "Another Argument or Stance still responds to this record.", 409)
 _CYCLE = ("argument_cycle", "That target would create an Argument response cycle.", 409)
 
-# SQLite's refusal vocabulary, and the one refusal only this backend makes.
-_RULE_CODES = {**rules._RULE_CODES, _VERSION_REQUIRED[0]: "ARGUMENT_SOURCE_VERSION_REQUIRED"}
-_RULE_STATUS = {**rules._RULE_STATUS, _VERSION_REQUIRED[0]: 409}
+# SQLite's refusal vocabulary, and the Version refusals only this backend makes.
+_RULE_CODES = {**rules._RULE_CODES, _VERSION_REQUIRED[0]: "ARGUMENT_SOURCE_VERSION_REQUIRED",
+               _VERSION_NOT_FOUND[0]: "ARGUMENT_SOURCE_VERSION_NOT_FOUND",
+               _VERSION_MISMATCH[0]: "ARGUMENT_SOURCE_VERSION_MISMATCH"}
+_RULE_STATUS = {**rules._RULE_STATUS, _VERSION_REQUIRED[0]: 409, _VERSION_NOT_FOUND[0]: 404,
+                _VERSION_MISMATCH[0]: 409}
 
 _TARGETS_LOCK_SQL: LiteralString = (
     "SELECT pg_advisory_xact_lock(hashtextextended('prks.argument_targets:' || %(library_id)s, 0))"
@@ -124,6 +146,11 @@ _SHARE_WORKS_SQL: LiteralString = """
 SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = ANY(%(ids)s)
 ORDER BY id COLLATE "C" FOR KEY SHARE
 """
+# The Versions a citation list names, and the Work each belongs to.
+_SHARE_VERSIONS_SQL: LiteralString = """
+SELECT id, work_id FROM prks.manifestations WHERE library_id = %(library_id)s AND id = ANY(%(ids)s)
+ORDER BY id COLLATE "C" FOR KEY SHARE
+"""
 # How many Versions each Work has, and the one when it has one.
 _VERSIONS_SQL: LiteralString = """
 SELECT work_id, count(*) AS n, min(id) AS only_id FROM prks.manifestations
@@ -168,12 +195,14 @@ FROM unnest(%(work_ids)s::text[], %(manifestation_ids)s::text[], %(pages)s::text
 """
 # ``_argument_sources``: Work title as the Work list shows it.
 _SOURCES_SQL: LiteralString = """
-SELECT s.argument_id, s.work_id, s.pages, s.order_index, COALESCE(m.title, w.title) AS work_title
+SELECT s.argument_id, s.work_id, s.manifestation_id, s.pages, s.order_index,
+       COALESCE(m.title, w.title) AS work_title
 FROM prks.argument_sources s
 JOIN prks.works w ON w.library_id = s.library_id AND w.id = s.work_id
 JOIN prks.manifestations m ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id
 WHERE s.library_id = %(library_id)s AND (%(argument_id)s::text IS NULL OR s.argument_id = %(argument_id)s)
-ORDER BY s.argument_id COLLATE "C", s.order_index, COALESCE(m.title, w.title) COLLATE "C"
+ORDER BY s.argument_id COLLATE "C", s.order_index, COALESCE(m.title, w.title) COLLATE "C",
+         s.manifestation_id COLLATE "C" NULLS FIRST
 """
 _AUTHORS_SQL: LiteralString = """
 SELECT r.work_id, p.id, p.first_name, p.last_name, r.role_type, r.credit_name, r.order_index
@@ -282,6 +311,14 @@ class Citation:
 
 
 @dataclass(frozen=True)
+class Held:
+    """What :func:`share_works` holds: the named Works found, and each named Version's Work."""
+
+    works: set[str]
+    versions: dict[str, str]
+
+
+@dataclass(frozen=True)
 class Target:
     type: str
     id: str
@@ -331,17 +368,29 @@ def share(scope: LibraryScope, argument_ids: Sequence[str]) -> set[str]:
     return _found(scope, _SHARE_ARGUMENTS_SQL, argument_ids)
 
 
-def share_works(scope: LibraryScope, raw_sources: Any) -> set[str]:
-    """Hold the Works a citation list names against a delete until COMMIT; the ids found.
+def versioned(raw_sources: Any) -> bool:
+    """Whether a citation list is in the Version-aware shape: an entry carries ``manifestation_id``."""
+    return isinstance(raw_sources, list) and any(isinstance(raw, dict) and "manifestation_id" in raw
+                                                 for raw in raw_sources)
+
+
+def share_works(scope: LibraryScope, raw_sources: Any) -> Held:
+    """Hold the Works and Versions a citation list names against a delete or move until COMMIT.
 
     Taken before the Argument row (the order a Work delete takes them in:
-    the Work, then the Arguments citing it).
+    the Work, then the Arguments citing it): the Works by id, then the
+    Versions by id. A Version's move updates its key, so it waits too.
     """
     if not isinstance(raw_sources, list):
-        return set()
-    names = [raw["work_id"].strip() for raw in raw_sources
-             if isinstance(raw, dict) and isinstance(raw.get("work_id"), str)]
-    return _found(scope, _SHARE_WORKS_SQL, names)
+        return Held(set(), {})
+    entries = [raw for raw in raw_sources if isinstance(raw, dict)]
+    names = [raw["work_id"].strip() for raw in entries if isinstance(raw.get("work_id"), str)]
+    pins = sorted({pin.strip() for pin in (raw.get("manifestation_id") for raw in entries)
+                   if isinstance(pin, str) and _usable(pin.strip())})
+    works = _found(scope, _SHARE_WORKS_SQL, names)
+    versions = ({str(row["id"]): str(row["work_id"]) for row in scope.execute(_SHARE_VERSIONS_SQL, {"ids": pins})}
+                if pins else {})
+    return Held(works, versions)
 
 
 def _fields(scope: LibraryScope, argument_id: str) -> Optional[dict[str, str]]:
@@ -355,8 +404,11 @@ def _revision(scope: LibraryScope, scope_type: str, scope_id: str) -> int:
     return revisions.read(scope, scope_type, [scope_id])[scope_id]
 
 
-def current_sources(scope: LibraryScope, argument_id: str) -> list[dict[str, str]]:
-    """``current_sources``: the ordered citation list in the wire's shape."""
+def current_sources(scope: LibraryScope, argument_id: str, *, with_versions: bool = False) -> list[dict[str, Any]]:
+    """``current_sources``: the ordered citation list in the wire's shape (``with_versions``: the Version-aware one)."""
+    if with_versions:
+        return [{"work_id": citation.work_id, "manifestation_id": citation.manifestation_id, "pages": citation.pages}
+                for citation in _citations(scope, argument_id)]
     return [{"work_id": citation.work_id, "pages": citation.pages} for citation in _citations(scope, argument_id)]
 
 
@@ -388,14 +440,16 @@ def sync_state(scope: LibraryScope, argument_id: str) -> Optional[dict[str, Any]
 # -- the two lists, decided ---------------------------------------------------------
 
 
-def _clean_sources(scope: LibraryScope, argument_id: str, raw_sources: Any,
-                   works: set[str]) -> list[Citation]:
+def _clean_sources(scope: LibraryScope, argument_id: str, raw_sources: Any, held: Held) -> list[Citation]:
     """``_replace_sources_on_conn``'s checks in its order; each entry with the Version it cites.
 
-    ``works`` are the named Works found, held by :func:`share_works`.
+    ``held`` is what :func:`share_works` holds for the list.
     """
     if not isinstance(raw_sources, list):
         raise ResearchError("invalid_sources", "Sources must be a JSON array.")
+    if versioned(raw_sources):
+        return _clean_versioned(raw_sources, held)
+    works = held.works
     cleaned: list[tuple[str, str]] = []
     seen: set[str] = set()
     for raw in raw_sources:
@@ -412,6 +466,38 @@ def _clean_sources(scope: LibraryScope, argument_id: str, raw_sources: Any,
             raise ResearchError("work_not_found", "Source Work not found.", 404)
         cleaned.append((work_id, network._pages(raw.get("pages"))))
     return _pin(scope, argument_id, cleaned)
+
+
+def _clean_versioned(raw_sources: list[Any], held: Held) -> list[Citation]:
+    """A Version-aware list, checked entry by entry; only an exact repeat is a duplicate."""
+    out: list[Citation] = []
+    seen: set[Citation] = set()
+    for raw in raw_sources:
+        if not isinstance(raw, dict):
+            raise ResearchError("invalid_sources", "Each source must be an object.")
+        work_id = raw.get("work_id")
+        if not isinstance(work_id, str) or not work_id.strip():
+            raise ResearchError("invalid_sources", "Each source needs a work_id.")
+        work_id = work_id.strip()
+        if "manifestation_id" not in raw:
+            raise ResearchError("invalid_sources", "Every source must name its Version, or none may.")
+        pin = raw["manifestation_id"]
+        if pin is not None and (not isinstance(pin, str) or not pin.strip()):
+            raise ResearchError("invalid_sources", "A source's manifestation_id must be a Version id or null.")
+        if work_id not in held.works:
+            raise ResearchError("work_not_found", "Source Work not found.", 404)
+        if pin is not None:
+            pin = pin.strip()
+            if pin not in held.versions:
+                raise _refuse(_VERSION_NOT_FOUND)
+            if held.versions[pin] != work_id:
+                raise _refuse(_VERSION_MISMATCH)
+        citation = Citation(work_id, pin, network._pages(raw.get("pages")))
+        if citation in seen:
+            raise ResearchError("invalid_sources", "Duplicate citation.")
+        seen.add(citation)
+        out.append(citation)
+    return out
 
 
 def _pin(scope: LibraryScope, argument_id: str, cleaned: list[tuple[str, str]]) -> list[Citation]:
@@ -626,17 +712,18 @@ def apply_field_operation(scope: LibraryScope, argument_id: str, field: str, val
 def set_sources(scope: LibraryScope, argument_id: str, raw_sources: Any) -> tuple[bool, int]:
     """``set_sources_on_conn``: replace the whole list and advance its revision together.
 
-    The Works it names are held before the Argument (:func:`share_works`).
+    The Works and Versions it names are held before the Argument (:func:`share_works`).
     Every entry is checked even when the list looks unchanged: a list naming
     a deleted Work is refused, not accepted for looking equal.
     """
-    works = share_works(scope, raw_sources)
+    held = share_works(scope, raw_sources)
     if not lock(scope, argument_id):
         raise _refuse(_NOT_FOUND)
     before = _citations(scope, argument_id)
-    citations = _clean_sources(scope, argument_id, raw_sources, works)
-    # An unchanged list keeps its pins (§8.5), so its rows are unchanged too.
-    if [(c.work_id, c.pages) for c in citations] == [(c.work_id, c.pages) for c in before]:
+    citations = _clean_sources(scope, argument_id, raw_sources, held)
+    # A legacy list keeps its pins (§8.5), so an unchanged one is unchanged rows too;
+    # a Version-aware one changes when only a pin does.
+    if citations == before:
         return False, _revision(scope, SOURCES_SCOPE_TYPE, argument_id)
     revisions.lock(scope, SOURCES_SCOPE_TYPE, argument_id)
     _write_sources(scope, argument_id, citations)
@@ -646,14 +733,17 @@ def set_sources(scope: LibraryScope, argument_id: str, raw_sources: Any) -> tupl
 
 def apply_sources_operation(scope: LibraryScope, argument_id: str, desired: list[Any],
                             base_revision: int) -> tuple[int, dict[str, Any]]:
-    """``SET_ARGUMENT_SOURCES``'s ``apply_sources``: an ordered list, so order is part of agreeing."""
+    """``SET_ARGUMENT_SOURCES``'s ``apply_sources``: an ordered list, so order is part of agreeing.
+
+    A Version-aware list agrees with the stored one only when every pin does.
+    """
     result: dict[str, Any] = {"argument_id": argument_id}
     share_works(scope, desired)  # before the Argument, as set_sources holds them
     if not lock(scope, argument_id):
         result["code"] = "ENTITY_NOT_FOUND"
         return 404, result
     revision = _revision(scope, SOURCES_SCOPE_TYPE, argument_id)
-    present = current_sources(scope, argument_id)
+    present = current_sources(scope, argument_id, with_versions=versioned(desired))
     if base_revision > revision:
         result.update(code="FUTURE_REVISION", current_revision=revision,
                       current_count=len(present), requested_count=len(desired))

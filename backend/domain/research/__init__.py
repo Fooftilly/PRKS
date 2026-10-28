@@ -17,9 +17,10 @@ slices (§15.3).
 **Lock order.** Every Research command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
 
-1. the Works a citation list names, by id, ``FOR KEY SHARE`` (an Argument
-   create or a source change), the order a Work delete takes them in: the
-   Work ``FOR UPDATE``, then the Arguments citing it;
+1. the Works a citation list names, by id, then the Versions it names, by
+   id, ``FOR KEY SHARE`` (an Argument create or a source change), the order
+   a Work delete takes them in: the Work ``FOR UPDATE``, then the Arguments
+   citing it;
 2. the Library's Concept hierarchy lock, for a command that adds or removes
    a parent edge (a parent change, a Concept delete), or its Argument
    target lock, for a target change;
