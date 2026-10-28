@@ -671,9 +671,18 @@ def assign_shards(
             buckets[target].append(test_id)
             loads[target] += estimate_seconds(test_id, timings, default)
 
-    module_order = {}
-    for test_id in ids:
-        module_order.setdefault(module_of(test_id), len(module_order))
+    if group_classes:
+        # The pilot must produce identical shard contents AND module order
+        # regardless of unittest discovery order; default LPT keeps its
+        # established module-discovery ordering unchanged.
+        module_order = {
+            module: index
+            for index, module in enumerate(sorted({module_of(test_id) for test_id in ids}))
+        }
+    else:
+        module_order = {}
+        for test_id in ids:
+            module_order.setdefault(module_of(test_id), len(module_order))
     for bucket in buckets:
         bucket.sort(key=lambda t: (module_order.get(module_of(t), len(module_order)), t))
     return buckets
