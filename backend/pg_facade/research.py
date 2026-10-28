@@ -17,7 +17,9 @@ Ported here: Concepts, their aliases and hierarchy, and their revision
 state (L-R-1 PR 2), through :mod:`backend.domain.research.concepts`;
 Positions, Arguments and Stances with their targets, citations, verdicts
 and revision state (PR 3), through :mod:`backend.domain.research.positions`
-and :mod:`backend.domain.research.arguments`. Refusals are SQLite's
+and :mod:`backend.domain.research.arguments`; and the Work PATCH's
+Research Note save, ``save_work_notes`` (PR 7, through
+:mod:`backend.domain.works.notes`). Refusals are SQLite's
 ``ResearchError`` codes, messages and statuses. Differences from SQLite,
 each deliberate:
 
@@ -261,3 +263,26 @@ class ResearchMixin(FacadeMixin):
         from backend.domain.research import arguments
 
         return _read(self, lambda scope: arguments.sync_state(scope, argument_id))
+
+    @ported
+    def save_work_notes(self, work_id: str, text_content) -> None:
+        """The Work PATCH's Research Note save (L-R-1 #634): SQLite's refusals, then ``notes.set_note``.
+
+        Runs SERIALIZABLE (a ``work_notes`` row is a peer table of the Work
+        merge, §7.1) and once more when a concurrent writer won a Concept key
+        the note names; the change enqueues ``research.reindex_work``.
+        """
+        from backend.domain.works import notes
+        from backend.research_network import ResearchError, research_note_refusal
+
+        try:
+            notes.validate(notes.RESEARCH, text_content)
+        except ValueError as exc:
+            raise research_note_refusal(text_content) from exc
+        wid = (work_id or "").strip()
+
+        def run(scope: LibraryScope) -> None:
+            if "\x00" in wid or notes.set_note(scope, wid, notes.RESEARCH, text_content) is None:
+                raise ResearchError("not_found", "Work not found.", 404)
+
+        _command(self, run, serializable=True)

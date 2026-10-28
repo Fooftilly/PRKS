@@ -3549,6 +3549,11 @@ class PRKSDatabase:
         from backend import research_network
         research_network.delete_argument(self, argument_id)
 
+    def save_work_notes(self, work_id: str, text_content) -> None:
+        """Replace a Work's Research Note (``ResearchError`` on a bad body or a missing Work)."""
+        from backend import research_network
+        research_network.save_work_notes(self, work_id, text_content)
+
     def get_playlist_sync_state(self, playlist_id: str) -> Optional[dict]:
         """Field revisions and the order revision for one Playlist."""
         with self.connection() as conn:

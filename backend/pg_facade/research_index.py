@@ -25,10 +25,21 @@ Differences from SQLite, each deliberate:
 - ``derived_note_edges_available`` is always true: the index cannot be
   missing or corrupt apart from the canonical tables.
 
-The index writes (``sync_work``, ``remove_*``, ``reconcile_all``) have no
-counterpart: on PostgreSQL ``research.reindex_work`` keeps the index, and a
-full rebuild is L-S-1's. Nothing in the running application constructs this
-class yet (the route cutover, §15.3).
+The index is kept by the database, never by its reader: a note save
+enqueues ``research.reindex_work`` in its own transaction, and the reads
+join the live Concepts, Arguments and Works. So the maintenance calls
+``server.py`` makes after a change (``sync_work``, ``remove_concept_mentions``,
+``remove_argument_mentions``) are accepted with ``PRKSResearchIndex``'s
+signatures and do nothing; no SQLite index write runs against PostgreSQL.
+``remove_work`` and ``reconcile_all`` have no counterpart (no route calls
+them through the bound index; a full rebuild is L-S-1's).
+
+``server.py`` reaches these reads only through its bound ``research_index``
+(and the Research routes their records only through its bound ``db``), so
+binding this class and :class:`~backend.pg_facade.PostgresLibrary` there,
+with the admitted :class:`RequestContext` bound per request, serves the
+Research routes from PostgreSQL. Nothing in the running application binds
+them yet: choosing the backend at start is the cutover's (PG-C1, #640).
 """
 
 from __future__ import annotations
@@ -97,8 +108,20 @@ class PostgresResearchIndex:
         aid = (argument_id or "").strip()
         return self._read(lambda scope: reindex.backlinks(scope, "argument", aid))
 
-    def build_graph(self, *, include_people: bool = False) -> GraphSnapshot:
-        """``ResearchGraphBuilder().build``; raises ``GraphTooLargeError`` past the bounds."""
+    def sync_work(self, work_id: str, text_content: str, db: Any) -> None:
+        """Nothing to do: the note save enqueued ``research.reindex_work`` in its transaction."""
+
+    def remove_concept_mentions(self, concept_id: str) -> None:
+        """Nothing to do: the reads join the live Concepts, so a deleted one has no mentions."""
+
+    def remove_argument_mentions(self, argument_id: str) -> None:
+        """Nothing to do: the reads join the live Arguments, so a deleted one has no mentions."""
+
+    def build_graph(self, db: Any = None, *, include_people: bool = False) -> GraphSnapshot:
+        """``PRKSResearchIndex.build_graph``; raises ``GraphTooLargeError`` past the bounds.
+
+        ``db`` is accepted and unused, as in the other reads.
+        """
         from backend.domain.research import graph
 
         return self._read(lambda scope: graph.snapshot(scope, include_people=bool(include_people)))

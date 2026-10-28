@@ -112,9 +112,15 @@ class Reply:
 
 @dataclass(frozen=True)
 class Admitted:
-    """Run the route; ``epoch`` is the Library's current epoch for the response header."""
+    """Run the route; ``epoch`` is the Library's current epoch for the response header.
+
+    ``context`` is the :class:`RequestContext` admission authorized: the
+    server binds it for the route (:mod:`backend.pg_facade.context`), so a
+    PostgreSQL facade call acts for this session and claimed epoch.
+    """
 
     epoch: int
+    context: RequestContext
 
 
 class _Answered:
@@ -426,11 +432,11 @@ def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
             return _refused(Refusal.NOT_AUTHENTICATED)
         if not fenced:
             ctx = RequestContext.for_session(session)
-            return Admitted(library_query(auth.db, ctx, _current_epoch, capability=capability))
+            return Admitted(library_query(auth.db, ctx, _current_epoch, capability=capability), ctx)
         # A missing or malformed claim is None, which library_command refuses
         # (LIBRARY_EPOCH_REQUIRED) before any database work.
         ctx = RequestContext.for_session(session, epoch=epoch)
-        return Admitted(library_command(auth.db, ctx, capability, _current_epoch))
+        return Admitted(library_command(auth.db, ctx, capability, _current_epoch), ctx)
     except AccessRefused as exc:
         return _refused(exc.refusal)
     except DatabaseError:

@@ -53,7 +53,6 @@ from backend.research_index import (
     reset_research_index,
 )
 from backend.research_network import ResearchError
-import backend.research_network as research_network
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.jobs import JobDiagnostics
@@ -87,7 +86,7 @@ from backend.api_contract.publishers import (
     PublisherInUse,
 )
 from backend.pdf_annotations import WorkAnnotationError
-from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
+from backend.research_graph import GraphTooLargeError
 from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.derived_cache_publish import publish_derived_cache_bytes
 from backend.storage import paths
@@ -791,6 +790,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return nullcontext()
         return gate.scope(mode)
 
+    def _acting_for_request(self):
+        """Bind the admitted RequestContext for the route (PostgreSQL facade calls act for it).
+
+        Nothing is bound without ``PRKS_AUTH``: the SQLite runtime has no
+        actor, and ``PRKSDatabase`` takes none.
+        """
+        ctx = getattr(self, "_prks_request_context", None)
+        if ctx is None:
+            return nullcontext()
+        from backend.pg_facade.context import acting_as
+
+        return acting_as(ctx)
+
     def _validate_request_host(self) -> bool:
         hosts = self.headers.get_all("Host") or []
         if len(hosts) != 1:
@@ -839,6 +851,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         Library's current epoch.
         """
         self._prks_library_epoch = None
+        self._prks_request_context = None
         method = (getattr(self, "command", "") or "").upper()
         auth = getattr(self.server, "prks_auth", None)
         if auth is None:
@@ -866,6 +879,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         )
         if isinstance(outcome, session_api.Admitted):
             self._prks_library_epoch = outcome.epoch
+            self._prks_request_context = outcome.context
             return True
         if isinstance(outcome, session_api.Reply):
             if outcome.status >= 400:
@@ -1063,7 +1077,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
+            with self._library_access(parsed_path), self._acting_for_request():
                 self.handle_api_get(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
@@ -1091,7 +1105,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
+            with self._library_access(parsed_path), self._acting_for_request():
                 self.handle_api_head(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
@@ -1120,7 +1134,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
+            with self._library_access(parsed_path), self._acting_for_request():
                 self.handle_api_post(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1135,7 +1149,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
+            with self._library_access(parsed_path), self._acting_for_request():
                 self.handle_api_patch(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1238,7 +1252,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     notes_text = body.pop("text_content", None)
                     if notes_present:
                         try:
-                            research_network.save_work_notes(db, w_id, notes_text)
+                            db.save_work_notes(w_id, notes_text)
                         except ResearchError as e:
                             self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                             return
@@ -1394,8 +1408,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 try:
-                    item = research_network.update_concept(
-                        db,
+                    item = db.update_concept(
                         cid,
                         name=data.get('name') if 'name' in data else None,
                         description=data.get('description') if 'description' in data else None,
@@ -1411,8 +1424,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, err)
                     return
                 try:
-                    item = research_network.update_position(
-                        db,
+                    item = db.update_position(
                         pid,
                         **req.domain_field_kwargs(),
                     )
@@ -1431,8 +1443,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 try:
-                    item = research_network.update_argument(
-                        db,
+                    item = db.update_argument(
                         aid,
                         name=data.get('name') if 'name' in data else None,
                         kind=data.get('kind') if 'kind' in data else None,
@@ -1457,7 +1468,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
+            with self._library_access(parsed_path), self._acting_for_request():
                 self.handle_api_put(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1482,7 +1493,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if parent_ids is None and isinstance(data, list):
                     parent_ids = data
                 try:
-                    item = research_network.replace_concept_parents(db, cid, parent_ids)
+                    item = db.replace_concept_parents(cid, parent_ids)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -1497,7 +1508,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if aliases is None and isinstance(data, list):
                     aliases = data
                 try:
-                    item = research_network.replace_concept_aliases(db, cid, aliases)
+                    item = db.replace_concept_aliases(cid, aliases)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -1512,7 +1523,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if sources is None and isinstance(data, list):
                     sources = data
                 try:
-                    item = research_network.replace_argument_sources(db, aid, sources)
+                    item = db.replace_argument_sources(aid, sources)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -1527,7 +1538,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if targets is None and isinstance(data, list):
                     targets = data
                 try:
-                    item = research_network.replace_argument_targets(db, aid, targets)
+                    item = db.replace_argument_targets(aid, targets)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -1544,7 +1555,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
+            with self._library_access(parsed_path), self._acting_for_request():
                 self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1695,7 +1706,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
                 try:
-                    research_network.delete_concept(db, cid)
+                    db.delete_concept(cid)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -1711,7 +1722,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
                 try:
-                    research_network.delete_position(db, pid)
+                    db.delete_position(pid)
                 except ResearchError as e:
                     self.send_json(
                         e.http_status,
@@ -1722,7 +1733,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
                 aid = unquote(path.split('/')[-1])
                 try:
-                    research_network.delete_argument(db, aid)
+                    db.delete_argument(aid)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -2408,11 +2419,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 raw_people = (query.get('people') or [''])[0].strip().lower()
                 include_people = raw_people in ('1', 'true', 'yes', 'on')
                 try:
-                    snapshot = ResearchGraphBuilder().build(
-                        db,
-                        research_index,
-                        include_people=include_people,
-                    )
+                    snapshot = research_index.build_graph(db, include_people=include_people)
                 except GraphTooLargeError as e:
                     body = {
                         'error': str(e),
@@ -2424,14 +2431,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 self.send_json(200, snapshot.to_dict())
             elif path == '/api/concepts':
-                items = research_network.list_concepts(db)
+                items = db.list_concepts()
                 counts = research_index.concept_mention_counts()
                 for item in items:
                     item['mention_count'] = int(counts.get(item['id'], 0))
                 self.send_json(200, items)
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
-                item = research_network.get_concept(db, cid)
+                item = db.get_concept(cid)
                 if not item:
                     self.send_json(404, {'error': 'Concept not found.'})
                     return
@@ -2453,11 +2460,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/openapi/processing-files.json':
                 self.send_json(200, processing_files_openapi_document())
             elif path == '/api/positions':
-                rows = research_network.list_positions(db)
+                rows = db.list_positions()
                 self.send_json(200, dump_response(PositionSummary, rows))
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
-                item = research_network.get_position(db, pid)
+                item = db.get_position(pid)
                 if item:
                     self.send_json(200, dump_response(PositionDetail, item))
                 else:
@@ -2466,11 +2473,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         research_error_envelope(message='Position not found.'),
                     )
             elif path == '/api/argument-verdicts':
-                self.send_json(200, research_network.list_verdicts(db))
+                self.send_json(200, db.list_verdicts())
             elif path == '/api/arguments':
                 kind = (query.get('kind') or [''])[0].strip() or None
                 try:
-                    items = research_network.list_arguments(db, kind=kind)
+                    items = db.list_arguments(kind=kind)
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
@@ -2480,13 +2487,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, items)
             elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
                 aid = unquote(path.split('/')[-1])
-                item = research_network.get_argument(db, aid)
+                item = db.get_argument(aid)
                 if not item:
                     self.send_json(404, {'error': 'Argument not found.'})
                     return
                 item['mention_count'] = research_index.mention_count_for_argument(aid)
                 item['mentions'] = research_index.argument_backlinks(aid, db)
-                item['verdicts'] = research_network.list_verdicts(db)
+                item['verdicts'] = db.list_verdicts()
                 self.send_json(200, item)
             elif path.startswith('/api/persons/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
                 # REVISIONS ONLY. The Person detail already carries every
@@ -3260,8 +3267,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 try:
-                    item = research_network.create_concept(
-                        db, data.get('name'), data.get('description', '') or ''
+                    item = db.create_concept(
+                        data.get('name'), data.get('description', '') or ''
                     )
                 except ResearchError as e:
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
@@ -3273,8 +3280,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, err)
                     return
                 try:
-                    item = research_network.create_position(
-                        db, req.name, req.description
+                    item = db.create_position(
+                        req.name, req.description
                     )
                 except ResearchError as e:
                     self.send_json(
@@ -3290,8 +3297,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 try:
-                    item = research_network.create_argument(
-                        db,
+                    item = db.create_argument(
                         name=data.get('name'),
                         kind=data.get('kind'),
                         main_text=data.get('main_text', '') or '',
