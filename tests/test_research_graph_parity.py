@@ -4,7 +4,8 @@ Each side builds the same Research network (Concepts with a hierarchy,
 Positions, Arguments with targets and citations, Works with Research Notes
 and Authors) one command at a time. The SQLite sides read through
 ``PRKSResearchIndex`` (kept as ``server.py`` keeps it: ``sync_work`` after
-a note, ``remove_*`` after a delete) and ``ResearchGraphBuilder``; the
+a note, ``remove_*`` after a delete) and its ``build_graph``
+(``ResearchGraphBuilder``); the
 ``postgres`` leg reads through ``PostgresResearchIndex`` after its
 ``research.reindex_work`` jobs ran. Results must be equal once generated
 ids become labels. Edges are compared as sets: their order is by node id,
@@ -33,7 +34,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend import research_graph
-from backend.research_graph import GraphTooLargeError, ResearchGraphBuilder
+from backend.research_graph import GraphTooLargeError
 from backend.research_index import PRKSResearchIndex
 from backend.research_network import save_work_notes
 from backend.storage.config import StorageConfig
@@ -141,10 +142,7 @@ class ResearchReadParityTests(ArgumentParityTestCase):
     # -- reading both sides -------------------------------------------------------
 
     def graph(self, side: ArgumentSide, include_people: bool = False) -> Any:
-        index = self.indexes[id(side)]
-        if self.on_postgres(side):
-            return index.build_graph(include_people=include_people)
-        return ResearchGraphBuilder().build(side.db, index, include_people=include_people)
+        return self.indexes[id(side)].build_graph(side.db, include_people=include_people)
 
     def same_graph(self, include_people: bool = False) -> dict[str, Any]:
         out = []
@@ -262,14 +260,21 @@ class AdapterShapeTests(unittest.TestCase):
     def test_the_postgres_reads_keep_the_sqlite_index_signatures(self) -> None:
         from backend.pg_facade.research_index import PostgresResearchIndex
 
-        mirrored = [name for name in vars(PostgresResearchIndex)
-                    if not name.startswith("_") and name != "build_graph"]
+        mirrored = [name for name in vars(PostgresResearchIndex) if not name.startswith("_")]
         self.assertEqual(sorted(mirrored), [
-            "argument_backlinks", "argument_mention_counts", "concept_backlinks", "concept_mention_counts",
-            "mention_count_for_argument", "mention_count_for_concept", "work_research_refs"])
+            "argument_backlinks", "argument_mention_counts", "build_graph", "concept_backlinks",
+            "concept_mention_counts", "mention_count_for_argument", "mention_count_for_concept",
+            "remove_argument_mentions", "remove_concept_mentions", "sync_work", "work_research_refs"])
         for name in mirrored:
             mine = list(inspect.signature(getattr(PostgresResearchIndex, name)).parameters)
             theirs = list(inspect.signature(getattr(PRKSResearchIndex, name)).parameters)
             self.assertEqual(mine, theirs, name)
-        self.assertEqual(list(inspect.signature(PostgresResearchIndex.build_graph).parameters),
-                         ["self", "include_people"])
+
+    def test_every_index_call_the_server_makes_is_mirrored(self) -> None:
+        """``server.py`` reaches the index only through ``research_index.<name>``; PostgreSQL has each."""
+        from backend.pg_facade.research_index import PostgresResearchIndex
+
+        with open(os.path.join(_PROJECT_DIR, "backend", "server.py"), encoding="utf-8") as handle:
+            called = set(re.findall(r"\bresearch_index\.(\w+)\(", handle.read()))
+        self.assertTrue(called)
+        self.assertEqual(called - set(vars(PostgresResearchIndex)), set())
