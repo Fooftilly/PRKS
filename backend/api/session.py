@@ -66,7 +66,7 @@ from datetime import datetime, timezone
 from email.message import Message
 from typing import Any, Optional, Union
 
-from backend.db.errors import DatabaseError
+from backend.db.errors import DatabaseError, TransientDatabaseError
 from backend.domain.identity import sessions
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
@@ -451,3 +451,22 @@ def handle(auth: WebAuth, request: HttpRequest) -> Outcome:
     if identity is not None:
         return identity
     return _admit(auth, request)
+
+
+def route_failure(exc: BaseException) -> Optional[Reply]:
+    """What an admitted route answers when a PostgreSQL call in it raised ``exc``.
+
+    Admission decided in its own transaction; the route's facade calls
+    authorize again in theirs (§9.4), so a membership, maintenance flag or
+    Library epoch that changed in between refuses there. That
+    :class:`AccessRefused` is answered as admission answers it. A mapped
+    :class:`DatabaseError` (§5.4) is its code and status: a registered
+    constraint's domain refusal, or a transient 503 with ``Retry-After``.
+    ``None`` for anything else, which the server answers as a logged 500.
+    """
+    if isinstance(exc, AccessRefused):
+        return _refused(exc.refusal)
+    if isinstance(exc, TransientDatabaseError) or (isinstance(exc, DatabaseError) and exc.http_status < 500):
+        headers = (("Retry-After", str(exc.retry_after)),) if exc.retry_after else ()
+        return Reply(exc.http_status, {"error": exc.code, "code": exc.code, "message": exc.message}, headers)
+    return None
