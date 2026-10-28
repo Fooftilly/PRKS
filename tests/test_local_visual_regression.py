@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 from PIL import Image, ImageDraw
 
 from scripts.ci.visual_regression import (
-    VisualCaptureFailure, assert_split_pdf_ownership, collect,
+    VisualCaptureFailure, assert_split_pdf_ownership, collect, main,
 )
 
 from tests.visual.compare import (
@@ -38,6 +38,40 @@ def png_sample(*, invert: bool = False) -> bytes:
 
 
 class LocalVisualBaselineTests(unittest.TestCase):
+    def test_replay_discards_old_outputs_before_capture_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            stale = ["prks-visual-candidate.json", "prks-visual-results.json",
+                     "prks-visual-failure.json"]
+            stale += [f"prks-visual-{name}.png" for name in SCENES]
+            for name in stale:
+                (root / name).write_text("stale result", encoding="utf-8")
+            unrelated = root / "keep.txt"
+            unrelated.write_text("unchanged", encoding="utf-8")
+            with (patch("scripts.ci.visual_regression.Path.cwd", return_value=root),
+                  patch("scripts.ci.visual_regression.collect",
+                        side_effect=VisualCaptureFailure("capture_pdf", "TimeoutError"))):
+                with self.assertRaises(VisualCaptureFailure):
+                    main(["--mode", "check"])
+            for name in stale:
+                with self.subTest(name=name):
+                    self.assertFalse((root / name).exists())
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "unchanged")
+
+    def test_replay_writes_only_this_runs_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "prks-visual-results.json").write_text("stale", encoding="utf-8")
+            (root / "prks-visual-failure.json").write_text("stale", encoding="utf-8")
+            sample = fingerprint(png_sample())
+            with (patch("scripts.ci.visual_regression.Path.cwd", return_value=root),
+                  patch("scripts.ci.visual_regression.collect",
+                        return_value={scene: sample for scene in SCENES})):
+                self.assertEqual(main(["--mode", "propose"]), 0)
+            self.assertTrue((root / "prks-visual-candidate.json").exists())
+            self.assertFalse((root / "prks-visual-results.json").exists())
+            self.assertFalse((root / "prks-visual-failure.json").exists())
+
     def test_split_capture_requires_distinct_work_and_pdf_ownership(self):
         page = Mock()
         assert_split_pdf_ownership(
