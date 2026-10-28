@@ -60,6 +60,18 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
         self.assertNotIn("path: .tests/\n", step)
 
+    def test_class_locality_is_manual_only_and_never_changes_default_gate(self):
+        workflow = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("      class_locality:", workflow)
+        self.assertIn("        default: false", workflow)
+        shard = job_source(workflow, "e2e")
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && inputs.class_locality",
+            shard,
+        )
+        self.assertIn("args+=(--class-locality-pilot)", shard)
+        self.assertIn('if [[ "$mode" != "full" ]]; then', shard)
+
     def test_manual_packaged_full_and_compare_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
         shard = job_source(workflow, "packaged-frontend")

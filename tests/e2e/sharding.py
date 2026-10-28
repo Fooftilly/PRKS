@@ -91,7 +91,10 @@ def parse_shard(value, env_value=None):
     return index - 1, total
 
 
-def select_external_shard(test_ids, shard_index, shard_total, timings=None, default=DEFAULT_TEST_SECONDS):
+def select_external_shard(
+    test_ids, shard_index, shard_total, timings=None, default=DEFAULT_TEST_SECONDS,
+    *, group_classes=False,
+):
     """Return the test IDs owned by one external shard.
 
     ``shard_index`` is 0-based. Assignment is the same LPT partition used by
@@ -104,13 +107,20 @@ def select_external_shard(test_ids, shard_index, shard_total, timings=None, defa
         raise ValueError(
             "shard index %d out of range for %d shards" % (shard_index, shard_total)
         )
-    buckets = assign_shards(test_ids, shard_total, timings, default=default)
+    buckets = assign_shards(
+        test_ids, shard_total, timings, default=default, group_classes=group_classes,
+    )
     return buckets[shard_index]
 
 
-def partition_external_shards(test_ids, shard_total, timings=None, default=DEFAULT_TEST_SECONDS):
+def partition_external_shards(
+    test_ids, shard_total, timings=None, default=DEFAULT_TEST_SECONDS,
+    *, group_classes=False,
+):
     """Return all external-shard buckets (convenience for coverage / CI plan)."""
-    return assign_shards(test_ids, shard_total, timings, default=default)
+    return assign_shards(
+        test_ids, shard_total, timings, default=default, group_classes=group_classes,
+    )
 
 
 def aggregate_external_shard_results(reports):
@@ -614,7 +624,10 @@ def agent_default_jobs(cpu_count=None, memory_limit_bytes=None) -> int:
     return max(1, jobs)
 
 
-def assign_shards(test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECONDS):
+def assign_shards(
+    test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECONDS, *,
+    group_classes=False,
+):
     """Split test IDs across `jobs` workers, longest-processing-time-first.
 
     Every discovered ID lands in exactly one shard. Tests are placed heaviest
@@ -630,15 +643,33 @@ def assign_shards(test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECOND
     if not ids:
         return [[] for _ in range(jobs)]
 
-    # Deterministic ordering before scheduling: equal-cost tests must not be
-    # placed in whatever order discovery happened to yield.
-    ordered = sorted(ids, key=lambda t: (-estimate_seconds(t, timings, default), t))
     loads = [0.0] * jobs
     buckets = [[] for _ in range(jobs)]
-    for test_id in ordered:
-        target = min(range(jobs), key=lambda i: (loads[i], i))
-        buckets[target].append(test_id)
-        loads[target] += estimate_seconds(test_id, timings, default)
+    if group_classes:
+        # Manual six-shard pilot only. Keep a class together so its module
+        # Chromium fixture need not be started on every external runner.
+        # Class-granularity packing can increase the critical-path shard if
+        # estimated durations are inaccurate; do not enable by default.
+        groups = {}
+        for test_id in ids:
+            groups.setdefault(test_id.rsplit(".", 1)[0], []).append(test_id)
+        weighted = [
+            (sum(estimate_seconds(t, timings, default) for t in group),
+             name, group)
+            for name, group in groups.items()
+        ]
+        for weight, _name, group in sorted(weighted, key=lambda item: (-item[0], item[1])):
+            target = min(range(jobs), key=lambda i: (loads[i], i))
+            buckets[target].extend(group)
+            loads[target] += weight
+    else:
+        # Deterministic ordering before scheduling: equal-cost tests must not
+        # be placed in whatever order discovery happened to yield.
+        ordered = sorted(ids, key=lambda t: (-estimate_seconds(t, timings, default), t))
+        for test_id in ordered:
+            target = min(range(jobs), key=lambda i: (loads[i], i))
+            buckets[target].append(test_id)
+            loads[target] += estimate_seconds(test_id, timings, default)
 
     module_order = {}
     for test_id in ids:

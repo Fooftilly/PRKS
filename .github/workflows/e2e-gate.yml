@@ -17,6 +17,10 @@ on:
         description: "Benchmark same-origin routing fast path (experimental)"
         type: boolean
         default: false
+      class_locality:
+        description: "Manual class-locality packing pilot (keeps all tests; normal PR/master uses per-test LPT)"
+        type: boolean
+        default: false
       shard_count:
         description: "Manual full-suite shard-width pilot; normal PR/master gates stay at six"
         type: choice
@@ -214,6 +218,7 @@ jobs:
           # Manual benchmark only. Normal PR/master gates still persist timing history.
           PRKS_E2E_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile && '1' || '0' }}
           PRKS_E2E_ROUTE_FASTPATH: ${{ github.event_name == 'workflow_dispatch' && inputs.route_fastpath && '1' || '0' }}
+          PRKS_E2E_CLASS_LOCALITY_PILOT: ${{ github.event_name == 'workflow_dispatch' && inputs.class_locality && '1' || '0' }}
           PRKS_E2E_MODE: ${{ needs.e2e-plan.outputs.mode }}
           PRKS_E2E_FEATURES: ${{ needs.e2e-plan.outputs.features }}
           # Use typed matrix values through the environment, rather than
@@ -226,6 +231,13 @@ jobs:
           set -euo pipefail
           mode="${PRKS_E2E_MODE}"
           args=(python tests/e2e/run.py --jobs "${PRKS_E2E_SHARD_JOBS}" --no-pointer-capture)
+          if [[ "${PRKS_E2E_CLASS_LOCALITY_PILOT}" == "1" ]]; then
+            if [[ "$mode" != "full" ]]; then
+              echo "::error::class locality pilot requires full suite"
+              exit 1
+            fi
+            args+=(--class-locality-pilot)
+          fi
           if [[ "${PRKS_E2E_SHARD_TOTAL}" -gt 1 ]]; then
             args+=(--shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}")
           fi

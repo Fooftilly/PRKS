@@ -129,6 +129,49 @@ class ShardAssignmentTests(unittest.TestCase):
         second = assign_shards(list(reversed(ids)), 4, timings)
         self.assertEqual(first, second)
 
+    def test_class_locality_pilot_preserves_coverage_and_class_ownership(self):
+        ids = []
+        for module in ("tests.e2e.test_app", "tests.e2e.test_offline",
+                       "tests.e2e.test_browse_offline"):
+            for klass in ("Fast", "Slow", "Mixed"):
+                ids.extend(_ids(module, klass, "test_a", "test_b", "test_c"))
+        times = {t: (11.0 if ".Slow." in t else 2.0) for t in ids}
+        for count in (1, 2, 3, 6, 12):
+            first = assign_shards(ids, count, times, group_classes=True)
+            self.assertEqual(
+                first,
+                assign_shards(list(reversed(ids)), count, times, group_classes=True),
+            )
+            self.assertEqual(sorted(t for b in first for t in b), sorted(ids))
+            owners = {}
+            for shard, bucket in enumerate(first):
+                for test_id in bucket:
+                    key = test_id.rsplit(".", 1)[0]
+                    self.assertNotIn(key, owners) if key in owners and owners[key] != shard else None
+                    owners[key] = shard
+            self.assertEqual(len(owners), 9)
+
+    def test_class_locality_pilot_is_external_shard_consistent(self):
+        ids = []
+        for klass in ("A", "B", "C", "D", "E"):
+            ids.extend(_ids("tests.e2e.test_app", klass, "a", "b", "c"))
+        weights = {t: (9.0 if ".D." in t else 3.0) for t in ids}
+        partition = partition_external_shards(
+            ids, 3, weights, group_classes=True,
+        )
+        self.assertEqual(
+            sorted(t for b in partition for t in b), sorted(ids),
+        )
+        for index in range(3):
+            self.assertEqual(
+                partition[index],
+                select_external_shard(
+                    ids, index, 3, weights, group_classes=True,
+                ),
+            )
+        self.assertEqual(assign_shards(ids, 3, weights),
+                         partition_external_shards(ids, 3, weights))
+
     def test_missing_timing_entries_fall_back_to_the_default_estimate(self):
         ids = _ids("tests.e2e.test_app", "C", "known", "unknown")
         timings = {"tests.e2e.test_app.C.known": 12.0}

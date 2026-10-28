@@ -1535,6 +1535,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--class-locality-pilot",
+        action="store_true",
+        help=(
+            "Manual full external-shard benchmark only: assign whole test "
+            "classes together to reduce module-scoped Chromium startup. "
+            "Normal PR/master gate keeps per-test LPT scheduling."
+        ),
+    )
+    parser.add_argument(
         "--ci-plan",
         action="store_true",
         help=(
@@ -1991,6 +2000,9 @@ def _main(argv=None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if args.class_locality_pilot and shard is None:
+        print("--class-locality-pilot requires --shard INDEX/TOTAL", file=sys.stderr)
+        return 2
 
     # Resolve selection before Chromium install so docs/unit --affected and
     # --list-tests are cheap no-ops (no browser download).
@@ -2027,6 +2039,11 @@ def _main(argv=None) -> int:
             tier = "agent" if args.agent else "dev"
             note = (note + "; fail-fast") if note else "fail-fast"
 
+    # The class-locality pilot must never silently shrink or retarget coverage.
+    if args.class_locality_pilot and tier != "full":
+        print("--class-locality-pilot requires a complete full-suite selection", file=sys.stderr)
+        return 2
+
     # External shard filter shares the LPT partitioner with --jobs so CI matrix
     # slices are disjoint and timing-balanced when baseline/local weights exist.
     if shard is not None and tier not in ("affected-noop", "last-failed-stale"):
@@ -2036,13 +2053,15 @@ def _main(argv=None) -> int:
         timings_for_shard = merge_timing_sources(baseline_timings, local_timings)
         before = len(test_ids)
         test_ids = select_external_shard(
-            test_ids, shard_index, shard_total, timings_for_shard
+            test_ids, shard_index, shard_total, timings_for_shard,
+            group_classes=args.class_locality_pilot,
         )
-        shard_note = "shard %d/%d (%d of %d tests)" % (
+        shard_note = "shard %d/%d (%d of %d tests)%s" % (
             shard_index + 1,
             shard_total,
             len(test_ids),
             before,
+            "; class-locality pilot" if args.class_locality_pilot else "",
         )
         note = ("%s; %s" % (note, shard_note)) if note else shard_note
         # Pointer capture belongs to the full gate once, not once per matrix
