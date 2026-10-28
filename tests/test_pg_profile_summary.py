@@ -27,7 +27,7 @@ def fixture() -> dict:
         for name in (
             "works_list", "works_browse", "work_detail",
             "works_recent_bounded", "works_batch_by_ids",
-            "concept_hierarchy_graph",
+            "concept_hierarchy_graph", "indexed_note_graph",
         ):
             rows.append({
                 "fixture_works": n, "operation": name,
@@ -46,8 +46,8 @@ def fixture() -> dict:
     return {
         "tool": "pg_stat_statements",
         "server_version_num": 180006,
-        "fixture": "synthetic_works_and_concept_chain",
-        "fixture_version": "works-concepts-v2",
+        "fixture": "synthetic_works_concepts_and_indexed_mentions",
+        "fixture_version": "works-concepts-mentions-v3",
         "fixture_tiers": [12, 48],
         "backend": "postgresql_read_adapters",
         "measurement": "warm_pg_read_adapter_calls_not_http",
@@ -58,15 +58,16 @@ def fixture() -> dict:
 
 
 class PGProfileSummaryTests(unittest.TestCase):
-    def test_valid_fixture_reports_all_twelve_reads_without_raw_sql(self):
+    def test_valid_fixture_reports_all_fourteen_reads_without_raw_sql(self):
         data = fixture()
-        self.assertEqual(len(validate(data)), 12)
+        self.assertEqual(len(validate(data)), 14)
         report = render(data)
         self.assertIn("| 48 | works_browse |", report)
         self.assertIn("| 48 | works_recent_bounded |", report)
         self.assertIn("| 48 | works_batch_by_ids |", report)
         self.assertIn("| 48 | concept_hierarchy_graph |", report)
-        self.assertIn("linked Concepts in one parent chain", report)
+        self.assertIn("| 48 | indexed_note_graph |", report)
+        self.assertIn("indexed Work Research Notes", report)
         self.assertIn("not authenticated HTTP/API", report)
         self.assertIn("SQL calls/read", report)
         self.assertIn("| 2.00 | 2 |", report)
