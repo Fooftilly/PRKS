@@ -199,6 +199,19 @@ def collect(output: Path) -> dict[str, dict]:
                         cleanup_stage, type(exc).__name__,
                     )
     if failure is not None:
+        # Persist only fixed stage/exception identifiers and scene names.
+        # Playwright's raw error, DOM text, IDs, paths and URLs are forbidden.
+        # A failed write must never mask the original capture failure.
+        try:
+            write_json(output / "prks-visual-failure.json", {
+                "format": "prks-local-visual-failure-v1",
+                "status": "capture_failed",
+                "stage": failure.stage,
+                "exception_type": failure.cause_type,
+                "completed_scenes": [name for name in SCENES if samples and name in samples],
+            })
+        except OSError:
+            pass
         raise failure from None
     if samples is None:
         raise VisualCaptureFailure("internal_result", "RuntimeError")
@@ -247,7 +260,8 @@ def main(argv: list[str] | None = None) -> int:
     write_json(work / "prks-visual-results.json", outcomes)
     for name, result in outcomes.items():
         print(f"[visual] {name}: {'PASS' if result['passed'] else 'DIFF'} "
-              f"mean={result['mean_delta']} hot={result['hot_fraction']} size_changed={result['size_changed']}")
+              f"reason={result['reason']} mean={result['mean_delta']} "
+              f"hot={result['hot_fraction']} size_changed={result['size_changed']}")
     return 0 if all(result["passed"] for result in outcomes.values()) else 1
 
 
