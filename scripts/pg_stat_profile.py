@@ -257,6 +257,49 @@ def assert_concept_parent_graph(value: Any, concept_ids: Sequence[str]) -> None:
         raise RuntimeError("synthetic Research Graph hierarchy is incorrect")
 
 
+def assert_indexed_note_graph(
+    value: Any, concept_ids: Sequence[str], work_ids: Sequence[str]
+) -> None:
+    """Verify the actual indexed note-to-Concept graph, not just graph size.
+
+    Both IDs and labels must match the synthetic fixture, and every Work
+    must have precisely one indexed concept edge. Reject missing or duplicate
+    mentions and an unexpected parent/citation/author relation.
+    """
+    if len(concept_ids) != len(work_ids) or not concept_ids:
+        raise RuntimeError("synthetic indexed graph fixture is incomplete")
+    if not (isinstance(getattr(value, "nodes", None), list)
+            and isinstance(getattr(value, "edges", None), list)
+            and getattr(value, "people_included", None) is False
+            and getattr(value, "derived_note_edges_available", None) is True):
+        raise RuntimeError("synthetic indexed graph snapshot metadata is invalid")
+    expected_nodes = [
+        ("concept:" + cid, cid, "concept", f"Profile Indexed Concept {i:04d}")
+        for i, cid in enumerate(concept_ids)
+    ] + [
+        ("work:" + wid, wid, "work", f"Profile Indexed Work {i:04d}")
+        for i, wid in enumerate(work_ids)
+    ]
+    observed_nodes = [
+        (node.get("id"), node.get("record_id"), node.get("type"), node.get("label"))
+        if isinstance(node, dict) else (None, None, None, None)
+        for node in value.nodes
+    ]
+    if observed_nodes != expected_nodes:
+        raise RuntimeError("synthetic indexed graph has missing or misordered nodes")
+    expected_edges = {
+        ("mentions_concept", "work:" + wid, "concept:" + cid, 1)
+        for wid, cid in zip(work_ids, concept_ids)
+    }
+    observed_edges = [
+        (edge.get("type"), edge.get("source"), edge.get("target"), edge.get("count"))
+        if isinstance(edge, dict) else (None, None, None, None)
+        for edge in value.edges
+    ]
+    if len(observed_edges) != len(expected_edges) or set(observed_edges) != expected_edges:
+        raise RuntimeError("synthetic indexed graph has wrong or missing mention edges")
+
+
 def verify_disposable_cluster(stats: Any, nonce: str) -> int:
     """Refuse an unproven server before profile DDL, resets or test DB creation."""
     cluster = stats.execute("SHOW cluster_name").fetchone()["cluster_name"]
@@ -297,12 +340,20 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     import psycopg
     from psycopg.rows import dict_row
 
+    from datetime import timedelta
+
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
     from backend.pg_facade import PostgresLibrary
     from backend.pg_facade import context as facade_context
     from backend.pg_facade.research_index import PostgresResearchIndex
     from backend.storage.config import StorageConfig
+    from backend.domain.identity.authorization import Capability
+    from backend.domain.identity.library_scope import library_command
+    from backend.domain.research import reindex
+    from backend.domain.works import notes
+    from backend.jobs import queue
+    from backend.jobs.runner import Outcome, run_job
     from tests.pg.facade_context import provision_actor
     from tests.pg.harness import get_harness
 
@@ -395,11 +446,58 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             for label, operation, verify in workloads:
                                 result = benchmark(stats, operation, repetitions, verify)
                                 output.append({"fixture_works": size, "operation": label, **result})
+
+                    # A separate synthetic Library per tier keeps the already
+                    # measured bare Concept hierarchy unchanged. It also
+                    # prevents seeded notes from leaking into the Work reads.
+                    # Reindex all notes through the actual job handler, outside
+                    # the timed window. The graph reads use the real PG adapter.
+                    lease = timedelta(seconds=30)
+                    for size in sizes:
+                        mention_actor = provision_actor(database, name="Indexed Graph Fixture")
+                        indexed_concepts: list[str] = []
+                        indexed_works: list[str] = []
+                        with facade_context.acting_as(mention_actor.context):
+                            for i in range(size):
+                                name = f"Profile Indexed Concept {i:04d}"
+                                indexed_concepts.append(library.create_concept(name)["id"])
+                                wid = library.add_work(f"Profile Indexed Work {i:04d}")
+                                indexed_works.append(wid)
+                                changed = library_command(
+                                    database, mention_actor.context, Capability.EDIT_LIBRARY,
+                                    lambda scope, work_id=wid, concept_name=name: notes.set_note(
+                                        scope, work_id, notes.RESEARCH,
+                                        f"[[concept:{concept_name}]]"
+                                    ),
+                                )
+                                if changed is None or not changed[0]:
+                                    raise RuntimeError("synthetic indexed graph note was not saved")
+                            # Each note write enqueues one reindex. Never silently
+                            # time an unindexed graph, a failed job, or a partial
+                            # fixture. Only this disposable profile DB is touched.
+                            for _ in range(size):
+                                job = queue.claim(database, "profile-reindex", lease=lease)
+                                if (job is None or job.kind != reindex.KIND
+                                        or job.library_id != mention_actor.library_id):
+                                    raise RuntimeError("synthetic indexed graph job inventory is incomplete")
+                                if run_job(database, job, lease=lease) is not Outcome.SUCCEEDED:
+                                    raise RuntimeError("synthetic indexed graph reindex failed")
+                            # The graph's exact nodes/edges are checked on every
+                            # call, not only after seeding or during warmup.
+                            result = benchmark(
+                                stats, research_index.build_graph, repetitions,
+                                lambda value: assert_indexed_note_graph(
+                                    value, indexed_concepts, indexed_works
+                                ),
+                            )
+                            output.append({
+                                "fixture_works": size, "operation": "indexed_note_graph", **result
+                            })
                     return {
                         "tool": "pg_stat_statements",
                         "server_version_num": int(version),
-                        "fixture": "synthetic_works_and_concept_chain",
-                        "fixture_version": "works-concepts-v2",
+                        "fixture": "synthetic_works_concepts_and_indexed_mentions",
+                        "fixture_version": "works-concepts-mentions-v3",
                         "fixture_tiers": list(sizes),
                         "backend": "postgresql_read_adapters",
                         "measurement": "warm_pg_read_adapter_calls_not_http",
