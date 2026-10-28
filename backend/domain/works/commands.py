@@ -27,9 +27,11 @@ from typing import LiteralString, Optional
 
 from backend import folder_sync, playlist_sync, work_metadata_sync, work_note_sync, work_source_sync
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.objects import lifecycle
 from backend.domain.organization import folders, playlists
 from backend.domain.people import roles
 from backend.domain.works import metadata, revisions
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, StorageKey
 
 _INSERT_WORK: LiteralString = """
 INSERT INTO prks.works (library_id, id, title, abstract, status, author_text, primary_manifestation_id)
@@ -51,16 +53,6 @@ INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, storag
 VALUES (%(library_id)s, %(asset_id)s, %(manifestation_id)s, %(work_id)s, %(kind)s, %(storage_locator)s,
         %(provider)s, %(provider_id)s, %(url)s, %(media_type)s, %(byte_size)s, %(sha256)s, %(sha256)s,
         %(origin)s, %(thumb_page)s, %(thumb_url)s)
-"""
-# One data root serves every Library of the instance (§6.2), so a storage key
-# is not private to a Library by its name alone. Until L-A-1's rule that a
-# transaction adopts only keys it wrote (§11.2), create refuses a key another
-# Library's Asset already names. The read takes SERIALIZABLE predicate locks,
-# so two Libraries racing to claim one key cannot both commit.
-_LOCATOR_OF_ANOTHER_LIBRARY: LiteralString = """
-SELECT 1 FROM prks.assets
-WHERE storage_locator = %(locator)s AND library_id <> %(library_id)s
-LIMIT 1
 """
 _INSERT_NOTE: LiteralString = """
 INSERT INTO prks.work_notes (library_id, work_id, kind, body)
@@ -129,8 +121,15 @@ RETURNING id
 """
 
 
-def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -> Optional[str]:
+def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False,
+                objects: Optional[StorageBackend] = None) -> Optional[str]:
     """Insert ``new``; returns its id. Safe to run again on a SERIALIZABLE retry.
+
+    A managed file's key is adopted first (``objects.lifecycle.adopt``, §11.2),
+    so ``objects`` is required for one: the key's per-object lock is held to
+    COMMIT and the bytes are confirmed there, so a cleanup settle cannot
+    unlink them under the new Asset. A key another Library names is refused
+    (``ObjectMissing``), as is one whose bytes are gone.
 
     ``if_absent`` is for a client-minted id (``CREATE_WORK``): when a Work
     with that id already exists nothing is inserted and None is returned.
@@ -158,7 +157,7 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
         "url": new.citation_url,
     })
     if new.asset is not None:
-        _insert_asset(scope, ids, new.asset)
+        _insert_asset(scope, ids, new.asset, objects)
     if new.research_note:
         # As every Research Note writer does (``notes``): the Concepts it
         # names are created when missing, and a Concept or Argument delete
@@ -175,16 +174,18 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False) -
     return new.work_id
 
 
-def _insert_asset(scope: LibraryScope, ids: dict[str, Optional[str]], asset: NewAsset) -> None:
+def _insert_asset(scope: LibraryScope, ids: dict[str, Optional[str]], asset: NewAsset,
+                  objects: Optional[StorageBackend]) -> None:
     source = asset.source
     values: dict[str, object] = {
         **ids, "media_type": asset.media_type, "thumb_page": asset.thumb_page,
         "thumb_url": asset.thumb_url,
     }
     if isinstance(source, ManagedFile):
-        if scope.execute(_LOCATOR_OF_ANOTHER_LIBRARY, {"locator": source.storage_locator}).fetchone():
-            # Worded like a missing file: the name of another Library's file is not confirmed.
-            raise ValueError("the managed PDF does not exist")
+        if objects is None:
+            raise ValueError("a managed file is adopted through the storage backend")
+        lifecycle.adopt(scope, objects, lifecycle.StoredObject(
+            StorageKey(NAMESPACE_ASSET_OBJECTS, source.storage_locator), source.byte_size, source.sha256))
         values.update(kind="managed_file", storage_locator=source.storage_locator, provider=None,
                       provider_id=None, url=None, byte_size=source.byte_size, sha256=source.sha256,
                       origin=source.origin)
@@ -305,10 +306,11 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     a base taken before the delete is stale on a Work recreated under the id.
     A ``research.reindex_work`` enqueued here drops the Work's derived
     mentions once the delete commits (§8.4).
-    The managed file stays where it is: claiming and removing bytes is the
-    objects lane's (L-A-1, §11.2), so this only reports the Work's
-    ``/api/pdfs/`` path and whether another Asset of the Library still
-    names the same storage key.
+    A managed file no other Asset of the Library names gets a cleanup claim
+    in this transaction (``objects.lifecycle.release``, §11.2); its bytes
+    are removed later, by a settle that finds nothing naming them. The
+    record reports the Work's ``/api/pdfs/`` path and whether another Asset
+    of the Library still names the same storage key.
     """
     if scope.execute(_LOCK_FOR_DELETE, {"work_id": work_id}).fetchone() is None:
         return None
@@ -340,6 +342,8 @@ def delete_work(scope: LibraryScope, work_id: str) -> Optional[DeletedWork]:
     revisions.tombstone_work_scopes(scope, work_id)
     still_used = locator is not None and scope.execute(
         _LOCATOR_STILL_USED, {"locator": locator}).fetchone() is not None
+    if locator is not None and not still_used:
+        lifecycle.release(scope, StorageKey(NAMESPACE_ASSET_OBJECTS, locator))
     return DeletedWork(work_id=work_id,
                        file_path="/api/pdfs/" + str(locator) if locator else "",
                        managed_pdf_still_referenced=still_used)

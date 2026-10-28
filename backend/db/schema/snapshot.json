@@ -27,7 +27,8 @@
     "100_works.sql",
     "110_people.sql",
     "120_organization.sql",
-    "130_research.sql"
+    "130_research.sql",
+    "150_objects.sql"
   ],
   "schemas": [
     "derived",
@@ -609,6 +610,7 @@
         "assets_library_id_id_work_id_key": "CREATE UNIQUE INDEX assets_library_id_id_work_id_key ON prks.assets USING btree (library_id, id, work_id)",
         "assets_manifestation": "CREATE INDEX assets_manifestation ON prks.assets USING btree (library_id, manifestation_id, work_id)",
         "assets_pkey": "CREATE UNIQUE INDEX assets_pkey ON prks.assets USING btree (id)",
+        "assets_source_locator": "CREATE INDEX assets_source_locator ON prks.assets USING btree (source_locator) WHERE (source_locator IS NOT NULL)",
         "assets_storage_locator": "CREATE INDEX assets_storage_locator ON prks.assets USING btree (storage_locator) WHERE (storage_locator IS NOT NULL)",
         "assets_supersedes": "CREATE INDEX assets_supersedes ON prks.assets USING btree (library_id, supersedes_asset_id, manifestation_id) WHERE (supersedes_asset_id IS NOT NULL)",
         "assets_work": "CREATE INDEX assets_work ON prks.assets USING btree (library_id, work_id)"
@@ -1841,6 +1843,57 @@
         "manifestations_work": "CREATE INDEX manifestations_work ON prks.manifestations USING btree (library_id, work_id)"
       }
     },
+    "prks.object_cleanup_claims": {
+      "columns": [
+        {
+          "name": "namespace",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "library_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "recorded_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_attempt_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "false",
+          "name": "hold",
+          "not_null": true,
+          "type": "boolean"
+        }
+      ],
+      "constraints": {
+        "object_cleanup_claims_hold_not_null": "NOT NULL hold",
+        "object_cleanup_claims_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE SET NULL",
+        "object_cleanup_claims_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
+        "object_cleanup_claims_name_not_null": "NOT NULL name",
+        "object_cleanup_claims_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text]))",
+        "object_cleanup_claims_namespace_not_null": "NOT NULL namespace",
+        "object_cleanup_claims_pkey": "PRIMARY KEY (namespace, name)",
+        "object_cleanup_claims_recorded_at_not_null": "NOT NULL recorded_at"
+      },
+      "indexes": {
+        "object_cleanup_claims_due": "CREATE INDEX object_cleanup_claims_due ON prks.object_cleanup_claims USING btree (last_attempt_at NULLS FIRST, recorded_at) WHERE (NOT hold)",
+        "object_cleanup_claims_library": "CREATE INDEX object_cleanup_claims_library ON prks.object_cleanup_claims USING btree (library_id) WHERE (library_id IS NOT NULL)",
+        "object_cleanup_claims_pkey": "CREATE UNIQUE INDEX object_cleanup_claims_pkey ON prks.object_cleanup_claims USING btree (namespace, name)"
+      }
+    },
     "prks.person_aliases": {
       "columns": [
         {
@@ -2419,6 +2472,84 @@
       "indexes": {
         "publishers_library_id_id_key": "CREATE UNIQUE INDEX publishers_library_id_id_key ON prks.publishers USING btree (library_id, id)",
         "publishers_pkey": "CREATE UNIQUE INDEX publishers_pkey ON prks.publishers USING btree (id)"
+      }
+    },
+    "prks.restore_run_objects": {
+      "columns": [
+        {
+          "name": "run_id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "namespace",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "restore_run_objects_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
+        "restore_run_objects_name_not_null": "NOT NULL name",
+        "restore_run_objects_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text]))",
+        "restore_run_objects_namespace_not_null": "NOT NULL namespace",
+        "restore_run_objects_pkey": "PRIMARY KEY (run_id, namespace, name)",
+        "restore_run_objects_run_id_fkey": "FOREIGN KEY (run_id) REFERENCES prks.restore_runs(id) ON DELETE CASCADE",
+        "restore_run_objects_run_id_not_null": "NOT NULL run_id"
+      },
+      "indexes": {
+        "restore_run_objects_key": "CREATE INDEX restore_run_objects_key ON prks.restore_run_objects USING btree (namespace, name)",
+        "restore_run_objects_pkey": "CREATE UNIQUE INDEX restore_run_objects_pkey ON prks.restore_run_objects USING btree (run_id, namespace, name)"
+      }
+    },
+    "prks.restore_runs": {
+      "columns": [
+        {
+          "default": "uuidv7()",
+          "name": "id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'running'::text",
+          "name": "state",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "started_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "finished_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "restore_runs_finished_check": "CHECK ((state = 'running'::text) = (finished_at IS NULL))",
+        "restore_runs_id_not_null": "NOT NULL id",
+        "restore_runs_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
+        "restore_runs_library_id_not_null": "NOT NULL library_id",
+        "restore_runs_pkey": "PRIMARY KEY (id)",
+        "restore_runs_started_at_not_null": "NOT NULL started_at",
+        "restore_runs_state_check": "CHECK (state = ANY (ARRAY['running'::text, 'committed'::text, 'failed'::text]))",
+        "restore_runs_state_not_null": "NOT NULL state"
+      },
+      "indexes": {
+        "restore_runs_library": "CREATE INDEX restore_runs_library ON prks.restore_runs USING btree (library_id)",
+        "restore_runs_pkey": "CREATE UNIQUE INDEX restore_runs_pkey ON prks.restore_runs USING btree (id)"
       }
     },
     "prks.roles": {

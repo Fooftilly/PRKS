@@ -276,7 +276,9 @@ class TestLocalSpecifics(LocalStorageTestCase):
         self.assertEqual(info.version, f"{st.st_mtime_ns}:{st.st_size}:{st.st_ino}")
 
     def test_backend_is_not_wired_into_production_paths_yet(self):
-        # Phase A adds the abstraction only; Phase B routes operations through it.
+        # Phase A adds the abstraction only; Phase B routes operations through
+        # it. Phase B starts on PostgreSQL (L-A-1 #635): the facade, which the
+        # running app does not construct yet, is the only other user.
         import subprocess
 
         out = subprocess.run(
@@ -285,7 +287,7 @@ class TestLocalSpecifics(LocalStorageTestCase):
         )
         if out.returncode not in (0, 1):  # pragma: no cover - no git
             self.skipTest("git unavailable")
-        self.assertEqual(out.stdout.split(), ["backend/storage/objects.py"])
+        self.assertEqual(out.stdout.split(), ["backend/pg_facade/works.py", "backend/storage/objects.py"])
 
 
 if __name__ == "__main__":

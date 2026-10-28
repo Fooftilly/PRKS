@@ -426,7 +426,8 @@ class SchemaFileLoadingTests(unittest.TestCase):
         self.assertEqual(
             [f.filename for f in load_schema_files()],
             ["000_extensions.sql", "010_instance.sql", "020_identity.sql", "030_jobs.sql", "040_sync.sql",
-             "100_works.sql", "110_people.sql", "120_organization.sql", "130_research.sql"],
+             "100_works.sql", "110_people.sql", "120_organization.sql", "130_research.sql",
+             "150_objects.sql"],
         )
 
 

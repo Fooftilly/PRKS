@@ -98,6 +98,8 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/research/graph.py",
     "backend/domain/research/positions.py",
     "backend/domain/research/reindex.py",
+    "backend/domain/objects/__init__.py",
+    "backend/domain/objects/lifecycle.py",
     "backend/domain/saved_views/__init__.py",
     "backend/domain/saved_views/views.py",
     "backend/domain/settings/__init__.py",
