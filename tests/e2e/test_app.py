@@ -166,8 +166,13 @@ def _open_work_from_home(page, title, *, profile_prefix=None):
         page.locator('#sidebar a.nav-link[href="#/folders"]').click()
         page.wait_for_function("() => location.hash === '#/folders'")
     with stage("recent"):
-        page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
-        page.locator(".card-title", has_text=title).wait_for()
+        # Preserve the complete click + card-visibility assertion in this
+        # inclusive stage. The two children reveal whether its repeatable
+        # ~1.300s post-#945 cost is action/handler or async list/DOM paint.
+        with stage("recent_click"):
+            page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
+        with stage("recent_card"):
+            page.locator(".card-title", has_text=title).wait_for()
     with stage("card_click"):
         page.locator(".card-title", has_text=title).click()
     with stage("work_ready"):

@@ -165,17 +165,53 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
             and node.name == "_open_work_from_home"
         ]
         self.assertEqual(len(nav_helpers), 1)
+        # ast.walk visits nested calls breadth-first, not in source order.
+        # Sort the stage calls by their locations before asserting the real
+        # interaction sequence; the separate check below asserts that the
+        # two child timers remain nested inside the inclusive recent phase.
         helper_stages = [
             call.args[0].value
-            for call in ast.walk(nav_helpers[0])
-            if isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id == "stage"
-            and len(call.args) == 1
-            and isinstance(call.args[0], ast.Constant)
+            for call in sorted(
+                (
+                    node for node in ast.walk(nav_helpers[0])
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "stage"
+                    and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Constant)
+                ),
+                key=lambda node: (node.lineno, node.col_offset),
+            )
         ]
         self.assertEqual(
-            helper_stages, ["folders", "recent", "card_click", "work_ready"]
+            helper_stages,
+            ["folders", "recent", "recent_click", "recent_card", "card_click", "work_ready"],
+        )
+        recent_scopes = [
+            node for node in ast.walk(nav_helpers[0])
+            if isinstance(node, ast.With)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+                and len(item.context_expr.args) == 1
+                and isinstance(item.context_expr.args[0], ast.Constant)
+                and item.context_expr.args[0].value == "recent"
+                for item in node.items
+            )
+        ]
+        self.assertEqual(len(recent_scopes), 1)
+        self.assertEqual(
+            [
+                item.context_expr.args[0].value
+                for node in recent_scopes[0].body
+                if isinstance(node, ast.With)
+                for item in node.items
+                if isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+            ],
+            ["recent_click", "recent_card"],
         )
         for mode, target in targets:
             module, class_name, method_name = target.rsplit(".", 2)
@@ -252,7 +288,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 nav_names,
                 {
                     f"person_{mode}_link_nav_{stage}"
-                    for stage in ("folders", "recent", "card_click", "work_ready")
+                    for stage in ("folders", "recent", "recent_click", "recent_card", "card_click", "work_ready")
                 },
                 target,
             )
