@@ -105,8 +105,8 @@ jobs:
               lines.append("Completed scenes: " + ", ".join(detail["completed_scenes"] or ["none"]) + ".")
               lines.append(
                   "Replay with the same pinned browser and a disposable test server: "
-                  "`python scripts/ci/visual_regression.py --mode check` "
-                  "from a temporary working directory."
+                  "`cd \"$RUNNER_TEMP\" && python \"$GITHUB_WORKSPACE/scripts/ci/visual_regression.py\" --mode check` "
+                  "(with the same commit and pinned prerequisites)."
               )
           elif approved and os.environ["PROPOSE"] != "1":
               lines.append(
