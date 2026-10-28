@@ -11,7 +11,7 @@ from scripts.pg_stat_profile import (
     assert_bounded_works, assert_ordered_work_ids, assert_work_detail,
     expected_recent_work_ids,
     assert_works_count, benchmark, create_verified_profile_database, percentile,
-    project_statement, run, sizes_arg, snapshot, verify_disposable_cluster,
+    project_statement, run, sizes_arg, snapshot, statement_rollup, verify_disposable_cluster,
 )
 
 
@@ -115,6 +115,31 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertIn("pg_stat_statements(false)", stats.statement)
         self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\bquery\b")
 
+    def test_all_statement_rollup_never_requests_sql_text(self):
+        class FakeStats:
+            def execute(self, statement):
+                self.statement = statement
+                return self
+
+            def fetchone(self):
+                return {
+                    "distinct_statement_count": 7,
+                    "total_sql_calls": 35,
+                    "total_exec_time": 12.34567,
+                    "query": "PRIVATE SQL MUST NEVER LEAK",
+                }
+
+        stats = FakeStats()
+        result = statement_rollup(stats)
+        self.assertEqual(result, {
+            "distinct_statement_count": 7,
+            "total_sql_calls": 35,
+            "total_exec_ms": 12.346,
+        })
+        self.assertIn("pg_stat_statements(false)", stats.statement)
+        self.assertNotRegex(stats.statement.split("FROM", 1)[0], r"\bquery\b")
+        self.assertNotIn("PRIVATE SQL", json.dumps(result))
+
     def test_bounded_ascending_fixture_tiers(self):
         self.assertEqual(sizes_arg("12,48,128"), (12, 48, 128))
         for text in ("", "1,1", "12,2", "501", "0", "1,2,3,4,5", "1,xx", "-1,5"):
@@ -191,7 +216,12 @@ class ProfileSafetyTests(unittest.TestCase):
         def operation():
             counter.append(1)
             return [{"id": "WORK-A"}]
-        with patch("scripts.pg_stat_profile.snapshot", side_effect=[[], results]):
+        with (
+            patch("scripts.pg_stat_profile.snapshot", side_effect=[[], results]),
+            patch("scripts.pg_stat_profile.statement_rollup", return_value={
+                "distinct_statement_count": 2, "total_sql_calls": 9, "total_exec_ms": 5.12,
+            }),
+        ):
             outcome = benchmark(Dummy(), operation, 4, lambda x: assert_works_count(x, 1))
         self.assertEqual(len(counter), 7)
         self.assertEqual(calls, ["reset"])
@@ -202,6 +232,7 @@ class ProfileSafetyTests(unittest.TestCase):
         self.assertEqual(outcome["first_call_context"], "first_call_of_operation_not_cold_start")
         self.assertGreaterEqual(outcome["first_observed_call_ms"], 0)
         self.assertTrue(outcome["top_statements"])
+        self.assertEqual(outcome["sql_rollup"]["total_sql_calls"], 9)
         bad = []
         def invalid():
             bad.append(1)
@@ -210,6 +241,32 @@ class ProfileSafetyTests(unittest.TestCase):
             benchmark(Dummy(), invalid, 4, lambda x: assert_works_count(x, 1))
         self.assertEqual(len(bad), 1)
         self.assertEqual(calls, ["reset"], "a failing first call must not reset SQL stats")
+
+    def test_incomplete_sql_accounting_fails_without_publishing_timings(self):
+        class Stats:
+            def __init__(self):
+                self.resets = 0
+
+            def execute(self, _query):
+                self.resets += 1
+
+        reads = []
+        def operation():
+            reads.append(1)
+            return [{"id": "WORK-A"}]
+
+        stats = Stats()
+        top_five = [{"query_fingerprint": "private", "calls": 5}]
+        with (
+            patch("scripts.pg_stat_profile.snapshot", side_effect=[[], top_five]),
+            patch("scripts.pg_stat_profile.statement_rollup", return_value={
+                "distinct_statement_count": 1, "total_sql_calls": 2, "total_exec_ms": 5.12,
+            }),
+            self.assertRaisesRegex(RuntimeError, "accounting"),
+        ):
+            benchmark(stats, operation, 4, lambda x: assert_works_count(x, 1))
+        self.assertEqual(len(reads), 7)
+        self.assertEqual(stats.resets, 1)
 
     def test_report_is_numeric_only_even_if_sql_in_row(self):
         probe_literal = "example select payload MUST NOT appear in profile output"
