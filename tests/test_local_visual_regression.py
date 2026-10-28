@@ -38,6 +38,22 @@ def png_sample(*, invert: bool = False) -> bytes:
 
 
 class LocalVisualBaselineTests(unittest.TestCase):
+    def test_advisory_workflow_rebuilds_and_checks_vue_before_capture(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github" / "workflows" / "visual-regression-pilot.yml"
+        ).read_text(encoding="utf-8")
+        build = workflow.index("      - name: Verify fresh Vue build matches checked-in runtime assets")
+        capture = workflow.index("      - name: Capture and compare five synthetic app surfaces")
+        self.assertLess(build, capture)
+        self.assertIn("npm ci --ignore-scripts --prefix frontend-app", workflow)
+        self.assertIn("npm run build --prefix frontend-app", workflow)
+        self.assertIn("git diff --quiet --", workflow)
+        self.assertIn("git status --porcelain --", workflow)
+        self.assertIn("frontend/vue", workflow)
+        self.assertIn("frontend/js/workspace-model.js", workflow)
+        self.assertIn("frontend/sw.js", workflow)
+
     def test_replay_discards_old_outputs_before_capture_failure(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

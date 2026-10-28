@@ -1,7 +1,8 @@
 name: Advisory local Playwright visual comparison
 
-# Manual or changed pilot code only: no duplicate full E2E or external
-# screenshot service. Baseline generation is a candidate until reviewed.
+# Advisory only: run for UI/runtime asset changes, pilot code, or manual
+# dispatch. Do not run on backend-only, dependency-only or test-only PRs.
+# No duplicate full E2E or external screenshot service.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +16,17 @@ on:
       - "scripts/ci/visual_regression.py"
       - "tests/visual/**"
       - "tests/test_local_visual_regression.py"
+      # These paths render the five currently approved fixture scenes.
+      # Keep unit-test-only changes out of this extra Chromium job.
+      - "frontend/**"
+      - "frontend-app/src/**"
+      - "!frontend-app/src/**/*.test.ts"
+      - "!frontend-app/src/**/*.spec.ts"
+      - "!frontend-app/src/**/*.test.tsx"
+      - "!frontend-app/src/**/*.spec.tsx"
+      - "frontend-app/index.html"
+      - "frontend-app/public/**"
+      - "frontend-app/vite.config.ts"
 
 permissions:
   contents: read
@@ -33,6 +45,44 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The Python server serves committed frontend/vue assets, not the
+      # TypeScript source. Build and check the exact output first, so this
+      # advisory job never reports PASS against an old Vue bundle.
+      - name: Set up pinned Node.js for Vue production build
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ">=24.15.0 <25"
+          cache: npm
+          cache-dependency-path: frontend-app/package-lock.json
+
+      - name: Install locked Vue build dependencies
+        run: npm ci --ignore-scripts --prefix frontend-app
+
+      - name: Verify fresh Vue build matches checked-in runtime assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build --prefix frontend-app
+          # Mirror the production build's canonical generated-asset list
+          # from Fast Static Analysis. Never screenshot stale committed Vue.
+          generated=(
+            frontend/vue
+            frontend/js/workspace-model.js
+            frontend/js/work-route-projection.js
+            frontend/js/search-query-codec.js
+            frontend/js/tab-leave.js
+            frontend/js/owner-resource.js
+            frontend/js/editor-recovery.js
+            frontend/js/route-model.js
+            frontend/vendor/DEPENDENCY-MANIFEST.json
+            frontend/sw.js
+          )
+          if ! git diff --quiet -- "${generated[@]}" ||
+             [[ -n "$(git status --porcelain -- "${generated[@]}")" ]]; then
+            echo "::error::Fresh Vue build differs from committed runtime assets; regenerate and commit the frontend build before trusting the visual result."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
