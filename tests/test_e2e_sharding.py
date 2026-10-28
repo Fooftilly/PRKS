@@ -147,8 +147,10 @@ class ShardAssignmentTests(unittest.TestCase):
             for shard, bucket in enumerate(first):
                 for test_id in bucket:
                     key = test_id.rsplit(".", 1)[0]
-                    self.assertNotIn(key, owners) if key in owners and owners[key] != shard else None
-                    owners[key] = shard
+                    if key in owners:
+                        self.assertEqual(owners[key], shard)
+                    else:
+                        owners[key] = shard
             self.assertEqual(len(owners), 9)
 
     def test_class_locality_pilot_is_external_shard_consistent(self):
