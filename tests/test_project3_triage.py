@@ -206,6 +206,11 @@ class BatchTriageTests(unittest.TestCase):
         with self.assertRaisesRegex(t.TriageError, "dependencies unavailable"):
             t.propose([intent()], self.fx.project(), bad_read)
 
+    def test_project_local_plan_files_are_rejected(self):
+        path = Path(__file__).resolve().parents[1] / "triage-plan.json"
+        with self.assertRaisesRegex(t.TriageError, "outside the PRKS"):
+            t.external_plan_path(path)
+
     def write_json(self, value):
         # Persist inside temporary directory for a single test's duration.
         if not hasattr(self, "_temp"):
