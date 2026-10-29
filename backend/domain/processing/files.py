@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import posixpath
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
@@ -419,7 +419,7 @@ def scan_rows(scope: LibraryScope) -> list[dict[str, Any]]:
 
 
 def reconcile(scope: LibraryScope, discovered: Sequence[tuple[str, str]], finished: Sequence[str],
-              unheld: Sequence[str], new_ids: Sequence[str]) -> None:
+              unheld: Sequence[str], new_ids: Sequence[str], claimed: Collection[str] = ()) -> None:
     """The scan's one transaction: the inbox as it was found, under the inbox lock.
 
     ``finished`` are ``imported`` rows whose import the scan completed (their
@@ -429,7 +429,8 @@ def reconcile(scope: LibraryScope, discovered: Sequence[tuple[str, str]], finish
     file. A discovered path with no row is staged ``pending``; a staged
     row's status returns to ``pending`` (an ``error`` is retried) and its
     filename follows the file; a row whose file is gone is deleted unless it
-    is ``imported`` or held by a restore.
+    is ``imported``, held by a restore, or ``claimed`` (its file is still
+    claimed, :func:`backend.domain.processing.inbox.recover_claims`).
     """
     if finished:
         scope.execute(_FINISH_SQL, {"ids": list(finished)})
@@ -448,7 +449,8 @@ def reconcile(scope: LibraryScope, discovered: Sequence[tuple[str, str]], finish
         scope.execute(_INSERT_SQL, {"ids": [item[0] for item in staged], "paths": [item[1] for item in staged],
                                     "names": [item[2] for item in staged]})
     vanished = [str(row["id"]) for rel_path, row in existing.items()
-                if rel_path not in found and row["status"] != IMPORTED and not row["restore_hold"]]
+                if rel_path not in found and rel_path not in claimed and row["status"] != IMPORTED
+                and not row["restore_hold"]]
     if vanished:
         scope.execute(_VANISHED_SQL, {"ids": vanished})
 

@@ -270,7 +270,7 @@ def _put_back(claim: str, path: str) -> bool:
     return False
 
 
-def recover_claims(inbox_dir: str, imported: dict[str, str]) -> None:
+def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     """Settle every claimed file a crash left in the inbox (:func:`_claim`).
 
     Runs under the inbox lock, so no claim of a running import or scan is
@@ -279,24 +279,28 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> None:
     ingested is removed, never published again (even when another file
     has taken the path); any other claim is put back (:func:`_put_back`).
     An empty claim directory (a crash before the rename) is removed.
+    Returns the ``rel_path`` of each claimed file left unsettled (it could
+    be neither removed nor put back), whose row the scan keeps.
 
     Only a real directory, and in it a regular file, is settled. Anything
     else with a claim's name (a link, a device) is not one the protocol
     made; it is left alone and never read, linked or published.
     """
     root = os.path.realpath(inbox_dir)
+    unsettled: set[str] = set()
     if not os.path.isdir(root):
-        return
+        return unsettled
     for directory, dirs, _names in os.walk(root):
         claims = [name for name in dirs if name.startswith(CLAIM_PREFIX)]
         dirs[:] = [name for name in dirs if not name.startswith(CLAIM_PREFIX)]
         for name in claims:
             if _CLAIM.fullmatch(name) is not None:
-                _settle(inbox_dir, root, os.path.join(directory, name), imported)
+                _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled)
+    return unsettled
 
 
-def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str]) -> None:
-    """Settle one claim directory a crash left (:func:`recover_claims`)."""
+def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str]) -> None:
+    """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`)."""
     try:
         if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
             LOGGER.warning("processing_claim_skipped reason=not_a_directory")
@@ -313,10 +317,12 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str])
         if not regular:
             LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
             continue
-        expected = imported.get(os.path.relpath(path, root).replace(os.sep, "/"))
+        rel_path = os.path.relpath(path, root).replace(os.sep, "/")
+        expected = imported.get(rel_path)
         if expected is not None and file_sha256(claim) == expected and _remove(inbox_dir, claim, path):
             continue
-        _put_back(claim, path)
+        if not _put_back(claim, path):
+            unsettled.add(rel_path)
     try:
         os.rmdir(claim_dir)
     except OSError:
@@ -330,11 +336,11 @@ def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
     """Reconcile the Library's rows with the inbox, under the inbox lock (module docs)."""
     with inbox_lock(runner.database, runner.library_id):
         rows = runner.read(files.scan_rows)
-        recover_claims(inbox_dir, {str(row["rel_path"]): str(row["import_sha256"]) for row in rows
-                                   if row["status"] == files.IMPORTED})
+        unsettled = recover_claims(inbox_dir, {str(row["rel_path"]): str(row["import_sha256"]) for row in rows
+                                               if row["status"] == files.IMPORTED})
         finished: list[str] = []
         for row in rows:
-            if row["status"] == files.IMPORTED and _finish_import(inbox_dir, row):
+            if row["status"] == files.IMPORTED and row["rel_path"] not in unsettled and _finish_import(inbox_dir, row):
                 finished.append(str(row["id"]))
         discovered = discover(inbox_dir)
         on_disk = {rel_path for rel_path, _name in discovered}
@@ -342,7 +348,7 @@ def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
                   if row["status"] != files.IMPORTED and row["restore_hold"] and row["restore_sha256"]
                   and row["rel_path"] in on_disk and _hash_at(inbox_dir, row["rel_path"]) == row["restore_sha256"]]
         new_ids = [new_id() for _found in discovered]
-        runner.command(lambda scope: files.reconcile(scope, discovered, finished, unheld, new_ids))
+        runner.command(lambda scope: files.reconcile(scope, discovered, finished, unheld, new_ids, unsettled))
 
 
 def _hash_at(inbox_dir: str, rel_path: str) -> Optional[str]:

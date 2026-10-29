@@ -457,6 +457,24 @@ class CrashRecoveryTests(ProcessingTestCase):
         with open(secret, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 outside")
 
+    def test_an_unsettled_claim_keeps_its_row_until_it_is_settled(self) -> None:
+        imported_path = self.put("done.pdf")
+        pending_path = self.put("open.pdf", b"%PDF-1.4 open")
+        imported_id, pending_id = self.staged("done.pdf"), self.staged("open.pdf")
+        self.crash_after_commit(imported_id)
+        self.assertIsNotNone(inbox._claim(imported_path))  # the process dies here
+        self.assertIsNotNone(inbox._claim(pending_path))
+        with mock.patch.object(inbox, "_remove", return_value=False), \
+                mock.patch.object(inbox, "_put_back", return_value=False):  # the inbox is not writable
+            self.assertEqual([row["id"] for row in self.library.scan_processing_files()], [pending_id])
+        kept = self.row(imported_id)
+        assert kept is not None
+        self.assertEqual(kept["status"], "imported")
+        staged = self.library.scan_processing_files()  # writable again
+        self.assertEqual([(row["id"], row["rel_path"]) for row in staged], [(pending_id, "open.pdf")])
+        self.assertIsNone(self.row(imported_id))
+        self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
+
     def test_an_empty_claim_directory_is_removed(self) -> None:
         os.mkdir(os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'2' * 32}"))  # a crash before the rename
         self.assertEqual(self.library.scan_processing_files(), [])
