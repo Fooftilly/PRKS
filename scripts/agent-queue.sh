@@ -30,7 +30,9 @@ printf '%s\n' "$project_json" | jq -er --arg role "$role" '
   else
     (["Issue", "Status", "Execution", "Title", "URL"] | @tsv),
     (.items[]
-      | select(.agent == $role)
+      # ChatGPT/Codex is the current option (renamed by the maintainer).
+      # Include old Codex values from historical/unrefreshed Project exports.
+      | select(.agent == $role or ($role == "ChatGPT/Codex" and .agent == "Codex"))
       | select(.content.type == "Issue" and .content.repository == "Fooftilly/PRKS")
       | select((.content.number | type) == "number")
       | ["#\(.content.number)", (.status // "(unset)"),
