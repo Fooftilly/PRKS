@@ -60,7 +60,11 @@ class Fixture:
         return pm.Project(pm.GraphQL(self.api, allow_mutations=apply))
 
     def plan(self, *rows):
-        return t.propose(list(rows), self.project(), self.read)
+        # Match the CLI path: validate/normalize aliases before calling propose.
+        rows = [copy.deepcopy(row) for row in rows]
+        for row in rows:
+            t.validate_row(row, plan=False)
+        return t.propose(rows, self.project(), self.read)
 
 
 class BatchTriageTests(unittest.TestCase):
