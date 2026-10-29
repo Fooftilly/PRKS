@@ -50,6 +50,7 @@ the fill as a job) is PG-C1's.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable
@@ -280,8 +281,8 @@ class AnnotationsMixin(FacadeMixin):
         """The Person's cached portrait: its bytes, subtype, hash and size; None when none is cached.
 
         Raises ``LookupError`` when there is no such Person. A reference whose
-        bytes are gone or not the recorded size reads as None (the adapter
-        fetches again); the bytes are read with a bound, never whole.
+        bytes are gone, or not the recorded size and hash, reads as None (the
+        adapter fetches again); the bytes are read with a bound, never whole.
         """
         from backend.domain.objects import portraits
         from backend.person_image import identify_cached_portrait_subtype
@@ -303,7 +304,7 @@ class AnnotationsMixin(FacadeMixin):
         except (OSError, StorageObjectError):
             return None
         subtype = identify_cached_portrait_subtype(body)
-        if len(body) != found.size or subtype is None:
+        if len(body) != found.size or subtype is None or hashlib.sha256(body).hexdigest() != found.sha256:
             return None
         return {"body": body, "subtype": subtype, "content_sha256": found.sha256, "byte_size": found.size}
 

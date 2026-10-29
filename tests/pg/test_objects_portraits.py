@@ -463,10 +463,16 @@ class FailureTests(PortraitTestCase):
         self.cache(person_id)
         self.assertEqual(self.claims(), {obj.key.name, before["portrait_locator"]})
 
-    def test_a_missing_or_truncated_object_reads_as_no_portrait(self) -> None:
+    def test_a_missing_changed_or_truncated_object_reads_as_no_portrait(self) -> None:
         person_id = self.person()
         self.cache(person_id)
         key = StorageKey(NAMESPACE_PORTRAITS, self.locator(person_id) or "")
+        size = int(self.row(person_id)["portrait_byte_size"])
+        # Same size, same WebP header, other bytes: the hash does not describe them.
+        body = self.read(key.name)
+        self.objects.replace(key, lambda stream: stream.write(body[:-1] + bytes([body[-1] ^ 1])))
+        self.assertEqual(len(self.read(key.name)), size)
+        self.assertIsNone(self.library._person_portrait(person_id))
         self.objects.replace(key, lambda stream: stream.write(b"RIFF"))
         self.assertIsNone(self.library._person_portrait(person_id))
         self.objects.delete(key)
