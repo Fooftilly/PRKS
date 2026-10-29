@@ -208,7 +208,10 @@ def execute(event: dict, *, github: GitHubAPI, project_token: str,
     if not project_token:
         raise BridgeError("protected project-automation token not configured")
     transport = pm.http_transport(project_token)
-    read = triage.rest_client(project_token)
+    # The protected classic project-scope token is for Project V2 GraphQL;
+    # private-repository issue/dependency REST reads use the job's scoped
+    # GITHUB_TOKEN (issues: write includes read) instead.
+    read = triage.rest_client(github.token)
     project = pm.Project(pm.GraphQL(
         transport, allow_mutations=operation == "apply" and mode == "apply"))
     plan = prepare(rows, reassign, project, read)
