@@ -5,7 +5,8 @@ claim, then claim and run one job at a time until stopped. Between jobs it
 waits for a ``NOTIFY prks_jobs`` (every enqueue sends one at COMMIT), with a
 poll as the fallback, and on each idle tick it runs the reaper, the idle
 tasks of its registry (each lane's periodic enqueue) and, at most once per
-interval, enqueues the deduplicated ``jobs.prune``.
+interval, enqueues the deduplicated ``jobs.prune``. A worker that never
+runs out of jobs still ticks between them, at most once per poll interval.
 
 **Start.** The worker claims nothing until its start check says so. The
 check first verifies the schema (§4.4: the database applied exactly this
@@ -211,6 +212,7 @@ class Worker:
         # Never taken in a signal handler (see SignalStop).
         self._begin_lock = threading.Lock()
         self._last_prune: Optional[float] = None
+        self._last_tick: Optional[float] = None
         self.started = threading.Event()  # the start check passed; the worker claims
         self.idle = threading.Event()  # set while it waits for a NOTIFY or the poll
         # Why the start check is still waiting (a stable reason code), for diagnostics.
@@ -244,6 +246,8 @@ class Worker:
                 job = self._claim()
                 if job is not None:
                     self._run(job)
+                    if self._last_tick is None or time.monotonic() - self._last_tick >= poll:
+                        self._idle_tick()  # a busy worker still reaps and schedules
                     continue
                 self._idle_tick()
                 self.idle.set()
@@ -352,6 +356,7 @@ class Worker:
         )
 
     def _idle_tick(self) -> None:
+        self._last_tick = time.monotonic()
         try:
             reaped = queue.reap(self.db)
         except DatabaseError as exc:

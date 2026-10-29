@@ -172,6 +172,20 @@ class IdleTickTests(WorkerTestCase):
         rows = self.run_sql("SELECT state FROM prks.jobs WHERE kind = %s", (prune.PRUNE_KIND,))
         self.assertEqual([row["state"] for row in rows], ["succeeded"])
 
+    def test_a_worker_that_never_runs_out_of_jobs_still_ticks_between_them(self) -> None:
+        ticks: list[float] = []
+
+        def busy(run: JobRun) -> None:
+            run.command(lambda tx: queue.enqueue(tx, "test.busy"))  # the queue never empties
+
+        self.registry.register("test.busy", busy)
+        self.registry.add_idle_task(lambda db: ticks.append(time.monotonic()))
+        self.enqueue_instance(kind="test.busy")
+        worker = self.start_worker()
+        wait_until(lambda: len(ticks) >= 3, "idle tasks between jobs")
+        self.assertFalse(worker.idle.is_set(), "the worker never went idle")
+        self.assertGreater(worker.stats.snapshot()["claimed"], len(ticks), "at most one tick per poll interval")
+
     def test_a_worker_without_the_prune_handler_enqueues_no_prune(self) -> None:
         worker = self.start_worker()
         self.assertTrue(worker.idle.wait(WAIT))
