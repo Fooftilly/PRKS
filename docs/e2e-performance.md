@@ -54,13 +54,21 @@ The 2026-10-28 weights use complete `e2e-timings-*-of-6` artifacts from
 and [class-locality run #40769904276](https://github.com/Fooftilly/PRKS/actions/runs/40769904276),
 both green on the same commit. An offline held-out schedule simulation
 indicated a better-balanced six-shard distribution, but the real performance
-effect still requires a controlled CI comparison. No class-locality scheduling
-policy is enabled.
+effect was measured by [manual full gate #40779596638](https://github.com/Fooftilly/PRKS/actions/runs/40779596638),
+which passed all 847 unique tests with no failures, errors, or skips: longest
+test step **606s → 589s** and workflow **673s → 651s** versus the previous
+standard run, with aggregate six-shard job time **3587s → 3622s**. This is one
+positive wall-clock sample, not a demonstrated reduction in runner-minutes.
+No class-locality scheduling policy is enabled.
 
 Committed writes fail closed unless the measurement export covers **every**
 current E2E module and every discovered exact test ID (so a single shard or
 affected-run file cannot wipe most bootstrap weights). Partial / experimental
 generation needs `--allow-partial` or an alternate `--output` path.
+Committed writes also require `--include-exact` even when the measurement
+export is complete, to prevent accidental loss of calibrated exact weights.
+Prefix-only output without the flag remains available for dry-run or alternate
+`--output` experiments.
 
 ## Current per-test path
 

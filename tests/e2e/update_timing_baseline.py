@@ -10,9 +10,10 @@ This tool never reads ``.tests/e2e-timings.json`` by default. Pass one or more
 ``--from`` measurement files exported from representative CI / full-gate runs
 (same JSON shape as the runner's exact timing history: unittest id → seconds).
 
-Writing the committed baseline fails closed unless the export covers every
-current E2E module and every discovered exact test ID. Partial / experimental
-generation requires ``--allow-partial`` or an alternate ``--output`` path.
+Writing the committed baseline requires ``--include-exact`` and fails closed
+unless the export covers every current E2E module and every discovered exact
+test ID. Partial / experimental generation requires ``--allow-partial`` or
+an alternate ``--output`` path.
 
 Examples::
 
@@ -22,11 +23,11 @@ Examples::
 
   # Write the committed file (review as an ordinary JSON diff)
   python tests/e2e/update_timing_baseline.py \\
-      --from /tmp/ci-e2e-timings.json --write
+      --from /tmp/ci-e2e-timings.json --include-exact --write
 
   # Median across multiple representative runs
   python tests/e2e/update_timing_baseline.py \\
-      --from run-a.json --from run-b.json --write
+      --from run-a.json --from run-b.json --include-exact --write
 
   # Explicit partial experiment (never the default committed path)
   python tests/e2e/update_timing_baseline.py \\
@@ -34,7 +35,7 @@ Examples::
 
 Wrapper::
 
-  scripts/e2e update-timing-baseline --from PATH [--write]
+  scripts/e2e update-timing-baseline --from PATH [--include-exact --write]
 """
 from __future__ import annotations
 
@@ -68,8 +69,8 @@ def build_parser():
             "Build committed E2E timing-baseline.json from representative "
             "exact per-test measurements. Does not use machine-local "
             ".tests/e2e-timings.json unless you pass it explicitly via --from. "
-            "Overwriting the committed baseline requires full-suite coverage "
-            "unless --allow-partial is set."
+            "Overwriting the committed baseline requires --include-exact "
+            "and full-suite coverage unless --allow-partial is set."
         ),
     )
     parser.add_argument(
@@ -263,6 +264,17 @@ def main(argv=None, *, discover_ids=None) -> int:
         write_path = committed_path
 
     writing_committed = write_path is not None and write_path == committed_path
+    # Exact-ID weights are a required part of the committed baseline.
+    # Prevent the default prefix-only mode from accidentally erasing them,
+    # even when a complete export is supplied or --allow-partial is requested.
+    if writing_committed and not args.include_exact:
+        print(
+            "error: --include-exact is required when overwriting the committed "
+            "timing-baseline.json; use --output PATH for prefix-only experiments",
+            file=sys.stderr,
+        )
+        return 2
+
     # Committed overwrite fails closed on partial coverage unless --allow-partial.
     # Alternate --output and stdout dry-run may be partial (experiments).
     if writing_committed:

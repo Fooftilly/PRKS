@@ -1413,6 +1413,73 @@ class TimingBaselineUpdateTests(unittest.TestCase):
                 weights["tests.e2e.demo.*"],
             )
 
+    def test_cli_committed_write_requires_exact_even_with_complete_coverage(self):
+        from tests.e2e import update_timing_baseline as cli
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            committed = root / "tests" / "e2e" / "timing-baseline.json"
+            committed.parent.mkdir(parents=True)
+            existing = {
+                "tests.e2e.demo.*": 8.0,
+                "tests.e2e.demo.C.test_a": 8.0,
+            }
+            committed.write_text(json.dumps(existing), encoding="utf-8")
+            measurements = root / "full-run.json"
+            measurements.write_text(
+                json.dumps({"tests.e2e.demo.C.test_a": 4.0}),
+                encoding="utf-8",
+            )
+            discovered = ["tests.e2e.demo.C.test_a"]
+            old_content = committed.read_text(encoding="utf-8")
+            with mock.patch.object(cli, "_repo_root", return_value=root):
+                for args in (
+                    ["--write"],
+                    ["--write", "--allow-partial"],
+                    ["--output", str(committed)],
+                ):
+                    with self.subTest(args=args):
+                        err = io.StringIO()
+                        with contextlib.redirect_stderr(err):
+                            code = cli.main(
+                                ["--from", str(measurements), *args],
+                                discover_ids=lambda: discovered,
+                            )
+                        self.assertEqual(code, 2)
+                        self.assertIn("--include-exact", err.getvalue())
+                        self.assertEqual(
+                            committed.read_text(encoding="utf-8"), old_content
+                        )
+
+                # The prefix-only compatibility mode remains available for
+                # output elsewhere without touching the committed baseline.
+                preview = root / "prefix-preview.json"
+                self.assertEqual(
+                    cli.main([
+                        "--from", str(measurements), "--output", str(preview),
+                    ]),
+                    0,
+                )
+                self.assertEqual(
+                    json.loads(preview.read_text(encoding="utf-8")),
+                    {"tests.e2e.demo.*": 4.0},
+                )
+
+                # A full, explicitly calibrated write may replace the file.
+                self.assertEqual(
+                    cli.main(
+                        ["--from", str(measurements), "--include-exact", "--write"],
+                        discover_ids=lambda: discovered,
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    json.loads(committed.read_text(encoding="utf-8"))[
+                        "tests.e2e.demo.C.test_a"
+                    ],
+                    4.0,
+                )
+
     def test_cli_dry_run_prints_json_and_requires_from(self):
         from tests.e2e import update_timing_baseline as cli
 
@@ -1478,6 +1545,7 @@ class TimingBaselineUpdateTests(unittest.TestCase):
                             "--from",
                             str(measurements),
                             "--write",
+                            "--include-exact",
                             "--allow-partial",
                         ],
                         discover_ids=lambda: discovered,
@@ -1518,7 +1586,7 @@ class TimingBaselineUpdateTests(unittest.TestCase):
                 err = io.StringIO()
                 with contextlib.redirect_stderr(err):
                     code = cli.main(
-                        ["--from", str(measurements), "--output", sneaky],
+                        ["--from", str(measurements), "--include-exact", "--output", sneaky],
                         discover_ids=lambda: discovered,
                     )
             self.assertEqual(code, 2, err.getvalue())
