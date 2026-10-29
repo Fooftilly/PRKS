@@ -10,7 +10,7 @@ From an authenticated PRKS clone, `gh auth login` with the classic `project` sco
 
 ## Example: one reviewed batch
 
-Create `~/prks-triage-proposals.json` *outside the repository* (no PRKS production data), with only the fields that need changing:
+Create a dedicated local directory with `mkdir -p ~/prks-project3-triage` and put `~/prks-project3-triage/proposals.json` there. For safety, the tool only reads/writes `.json` files within this directory (and refuses symlink escapes or paths inside the repository). Put only the fields that need changing:
 
 ```json
 {
@@ -30,16 +30,16 @@ The input may have 1–25 issues; agent aliases such as `cursor`, `claude` and `
 
 ```bash
 python scripts/project3_triage.py propose \
-  --input ~/prks-triage-proposals.json \
-  --out ~/prks-triage-plan.json
+  --input ~/prks-project3-triage/proposals.json \
+  --out ~/prks-project3-triage/plan.json
 ```
 
 The `propose` command reads live Project/issue states, labels, and native open blockers, and writes an **unapproved** JSON plan with explicit before-values. It sends no mutation. Review the plan carefully, then change **only the intended rows** from `"approved": false` to `"approved": true`. Recheck target-architecture relevance and overlapping PRs as a maintainer decision, not an automatic inference.
 
 ```bash
-python scripts/project3_triage.py check --plan ~/prks-triage-plan.json
+python scripts/project3_triage.py check --plan ~/prks-project3-triage/plan.json
 # Copy the "Plan SHA-256" value from the check output:
-python scripts/project3_triage.py apply --plan ~/prks-triage-plan.json \
+python scripts/project3_triage.py apply --plan ~/prks-project3-triage/plan.json \
   --plan-sha256 "<paste-exact-sha256-from-check>"
 ```
 
