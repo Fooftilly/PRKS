@@ -156,10 +156,10 @@ class SuccessTests(ReplaceTestCase):
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.roles WHERE work_id = %s AND role_type = 'Mentioned'",
                                   (work_id,))[0]["n"], 1)
 
-    def test_a_shared_surname_links_the_person_added_first(self) -> None:
+    def test_a_shared_surname_links_the_oldest_person_not_the_lowest_id(self) -> None:
         first = self.library.add_person("Ada", "Smith")
         second = self.library.add_person("Bob", "Smith")
-        # The Person added first has the higher ID, so ID order would pick the other.
+        # Make the higher ID the older Person, so ID order would pick the other one.
         low_id, high_id = sorted((first, second))
         self.sql("UPDATE prks.persons SET created_at = now() - interval '1 day' WHERE id = %s",
                  (high_id,))
