@@ -43,6 +43,7 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
             "        if: >-\n"
             "          github.event_name == 'workflow_dispatch' &&\n"
             "          !inputs.profile && !inputs.route_fastpath &&\n"
+            "          !inputs.module_affinity &&\n"
             "          needs.e2e-plan.outputs.mode == 'full' &&\n"
             "          steps.tests.outcome == 'success'\n",
             step,
