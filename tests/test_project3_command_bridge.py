@@ -159,6 +159,10 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(bridge.BridgeError, "unexpected"):
             bridge.parse(payload({**intent(), "code": "rm -rf /"}))
 
+    def test_command_inbox_itself_cannot_be_assigned(self):
+        with self.assertRaisesRegex(bridge.BridgeError, "not an assignment target"):
+            bridge.parse(payload(intent(bridge.INBOX)))
+
     def test_duplicate_issue_command_refused(self):
         with self.assertRaisesRegex(bridge.BridgeError, "duplicate issue"):
             bridge.parse(payload(intent(), intent()))
