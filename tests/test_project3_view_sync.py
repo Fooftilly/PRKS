@@ -165,6 +165,18 @@ class AgentViewTests(unittest.TestCase):
         self.assertEqual(sync.main([], transport=self.api), 0)
         self.assertFalse(self.api.mutations)
 
+    def test_strict_read_only_check_fails_on_drift_without_writes(self):
+        self.assertEqual(sync.main(["--fail-on-drift"], transport=self.api), 1)
+        self.assertFalse(self.api.mutations)
+        sync.reconcile(self.api, apply=True)
+        self.api.mutations.clear()
+        self.assertEqual(sync.main(["--fail-on-drift"], transport=self.api), 0)
+        self.assertFalse(self.api.mutations)
+
+    def test_strict_check_cannot_be_combined_with_apply(self):
+        self.assertEqual(sync.main(["--apply", "--fail-on-drift"], transport=self.api), 1)
+        self.assertFalse(self.api.mutations)
+
     def test_desired_filters_keep_ownership_separate_from_actionability(self):
         self.assertIn('agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"',
                       sync.OWNED_FILTER)
