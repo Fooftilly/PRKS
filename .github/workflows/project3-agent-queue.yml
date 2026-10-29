@@ -11,9 +11,6 @@ on:
       - .github/workflows/project3-agent-queue.yml
       - scripts/project3_agent_queue.py
       - scripts/project3_readiness.py
-  workflow_run:
-    workflows: ["Project 3 assignment bridge"]
-    types: [completed]
   schedule:
     - cron: "13 * * * *"
   workflow_dispatch:
@@ -27,13 +24,7 @@ concurrency:
 
 jobs:
   publish:
-    if: >-
-      github.repository == 'Fooftilly/PRKS' &&
-      github.ref == 'refs/heads/master' &&
-      (github.event_name != 'workflow_run' ||
-       (github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_branch == 'master' &&
-        github.event.workflow_run.head_repository.full_name == 'Fooftilly/PRKS'))
+    if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     environment: project-automation

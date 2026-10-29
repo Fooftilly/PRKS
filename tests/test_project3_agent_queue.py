@@ -204,10 +204,9 @@ class WorkflowTests(unittest.TestCase):
         content = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("environment: project-automation", content)
         self.assertIn("github.ref == 'refs/heads/master'", content)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", content)
-        self.assertIn("github.event.workflow_run.head_branch == 'master'", content)
-        self.assertIn("github.event.workflow_run.head_repository.full_name == 'Fooftilly/PRKS'", content)
-        self.assertIn("Project 3 assignment bridge", content)
+        self.assertNotIn("workflow_run:", content)
+        self.assertNotIn("github.event.workflow_run", content)
+        self.assertIn("push:", content)
         self.assertIn("workflow_dispatch:", content)
         self.assertIn("schedule:", content)
         self.assertIn("permissions: {}", content)
@@ -219,6 +218,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("scripts/project3_agent_queue.py publish", content)
         for ref in re.findall(r"uses:\s*(\S+)", content):
             self.assertRegex(ref, r"@[0-9a-f]{40}$")
+
+
+    def test_assignment_bridge_triggers_without_workflow_run(self) -> None:
+        bridge = (ROOT / ".github" / "workflows" / "project3-assignment-bridge.yml").read_text(encoding="utf-8")
+        self.assertIn("environment: project-automation", bridge)
+        self.assertIn("github.actor == 'Fooftilly'", bridge)
+        self.assertIn("github.event.issue.number == 982", bridge)
+        self.assertIn("actions: write", bridge)
+        self.assertIn("issues: write", bridge)
+        self.assertIn("gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master", bridge)
+        self.assertLess(bridge.index("run: python3 scripts/project3_command_bridge.py"),
+                        bridge.index("gh workflow run project3-agent-queue.yml"))
 
 
 if __name__ == "__main__":

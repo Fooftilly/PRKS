@@ -459,9 +459,12 @@ A different, job-scoped `GITHUB_TOKEN` with `contents: write` publishes
 **only** `agent-queue.json` to the dedicated orphan branch
 `project3-agent-queue`, using trusted `master` workflow code. The Project
 token is available only in the query step and is not given to Git or the
-publisher. Publishing is triggered after successful assignment-bridge runs
-(including check-only commands), hourly at minute 13 UTC to reconcile manual
-Project changes, and on manual dispatch. GitHub scheduled workflows are
+publisher. After each successful authenticated assignment-bridge command (including
+check-only commands), the bridge explicitly requests `workflow_dispatch`
+with its job-scoped `GITHUB_TOKEN` (`actions: write`). No `workflow_run`
+hook, upstream artifacts, external payloads, or new PAT are involved.
+Publisher runs also occur hourly at minute 13 UTC to reconcile manual
+Project changes, on relevant `master` changes and on manual dispatch. GitHub scheduled workflows are
 best effort; the consumer enforces expiry independently. The data branch is
 not the Project's assignment store and must never be edited manually.
 
