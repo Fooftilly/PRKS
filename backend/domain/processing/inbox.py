@@ -49,6 +49,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, BinaryIO, LiteralString, Optional, Protocol, TypeVar
@@ -70,6 +71,8 @@ LOGGER = logging.getLogger("prks.processing")
 INBOX_LOCK_KEY: LiteralString = "hashtextextended('prks.inbox:' || %s, 0)"
 _CHUNK = 1024 * 1024
 _HEADER = b"%PDF-"
+# A file the inbox protocol has claimed for removal (``_claim``).
+CLAIM_PREFIX = ".prks-claimed-"
 HELD = "This file was restored from a backup, and the file at its path is not the one backed up."
 
 
@@ -134,12 +137,12 @@ def file_sha256(path: str) -> Optional[str]:
     return digest.hexdigest()
 
 
-def _remove(inbox_dir: str, path: str) -> bool:
-    """Remove an inbox file (absent counts as removed) and the directories it leaves empty."""
+def _remove(inbox_dir: str, claim: str, path: str) -> bool:
+    """Remove a claimed inbox file (absent counts as removed) and the directories ``path`` leaves empty."""
     from backend.db_manager import prune_empty_processing_parent_dirs
 
     try:
-        os.remove(path)
+        os.remove(claim)
     except FileNotFoundError:
         pass
     except OSError as exc:
@@ -147,6 +150,36 @@ def _remove(inbox_dir: str, path: str) -> bool:
         return False
     prune_empty_processing_parent_dirs(inbox_dir, path)
     return True
+
+
+def _claim(path: str) -> Optional[str]:
+    """Move the file at ``path`` to a private name beside it; None when there is none.
+
+    Writers outside PRKS do not take the inbox lock, so a path can be
+    replaced at any time. After the rename the claimed name holds exactly
+    one file, which no outside writer names: what is hashed is what is
+    removed. The private name does not end in ``.pdf``, so a crash before it
+    is removed or put back never offers it for import.
+    """
+    claim = os.path.join(os.path.dirname(path), CLAIM_PREFIX + uuid.uuid4().hex)
+    try:
+        os.rename(path, claim)
+    except FileNotFoundError:
+        return None
+    return claim
+
+
+def _put_back(claim: str, path: str) -> None:
+    """Return a claimed file to ``path``, never over a file that has arrived there since."""
+    try:
+        os.link(claim, path)
+    except FileExistsError:
+        LOGGER.warning("processing_claim_kept reason=path_taken")
+        return
+    except OSError as exc:
+        LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
+        return
+    os.remove(claim)
 
 
 # -- scan -------------------------------------------------------------------------
@@ -179,17 +212,28 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
 
     The source is removed only while the file at the path has the imported
     bytes' hash; a different file there is left alone (and listed as new).
-    A file that cannot be read keeps the row, for the next scan to retry.
+    A file that cannot be read or removed keeps the row, for the next scan
+    to retry. The file is claimed (:func:`_claim`) before it is hashed, so
+    a replacement arriving meanwhile is never the one removed.
     """
     path = resolve(inbox_dir, str(row["rel_path"]))
     if path is None or not os.path.isfile(path):
         return True
-    digest = file_sha256(path)
-    if digest is None:
+    try:
+        claim = _claim(path)
+    except OSError as exc:
+        LOGGER.warning("processing_source_claim_failed error=%s", type(exc).__name__)
         return False
-    if digest != row["import_sha256"]:
+    if claim is None:
         return True
-    return _remove(inbox_dir, path)
+    digest = file_sha256(claim)
+    if digest != row["import_sha256"]:
+        _put_back(claim, path)
+        return digest is not None
+    if _remove(inbox_dir, claim, path):
+        return True
+    _put_back(claim, path)
+    return False
 
 
 # -- import -----------------------------------------------------------------------

@@ -150,10 +150,10 @@ class InboxLockTests(ProcessingTestCase):
         seen: list[tuple[bool, Optional[str]]] = []
         real = inbox._remove
 
-        def remove(inbox_dir: str, path: str) -> bool:
+        def remove(*args: Any) -> bool:
             row = self.row(file_id)
             seen.append((self.lock_is_free(), None if row is None else row["status"]))
-            return real(inbox_dir, path)
+            return real(*args)
 
         with mock.patch.object(inbox, "_remove", remove):
             self.library.import_processing_file(file_id)
@@ -312,6 +312,27 @@ class CrashRecoveryTests(ProcessingTestCase):
         staged = self.library.scan_processing_files()
         self.assertEqual([(row["rel_path"], row["status"]) for row in staged], [("race.pdf", "pending")])
         self.assertNotEqual(staged[0]["id"], file_id)
+
+    def test_a_file_replaced_while_it_is_hashed_is_kept(self) -> None:
+        path = self.put("swap.pdf")
+        file_id = self.staged("swap.pdf")
+        self.crash_after_commit(file_id)
+        replacement = b"%PDF-1.4\n%arrived while the scan hashed\n%%EOF\n"
+        real = inbox.file_sha256
+
+        def hash_then_replace(claimed: str) -> Optional[str]:
+            digest = real(claimed)
+            self.put("swap.pdf", replacement)  # a new file at the public path
+            return digest
+
+        with mock.patch.object(inbox, "file_sha256", hash_then_replace):
+            self.library.scan_processing_files()
+        self.assertIsNone(self.row(file_id))
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), replacement)
+        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["rel_path"], row["status"]) for row in staged], [("swap.pdf", "pending")])
 
     def test_an_absent_file_only_loses_the_row(self) -> None:
         path = self.put("a.pdf")
