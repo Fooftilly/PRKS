@@ -400,11 +400,14 @@ class RecreatedWorkTests(SyncTestCase):
 
     def recreate(self, work_id: str) -> None:
         """A PDF Work under ``work_id``: every field, both notes and an Asset to hold thumb_page."""
+        name = "again-%s.pdf" % uuid.uuid4().hex
+        self.store_pdf(name, b"%PDF-1.4\n")
+        objects = self.library._objects()
         self.run_command(lambda scope: commands.create_work(scope, commands.NewWork(
             work_id=work_id, manifestation_id=generate("MF"), title="Again",
             bibliographic={"doc_type": "article"}, asset_id=generate("AS"),
             asset=commands.NewAsset(source=commands.ManagedFile(
-                storage_locator="again-%s.pdf" % uuid.uuid4().hex, sha256="0" * 64, byte_size=9)))))
+                storage_locator=name, sha256="0" * 64, byte_size=9))), objects=objects))
 
     def deleted_and_recreated(self) -> str:
         work_id = "W-" + uuid.uuid4().hex.upper()

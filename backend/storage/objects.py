@@ -200,6 +200,9 @@ class ObjectInfo:
     version: str
     # Set only when this call computed it (put_new/replace with hash=True).
     sha256: Optional[str] = None
+    # Seconds since the epoch the bytes were last written; set by ``stat``.
+    # Maintenance only: the orphan sweep's grace period (postgresql-architecture §11.2).
+    modified_at: Optional[float] = None
 
 
 Writer = Callable[[BinaryIO], None]
@@ -486,7 +489,8 @@ class LocalFilesystemStorage:
         if found is None:
             return None
         _, st = found
-        return ObjectInfo(key=key, size=st.st_size, version=_version_token(st), sha256=None)
+        return ObjectInfo(key=key, size=st.st_size, version=_version_token(st), sha256=None,
+                          modified_at=st.st_mtime)
 
     def delete(self, key: StorageKey) -> bool:
         key = _check_key(key)

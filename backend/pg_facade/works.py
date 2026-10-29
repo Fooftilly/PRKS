@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from backend.db_manager import DeletedWorkRecord
     from backend.domain.identity.library_scope import LibraryScope
     from backend.domain.works.commands import ManagedFile, NewAsset
+    from backend.storage.objects import StorageBackend
 
 T = TypeVar("T")
 
@@ -79,6 +80,13 @@ class WorksMixin(FacadeMixin):
         if self._storage is None:
             raise RuntimeError("this PostgreSQL library has no data root")
         return self._storage.pdfs_dir
+
+    def _objects(self) -> StorageBackend:
+        from backend.storage.objects import LocalFilesystemStorage
+
+        if self._storage is None:
+            raise RuntimeError("this PostgreSQL library has no data root")
+        return LocalFilesystemStorage.for_config(self._storage)
 
     def _finish(self, rows: List[dict]) -> List[dict]:
         from backend.db_manager import finish_work_summary_rows
@@ -185,7 +193,9 @@ class WorksMixin(FacadeMixin):
             research_note=text_content,
             private_note=(private_notes or "").strip() or None,
         )
-        return self._command(lambda scope: commands.create_work(scope, new), serializable=True)
+        objects = self._objects() if asset is not None and isinstance(asset.source, commands.ManagedFile) else None
+        return self._command(lambda scope: commands.create_work(scope, new, objects=objects),
+                             serializable=True)
 
     def _new_asset(self, kind: Optional[str], file_path: str, url: Optional[str],
                    provider: Optional[str], provider_id: Optional[str], source_mime: str,
@@ -409,17 +419,19 @@ class WorksMixin(FacadeMixin):
 
     @ported
     def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
-        """Delete the Work and what it owns; the managed file is left in place.
+        """Delete the Work and what it owns, claiming its managed file for cleanup.
 
-        ``claim_pdf`` is accepted for the signature: no PostgreSQL path claims
-        or removes managed bytes before the objects lane (L-A-1), so the
-        record only reports the path and whether another Asset still names it.
+        The delete records the cleanup claims of the stored files no other
+        Asset names in its own transaction (``objects.lifecycle.release``);
+        the bytes stay until a settle finds nothing naming them (L-A-1,
+        §11.2). ``claim_pdf=False`` (undoing a create that adopted existing
+        bytes) records none; bytes nothing names are still orphans to the
+        sweep after its grace period.
         """
         from backend.db_manager import DeletedWorkRecord
         from backend.domain.works import commands
 
-        del claim_pdf
-        deleted = self._command(lambda scope: commands.delete_work(scope, work_id))
+        deleted = self._command(lambda scope: commands.delete_work(scope, work_id, claim_files=claim_pdf))
         if deleted is None:
             return None
         return DeletedWorkRecord(work_id=deleted.work_id, file_path=deleted.file_path,

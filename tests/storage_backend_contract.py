@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import io
 import threading
+import time
 
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
@@ -205,6 +206,9 @@ class StorageBackendContract:
         self.assertEqual(info.size, 5)
         self.assertIsNone(info.sha256)
         self.assertEqual(info.version, put.version)
+        # When the bytes were written, for the orphan sweep's grace period.
+        self.assertIsInstance(info.modified_at, float)
+        self.assertLess(abs(info.modified_at - time.time()), 600)
 
     # -- delete ---------------------------------------------------------------------
 
