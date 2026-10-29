@@ -188,20 +188,27 @@ def summarize(
             "created_to_start_seconds": lag,
         })
 
-    # GitHub Actions' workflow-run updated_at is not a reliable completion
-    # timestamp; only compute wall time from an explicit completed_at field.
-    workflow_wall_seconds = None
-    if run.get("completed_at") is not None and run.get("run_started_at") is not None:
-        wall_start = _timestamp(run["run_started_at"], "workflow start")
-        wall_end = _timestamp(run["completed_at"], "workflow completion")
-        if wall_end <= wall_start:
-            raise InvalidBenchmark("Contradictory workflow wall timestamps")
+    # An explicit workflow boundary must agree with every successful job,
+    # even when its counterpart is unavailable. GitHub's updated_at is not
+    # a reliable workflow completion timestamp.
+    wall_start = (_timestamp(run["run_started_at"], "workflow start")
+                  if run.get("run_started_at") is not None else None)
+    wall_end = (_timestamp(run["completed_at"], "workflow completion")
+                if run.get("completed_at") is not None else None)
+    if wall_start is not None and wall_end is not None and wall_end <= wall_start:
+        raise InvalidBenchmark("Contradictory workflow wall timestamps")
+    if wall_start is not None or wall_end is not None:
         for active_job in (j for j in jobs if j.get("conclusion") != "skipped"):
             active_start = _timestamp(active_job.get("started_at"), "active job start")
             active_end = _timestamp(active_job.get("completed_at"), "active job completion")
-            if active_start < wall_start or active_end > wall_end or active_end < active_start:
+            if (active_end < active_start
+                    or (wall_start is not None and active_start < wall_start)
+                    or (wall_end is not None and active_end > wall_end)):
                 raise InvalidBenchmark("Contradictory workflow wall timestamps")
-        workflow_wall_seconds = (wall_end - wall_start).total_seconds()
+    workflow_wall_seconds = (
+        (wall_end - wall_start).total_seconds()
+        if wall_start is not None and wall_end is not None else None
+    )
 
     return {
         "mode": mode,
