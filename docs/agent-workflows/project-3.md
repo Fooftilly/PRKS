@@ -172,6 +172,10 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 - **Agent Queue** cannot exclude items with an open Blocked-by prerequisite, because no filter qualifier exists. Check the issue's Relationships panel before starting work.
 - **Timeline** stays sparse until Start date and Target date are filled in (no item has them today).
 
+### Reviewed issue triage batches
+
+The maintainer may use `scripts/project3_triage.py` to prepare and explicitly approve batches of **existing issue** Agent, Status and Execution edits. The workflow is separate from `project-sync`'s PR-only transitions and never updates PRs or infers acceptance from assignment. Its default operation is read-only: a proposed plan begins with all rows unapproved, and applying requires the exact reviewed plan SHA-256. It checks candidate acceptance, current issue state and native blockers, plus drift and verification; roadmap/overlapping-PR assessment remains an explicit maintainer review, not an automated claim. See `docs/agent-workflows/project3-triage.md` for commands and safety boundaries. This is an optional manual tool; it does not change the approved native Project workflow policy.
+
 ## 8. Archival
 
 **Issues are never archived automatically.** Age, closure or Done alone never decides relevance. This covers roadmap and controller issues, completed issues still relevant to future work, issues that record architectural or implementation decisions or historical bugs and their fixes, and issues referenced by dependencies or roadmap work.
