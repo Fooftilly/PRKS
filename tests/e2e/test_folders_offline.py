@@ -194,24 +194,46 @@ class FoldersOfflineTests(unittest.TestCase):
         toggle.wait_for(state='visible', timeout=10000)
         initial_label = toggle.get_attribute('aria-label')
         self.assertIn(initial_label, ('Expand all', 'Collapse all'))
+
+        def wait_for_rendered_tree(expected_label):
+            # The toolbar label reflects the collapse map, but the branch DOM
+            # is updated independently. Assert the seeded child's actual
+            # rendered visibility as well as the parent row's ARIA state.
+            page.wait_for_function(
+                """([parentId, childId, label]) => {
+                    const host = document.querySelector('[data-prks-folder-tree-host]');
+                    const button = document.getElementById('prks-folder-library-expand-toggle');
+                    if (!host || !button || button.getAttribute('aria-label') !== label) return false;
+                    const byId = (selector, id, scope) => Array.from(
+                        scope.querySelectorAll(selector)
+                    ).find(el => el.getAttribute('data-folder-id') === id);
+                    const branch = byId('.prks-folder-tree__branch', parentId, host);
+                    const parent = byId('.prks-folder-tree__row', parentId, host);
+                    const child = branch && byId('.prks-folder-tree__row', childId, branch);
+                    if (!branch || !parent || !child) return false;
+                    const collapsed = label === 'Expand all';
+                    if (branch.classList.contains('is-collapsed') !== collapsed ||
+                        parent.getAttribute('aria-expanded') !== (collapsed ? 'false' : 'true')) {
+                        return false;
+                    }
+                    const b = branch.getBoundingClientRect();
+                    const c = child.getBoundingClientRect();
+                    if (collapsed) return b.height <= 1;
+                    // After the CSS grid transition the entire child row must
+                    // be visible within the branch, not merely present in DOM.
+                    const overlap = Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top);
+                    return c.height > 1 && overlap >= c.height - 1;
+                }""",
+                arg=[server.ids['folder_parent'], server.ids['folder_child'], expected_label],
+                timeout=10000,
+            )
+
+        wait_for_rendered_tree(initial_label)
         toggle.click()
-        page.wait_for_function(
-            """initial => {
-                const control = document.getElementById('prks-folder-library-expand-toggle');
-                return !!control && control.getAttribute('aria-label') !== initial;
-            }""",
-            arg=initial_label,
-            timeout=10000,
-        )
+        next_label = 'Collapse all' if initial_label == 'Expand all' else 'Expand all'
+        wait_for_rendered_tree(next_label)
         toggle.click()
-        page.wait_for_function(
-            """initial => {
-                const control = document.getElementById('prks-folder-library-expand-toggle');
-                return !!control && control.getAttribute('aria-label') === initial;
-            }""",
-            arg=initial_label,
-            timeout=10000,
-        )
+        wait_for_rendered_tree(initial_label)
         # Local filtering and hierarchy toggling are pure cache operations.
         self.assertEqual([p for p in seen if p.startswith('/api/')], [])
 
