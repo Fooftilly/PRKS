@@ -168,6 +168,8 @@ def parse(body: Any) -> tuple[str, list[dict], list[bool]]:
             raise BridgeError("unexpected command row key or reassignment flag")
         reassign.append(original.get("allow_reassignment", False))
         row = {key: value for key, value in original.items() if key != "allow_reassignment"}
+        if row.get("number") == INBOX:
+            raise BridgeError("the assignment command inbox is not an assignment target")
         try:
             triage.validate_row(row, plan=False)
         except triage.TriageError as exc:
