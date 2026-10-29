@@ -65,6 +65,46 @@ class ViewError(Exception):
     pass
 
 
+def _connection(result: Any) -> dict:
+    """Require the exact user-owned Project #3, never a similarly named board."""
+    if not isinstance(result, dict) or not isinstance(result.get("user"), dict):
+        raise ViewError("Project owner could not be queried")
+    project = result["user"].get("projectV2")
+    if (not isinstance(project, dict) or project.get("id") != PROJECT_ID
+            or project.get("number") != PROJECT_NUMBER):
+        raise ViewError("Project #3 identity does not match")
+    owner = project.get("owner")
+    if (not isinstance(owner, dict) or owner.get("__typename") != "User"
+            or owner.get("login") != OWNER):
+        raise ViewError("Project #3 ownership does not match")
+    conn = project.get("views")
+    if not isinstance(conn, dict) or type(conn.get("totalCount")) is not int:
+        raise ViewError("Project view connection is incomplete")
+    if not isinstance(conn.get("nodes"), list) or not isinstance(conn.get("pageInfo"), dict):
+        raise ViewError("Project view page is malformed")
+    return conn
+
+
+def _view(raw: Any) -> dict:
+    if not isinstance(raw, dict):
+        raise ViewError("Project view is not an object")
+    if (not isinstance(raw.get("id"), str)
+            or type(raw.get("number")) is not int
+            or not isinstance(raw.get("name"), str)
+            or not isinstance(raw.get("filter"), (str, type(None)))
+            or not isinstance(raw.get("layout"), str)):
+        raise ViewError("Project view has unknown field values")
+    return raw
+
+
+def _next_cursor(info: dict, seen: set[str]) -> str:
+    cursor = info.get("endCursor")
+    if not isinstance(cursor, str) or not cursor or cursor in seen:
+        raise ViewError("Malformed or repeating Project view cursor")
+    seen.add(cursor)
+    return cursor
+
+
 def views(transport: Transport) -> list[dict[str, Any]]:
     """Read every view page and fail on drift/partial pagination."""
     items: list[dict[str, Any]] = []
@@ -74,49 +114,26 @@ def views(transport: Transport) -> list[dict[str, Any]]:
     expected_total: int | None = None
     after: str | None = None
     for _ in range(MAX_PAGES):
-        result = transport(VIEWS_QUERY, {
+        conn = _connection(transport(VIEWS_QUERY, {
             "owner": OWNER, "number": PROJECT_NUMBER, "after": after
-        })
-        if not isinstance(result, dict) or not isinstance(result.get("user"), dict):
-            raise ViewError("Project owner could not be queried")
-        project = result["user"].get("projectV2")
-        if not isinstance(project, dict) or project.get("id") != PROJECT_ID or project.get("number") != PROJECT_NUMBER:
-            raise ViewError("Project #3 identity does not match")
-        owner = project.get("owner")
-        if not isinstance(owner, dict) or owner.get("__typename") != "User" or owner.get("login") != OWNER:
-            raise ViewError("Project #3 ownership does not match")
-        conn = project.get("views")
-        if not isinstance(conn, dict) or type(conn.get("totalCount")) is not int:
-            raise ViewError("Project view connection is incomplete")
+        }))
         total = conn["totalCount"]
         if expected_total is not None and total != expected_total:
             raise ViewError("Project views changed during pagination")
         expected_total = total
-        page = conn.get("nodes")
-        info = conn.get("pageInfo")
-        if not isinstance(page, list) or not isinstance(info, dict):
-            raise ViewError("Project view page is malformed")
-        for view in page:
-            if (not isinstance(view, dict) or not isinstance(view.get("id"), str)
-                    or type(view.get("number")) is not int
-                    or not isinstance(view.get("name"), str)
-                    or not isinstance(view.get("filter"), (str, type(None)))
-                    or not isinstance(view.get("layout"), str)):
-                raise ViewError("Project view has unknown field values")
-            if view["id"] in seen_ids or view["number"] in seen_numbers:
+        for raw in conn["nodes"]:
+            item = _view(raw)
+            if item["id"] in seen_ids or item["number"] in seen_numbers:
                 raise ViewError("Duplicate Project view in pagination")
-            seen_ids.add(view["id"])
-            seen_numbers.add(view["number"])
-            items.append(view)
+            seen_ids.add(item["id"])
+            seen_numbers.add(item["number"])
+            items.append(item)
+        info = conn["pageInfo"]
         if info.get("hasNextPage") is False:
             if len(items) != total:
                 raise ViewError(f"Incomplete Project views: read {len(items)} of {total}")
             return items
-        cursor = info.get("endCursor")
-        if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
-            raise ViewError("Malformed or repeating Project view cursor")
-        seen_cursors.add(cursor)
-        after = cursor
+        after = _next_cursor(info, seen_cursors)
     raise ViewError("Too many Project views to verify")
 
 
