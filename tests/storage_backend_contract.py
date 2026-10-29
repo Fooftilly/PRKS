@@ -252,6 +252,38 @@ class StorageBackendContract:
         with self.assertRaises(InvalidStorageKey):
             list(self.backend.iter_keys("../pdfs"))
 
+    # -- list_keys ------------------------------------------------------------------
+
+    def test_list_keys_pages_through_a_namespace_in_name_order(self):
+        names = ["d.pdf", "b.pdf", "e.pdf", "a.pdf", "c.pdf"]
+        for name in names:
+            self.backend.put_new(self.key(name), _writer(name.encode()))
+        self.backend.put_new(self.key("a.webp", NAMESPACE_PORTRAITS), _writer(b"img"))
+        pages, after = [], None
+        while True:
+            page = self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, after=after, limit=2)
+            if not page:
+                break
+            self.assertLessEqual(len(page), 2)
+            self.assertTrue(all(k.namespace == NAMESPACE_ASSET_OBJECTS for k in page))
+            pages.append([k.name for k in page])
+            after = page[-1].name
+        self.assertEqual(pages, [["a.pdf", "b.pdf"], ["c.pdf", "d.pdf"], ["e.pdf"]])
+        self.assertEqual(
+            [k.name for k in self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, after="bz", limit=10)],
+            ["c.pdf", "d.pdf", "e.pdf"],
+            "after need not be a stored name",
+        )
+
+    def test_list_keys_rejects_bad_arguments(self):
+        self.assertEqual(self.backend.list_keys(NAMESPACE_PORTRAITS, limit=1), [])
+        with self.assertRaises(InvalidStorageKey):
+            self.backend.list_keys("../pdfs", limit=1)
+        with self.assertRaises(InvalidStorageKey):
+            self.backend.list_keys(NAMESPACE_PORTRAITS, after="../x", limit=1)
+        with self.assertRaises(ValueError):
+            self.backend.list_keys(NAMESPACE_PORTRAITS, limit=0)
+
     def test_namespaces_are_independent(self):
         self.backend.put_new(self.key("same.bin"), _writer(b"asset"))
         self.backend.put_new(self.key("same.bin", NAMESPACE_PORTRAITS), _writer(b"portrait"))

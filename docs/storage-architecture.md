@@ -1287,6 +1287,7 @@ class StorageBackend(Protocol):
     def delete(self, key) -> bool: ...                  # True = gone (removed or already absent)
     def verify(self, key, sha256: str) -> bool | None: ...  # None = absent or unreadable
     def iter_keys(self, namespace: str) -> Iterator[StorageKey]: ...  # maintenance only
+    def list_keys(self, namespace: str, *, after: str | None = None, limit: int) -> list[StorageKey]: ...  # maintenance only
 
 def mint_name(namespace: str, hint: str) -> str: ...   # backend-neutral; today's mint_managed_pdf_filename rules
 ```
@@ -1305,6 +1306,7 @@ maps, ACLs, multipart APIs or generic repository.
 | `delete` | Idempotent. An already-absent key is success. That matches the `FileNotFoundError` terminal state of `pending_pdf_cleanup`. |
 | `verify` | Streams the object and compares its SHA-256, three-valued. |
 | `iter_keys` | Only for maintenance: audit, orphan sweep, backup, relocation. **Never on a request path.** It ignores temporaries and reserved names. |
+| `list_keys` | Maintenance only, like `iter_keys`: at most `limit` keys named after `after`, in name order, holding at most a page of names. The orphan sweep pages through a namespace with it. |
 | Key validation | Every operation refuses an invalid key before touching storage. The name grammar is the current `safe_pdf_path_under_dir` rules plus a byte bound; legacy names that it accepts remain valid. |
 
 ### 10.3 LocalFilesystemStorage specifics
@@ -1354,7 +1356,8 @@ with `If-Match: <ETag>`. A `412` means the object was deleted or changed in
 between, and it is reported as a failed precondition, never as a silent
 create. The key-scoped lock (§12) makes that case exceptional. `stat` maps to
 `HeadObject`, `delete` to `DeleteObject`, and
-`iter_keys` to `ListObjectsV2` under the namespace prefix. Durability is the
+`iter_keys` and `list_keys` to `ListObjectsV2` under the namespace prefix
+(`list_keys` with `StartAfter` and `MaxKeys`). Durability is the
 service's. Phase F adds it only for a real deployment need, and adds no
 dependency before then.
 

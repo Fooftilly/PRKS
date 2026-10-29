@@ -27,6 +27,9 @@ from backend.jobs import diagnostics, embedded
 from backend.jobs.embedded import EmbeddedWorker, EmbeddedWorkerConfigError, WebJobs, web_jobs
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.worker import WorkerSettings
+from backend.storage import root_binding
+from backend.storage.errors import StorageRootRefused
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.http_fixtures import HttpAuthTestCase
 from tests.pg.test_jobs_worker import WAIT, WorkerTestCase, wait_until
 
@@ -197,6 +200,50 @@ class LifecycleTests(EmbeddedWorkerTestCase):
         self.assertEqual(out.strip(), "stopped")
         self.assertEqual(self.state(job_id), "succeeded")  # type: ignore[arg-type]
         self.assertEqual(self.effects(), ["child"])
+
+
+class ObjectMaintenanceTests(EmbeddedWorkerTestCase):
+    def root_with_orphan(self, *files: str) -> tuple[str, StorageKey]:
+        root = tempfile.mkdtemp(prefix="prks-web-root-")
+        self.addCleanup(shutil.rmtree, root, True)
+        for name in files:
+            open(os.path.join(root, name), "wb").close()
+        stored = StorageKey(NAMESPACE_ASSET_OBJECTS, "orphan.pdf")
+        LocalFilesystemStorage(root).put_new(stored, lambda stream: stream.write(b"bytes"))
+        self.run_sql("INSERT INTO prks.object_cleanup_claims (namespace, name) VALUES (%s, %s)",
+                     (stored.namespace, stored.name))
+        return root, stored
+
+    def test_the_bound_root_gets_object_maintenance_before_the_worker_starts(self) -> None:
+        root, stored = self.root_with_orphan()
+        worker = self.embedded()
+        jobs = WebJobs(self.db, worker)
+        jobs.bind_root(root)
+        self.assertNotIn("objects.cleanup", self.registry.kinds(), "the process registry is left as it was")
+        server, thread, error = self.serve(jobs)
+        wait_until(lambda: LocalFilesystemStorage(root).stat(stored) is None, "the claim to be settled")
+        with self.assertRaises(RuntimeError):
+            worker.attach_objects(root)  # too late: the worker is running
+        server.shutdown()
+        thread.join(WAIT)
+        self.assertEqual(error, [])
+
+    def test_a_root_holding_a_sqlite_catalogue_gets_none(self) -> None:
+        root, stored = self.root_with_orphan("prks_data.db")
+        worker = self.embedded()
+        with self.assertLogs("prks.objects", "WARNING"):
+            WebJobs(self.db, worker).bind_root(root)
+        self.assertNotIn("objects.cleanup", worker.registry.kinds())
+        self.assertEqual(worker.registry.idle_tasks(), ())
+        self.assertIsNotNone(LocalFilesystemStorage(root).stat(stored))
+
+    def test_a_root_this_process_did_not_lease_is_refused(self) -> None:
+        root, _stored = self.root_with_orphan()
+        worker = self.embedded()
+        leased = type("Leased", (), {"root_real": os.path.realpath(tempfile.gettempdir())})()
+        with patch.object(root_binding, "_ACTIVE", leased), self.assertRaises(StorageRootRefused):
+            WebJobs(self.db, worker).bind_root(root)
+        self.assertNotIn("objects.cleanup", worker.registry.kinds())
 
 
 class SettingTests(EmbeddedWorkerTestCase):

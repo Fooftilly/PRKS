@@ -33,11 +33,19 @@ running backup holds it shared while it copies the objects its snapshot
 names (§11.3).
 
 **Transactions.** :func:`adopt`, :func:`release` and :func:`replace_object`
-run inside the caller's Library command; settle, the retry pass and the
-sweep are maintenance and run one transaction per key on the
-:class:`~backend.db.database.Database`. Settle deletes the bytes before its
-transaction commits; if the commit then fails, the claim is still there and
-the next settle finds the bytes already gone, which is success.
+run inside the caller's Library command; settle and the sweep's claim are
+maintenance and run one transaction per key: :func:`settle_tx` and
+:func:`claim_orphan` inside a lease-fenced job transaction
+(:mod:`backend.domain.objects.jobs`), or :func:`settle`, :func:`retry_claims`
+and :func:`sweep` on the :class:`~backend.db.database.Database`. Settle
+deletes the bytes before its transaction commits; if the commit then fails,
+the claim is still there and the next settle finds the bytes already gone,
+which is success.
+
+**Scheduling.** :func:`release` also enqueues the ``objects.cleanup`` job in
+the releasing command (deduplicated with any queued one), so a claim is
+settled soon after it is recorded; the jobs module's idle task schedules
+the rest (claims left from a restart, retries, the weekly sweep).
 """
 
 from __future__ import annotations
@@ -53,6 +61,7 @@ from typing import Any, LiteralString, Optional
 
 from backend.db.database import Database, Transaction
 from backend.domain.identity.library_scope import LibraryScope
+from backend.jobs import queue
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
@@ -77,6 +86,8 @@ _TRY_OBJECTS_LOCK_SQL: LiteralString = (
 
 DEFAULT_SWEEP_GRACE = timedelta(hours=24)
 DEFAULT_RETRY_LIMIT = 100
+# The instance job that settles due claims; one runs at a time (§7.4).
+CLEANUP_KIND = "objects.cleanup"
 
 _ASSET_REFERENCES: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.assets WHERE storage_locator = %(name)s)
@@ -147,9 +158,12 @@ _NOTE_ATTEMPT: LiteralString = """
 UPDATE prks.object_cleanup_claims SET last_attempt_at = clock_timestamp()
 WHERE namespace = %(namespace)s AND name = %(name)s
 """
+# Due: never attempted, or last attempted at least retry_after ago.
 _DUE_CLAIMS: LiteralString = """
 SELECT namespace, name FROM prks.object_cleanup_claims
 WHERE NOT hold AND (%(library_id)s::text IS NULL OR library_id = %(library_id)s)
+  AND (last_attempt_at IS NULL
+       OR last_attempt_at <= clock_timestamp() - make_interval(secs => %(retry_after)s))
 ORDER BY last_attempt_at NULLS FIRST, recorded_at, namespace, name
 LIMIT %(limit)s
 """
@@ -261,7 +275,8 @@ def release(scope: LibraryScope, key: StorageKey, *, hold: bool = False) -> bool
 
     Called in the transaction that stops naming the key, after its last
     change. Returns whether a claim is recorded (or already was). ``hold``
-    keeps the bytes until someone releases the hold (restore, §11.4).
+    keeps the bytes until someone releases the hold (restore, §11.4);
+    otherwise the ``objects.cleanup`` job is enqueued in the same command.
 
     Takes the per-object lock first: two transactions that each drop one of
     the Library's last two names of a key then check in turn, so the second
@@ -273,6 +288,10 @@ def release(scope: LibraryScope, key: StorageKey, *, hold: bool = False) -> bool
     if named_here is not None and scope.execute(named_here, {"name": key.name}).fetchone() is not None:
         return False
     scope.execute(_RECORD_CLAIM, {**_key_params(key), "hold": hold})
+    if not hold:
+        queue.enqueue_instance_job_for_library(
+            scope, CLEANUP_KIND, dedupe_key=CLEANUP_KIND, singleton_key=CLEANUP_KIND
+        )
     return True
 
 
@@ -305,41 +324,67 @@ def replace_object(scope: LibraryScope, storage: StorageBackend, asset_id: str,
 # -- maintenance ------------------------------------------------------------------------
 
 
-def settle(db: Database, storage: StorageBackend, key: StorageKey) -> Settled:
-    """Settle the claim on ``key`` in one transaction: delete the bytes only if nothing names them."""
+def settle_tx(tx: Transaction, storage: StorageBackend, key: StorageKey) -> Settled:
+    """Settle the claim on ``key`` in the caller's transaction: delete the bytes only if nothing names them.
 
-    def run(tx: Transaction) -> Settled:
-        params = _key_params(key)
-        tx.execute(OBJECT_LOCK_SQL, (str(key),))
-        claim = tx.execute(_CLAIM_FOR_SETTLE, params).fetchone()
-        if claim is None:
-            return Settled.ABSENT
-        if claim["hold"]:
-            return Settled.HELD
-        if claim["library_id"] is not None:
-            locked = tx.execute(_TRY_OBJECTS_LOCK_SQL, (claim["library_id"],)).fetchone()
-            if locked is None or not locked["locked"]:
-                # Stamped like an attempt, so the bounded pass rotates past
-                # a Library under backup instead of retrying it first.
-                tx.execute(_NOTE_ATTEMPT, params)
-                return Settled.BUSY
-        referenced = references(tx, key)
-        if referenced:
-            tx.execute(_FORGET_CLAIM, params)
-            return Settled.REFERENCED
-        if referenced is None:
+    The caller's transaction is the settle's: a job runs it fenced by its
+    lease (:meth:`~backend.jobs.runner.JobRun.command`), so a run that lost
+    its lease deletes nothing.
+    """
+    params = _key_params(key)
+    tx.execute(OBJECT_LOCK_SQL, (str(key),))
+    claim = tx.execute(_CLAIM_FOR_SETTLE, params).fetchone()
+    if claim is None:
+        return Settled.ABSENT
+    if claim["hold"]:
+        return Settled.HELD
+    if claim["library_id"] is not None:
+        locked = tx.execute(_TRY_OBJECTS_LOCK_SQL, (claim["library_id"],)).fetchone()
+        if locked is None or not locked["locked"]:
+            # Stamped like an attempt, so the bounded pass rotates past
+            # a Library under backup instead of retrying it first.
             tx.execute(_NOTE_ATTEMPT, params)
-            return Settled.UNKNOWN
-        try:
-            storage.delete(key)
-        except (OSError, StorageObjectError) as exc:
-            LOGGER.warning("object_cleanup_failed namespace=%s error=%s", key.namespace, type(exc).__name__)
-            tx.execute(_NOTE_ATTEMPT, params)
-            return Settled.FAILED
+            return Settled.BUSY
+    referenced = references(tx, key)
+    if referenced:
         tx.execute(_FORGET_CLAIM, params)
-        return Settled.REMOVED
+        return Settled.REFERENCED
+    if referenced is None:
+        tx.execute(_NOTE_ATTEMPT, params)
+        return Settled.UNKNOWN
+    try:
+        storage.delete(key)
+    except (OSError, StorageObjectError) as exc:
+        LOGGER.warning("object_cleanup_failed namespace=%s error=%s", key.namespace, type(exc).__name__)
+        tx.execute(_NOTE_ATTEMPT, params)
+        return Settled.FAILED
+    tx.execute(_FORGET_CLAIM, params)
+    return Settled.REMOVED
 
-    return db.command(run)
+
+def settle(db: Database, storage: StorageBackend, key: StorageKey) -> Settled:
+    """Settle the claim on ``key`` in one transaction of its own (:func:`settle_tx`)."""
+    return db.command(lambda tx: settle_tx(tx, storage, key))
+
+
+def due_claim_keys(tx: Transaction, *, limit: int = DEFAULT_RETRY_LIMIT, library_id: Optional[str] = None,
+                   retry_after: timedelta = timedelta(0)) -> list[tuple[str, str]]:
+    """The ``(namespace, name)`` of at most ``limit`` due claims, never-attempted first.
+
+    A claim attempted less than ``retry_after`` ago is not due, so a pass
+    that stamps what it could not settle does not select it again at once.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if retry_after < timedelta(0):
+        raise ValueError("retry_after must not be negative")
+    params = {"library_id": library_id, "limit": limit, "retry_after": retry_after.total_seconds()}
+    return [(row["namespace"], row["name"]) for row in tx.execute(_DUE_CLAIMS, params).fetchall()]
+
+
+def note_attempt(tx: Transaction, namespace: str, name: str) -> None:
+    """Stamp a claim as attempted, so the bounded pass rotates it behind the others."""
+    tx.execute(_NOTE_ATTEMPT, {"namespace": namespace, "name": name})
 
 
 def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[str] = None,
@@ -347,8 +392,7 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
     """One bounded pass over due claims (never-attempted first), each settled in its own transaction."""
     if limit < 1:
         raise ValueError("limit must be at least 1")
-    rows = db.query(lambda tx: [(row["namespace"], row["name"]) for row in tx.execute(
-        _DUE_CLAIMS, {"library_id": library_id, "limit": limit}).fetchall()])
+    rows = db.query(lambda tx: due_claim_keys(tx, limit=limit, library_id=library_id))
     outcomes: Counter[Settled] = Counter()
     for namespace, name in rows:
         try:
@@ -357,8 +401,7 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
             # Never a key PRKS wrote. Stamped like an attempt, so it rotates
             # behind the valid claims instead of filling every pass.
             LOGGER.warning("object_cleanup_invalid_claim namespace=%s", namespace)
-            db.command(lambda tx, params={"namespace": namespace, "name": name}: tx.execute(
-                _NOTE_ATTEMPT, params))
+            db.command(lambda tx, namespace=namespace, name=name: note_attempt(tx, namespace, name))
             outcomes[Settled.FAILED] += 1
             continue
         outcomes[settle(db, storage, key)] += 1
@@ -385,12 +428,13 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
                 continue
             if info is None or info.modified_at is None or info.modified_at > cutoff:
                 continue
-            if db.command(lambda tx, key=key: _claim_orphan(tx, key)):
+            if db.command(lambda tx, key=key: claim_orphan(tx, key)):
                 claimed += 1
     return claimed
 
 
-def _claim_orphan(tx: Transaction, key: StorageKey) -> bool:
+def claim_orphan(tx: Transaction, key: StorageKey) -> bool:
+    """Record an orphan claim for ``key`` under the per-object lock if nothing names it; whether one was recorded."""
     tx.execute(OBJECT_LOCK_SQL, (str(key),))
     if references(tx, key) is not False:
         return False
