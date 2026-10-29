@@ -36,14 +36,25 @@ and returns, but acknowledge only committed bytes:
 Replacing a Work's PDF with another document
 (:mod:`backend.domain.objects.replace`) is the private
 :meth:`AnnotationsMixin._replace_work_pdf`, for the same reason.
+
+Person portraits (:mod:`backend.domain.objects.portraits`) are private too:
+SQLite has no ``PRKSDatabase`` method for them (its adapter caches the file
+itself). :meth:`AnnotationsMixin._person_portrait` reads the cached
+portrait, :meth:`AnnotationsMixin._cache_person_portrait` fetches the
+Person's ``image_url`` and caches it, and
+:meth:`AnnotationsMixin._clear_person_portrait` drops it. Caching is a
+write and needs ``EDIT_LIBRARY`` (a reader never writes, §9.4); what the
+adapter does on a reader's miss (serve the fetched bytes uncached, or queue
+the fill as a job) is PG-C1's.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, List, NoReturn, TypeVar
+from typing import TYPE_CHECKING, Any, List, NoReturn, Optional, TypeVar
 
 from backend.log_safety import safe_error_type, safe_log_id
 from backend.pg_facade.context import current_context
@@ -52,6 +63,7 @@ from backend.pg_facade.registry import FacadeMixin, ported
 if TYPE_CHECKING:
     from backend.domain.identity.library_scope import LibraryScope
     from backend.domain.objects.ingest import IngestedPdf
+    from backend.person_image import PortraitImage
     from backend.storage.objects import StorageBackend, Writer
 
 T = TypeVar("T")
@@ -264,6 +276,91 @@ class AnnotationsMixin(FacadeMixin):
             except Exception as exc:  # noqa: BLE001 - best effort, as on SQLite
                 LOGGER.warning("pdf_mentioned_role_failed work_id=%s error_type=%s",
                                safe_log_id(work_id), safe_error_type(exc))
+
+    def _person_portrait(self, person_id: str) -> Optional[dict[str, Any]]:
+        """The Person's cached portrait: its bytes, subtype, hash and size; None when none is cached.
+
+        Raises ``LookupError`` when there is no such Person. A reference whose
+        bytes are gone, or not the recorded size and hash, reads as None (the
+        adapter fetches again); the bytes are read with a bound, never whole.
+        """
+        from backend.domain.objects import portraits
+        from backend.person_image import identify_cached_portrait_subtype
+        from backend.storage.objects import StorageObjectError
+
+        def read(scope: LibraryScope) -> Any:
+            if portraits.source(scope, person_id) is None:
+                return portraits.NOT_FOUND
+            return portraits.current(scope, person_id)
+
+        found = _read(self, read)
+        if found == portraits.NOT_FOUND:
+            raise LookupError(found)
+        if not isinstance(found, portraits.Portrait):
+            return None
+        try:
+            with self._annotation_objects().open_read(found.key) as handle:
+                body = handle.read(found.size + 1)
+        except (OSError, StorageObjectError):
+            return None
+        subtype = identify_cached_portrait_subtype(body)
+        if len(body) != found.size or subtype is None or hashlib.sha256(body).hexdigest() != found.sha256:
+            return None
+        return {"body": body, "subtype": subtype, "content_sha256": found.sha256, "byte_size": found.size}
+
+    def _cache_person_portrait(self, person_id: str,
+                               prepare: Optional[Callable[[str], Optional[PortraitImage]]] = None
+                               ) -> Optional[dict[str, Any]]:
+        """Fetch the Person's ``image_url``, transcode it and make it the cached portrait.
+
+        The Person and ``EDIT_LIBRARY`` are checked before anything is
+        fetched or written; ``prepare`` (default
+        :func:`backend.person_image.fetch_and_prepare`, its format and size
+        limits) turns the URL into WebP or JPEG bytes; they go to a fresh
+        key; one command names it under the Person row lock
+        (:func:`backend.domain.objects.portraits.commit`). Returns what
+        :meth:`_person_portrait` returns, or None when nothing was cached: no
+        ``image_url``, a fetch or transcode that failed, or a URL changed
+        while fetching (that write's key is claimed). Raises ``LookupError``
+        when there is no such Person.
+        """
+        from backend.domain.identity.authorization import Capability
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.objects import portraits
+
+        url = library_query(self._database, current_context(),
+                            lambda scope: portraits.source(scope, person_id),
+                            capability=Capability.EDIT_LIBRARY)
+        if url is None:
+            raise LookupError(portraits.NOT_FOUND)
+        if not url:
+            return None
+        from backend.person_image import fetch_and_prepare
+
+        image = (prepare or fetch_and_prepare)(url)
+        if image is None:
+            return None
+        storage = self._annotation_objects()
+        stored = portraits.store(storage, image)
+        done = _command(self, lambda scope: portraits.commit(scope, storage, person_id, url, stored))
+        if done == portraits.NOT_FOUND:
+            raise LookupError(done)
+        if not isinstance(done, portraits.Portrait):
+            return None
+        return {"body": image.body, "subtype": image.subtype, "content_sha256": done.sha256,
+                "byte_size": done.size}
+
+    def _clear_person_portrait(self, person_id: str) -> bool:
+        """Drop the Person's cached portrait (its key is claimed); whether one was cached.
+
+        Raises ``LookupError`` when there is no such Person.
+        """
+        from backend.domain.objects import portraits
+
+        cleared = _command(self, lambda scope: portraits.clear(scope, person_id))
+        if cleared == portraits.NOT_FOUND:
+            raise LookupError(cleared)
+        return bool(cleared)
 
     def _annotation_objects(self) -> StorageBackend:
         from backend.storage.objects import LocalFilesystemStorage

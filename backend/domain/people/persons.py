@@ -264,7 +264,8 @@ def set_field(scope: LibraryScope, person_id: str, field: str, value: str) -> tu
 
     ``value`` comes from :func:`canonical_field`; the caller holds the
     Person row lock (:func:`lock`). Returns ``(changed, revision_after)``;
-    a no-op advances nothing.
+    a no-op advances nothing. A changed ``image_url`` also drops the cached
+    portrait made from the old one (``objects.portraits.forget``).
     """
     revision = revisions.lock(scope, SCOPE_TYPE, scope_id(person_id, field))
     current = stored_value(scope, person_id, field)
@@ -274,6 +275,11 @@ def set_field(scope: LibraryScope, person_id: str, field: str, value: str) -> tu
     if current == desired:
         return False, revision
     params = {"person_id": person_id, "value": desired}
+    if field == "image_url":
+        # The cached portrait was made from the old URL: claimed with it.
+        from backend.domain.objects import portraits
+
+        portraits.forget(scope, person_id)
     if field == "aliases":
         _write_aliases(scope, person_id, aliases)
         scope.execute(_TOUCH_SQL, params)
@@ -344,7 +350,8 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
     every pair scope of the Person advances once, present or removed earlier
     (``groups.drop_memberships``), every role scope that names the Person
     advances once (``roles.tombstone_person_scopes``), every field scope
-    advances once, edited or not, and the aliases go with the row. Run
+    advances once, edited or not, the aliases go with the row, and a cached
+    portrait's key is claimed (``objects.portraits.forget``). Run
     SERIALIZABLE.
     """
     member_of = groups.groups_of_person(scope, person_id)
@@ -364,5 +371,8 @@ def delete_person(scope: LibraryScope, person_id: str) -> tuple[bool, int]:
     field_scopes = [(SCOPE_TYPE, scope_id(person_id, field)) for field in rules.SYNCED_FIELDS]
     for key in revisions.lock_many(scope, field_scopes):
         revisions.advance(scope, *key)
+    from backend.domain.objects import portraits
+
+    portraits.forget(scope, person_id)  # the cached portrait's key is claimed, never deleted here
     scope.execute(_DELETE_SQL, {"person_id": person_id})
     return True, 0

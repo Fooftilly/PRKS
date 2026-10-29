@@ -220,14 +220,15 @@ class ClaimTests(ObjectsTestCase):
         self.command(lambda scope: lifecycle.release(scope, obj.key))
         self.assertTrue(self.claims()[obj.key.name]["hold"])
 
-    def test_a_portrait_is_never_known_to_be_unreferenced(self) -> None:
+    def test_a_portrait_no_person_names_is_unreferenced(self) -> None:
+        # Persons' portrait_locator is the catalogue (tests/pg/test_objects_portraits.py).
         portrait = key("P-1_abc.jpg", NAMESPACE_PORTRAITS)
         self.objects.put_new(portrait, lambda stream: stream.write(b"jpeg"))
         self.claim(portrait)
-        self.assertIs(self.settle(portrait), Settled.UNKNOWN)
-        self.assertIsNotNone(self.objects.stat(portrait))
-        self.assertIsNotNone(self.claims()[portrait.name]["last_attempt_at"])
-        self.assertEqual(self.sweep(namespaces=(NAMESPACE_PORTRAITS,)), 0)
+        self.assertIs(self.settle(portrait), Settled.REMOVED)
+        self.assertIsNone(self.objects.stat(portrait))
+        self.objects.put_new(portrait, lambda stream: stream.write(b"jpeg"))
+        self.assertEqual(self.sweep(namespaces=(NAMESPACE_PORTRAITS,)), 1)
 
     def test_a_release_takes_over_an_orphan_claim(self) -> None:
         obj = self.put()
