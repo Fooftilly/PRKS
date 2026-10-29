@@ -1922,6 +1922,72 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
         duplicate = runner._external_shard_completion_error([a, a], {a: 1.0})
         self.assertIn("duplicate test IDs", duplicate)
 
+    def test_duplicate_execution_count_fails_despite_matching_timing_keys(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        observed = {a: 1.0, b: 2.0}
+        self.assertIsNone(runner._external_shard_completion_error([a, b], observed))
+        self.assertIn(
+            "selected=2 completed=3", runner._execution_count_error([a, b], 3)
+        )
+        self.assertIsNone(runner._execution_count_error([a, b], 2))
+
+        result = mock.Mock()
+        result.testsRun = 3
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.timings = observed
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        with mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}):
+            with mock.patch.object(runner.unittest, "TextTestRunner") as test_runner:
+                test_runner.return_value.run.return_value = result
+                with mock.patch.object(runner, "_suite_for"):
+                    with mock.patch.object(runner, "_write_serial_benchmark_result"):
+                        with contextlib.redirect_stderr(io.StringIO()) as err:
+                            ok, recorded, failed, _ = runner.run_serial(
+                                [a, b], fail_fast=False
+                            )
+        self.assertFalse(ok)
+        self.assertEqual(recorded, observed)
+        self.assertEqual(failed, [])
+        self.assertIn("execution count mismatch", err.getvalue())
+
+    def test_worker_report_rejects_duplicate_execution_count(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        result = mock.Mock()
+        result.testsRun = 3
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.timings = {a: 1.0, b: 2.0}
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = Path(tmp) / "selected.json"
+            report_file = Path(tmp) / "report.json"
+            selected.write_text(json.dumps([a, b]), encoding="utf-8")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+                stack.enter_context(mock.patch.object(runner, "_install_shutdown_handlers"))
+                stack.enter_context(mock.patch.object(runner, "apply_e2e_playwright_env"))
+                stack.enter_context(mock.patch.object(runner, "_suite_for"))
+                test_runner = stack.enter_context(
+                    mock.patch.object(runner.unittest, "TextTestRunner")
+                )
+                test_runner.return_value.run.return_value = result
+                rc = runner.run_worker(0, 1, str(selected), str(report_file))
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+        self.assertEqual(rc, 1)
+        self.assertIn("selected=2 completed=3", report["detail"])
+
+
     def test_green_unittest_result_with_missing_completion_fails_shard(self):
         from tests.e2e import run as runner
 
