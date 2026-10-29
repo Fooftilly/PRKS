@@ -42,5 +42,5 @@ jobs:
           if [[ "${PROJECT3_VIEW_APPLY}" == "true" ]]; then
             python3 scripts/project3_view_sync.py --apply
           else
-            python3 scripts/project3_view_sync.py
+            python3 scripts/project3_view_sync.py --fail-on-drift
           fi
