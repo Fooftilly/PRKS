@@ -1940,6 +1940,26 @@ class BenchmarkModeTests(unittest.TestCase):
             ("profile", "module-affinity"),
         )
 
+    def test_representative_affinity_flag_does_not_enter_benchmark_mode(self):
+        from tests.e2e import run as runner
+
+        with mock.patch.dict(os.environ, {"PRKS_E2E_SEED_CACHE": "1"}, clear=True):
+            normal = runner.build_parser().parse_args([
+                "--module-affinity", "--shard", "1/6",
+            ])
+            self.assertFalse(normal.module_affinity_pilot)
+            self.assertEqual(runner._apply_runtime_modes(normal), ())
+            pilot = runner.build_parser().parse_args([
+                "--module-affinity-pilot", "--shard", "1/6",
+            ])
+            self.assertEqual(
+                runner._apply_runtime_modes(pilot),
+                ("module-affinity",),
+            )
+        # main() restores pilot env after exit so later representative gates
+        # cannot accidentally inherit experimental no-history semantics.
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "1"}), ())
+
     def test_env_truthiness_is_shared_with_the_harness(self):
         """One definition decides how the harness reads a switch and how the
         runner judges the same switch."""

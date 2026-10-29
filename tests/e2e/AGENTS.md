@@ -270,7 +270,12 @@ whenever the module changes. The scheduling and aggregation logic lives in
 — no Chromium needed.
 
 External CI sharding. `--shard INDEX/TOTAL` (1-based) selects one bucket from
-the same LPT partition used by `--jobs TOTAL`. The authoritative GitHub Actions
+the same LPT partition used by `--jobs TOTAL`. The proposed normal full
+six-shard PR/master gate uses a small soft module reuse preference with
+`--module-affinity`, preserving ordinary timing history. Affected CI and
+local `--jobs` use unchanged LPT. Manual six-shard dispatches retain
+`module_affinity=false` (control) / `true` (non-persisting pilot) for paired
+validation. The authoritative GitHub Actions
 E2E gate (`.github/workflows/e2e-gate.yml`) plans pull requests via
 `python tests/e2e/run.py --ci-plan --base <ref>` with
 `PRKS_E2E_CI_FRONTEND_FULL=1`:

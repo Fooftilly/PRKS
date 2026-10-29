@@ -90,6 +90,35 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertIn(guarded, step)
         self.assertEqual(step.count("args+=(--module-affinity-pilot)"), 1)
 
+    def test_representative_six_shard_pr_master_uses_soft_affinity(self):
+        workflow = SOURCE.read_text(encoding="utf-8")
+        shard = job_source(workflow, "e2e")
+        step = named_upload_step(shard, "Run E2E selection shard")
+        self.assertIn(
+            "PRKS_E2E_MODULE_AFFINITY_DEFAULT: ${{ "
+            "github.event_name != 'workflow_dispatch' && "
+            "needs.e2e-plan.outputs.mode == 'full' && "
+            "matrix.total == 6 && '1' || '0' }}",
+            step,
+        )
+        self.assertIn(
+            '          if [[ "${PRKS_E2E_MODULE_AFFINITY_DEFAULT}" == "1" ]]; then\n'
+            '            if [[ "$mode" != "full" || "${PRKS_E2E_SHARD_TOTAL}" != "6" ]]; then\n'
+            '              echo "::error::default module affinity requires a full six-shard gate"\n'
+            '              exit 1\n'
+            '            fi\n'
+            '            args+=(--module-affinity)\n'
+            '          fi\n',
+            step,
+        )
+        self.assertEqual(step.count("args+=(--module-affinity)"), 1)
+        # The manual comparison path must be opt-in, independent of the default.
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && inputs.module_affinity",
+            step,
+        )
+        self.assertIn("args+=(--module-affinity-pilot)", step)
+
     def test_manual_packaged_full_and_compare_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
         shard = job_source(workflow, "packaged-frontend")

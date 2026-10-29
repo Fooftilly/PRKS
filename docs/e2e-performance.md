@@ -25,6 +25,29 @@ Invariants:
 - the "slowest tests" report uses observed/local exact timings only — never committed metadata;
 - E2E test selection, full six-shard coverage and the LPT assignment algorithm are unchanged.
 
+### Soft module-affinity scheduling
+
+A same-commit six-shard paired benchmark on 2026-10-29 showed that the 1-second
+soft module-affinity preference reduced module/shard combinations from 158 to
+118 without changing the 847 unique Chromium test IDs. The active full gate
+fell from 668s to 641s (−27s), and summed shard job time from 3618s to 3417s
+(−201s); the shard spread worsened from 85s to 128s. This is one positive
+paired observation, not a guarantee of future speedups.
+
+The proposed default applies **only to normal PR and master full six-shard CI
+runs**. Affected mode and local `--jobs` remain plain per-test LPT. Manual
+`workflow_dispatch` retains `module_affinity=false` as the control and
+`module_affinity=true` as the non-persisting experimental candidate, so
+repeated A/B comparisons can run on identical SHA. Normal full CI passes
+`--module-affinity` (representative, persists timing history); a manual
+comparison passes `--module-affinity-pilot` (does not persist timings or
+last-failed). Both reject partial selections or missing external shards.
+
+**Activation gate:** merge the default-enablement change only after an
+additional exact-SHA paired six-shard benchmark validates the critical path,
+runner-minute savings, and 847 unique test IDs. If the repeat regresses,
+keep the manual toggle without changing normal CI.
+
 ### Refreshing the baseline
 
 Do **not** hand-edit `timing-baseline.json` indefinitely, and do **not** treat a

@@ -1538,6 +1538,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--module-affinity",
+        action="store_true",
+        help=(
+            "Representative six-shard full-gate scheduling: softly prefer "
+            "reusing module fixtures, while retaining normal timing history. "
+            "Requires external --shard and the complete suite."
+        ),
+    )
+    parser.add_argument(
         "--module-affinity-pilot",
         action="store_true",
         help=(
@@ -2007,8 +2016,11 @@ def _main(argv=None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    if args.module_affinity_pilot and shard is None:
-        print("--module-affinity-pilot requires --shard INDEX/TOTAL", file=sys.stderr)
+    if args.module_affinity and args.module_affinity_pilot:
+        print("--module-affinity and --module-affinity-pilot are mutually exclusive", file=sys.stderr)
+        return 2
+    if (args.module_affinity or args.module_affinity_pilot) and shard is None:
+        print("--module-affinity requires --shard INDEX/TOTAL", file=sys.stderr)
         return 2
 
     # Resolve selection before Chromium install so docs/unit --affected and
@@ -2046,8 +2058,8 @@ def _main(argv=None) -> int:
             tier = "agent" if args.agent else "dev"
             note = (note + "; fail-fast") if note else "fail-fast"
 
-    if args.module_affinity_pilot and tier != "full":
-        print("--module-affinity-pilot requires a complete full-suite selection", file=sys.stderr)
+    if (args.module_affinity or args.module_affinity_pilot) and tier != "full":
+        print("--module-affinity requires a complete full-suite selection", file=sys.stderr)
         return 2
 
     # External shard filter shares the LPT partitioner with --jobs so CI matrix
@@ -2060,14 +2072,18 @@ def _main(argv=None) -> int:
         before = len(test_ids)
         test_ids = select_external_shard(
             test_ids, shard_index, shard_total, timings_for_shard,
-            module_affinity=args.module_affinity_pilot,
+            module_affinity=(args.module_affinity or args.module_affinity_pilot),
+        )
+        affinity_label = (
+            "; module-affinity pilot" if args.module_affinity_pilot else
+            "; module-affinity default" if args.module_affinity else ""
         )
         shard_note = "shard %d/%d (%d of %d tests)%s" % (
             shard_index + 1,
             shard_total,
             len(test_ids),
             before,
-            "; module-affinity pilot" if args.module_affinity_pilot else "",
+            affinity_label,
         )
         note = ("%s; %s" % (note, shard_note)) if note else shard_note
         # Pointer capture belongs to the full gate once, not once per matrix

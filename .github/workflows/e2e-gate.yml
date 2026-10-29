@@ -18,7 +18,7 @@ on:
         type: boolean
         default: false
       module_affinity:
-        description: "Manual soft module-affinity scheduling pilot (default gates unchanged)"
+        description: "Manual soft module-affinity benchmark toggle (default false; normal full CI uses affinity)"
         type: boolean
         default: false
       shard_count:
@@ -219,6 +219,10 @@ jobs:
           PRKS_E2E_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile && '1' || '0' }}
           PRKS_E2E_ROUTE_FASTPATH: ${{ github.event_name == 'workflow_dispatch' && inputs.route_fastpath && '1' || '0' }}
           PRKS_E2E_MODULE_AFFINITY_PILOT: ${{ github.event_name == 'workflow_dispatch' && inputs.module_affinity && '1' || '0' }}
+          # Representative full six-shard PR/master gates use the proven soft bias.
+          # Manual dispatch remains explicit baseline-versus-pilot A/B; affected
+          # selections keep existing unmodified per-test LPT scheduling.
+          PRKS_E2E_MODULE_AFFINITY_DEFAULT: ${{ github.event_name != 'workflow_dispatch' && needs.e2e-plan.outputs.mode == 'full' && matrix.total == 6 && '1' || '0' }}
           PRKS_E2E_MODE: ${{ needs.e2e-plan.outputs.mode }}
           PRKS_E2E_FEATURES: ${{ needs.e2e-plan.outputs.features }}
           # Use typed matrix values through the environment, rather than
@@ -231,6 +235,13 @@ jobs:
           set -euo pipefail
           mode="${PRKS_E2E_MODE}"
           args=(python tests/e2e/run.py --jobs "${PRKS_E2E_SHARD_JOBS}" --no-pointer-capture)
+          if [[ "${PRKS_E2E_MODULE_AFFINITY_DEFAULT}" == "1" ]]; then
+            if [[ "$mode" != "full" || "${PRKS_E2E_SHARD_TOTAL}" != "6" ]]; then
+              echo "::error::default module affinity requires a full six-shard gate"
+              exit 1
+            fi
+            args+=(--module-affinity)
+          fi
           if [[ "${PRKS_E2E_MODULE_AFFINITY_PILOT}" == "1" ]]; then
             if [[ "$mode" != "full" ]]; then
               echo "::error::module affinity pilot requires full suite"
