@@ -109,6 +109,14 @@ class AnnotationParityTests(WorksParityTestCase):
         mine, theirs = (json.loads(side.db.get_work_annotations(work_id))
                         for side, work_id in ((self.leg, ids[0]), (self.ref, ids[1])))
         self.assertEqual(self.leg.normal(mine), self.ref.normal(theirs))
+        # The Work detail carries the same list, as a JSON string too.
+        details = []
+        for side, work_id in ((self.leg, ids[0]), (self.ref, ids[1])):
+            work = side.db.get_work(work_id)
+            if work is not None:
+                work = dict(work, annotations=json.loads(work["annotations"]))
+            details.append(work)
+        self.assertEqual(self.leg.normal(details[0]), self.ref.normal(details[1]))
 
     def same_outcome(self, call: Callable[[Any, str], Any]) -> Any:
         """``call(db, work_id)`` on both sides: equal results, or equal ``WorkAnnotationError``s."""

@@ -204,6 +204,14 @@ def asset_annotations(scope: LibraryScope, asset_id: str) -> list[dict[str, Any]
     return [reconstruct_annotation(row) for row in scope.execute(_ROWS, {"asset_id": asset_id}).fetchall()]
 
 
+def work_annotations(scope: LibraryScope, work_id: str) -> list[dict[str, Any]]:
+    """The Work's annotations (its primary managed PDF's); none for a missing Work or one without a PDF."""
+    target = read_target(scope, work_id)
+    if target is None or target.asset_id is None:
+        return []
+    return asset_annotations(scope, target.asset_id)
+
+
 def current(scope: LibraryScope, asset_id: str, annotation_id: str) -> Optional[dict[str, Any]]:
     row = scope.execute(_ROW, {"asset_id": asset_id, "annotation_id": annotation_id}).fetchone()
     return None if row is None else reconstruct_annotation(row)

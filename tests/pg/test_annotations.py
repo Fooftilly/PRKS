@@ -83,6 +83,8 @@ class PersistenceTests(AnnotationTestCase):
         self.assertRegex(updated_at, r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
         self.assertEqual(listed, HIGHLIGHT)
         self.assertEqual(result["annotation"], HIGHLIGHT)
+        # The Work detail reads the same rows in its snapshot.
+        self.assertEqual(json.loads(self.library.get_work(work_id)["annotations"]), self.listed(work_id))
         (row,) = self.sql("SELECT library_id, asset_id, work_id, type, content, page_index, color,"
                           " jsonb_typeof(geometry) AS kind, geometry FROM prks.annotations")
         self.assertEqual({k: row[k] for k in ("library_id", "asset_id", "work_id", "type", "content",

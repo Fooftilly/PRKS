@@ -57,13 +57,7 @@ class AnnotationsMixin(FacadeMixin):
     def get_work_annotations(self, work_id: str) -> str:
         from backend.domain.annotations import store
 
-        def run(scope: LibraryScope) -> list[dict[str, Any]]:
-            target = store.read_target(scope, work_id)
-            if target is None or target.asset_id is None:
-                return []
-            return store.asset_annotations(scope, target.asset_id)
-
-        return json.dumps(_read(self, run))
+        return json.dumps(_read(self, lambda scope: store.work_annotations(scope, work_id)))
 
     @ported
     def get_work_annotations_state(self, work_id: str):
