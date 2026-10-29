@@ -435,3 +435,70 @@ Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub inte
 - `In Progress` means the work is already owned. Report it for coordination, never as new work to assign. `execution: Human` does not authorize agent pickup even if a named agent makes the issue visible in view #9. `Agent` names a specific executor; it never makes an issue ready by itself.
 - Inbox, Backlog and every other Status are not ready. An issue with `in_project: false` is not on Project #3 and is not ready. A `null` field and an issue not listed are **unknown**; neither is ever promoted to ready.
 - Re-read an issue's live state before acting: the snapshot can be up to 30 hours old.
+
+## 15. Cloud agent assignment queue (read-only; Project #3 remains authoritative)
+
+Cloud agent sessions may have a working Git remote but no `gh` Project V2
+GraphQL authentication. Do not copy the classic `project`-scoped
+`PROJECT_SYNC_TOKEN` into an agent session solely to read assignments.
+
+`.github/workflows/project3-agent-queue.yml` uses the protected
+`project-automation` environment and the existing token, on `master`
+only, to call the same exhaustive, read-only collector described in §14.
+Only after that collector has verified the Project is public, its identity
+and field types are correct, every page was retrieved and the snapshot is
+valid does `scripts/project3_agent_queue.py publish` extract a minimal
+ownership inventory. The output contains only open, non-archived Project #3
+PRKS issues with a recognized Agent value, their `number`, `agent`,
+`status`, and `execution`, together with the Project identity, completeness,
+generation time, expiry, count and optional originating workflow run ID.
+It publishes no Project mutations, assignees, issue descriptions, hidden
+fields, project item IDs or private-project data.
+
+A different, job-scoped `GITHUB_TOKEN` with `contents: write` publishes
+**only** `agent-queue.json` to the dedicated orphan branch
+`project3-agent-queue`, using trusted `master` workflow code. The Project
+token is available only in the query step and is not given to Git or the
+publisher. Publishing is triggered after successful assignment-bridge runs
+(including check-only commands), hourly at minute 13 UTC to reconcile manual
+Project changes, and on manual dispatch. GitHub scheduled workflows are
+best effort; the consumer enforces expiry independently. The data branch is
+not the Project's assignment store and must never be edited manually.
+
+Public endpoint after the first successful publish:
+
+`https://raw.githubusercontent.com/Fooftilly/PRKS/project3-agent-queue/agent-queue.json`
+
+Agent usage from an ordinary PRKS checkout:
+
+```bash
+bash scripts/agent-queue.sh claude
+bash scripts/agent-queue.sh cursor
+bash scripts/agent-queue.sh chatgpt
+```
+
+The script first uses the live `gh project item-list` when available. If
+that cannot run or gives an incomplete response, it obtains the public
+snapshot via the existing Git remote (`git fetch` + `git show FETCH_HEAD`),
+then falls back to HTTPS `curl` for environments without Git remote access.
+Neither fallback requires `gh auth` or a Project token. It validates the
+strict schema, complete marker, Project identity/public flag, exact counts,
+unique sorted issue numbers, canonical agent options and generation/expiry
+timestamps using `python3` before displaying any rows. The published
+snapshot expires **12 hours** after its generation; a stale, missing,
+corrupt, private or unrecognized queue fails closed and is not interpreted
+as an empty work list. Published queues omit title text; issue URLs remain
+available for live inspection. GitHub raw-content caching may briefly lag
+the more direct Git remote.
+
+Assignments are **ownership only**. Before beginning a task, read the live
+issue, verify it is open, verify the live native blocker relationships, avoid
+overlapping PRs, require the appropriate Status/Execution readiness and the
+maintainer's go-ahead where specified. A stale snapshot cannot silently
+authorize work. If publishing fails, inspect the **Project 3 agent queue
+publisher** Actions run: the protected environment must admit `master`,
+`PROJECT_SYNC_TOKEN` must be valid, and the workflow must be permitted to
+push with its job-scoped `contents: write` token. Do not weaken the
+private-project guard to work around missing permission. The first
+successful run creates `project3-agent-queue` automatically. Test with
+`python3 -m unittest discover -s tests -p 'test_project3_agent_queue.py'`.
