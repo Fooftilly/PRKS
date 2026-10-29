@@ -27,4 +27,6 @@ Before starting any issue:
 3. Compare the affected files and behavior against open PRs and the accepted target roadmaps, particularly #310/#614 PostgreSQL and backend cutover, #230/#303 completed frontend migration, and active replacement/design plans. Skip code that is being retired, SQLite-specific fixes during cutover, duplicate PR work, or findings the planned architecture will eliminate.
 4. Take one bounded task, implement with targeted tests, and open a PR for maintainer review. Do not merge without explicit approval. Return to the queue after that task is completed or deliberately parked.
 
+For a maintainer-reviewed batch update to an existing issue's Agent, Status or Execution, use the dry-run-first tool in `docs/agent-workflows/project3-triage.md` rather than repeated ad hoc field edits. The agent queue itself never changes fields.
+
 For hosted agents without a shell or a GitHub Projects API, use the already-established validated, fresh Project #3 readiness snapshot workflow described in `docs/agent-workflows/project-3.md` §14. Recheck the live issue and blockers before acting. If the snapshot is unavailable/stale, obtain a new CLI queue output from the maintainer and treat readiness as unknown until verified. Do not infer ownership from issue labels, PR authors, or previous chat assignments.
