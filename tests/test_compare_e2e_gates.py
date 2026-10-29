@@ -268,6 +268,12 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         payload["completed_at"] = (START + timedelta(seconds=200)).isoformat()
         with self.assertRaisesRegex(InvalidBenchmark, "Contradictory"):
             summarize(payload, jobs("source"), "source", **kwargs)
+        payload["completed_at"] = (START + timedelta(seconds=700)).isoformat()
+        payload.pop("run_started_at")
+        self.assertIsNone(
+            summarize(payload, jobs("source"), "source", **kwargs)["workflow_wall_minutes"]
+        )
+        payload["run_started_at"] = START.isoformat()
         payload.pop("completed_at")
         self.assertIsNone(
             summarize(payload, jobs("source"), "source", **kwargs)["workflow_wall_minutes"]
