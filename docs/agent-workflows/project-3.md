@@ -159,7 +159,7 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 | Active Work (#7) | table | `is:open -label:dependencies -work-type:Epic status:"In Progress",Review,"Changes requested",Blocked` | Status | Priority ↑ | Title, Status, Assignees, Execution, Agent, Linked pull requests, Parent issue, Labels |
 | Work Board (#8) | board | `-label:dependencies -work-type:Epic -status:Inbox,Backlog,Idea,Parked` | columns: Status (hide Inbox and Backlog columns) | – | Title, Status, Linked pull requests, Parent issue, Execution, Labels |
 | Triage (new, optional) | table | `is:open status:Inbox -label:dependencies` | – | Updated ↓ | Title, Labels, Parent issue, Created |
-| Agent Queue (#9, all ownership) | table | `is:open is:issue -label:dependencies agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"` | Status | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
+| Agent Queue (#9, all ownership) | table | `is:open is:issue agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"` | Status | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
 | Research Queue (#10) | table | `is:open label:research -status:Done` | – | Updated ↓ | Title, Status, Assignees, Parent issue, Labels |
 | Roadmap Research (new, optional) | table | `is:open work-type:Epic roadmap-stage:"Research / Design"` | – | Roadmap Order ↑ | Title, Status, Horizon, Commitment, Sub-issues progress |
 | Research History (new) | table | `label:research is:closed` | – | Closed ↓ | Title, Closed, Labels, Linked pull requests |
