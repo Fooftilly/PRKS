@@ -62,6 +62,25 @@ class AgentQueueTests(unittest.TestCase):
         self.assertIn("#740", self.run_queue("codex").stdout)
         self.assertIn("#635", self.run_queue("claude").stdout)
 
+    def test_chatgpt_queue_accepts_historical_codex_field_value(self):
+        # PR Lens/Devin assessed the old field configuration. The live option
+        # was renamed to ChatGPT/Codex, but old snapshots can still say Codex.
+        rows = [item(740, agent="Codex"), item(741, agent="ChatGPT/Codex")]
+        for role in ("chatgpt", "codex", "ChatGPT/Codex"):
+            with self.subTest(role=role):
+                run = self.run_queue(role, items=rows)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertIn("#740", run.stdout)
+                self.assertIn("#741", run.stdout)
+
+    def test_historical_codex_value_does_not_leak_to_other_agents(self):
+        run = self.run_queue("cursor", items=[
+            item(740, agent="Codex"), item(815, agent="Cursor Cloud")
+        ])
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("#815", run.stdout)
+        self.assertNotIn("#740", run.stdout)
+
     def test_truncated_project_is_rejected(self):
         run = self.run_queue("cursor", total=1001)
         self.assertNotEqual(run.returncode, 0)
