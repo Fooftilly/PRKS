@@ -190,6 +190,9 @@ if __name__ == "__main__":
     config = bind_storage(config)
     setup_logging(config)
     bound_root.log_binding()
+    if jobs is not None:
+        # The embedded worker's object maintenance acts on the leased root only.
+        jobs.bind_root(config.root)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
     run_server(port=port, host=args.host, auth=auth, jobs=jobs)

@@ -3,8 +3,9 @@
 :class:`Worker` is the loop one worker runs: wait until the process may
 claim, then claim and run one job at a time until stopped. Between jobs it
 waits for a ``NOTIFY prks_jobs`` (every enqueue sends one at COMMIT), with a
-poll as the fallback, and on each idle tick it runs the reaper and, at most
-once per interval, enqueues the deduplicated ``jobs.prune``.
+poll as the fallback, and on each idle tick it runs the reaper, the idle
+tasks of its registry (each lane's periodic enqueue) and, at most once per
+interval, enqueues the deduplicated ``jobs.prune``.
 
 **Start.** The worker claims nothing until its start check says so. The
 check first verifies the schema (§4.4: the database applied exactly this
@@ -17,7 +18,9 @@ is bound, the worker takes its **shared** ``root.lock`` for the rest of the
 run. Only then does it run ``root_pairing.start_process(…, bump=True)``: while setup is ``unconfigured`` or ``bootstrapping``
 it reports :attr:`~backend.domain.identity.root_pairing.StartStatus.SETUP_PENDING`,
 and the worker checks again on its poll; once setup is ready the check
-reconciles and bumps once, and the worker starts claiming. A refusal that is
+reconciles and bumps once, the object maintenance jobs are bound to that
+paired root (:func:`backend.domain.objects.jobs.attach`, on the worker's own
+copy of the registry), and the worker starts claiming. A refusal that is
 not retryable (a foreign root, a stale copy, a testing mismatch) stops it
 before it claims anything.
 
@@ -61,6 +64,7 @@ from backend.db.errors import DatabaseConfigError, DatabaseError
 from backend.db.migrate import SCHEMA_DIR, MigrationError, verify_schema
 from backend.domain.identity import root_pairing
 from backend.domain.identity.errors import RootPairingRefused
+from backend.domain.objects import jobs as object_jobs
 from backend.domain.research import reindex as _research_reindex  # noqa: F401  registers research.reindex_work
 from backend.jobs import queue
 from backend.jobs.diagnostics import WorkerStats
@@ -356,6 +360,11 @@ class Worker:
             if reaped:
                 self.stats.add("reaped", reaped)
                 LOGGER.warning("jobs_reaped count=%s", reaped)
+        for task in self.registry.idle_tasks():
+            try:
+                task(self.db)
+            except DatabaseError as exc:
+                self._error("idle_task", exc)
         now = time.monotonic()
         every = self.settings.prune_every.total_seconds()
         if self._last_prune is not None and now - self._last_prune < every:
@@ -437,6 +446,22 @@ def root_start_check(
         return started.status is root_pairing.StartStatus.READY
 
     return check
+
+
+def _attaching_objects(check: StartCheck, registry: HandlerRegistry, root: JoinedRoot) -> StartCheck:
+    """``check``, then (once, before the first claim) the objects lane bound to the paired root."""
+    attached = False
+
+    def start() -> bool:
+        nonlocal attached
+        if not check():
+            return False
+        if not attached:
+            object_jobs.attach(registry, root.path)
+            attached = True
+        return True
+
+    return start
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -575,6 +600,9 @@ def main(
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
     root = JoinedRoot(os.path.realpath(os.path.abspath(args.root)))
+    # This worker's handlers: the process-wide ones, plus the objects lane's
+    # once the start check has paired the root they act on.
+    worker_registry = registry.copy()
     try:
         db = open_database(env)
     except DatabaseConfigError as exc:
@@ -587,9 +615,12 @@ def main(
         with db:
             worker = Worker(
                 db,
-                registry=registry,
+                registry=worker_registry,
                 settings=settings,
-                start_check=root_start_check(db, root=root, testing=bool(args.testing), schema_dir=schema_dir),
+                start_check=_attaching_objects(
+                    root_start_check(db, root=root, testing=bool(args.testing), schema_dir=schema_dir),
+                    worker_registry, root,
+                ),
             )
             LOGGER.info("worker_starting name=%s", worker.name)
             run_worker(worker)

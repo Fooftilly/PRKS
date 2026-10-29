@@ -996,7 +996,7 @@ RETURNING op_id;
 | Restore exclusive | gate "restore" mode | Committed `libraries.maintenance = 'restore'` plus the Library maintenance lock: every command takes it shared (try-lock) and re-reads the flag; restore takes it exclusive to drain in-flight writers before its one-transaction commit, which advances `libraries.epoch` to fence everything that started earlier (§11.4) |
 | Reference check + delete of an object | `_PDF_PATH_LOCKS` + one transaction | `pg_advisory_xact_lock(hashtextextended('obj:'||name, 0))` + the same single transaction (`settle_claim_if_referenced`) |
 | Materialization validate → replace → mark | per-Work `threading.Lock` | `SELECT … FROM assets WHERE id = … FOR UPDATE` |
-| Cleanup retry single runner | implicit (one process) | It is a job; one claimed job per Library at a time via a unique `singleton_key` |
+| Cleanup retry single runner | implicit (one process) | It is an instance job (`objects.cleanup`); one claimed at a time via a unique `singleton_key`, each claim settled under its Library's objects lock |
 | Migrations single runner | implicit | `pg_advisory_lock` (§4.4) |
 
 ### 7.5 Process-local state, item by item (PG13)
@@ -1933,8 +1933,17 @@ part of the Assets lane, against the new schema, not against SQLite.
   grace period (24 h default), so an ordinary write is not claimed; a write
   that stalls past the grace period is caught by its adoption check above
   rather than by age. It
-  runs on demand and weekly; it never deletes directly, it only records
-  claims, and claims are settled by the usual three-valued check.
+  runs on demand and weekly, in bounded passes that resume after a cursor;
+  it never deletes directly, it only records claims, and claims are
+  settled by the usual three-valued check. It runs only on a root that
+  holds no SQLite catalogue: until the cutover, a root that also serves
+  SQLite keeps files the PostgreSQL catalogue does not name.
+- **Cleanup scheduling**: the releasing command enqueues `objects.cleanup`
+  (deduplicated); each worker's idle tick enqueues it when a claim is due
+  (never attempted, or attempted at least 10 minutes ago) and no cleanup
+  job is queued or running, which also covers claims left by a restart.
+  Each pass settles a bounded batch and enqueues the next one only while
+  claims are due.
 - **Why immutable**: backup can copy exactly the bytes a snapshot references
   (§11.4); clients can cache by `content_sha256`; object storage later
   (#311 Phase F) needs no special mode; and #60 §9.4's generation protocol and

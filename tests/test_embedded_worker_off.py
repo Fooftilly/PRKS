@@ -1,4 +1,7 @@
-"""Without ``PRKS_AUTH`` the web process runs no job worker and never loads psycopg (L-J-1 #627)."""
+"""Without ``PRKS_AUTH`` the web process runs no job worker, no object maintenance, and never loads psycopg.
+
+L-J-1 #627; L-A-1 #635.
+"""
 from __future__ import annotations
 
 import os
@@ -13,7 +16,8 @@ import sys, threading
 import prks_app
 from backend import server
 assert prks_app.start_jobs(None, {"PRKS_EMBEDDED_WORKER": "1"}) is None
-loaded = sorted(m for m in sys.modules if m.split('.')[0] in ('psycopg', 'psycopg_pool') or m.startswith('backend.jobs'))
+loaded = sorted(m for m in sys.modules if m.split('.')[0] in ('psycopg', 'psycopg_pool')
+                or m.startswith(('backend.jobs', 'backend.domain.objects')))
 threads = sorted(t.name for t in threading.enumerate() if t is not threading.main_thread())
 print(repr((loaded, threads)))
 """

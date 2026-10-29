@@ -29,6 +29,7 @@ from backend.jobs.runner import JobRun, run_job
 from backend.jobs.worker import EXIT_OK, EXIT_REFUSED, Worker, WorkerSettings, main
 from backend.storage import root_binding, root_marker
 from backend.storage.config import StorageConfig
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.jobs_fixtures import LEASE, JobsTestCase
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
 
@@ -547,6 +548,44 @@ class WorkerStartTests(RootPairingTestCase):
         finally:
             lease.release()
         return name, root
+
+    def orphan_claim(self, name: str, root: str) -> StorageKey:
+        """A stored object in ``root`` and a cleanup claim for it."""
+        stored = StorageKey(NAMESPACE_ASSET_OBJECTS, "orphan.pdf")
+        LocalFilesystemStorage(root).put_new(stored, lambda stream: stream.write(b"bytes"))
+        self.db(name).command(lambda tx: tx.execute(
+            "INSERT INTO prks.object_cleanup_claims (namespace, name) VALUES (%s, %s)",
+            (stored.namespace, stored.name)))
+        return stored
+
+    def test_object_maintenance_is_bound_to_the_paired_root_once_the_start_check_passes(self) -> None:
+        name, root = self.bootstrapped()
+        stored = self.orphan_claim(name, root)
+        registry, _ran = self.counting_registry()
+        with self.assertLogs("prks.objects", "INFO") as logs:
+            state = self.worker_main(name, root, registry)
+            wait_until(lambda: LocalFilesystemStorage(root).stat(stored) is None, "the claim to be settled")
+        self.assertIn("object_maintenance_attached", "\n".join(logs.output))
+        self.assertEqual(registry.kinds(), {"test.instance"}, "the caller's registry is left as it was")
+        self.assertEqual(self.finish(state), EXIT_OK)
+
+    def test_a_root_holding_a_sqlite_catalogue_gets_no_object_maintenance(self) -> None:
+        name, root = self.bootstrapped()
+        stored = self.orphan_claim(name, root)
+        open(os.path.join(root, "prks_data.db"), "wb").close()
+        registry, ran = self.counting_registry()
+        job_id = self.enqueue(name)
+        with self.assertLogs("prks.objects", "WARNING") as logs:
+            state = self.worker_main(name, root, registry)
+            self.assertTrue(ran.wait(WAIT))
+            wait_until(lambda: self.job_state(name, job_id) == "succeeded", "the job to finish")
+            self.assertTrue(state["worker"].idle.wait(WAIT))
+        self.assertIn("object_maintenance_disabled reason=sqlite_catalogue", "\n".join(logs.output))
+        kinds = self.db(name).query(lambda tx: tx.execute(
+            "SELECT kind FROM prks.jobs WHERE kind LIKE 'objects.%%'").fetchall())
+        self.assertEqual(kinds, [])
+        self.assertIsNotNone(LocalFilesystemStorage(root).stat(stored))
+        self.assertEqual(self.finish(state), EXIT_OK)
 
     def test_a_worker_started_before_bootstrap_claims_nothing_then_checks_and_bumps(self) -> None:
         name, root = self.database(), self.new_root()
