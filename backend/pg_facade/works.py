@@ -23,6 +23,7 @@ read in the Work detail's snapshot.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
     from backend.db_manager import DeletedWorkRecord
     from backend.domain.identity.library_scope import LibraryScope
     from backend.domain.works.commands import ManagedFile, NewAsset
-    from backend.storage.objects import StorageBackend
+    from backend.storage.objects import StorageBackend, Writer
 
 T = TypeVar("T")
 
@@ -163,35 +164,67 @@ class WorksMixin(FacadeMixin):
           keep them, and a ``"pdf"`` kind without a file reads back as no
           source.
         """
+        fields = {name: value for name, value in locals().items() if name != "self"}
+        return self._add_work(fields, None)
+
+    def _add_work_with_pdf(self, file_name: str, write: Writer, **fields: Any) -> str:
+        """Create a Work from an uploaded PDF: ``add_work`` with the bytes stored here.
+
+        Not a ``PRKSDatabase`` method, so not public: on SQLite the HTTP
+        adapter stores the upload first
+        (``work_pdf_replace.store_new_managed_pdf_bytes``) and passes its
+        ``file_path``; routing the upload here is PG-C1's. Here the caller's
+        edit right is checked
+        before anything is written, ``objects.ingest.store_pdf`` writes the
+        source key (and a linearized working key), and the create adopts
+        them in its own transaction. ``fields`` are ``add_work``'s other
+        arguments. Bytes a refused or failed create leaves behind are never
+        removed here; the orphan sweep claims them (§11.2).
+        """
+        if "file_path" in fields:
+            raise TypeError("the uploaded PDF is the Work's file")
+        bound = inspect.signature(WorksMixin.add_work).bind(self, **fields)
+        bound.apply_defaults()
+        arguments = {name: value for name, value in bound.arguments.items() if name != "self"}
+        return self._add_work(arguments, (file_name, write))
+
+    def _add_work(self, fields: dict[str, Any], upload: Optional[tuple[str, Writer]]) -> str:
         from backend.db_manager import _canonical_new_source, normalize_doc_type
+        from backend.domain.objects import ingest
         from backend.domain.works import commands
 
+        file_path = fields["file_path"]
         self._authorize_edit()
+        # An upload has a file before it has a key: classified as one.
         kind, url, provider, provider_id = _canonical_new_source(
-            source_kind, source_url, provider, provider_id, file_path)
-        asset = self._new_asset(kind, file_path, url, provider, provider_id, source_mime,
-                                thumb_url, thumb_page)
-        bibliographic = {
-            "doc_type": normalize_doc_type(doc_type), "year": year,
-            "published_date": published_date, "edition": edition, "publisher": publisher,
-            "location": location, "journal": journal, "volume": volume, "issue": issue,
-            "pages": pages, "isbn": isbn, "doi": doi,
-            "urldate": (urldate or "").strip() or None,
-        }
+            fields["source_kind"], fields["source_url"], fields["provider"], fields["provider_id"],
+            upload[0] if upload is not None else file_path)
+        managed: Optional[ManagedFile] = None
+        if upload is not None:
+            if kind == "video":
+                raise ValueError("a video Work has no managed file")
+            managed = ingest.store_pdf(self._objects(), *upload).managed_file()
+        asset = self._new_asset(kind, file_path, url, provider, provider_id, fields["source_mime"],
+                                fields["thumb_url"], fields["thumb_page"], managed)
+        bibliographic = {name: fields[name] for name in (
+            "year", "published_date", "edition", "publisher", "location", "journal", "volume",
+            "issue", "pages", "isbn", "doi")}
+        bibliographic["doc_type"] = normalize_doc_type(fields["doc_type"])
+        bibliographic["urldate"] = (fields["urldate"] or "").strip() or None
         stream = isinstance(asset.source, commands.Stream) if asset is not None else False
         new = commands.NewWork(
             work_id=self.generate_id("W"),
             manifestation_id=self.generate_id("MF"),
-            title=title,
-            status=status,
-            abstract=abstract,
-            author_text=author_text,
+            title=fields["title"],
+            status=fields["status"],
+            abstract=fields["abstract"],
+            author_text=fields["author_text"],
             bibliographic=bibliographic,
             citation_url=None if stream else (url or "").strip() or None,
             asset_id=self.generate_id("AS") if asset is not None else None,
             asset=asset,
-            research_note=text_content,
-            private_note=(private_notes or "").strip() or None,
+            research_note=fields["text_content"],
+            private_note=(fields["private_notes"] or "").strip() or None,
         )
         objects = self._objects() if asset is not None and isinstance(asset.source, commands.ManagedFile) else None
         return self._command(lambda scope: commands.create_work(scope, new, objects=objects),
@@ -199,7 +232,8 @@ class WorksMixin(FacadeMixin):
 
     def _new_asset(self, kind: Optional[str], file_path: str, url: Optional[str],
                    provider: Optional[str], provider_id: Optional[str], source_mime: str,
-                   thumb_url: str, thumb_page: Any) -> Optional[NewAsset]:
+                   thumb_url: str, thumb_page: Any,
+                   managed: Optional[ManagedFile] = None) -> Optional[NewAsset]:
         from backend.domain.works import commands
 
         presentation: dict[str, Any] = {
@@ -207,7 +241,7 @@ class WorksMixin(FacadeMixin):
             "thumb_url": (thumb_url or "").strip() or None,
             "thumb_page": _thumb_page(thumb_page),
         }
-        has_file = bool((file_path or "").strip())
+        has_file = managed is not None or bool((file_path or "").strip())
         if kind == "video":
             if has_file:
                 raise ValueError("a video Work has no managed file")
@@ -218,7 +252,7 @@ class WorksMixin(FacadeMixin):
             )
         if not has_file:
             return None
-        return commands.NewAsset(source=self._managed_file(file_path), **presentation)
+        return commands.NewAsset(source=managed or self._managed_file(file_path), **presentation)
 
     def _managed_file(self, file_path: str) -> ManagedFile:
         from backend.db_manager import managed_pdf_filename, safe_pdf_path_under_dir
