@@ -273,11 +273,18 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         self.assertIsNone(
             summarize(payload, jobs("source"), "source", **kwargs)["workflow_wall_minutes"]
         )
+        payload["completed_at"] = (START + timedelta(seconds=150)).isoformat()
+        with self.assertRaisesRegex(InvalidBenchmark, "Contradictory"):
+            summarize(payload, jobs("source"), "source", **kwargs)
+        payload["completed_at"] = (START + timedelta(seconds=700)).isoformat()
         payload["run_started_at"] = START.isoformat()
         payload.pop("completed_at")
         self.assertIsNone(
             summarize(payload, jobs("source"), "source", **kwargs)["workflow_wall_minutes"]
         )
+        payload["run_started_at"] = (START + timedelta(seconds=100)).isoformat()
+        with self.assertRaisesRegex(InvalidBenchmark, "Contradictory"):
+            summarize(payload, jobs("source"), "source", **kwargs)
 
     def test_plan_log_proves_full_not_affected_selection(self):
         plan_jobs = jobs("source")
