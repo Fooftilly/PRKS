@@ -208,15 +208,20 @@ def plan_packaged_e2e(
     )
 
 
-def _discover_complete_e2e_ids() -> list[str]:
-    """Use the runner's authoritative live unittest modules, not stale JSON.
+def _discover_complete_e2e_ids(*, default_modules: bool = False) -> list[str]:
+    """Use live unittest modules; audit can pin the ordinary full gate.
 
     Imports may require pinned development dependencies. If discovery fails
     (including unittest's synthetic _FailedTest entries), choose full.
     """
     from tests.e2e import run
 
-    ids = run.discover_test_ids()
+    # The installed classic-transition/accessibility opt-ins alter
+    # run.E2E_MODULES at import time. Only the advisory coverage audit
+    # explicitly pins the ordinary default packaged/source full module set.
+    # The dormant candidate planner retains its existing discovery behavior.
+    ids = (run.discover_test_ids(modules=run.DEFAULT_E2E_MODULES)
+           if default_modules else run.discover_test_ids())
     if (
         not ids
         or run.invalid_e2e_discovery_ids(ids)
@@ -460,7 +465,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.coverage_audit:
         try:
-            report = audit_packaged_coverage(_discover_complete_e2e_ids())
+            report = audit_packaged_coverage(
+                _discover_complete_e2e_ids(default_modules=True)
+            )
             print(format_packaged_coverage_audit(report))
             return 0 if report["coverage_complete"] else 1
         except (OSError, ValueError, TypeError, ImportError, RuntimeError) as exc:
