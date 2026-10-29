@@ -10,7 +10,13 @@ bash scripts/agent-queue.sh claude   # Claude Code
 bash scripts/agent-queue.sh chatgpt  # ChatGPT/Codex, including Codex
 ```
 
-As of 2026-10-29, the maintainer renamed Project #3's Agent option from **Codex** to **ChatGPT/Codex**. Both `chatgpt` and `codex` command aliases select the new option. The helper also recognizes legacy `Codex` values in older/unrefreshed Project exports, without creating a separate agent or altering Project settings.
+As of 2026-10-29, the maintainer renamed Project #3's Agent option from **Codex** to **ChatGPT/Codex**. The read-only helper accepts interchangeable, case-insensitive names with spaces, hyphens, underscores or slashes as separators:
+
+- **ChatGPT/Codex:** `chatgpt`, `codex`, `ChatGPT/Codex`, `chatgpt-codex` (and legacy stored `Codex` or `ChatGPT` values).
+- **Cursor Cloud:** `cursor`, `Cursor Cloud`, `cursor-cloud` (and legacy stored `Cursor` values).
+- **Claude Code:** `claude`, `Claude Code`, `claude-code` (and legacy stored `Claude` values).
+
+These are aliases **only in the queue command**: GitHub Project #3 keeps its existing canonical single-select values; the helper neither adds Project field options nor modifies assignments. Unrecognized names fail rather than falling back to another agent.
 
 The helper reads all Project #3 items once with `gh project item-list` and prints matching PRKS issues with their live Project Status and Execution fields. It rejects incomplete Project item lists, and never updates GitHub. It displays **all** assigned issues, including Inbox, Backlog, Blocked, In Progress and unaccepted candidates. Its output is **not** an actionable queue or authorization to start work.
 
