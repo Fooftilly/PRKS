@@ -3,6 +3,8 @@
 This is an operator guide for Cursor Projects/coordinator usage. It is not an always-on engineering rule.
 
 ## Delegation model
+
+- Before assigning a worker new PRKS work, read its live Project #3 Agent queue with `bash scripts/agent-queue.sh cursor`. Follow `docs/agent-workflows/agent-queue.md`: Project Agent is ownership, not permission to implement. Check approval, blockers, roadmaps, open PRs and code that may be retired before taking an issue.
 - Keep one long-lived PRKS Project so shared context survives across tasks.
 - Give one worker one bounded deliverable.
 - When a GitHub issue exists, treat it as the task source of truth and avoid restating the entire repository history in the worker prompt.

@@ -22,6 +22,8 @@ Sources: the maintainer's baseline export (44 items, `hasNextPage: false`, taken
 
 **Custom fields (all preserved).** Status; Horizon {Now, Next, Later, Long-term, Exploratory}; Work Type {Epic, Feature, Research, Bug, Infrastructure, Documentation}; Priority {P0, P1, P2, P3}; Commitment {Committed, Research-first, Exploratory}; Agent {Unassigned, Cursor Cloud, Claude Code, Codex, Manual}; Effort {XS, S, M, L, XL}; Roadmap Order (number); Start date, Target date (date). No iteration field. No item has Agent, Effort, dates or assignees set.
 
+**Agent field update (2026-10-29):** The maintainer renamed the existing `Codex` single-select option to `ChatGPT/Codex` and assigned agent ownership for active issues. The line above is a historical 2026-10-10 configuration snapshot, not the current option list. Current Agent choices are `Unassigned`, `Cursor Cloud`, `Claude Code`, `ChatGPT/Codex`, and `Manual`. The read-only queue in `scripts/agent-queue.sh` accepts both `chatgpt` and `codex` command aliases and tolerates legacy `Codex` values in old exports. Project assignment does not imply implementation approval or readiness.
+
 **Status options.**
 
 | Baseline | Live |
