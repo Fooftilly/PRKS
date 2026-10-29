@@ -287,7 +287,8 @@ class TestLocalSpecifics(LocalStorageTestCase):
         )
         if out.returncode not in (0, 1):  # pragma: no cover - no git
             self.skipTest("git unavailable")
-        self.assertEqual(out.stdout.split(), ["backend/pg_facade/works.py", "backend/storage/objects.py"])
+        self.assertEqual(out.stdout.split(), ["backend/pg_facade/annotations.py", "backend/pg_facade/works.py",
+                                              "backend/storage/objects.py"])
 
 
 if __name__ == "__main__":
