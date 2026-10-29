@@ -334,6 +334,35 @@ class CrashRecoveryTests(ProcessingTestCase):
         staged = self.library.scan_processing_files()
         self.assertEqual([(row["rel_path"], row["status"]) for row in staged], [("swap.pdf", "pending")])
 
+    def test_a_claim_a_crash_left_is_put_back_by_the_next_scan(self) -> None:
+        path = self.put("crash.pdf")
+        file_id = self.staged("crash.pdf")
+        self.crash_after_commit(file_id)
+        claimed = inbox._claim(path)  # the process dies here, before the hash
+        assert claimed is not None
+        self.put("other.pdf")
+        pending = self.put("pending.pdf")
+        pending_claim = inbox._claim(pending)  # a staged file, claimed the same way
+        assert pending_claim is not None
+        staged = self.library.scan_processing_files()
+        self.assertEqual(sorted(row["rel_path"] for row in staged), ["other.pdf", "pending.pdf"])
+        self.assertIsNone(self.row(file_id))
+        self.assertFalse(os.path.exists(path))
+        self.assertTrue(os.path.isfile(pending))
+        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
+
+    def test_a_claimed_file_whose_name_was_taken_gets_a_new_name(self) -> None:
+        path = self.put("taken.pdf", b"%PDF-1.4 B")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        self.put("taken.pdf", b"%PDF-1.4 C")
+        staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
+        self.assertEqual(len(staged), 2)
+        self.assertEqual(staged[1], "taken.pdf")
+        self.assertRegex(staged[0], r"^taken \(recovered [0-9a-f]{8}\)\.pdf$")
+        with open(os.path.join(self.inbox, staged[0]), "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 B")
+
     def test_an_absent_file_only_loses_the_row(self) -> None:
         path = self.put("a.pdf")
         file_id = self.staged("a.pdf")

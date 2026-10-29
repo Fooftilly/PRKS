@@ -49,6 +49,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -73,6 +74,7 @@ _CHUNK = 1024 * 1024
 _HEADER = b"%PDF-"
 # A file the inbox protocol has claimed for removal (``_claim``).
 CLAIM_PREFIX = ".prks-claimed-"
+_CLAIM = re.compile(re.escape(CLAIM_PREFIX) + r"[0-9a-f]{32}-(.+)", re.DOTALL)
 HELD = "This file was restored from a backup, and the file at its path is not the one backed up."
 
 
@@ -101,14 +103,15 @@ def discover(inbox_dir: str) -> list[tuple[str, str]]:
     """``_discover_processing_pdfs``: ``(rel_path, filename)`` per PDF under the inbox.
 
     Paths are resolved, so a link leading outside the inbox is skipped, and
-    ``rel_path`` is ``/``-separated on every platform.
+    ``rel_path`` is ``/``-separated on every platform. A file the protocol
+    has claimed (:func:`_claim`) is not listed.
     """
     os.makedirs(inbox_dir, exist_ok=True)
     root = os.path.realpath(inbox_dir)
     found: list[tuple[str, str]] = []
     for directory, _dirs, names in os.walk(root):
         for name in sorted(names):
-            if not name.lower().endswith(".pdf"):
+            if not name.lower().endswith(".pdf") or name.startswith(CLAIM_PREFIX):
                 continue
             path = os.path.realpath(os.path.join(directory, name))
             if path != root and not path.startswith(root + os.sep):
@@ -158,10 +161,11 @@ def _claim(path: str) -> Optional[str]:
     Writers outside PRKS do not take the inbox lock, so a path can be
     replaced at any time. After the rename the claimed name holds exactly
     one file, which no outside writer names: what is hashed is what is
-    removed. The private name does not end in ``.pdf``, so a crash before it
-    is removed or put back never offers it for import.
+    removed. The private name keeps the file's name after the prefix, so
+    after a crash the next scan puts it back (:func:`recover_claims`); it
+    is never offered for import under the private name.
     """
-    claim = os.path.join(os.path.dirname(path), CLAIM_PREFIX + uuid.uuid4().hex)
+    claim = os.path.join(os.path.dirname(path), f"{CLAIM_PREFIX}{uuid.uuid4().hex}-{os.path.basename(path)}")
     try:
         os.rename(path, claim)
     except FileNotFoundError:
@@ -169,17 +173,47 @@ def _claim(path: str) -> Optional[str]:
     return claim
 
 
-def _put_back(claim: str, path: str) -> None:
-    """Return a claimed file to ``path``, never over a file that has arrived there since."""
-    try:
-        os.link(claim, path)
-    except FileExistsError:
-        LOGGER.warning("processing_claim_kept reason=path_taken")
+def _put_back(claim: str, path: str) -> bool:
+    """Make a claimed file visible again; whether it is.
+
+    It returns to ``path``, never over a file that has arrived there since;
+    then it takes a new name beside it (``<name> (recovered <id>).pdf``),
+    so both files are listed. On any other failure the claim stays, and the
+    next scan tries again.
+    """
+    stem, ext = os.path.splitext(path)
+    for target in (path, f"{stem} (recovered {uuid.uuid4().hex[:8]}){ext or '.pdf'}"):
+        try:
+            os.link(claim, target)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
+            return False
+        try:
+            os.remove(claim)
+        except OSError as exc:  # both names hold it; the next scan's recovery finds the claim again
+            LOGGER.warning("processing_claim_unlink_failed error=%s", type(exc).__name__)
+        return True
+    LOGGER.warning("processing_claim_kept reason=names_taken")
+    return False
+
+
+def recover_claims(inbox_dir: str) -> None:
+    """Put back every claimed file a crash left in the inbox (:func:`_claim`).
+
+    Runs under the inbox lock, so no claim of a running import or scan is
+    among them. A file whose import finished is then removed again by the
+    scan's own rule, by its hash.
+    """
+    root = os.path.realpath(inbox_dir)
+    if not os.path.isdir(root):
         return
-    except OSError as exc:
-        LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
-        return
-    os.remove(claim)
+    for directory, _dirs, names in os.walk(root):
+        for name in names:
+            found = _CLAIM.fullmatch(name)
+            if found is not None:
+                _put_back(os.path.join(directory, name), os.path.join(directory, found.group(1)))
 
 
 # -- scan -------------------------------------------------------------------------
@@ -188,6 +222,7 @@ def _put_back(claim: str, path: str) -> None:
 def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
     """Reconcile the Library's rows with the inbox, under the inbox lock (module docs)."""
     with inbox_lock(runner.database, runner.library_id):
+        recover_claims(inbox_dir)
         rows = runner.read(files.scan_rows)
         finished: list[str] = []
         for row in rows:
@@ -228,8 +263,7 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
         return True
     digest = file_sha256(claim)
     if digest != row["import_sha256"]:
-        _put_back(claim, path)
-        return digest is not None
+        return _put_back(claim, path) and digest is not None
     if _remove(inbox_dir, claim, path):
         return True
     _put_back(claim, path)
