@@ -1893,6 +1893,51 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             self.assertTrue(needed, reason)
 
 
+def _mock_failed_parallel_worker(test_ids, worker_report):
+    """Exercise parent attribution with a completed fake worker, no Chromium."""
+    from tests.e2e import run as runner
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        proc = mock.Mock()
+        proc.poll.return_value = 1
+        proc.returncode = 1
+        worker = {
+            "index": 0,
+            "proc": proc,
+            "handle": io.StringIO(),
+            "shard": test_ids,
+            "started": runner.time.perf_counter(),
+            "report_file": root / "report.json",
+            "log_file": root / "worker.log",
+            "heartbeat_file": root / "heartbeat.json",
+        }
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(runner, "REPO", root))
+            stack.enter_context(mock.patch.object(
+                runner, "apply_e2e_playwright_env", return_value=root
+            ))
+            stack.enter_context(mock.patch.object(
+                runner, "_spawn_worker", return_value=worker
+            ))
+            stack.enter_context(mock.patch.object(
+                runner, "_read_report", return_value=worker_report
+            ))
+            stack.enter_context(mock.patch.object(runner, "_stop_worker"))
+            stack.enter_context(mock.patch.object(
+                runner, "per_test_watchdog_s", return_value=0
+            ))
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    ok, observed, failed, _ = runner.run_parallel(
+                        test_ids, 1, dict.fromkeys(test_ids, 1.0), False
+                    )
+        saved = policy.load_failure_diagnostics(
+            root / ".tests" / "e2e-failure-diagnostics.json"
+        )
+    return ok, observed, failed, saved
+
+
 class UnexpectedE2ESkipGuardTests(unittest.TestCase):
     """Skipped unittest cases count as run but do not exercise browser contracts."""
 
@@ -2024,44 +2069,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
             "detail": "untrusted skip reason",
             "watchdog": False,
         }
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            proc = mock.Mock()
-            proc.poll.return_value = 1
-            proc.returncode = 1
-            worker = {
-                "index": 0,
-                "proc": proc,
-                "handle": io.StringIO(),
-                "shard": [tid],
-                "started": runner.time.perf_counter(),
-                "report_file": root / "report.json",
-                "log_file": root / "worker.log",
-                "heartbeat_file": root / "heartbeat.json",
-            }
-            with contextlib.ExitStack() as stack:
-                stack.enter_context(mock.patch.object(runner, "REPO", root))
-                stack.enter_context(mock.patch.object(
-                    runner, "apply_e2e_playwright_env", return_value=root
-                ))
-                stack.enter_context(mock.patch.object(
-                    runner, "_spawn_worker", return_value=worker
-                ))
-                stack.enter_context(mock.patch.object(
-                    runner, "_read_report", return_value=report
-                ))
-                stack.enter_context(mock.patch.object(runner, "_stop_worker"))
-                stack.enter_context(mock.patch.object(
-                    runner, "per_test_watchdog_s", return_value=0
-                ))
-                with contextlib.redirect_stdout(io.StringIO()):
-                    with contextlib.redirect_stderr(io.StringIO()):
-                        ok, observed, failed, _phases = runner.run_parallel(
-                            [tid], 1, {tid: 0.1}, False
-                        )
-            saved = policy.load_failure_diagnostics(
-                root / ".tests" / "e2e-failure-diagnostics.json"
-            )
+        ok, observed, failed, saved = _mock_failed_parallel_worker([tid], report)
         self.assertFalse(ok)
         self.assertEqual(observed, {tid: 0.1})
         self.assertEqual(failed, [tid])
@@ -2217,44 +2225,9 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
             (None, "worker-crash"),
         ):
             with self.subTest(kind=expected_kind):
-                with tempfile.TemporaryDirectory() as tmp:
-                    root = Path(tmp)
-                    proc = mock.Mock()
-                    proc.poll.return_value = 1
-                    proc.returncode = 1
-                    worker = {
-                        "index": 0,
-                        "proc": proc,
-                        "handle": io.StringIO(),
-                        "shard": [a, b],
-                        "started": runner.time.perf_counter(),
-                        "report_file": root / "report.json",
-                        "log_file": root / "worker.log",
-                        "heartbeat_file": root / "heartbeat.json",
-                    }
-                    with contextlib.ExitStack() as stack:
-                        stack.enter_context(mock.patch.object(runner, "REPO", root))
-                        stack.enter_context(mock.patch.object(
-                            runner, "apply_e2e_playwright_env", return_value=root
-                        ))
-                        stack.enter_context(mock.patch.object(
-                            runner, "_spawn_worker", return_value=worker
-                        ))
-                        stack.enter_context(mock.patch.object(
-                            runner, "_read_report", return_value=worker_report
-                        ))
-                        stack.enter_context(mock.patch.object(runner, "_stop_worker"))
-                        stack.enter_context(mock.patch.object(
-                            runner, "per_test_watchdog_s", return_value=0
-                        ))
-                        with contextlib.redirect_stdout(io.StringIO()):
-                            with contextlib.redirect_stderr(io.StringIO()):
-                                ok, _observed, failed, _phases = runner.run_parallel(
-                                    [a, b], 1, {a: 1.0, b: 1.0}, False
-                                )
-                    saved = policy.load_failure_diagnostics(
-                        root / ".tests" / "e2e-failure-diagnostics.json"
-                    )
+                ok, _observed, failed, saved = _mock_failed_parallel_worker(
+                    [a, b], worker_report
+                )
                 self.assertFalse(ok)
                 self.assertEqual(failed, [])
                 self.assertEqual(saved["kind"], expected_kind)
