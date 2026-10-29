@@ -44,10 +44,13 @@ passed. The source-only unbundled↔bundled transition test is deliberately
 excluded from default source and packaged E2E inventory.
 
 Missing required IDs, new/renamed test IDs, missing declared modules,
-undiscovered smoke IDs, unknown candidate IDs, or malformed feature
-selectors cause an invalid/fail-closed audit. The report lists the missing
-IDs and any IDs unmatched by the feature selectors; test-list ordering does
-not affect results. Contract tests use synthetic complete/partial fixtures.
+undiscovered smoke IDs, unknown candidate IDs, malformed feature
+selectors, or a feature map with no matches anywhere in discovery cause an
+invalid/fail-closed audit. The report lists missing IDs, unmapped source IDs,
+and individual unmatched feature selectors separately; those last two
+categories are diagnostic (some E2E tests are legitimately ungrouped, and
+some feature selectors may describe optional scenarios). Test-list ordering
+does not affect results. Contract tests use synthetic complete/partial fixtures.
 A real incomplete suite cannot be certified merely by an unchanged total:
 the runner's module list and the explicit obligations are the conservative
 floor, **not** a mathematical proof that all possible regressions were
