@@ -669,7 +669,7 @@ def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
     if watchdog and detail.startswith("per-test watchdog:"):
         return detail
     if (report or {}).get("kind") == "execution-count-mismatch":
-        if re.fullmatch(r"E2E execution count mismatch: selected=\\d+ completed=\\d+", detail):
+        if re.fullmatch(r"E2E execution count mismatch: selected=\d+ completed=\d+", detail):
             return detail
     return ""
 
