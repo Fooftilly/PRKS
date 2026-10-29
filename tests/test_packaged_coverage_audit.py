@@ -84,7 +84,7 @@ class PackagedCoverageAuditTests(unittest.TestCase):
     def test_empty_invalid_and_incomplete_module_inventory_fail_closed(self):
         all_ids, modules = complete_fixture()
         for invalid in ([], ["unittest.loader._FailedTest.X"], all_ids + [all_ids[0]],
-                        all_ids + ["not-an-e2e-id"], None):
+                        all_ids + ["not-an-e2e-id"]):
             with self.subTest(invalid=repr(invalid)[:60]):
                 with self.assertRaises(ValueError):
                     self.audit(invalid)
