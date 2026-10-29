@@ -10,6 +10,8 @@ bash scripts/agent-queue.sh claude   # Claude Code
 bash scripts/agent-queue.sh chatgpt  # ChatGPT/Codex, including Codex
 ```
 
+As of 2026-10-29, the maintainer renamed Project #3's Agent option from **Codex** to **ChatGPT/Codex**. Both `chatgpt` and `codex` command aliases select the new option. The helper also recognizes legacy `Codex` values in older/unrefreshed Project exports, without creating a separate agent or altering Project settings.
+
 The helper reads all Project #3 items once with `gh project item-list` and prints matching PRKS issues with their live Project Status and Execution fields. It rejects incomplete Project item lists, and never updates GitHub. It displays **all** assigned issues, including Inbox, Backlog, Blocked, In Progress and unaccepted candidates. Its output is **not** an actionable queue or authorization to start work.
 
 Before starting any issue:
