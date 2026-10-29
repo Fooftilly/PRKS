@@ -39,7 +39,7 @@ VIEWS_QUERY = """query($owner:String!,$number:Int!,$after:String){
       id number owner { __typename ... on User { login } }
       views(first:100,after:$after) {
         totalCount pageInfo { hasNextPage endCursor }
-        nodes { id number name filter layout }
+        nodes { id number name filter layout updatedAt }
       }
     }
   }
@@ -80,6 +80,7 @@ def _view(raw: Any) -> dict:
     if not isinstance(raw, dict):
         raise ViewError("Project view is not an object")
     if (not isinstance(raw.get("id"), str)
+            or not isinstance(raw.get("updatedAt"), str)
             or type(raw.get("number")) is not int
             or not isinstance(raw.get("name"), str)
             or not isinstance(raw.get("filter"), (str, type(None)))
@@ -142,7 +143,9 @@ def reconcile(transport: Transport, *, apply: bool) -> list[str]:
         return []
     if not apply:
         return ["View #9 Agent Queue: ownership filter differs from policy"]
-    # Guard against an independent UI edit while the view list was fetched.
+    # GitHub does not offer a compare-and-swap revision for view filters.
+    # Recheck updatedAt immediately before writing to catch prior UI edits;
+    # simultaneous edits inside the subsequent API call remain possible.
     if queue(views(transport)) != current:
         raise ViewError("Agent Queue changed concurrently; no mutation made")
     result = transport(UPDATE_VIEW, {
