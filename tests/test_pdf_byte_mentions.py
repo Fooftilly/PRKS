@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import random
 import unittest
 
 from backend.pdf_byte_mentions import (
     iter_double_bracket_inners,
+    iter_double_bracket_inners_chunked,
+    iter_pdf_mentioned_labels_chunked,
     iter_pdf_mentioned_labels,
     normalize_pdf_mentioned_label,
 )
@@ -70,6 +73,28 @@ class PdfByteMentionsTests(unittest.TestCase):
         # Former ReDoS shape: many '[[a' without closing. Must finish quickly.
         data = b"[[" + (b"[[a" * 20000)
         self.assertEqual(list(iter_double_bracket_inners(data)), [])
+
+
+    def test_chunked_scan_finds_markers_split_across_chunks(self) -> None:
+        data = b"x [[Ada Lovelace]] y [[Curie]]"
+        for size in range(1, len(data) + 1):
+            chunks = [data[i:i + size] for i in range(0, len(data), size)]
+            with self.subTest(size=size):
+                self.assertEqual(list(iter_pdf_mentioned_labels_chunked(chunks)), ["Ada Lovelace", "Curie"])
+
+    def test_chunked_scan_matches_the_whole_buffer_scan(self) -> None:
+        rng = random.Random(635)
+        for _ in range(20000):
+            data = bytes(rng.choice(b"[]ab ") for _ in range(rng.randint(0, 40)))
+            max_inner = rng.randint(0, 6)
+            cuts = sorted(rng.sample(range(len(data) + 1), rng.randint(0, min(len(data) + 1, 6))))
+            chunks = [data[a:b] for a, b in zip([0, *cuts], [*cuts, len(data)])]
+            self.assertEqual(list(iter_double_bracket_inners_chunked(chunks, max_inner=max_inner)),
+                             list(iter_double_bracket_inners(data, max_inner=max_inner)), (data, chunks))
+
+    def test_chunked_scan_does_not_keep_an_oversized_inner(self) -> None:
+        chunks = [b"[[", *([b"a" * 1000] * 1000), b"]] [[ok]]"]
+        self.assertEqual(list(iter_double_bracket_inners_chunked(chunks)), [b"ok"])
 
 
 if __name__ == "__main__":

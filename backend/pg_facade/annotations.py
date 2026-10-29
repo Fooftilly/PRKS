@@ -32,22 +32,30 @@ and returns, but acknowledge only committed bytes:
 - ``mark_work_pdf_materialized`` may only lower the materialized revision
   (record lag) or, without ``at_revision``, report it; a revision above it
   is ``ValueError(STALE)``, since no committed bytes embed one.
+
+Replacing a Work's PDF with another document
+(:mod:`backend.domain.objects.replace`) is the private
+:meth:`AnnotationsMixin._replace_work_pdf`, for the same reason.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, List, NoReturn, TypeVar
 
+from backend.log_safety import safe_error_type, safe_log_id
 from backend.pg_facade.context import current_context
 from backend.pg_facade.registry import FacadeMixin, ported
 
 if TYPE_CHECKING:
     from backend.domain.identity.library_scope import LibraryScope
+    from backend.domain.objects.ingest import IngestedPdf
     from backend.storage.objects import StorageBackend, Writer
 
 T = TypeVar("T")
+LOGGER = logging.getLogger("prks.objects")
 
 
 def _read(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
@@ -56,13 +64,14 @@ def _read(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
     return library_query(library._database, current_context(), fn)
 
 
-def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
+def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T], *, serializable: bool = False) -> T:
     from backend.db.database import Isolation
     from backend.domain.identity.authorization import Capability
     from backend.domain.identity.library_scope import library_command
 
+    isolation = Isolation.SERIALIZABLE if serializable else Isolation.READ_COMMITTED
     return library_command(library._database, current_context(), Capability.EDIT_LIBRARY, fn,
-                           isolation=Isolation.READ_COMMITTED)
+                           isolation=isolation)
 
 
 def _raise_refused(refused: str) -> NoReturn:
@@ -188,13 +197,73 @@ class AnnotationsMixin(FacadeMixin):
             _raise_refused(checked)
         storage = self._annotation_objects()
         written = ingest.store_pdf(storage, "annotated.pdf", write, context="work-pdf-materialize")
+        labels = self._labels(storage, written)
         done = _command(self, lambda scope: materialize.commit(scope, storage, work_id, written, claimed_revision))
         if isinstance(done, str):
             _raise_refused(done)
+        self._mention(work_id, labels)
         return {"work_id": work_id, "file_path": "/api/pdfs/" + done.locator,
                 "content_sha256": done.sha256, "byte_size": done.size,
                 "materialized_pdf_annotation_revision": done.revision,
                 "canonical_annotation_set_revision": done.revision, "stale": False}
+
+    def _replace_work_pdf(self, work_id: str, write: Writer) -> dict[str, Any]:
+        """Replace the Work's managed PDF with the document ``write`` produces.
+
+        Not a ``PRKSDatabase`` method (SQLite's adapter writes the bytes
+        itself), so not public; routing ``POST /api/works/{id}/pdf`` without a
+        materialization claim here is PG-C1's. The Work and its managed PDF are
+        checked, for an actor who may edit, before anything is written; the
+        bytes go to fresh keys; then one command adopts them under the Work
+        and Asset locks (:func:`backend.domain.objects.replace.commit`). The
+        Persons the bytes mention are then linked as ``Mentioned``, best
+        effort, as on SQLite. Raises ``LookupError`` for a missing Work or one
+        without a managed PDF; a refused write's keys are claimed for cleanup.
+
+        The adapter still owes SQLite's other after-write effect: the text
+        index (``text_index.sync_work(work_id, result["file_path"])``), which
+        reads the bytes through the returned ``file_path``.
+        """
+        from backend.domain.identity.authorization import Capability
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.objects import ingest, replace
+
+        refused = library_query(self._database, current_context(),
+                                lambda scope: replace.check(scope, work_id),
+                                capability=Capability.EDIT_LIBRARY)
+        if refused is not None:
+            _raise_refused(refused)
+        storage = self._annotation_objects()
+        written = ingest.store_pdf(storage, "replaced.pdf", write, context="work-pdf-overwrite")
+        labels = self._labels(storage, written)
+        done = _command(self, lambda scope: replace.commit(scope, storage, work_id, written))
+        if isinstance(done, str):
+            _raise_refused(done)
+        self._mention(work_id, labels)
+        return replace.result(done)
+
+    def _labels(self, storage: StorageBackend, written: IngestedPdf) -> list[str]:
+        """The names the raw bytes mention, read before the command can release the raw key."""
+        from backend.domain.objects import replace
+        from backend.storage.objects import StorageObjectError
+
+        try:
+            return replace.stored_labels(storage, written.source.key)
+        except (OSError, StorageObjectError) as exc:
+            LOGGER.warning("pdf_mentions_read_failed error_type=%s", safe_error_type(exc))
+            return []
+
+    def _mention(self, work_id: str, labels: List[str]) -> None:
+        """SQLite's ``_sync_mentioned_roles``: each label in its own command, a failure skipped."""
+        from backend.domain.objects import replace
+
+        for label in labels:
+            try:
+                _command(self, lambda scope, label=label: replace.mention(scope, work_id, label),
+                         serializable=True)
+            except Exception as exc:  # noqa: BLE001 - best effort, as on SQLite
+                LOGGER.warning("pdf_mentioned_role_failed work_id=%s error_type=%s",
+                               safe_log_id(work_id), safe_error_type(exc))
 
     def _annotation_objects(self) -> StorageBackend:
         from backend.storage.objects import LocalFilesystemStorage
