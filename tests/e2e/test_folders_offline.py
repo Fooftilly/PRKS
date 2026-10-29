@@ -7,7 +7,7 @@ unreachable must land on a usable cached hierarchy, not an empty library.
 import json
 import os
 import unittest
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
@@ -413,10 +413,19 @@ class FoldersOfflineTests(unittest.TestCase):
 
         page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Brand New Folder')")
         page.wait_for_selector('#folder-modal:not(.hidden)')
-        page.evaluate("""async () => {
-            try { await createFolder('Direct', ''); } catch (_) {}
-        }""")
-        page.wait_for_timeout(400)
+        # A zero-request assertion alone passes when createFolder throws or
+        # never writes an operation. The offline write must actually enqueue.
+        created_id = page.evaluate("async () => await createFolder('Direct', '')")
+        self.assertTrue(created_id, 'offline createFolder returned no Folder ID')
+        wait_for_async(
+            page,
+            """id => prksSync.store.listOperations().then(rows =>
+                rows.some(op => op.operation === 'CREATE_FOLDER'
+                    && op.entity_id === id && op.payload?.title === 'Direct'))""",
+            arg=created_id,
+            timeout=20000,
+            message='offline createFolder failed to enqueue the expected operation',
+        )
         self.assertEqual(posts, [])
 
     def test_create_dialog_disconnect_race_issues_no_request(self):
@@ -508,9 +517,12 @@ class FoldersOfflineTests(unittest.TestCase):
         # The closed card must not fetch the folder catalog either.
         self.assertEqual([p for p in seen if p == '/api/folders'], [])
         # ... and the current folder stays an ordinary navigable link.
+        # Work A is assigned to the seeded parent Folder; losing its
+        # navigable summary link must not silently pass this test.
         link = page.locator('.prks-work-folder-summary a')
-        if link.count():
-            self.assertTrue(link.first.get_attribute('href').startswith('#/folders/'))
+        link.wait_for(state='visible', timeout=10000)
+        expected_href = '#/folders/' + quote(str(ids['folder_parent']), safe='')
+        self.assertEqual(link.get_attribute('href'), expected_href)
 
     def test_open_work_folder_editor_keeps_clear_new_and_done(self):
         server, page, context, _c = self.start()
