@@ -29,6 +29,7 @@ transaction explicitly with its isolation level.
 
 from __future__ import annotations
 
+import threading
 import time
 import weakref
 from random import SystemRandom
@@ -47,6 +48,7 @@ from backend.db.config import DatabaseConfig
 from backend.db.errors import (
     ConstraintRegistry,
     DatabaseUnavailableError,
+    PoolExhaustedError,
     is_retryable,
     map_database_error,
 )
@@ -150,6 +152,8 @@ class Database:
         self._config = config
         self._registry = registry
         self._sleep = sleep
+        # Bounds the connections advisory_lock opens outside the pool.
+        self._lock_slots = threading.BoundedSemaphore(config.pool_max)
         self._pool = ConnectionPool(
             conninfo=config.conninfo,
             kwargs={"autocommit": True, "application_name": config.application_name},
@@ -252,12 +256,26 @@ class Database:
         The lock is session-level, taken on a connection of its own, outside
         the pool: it spans the commits of the commands the block runs on
         pooled connections, and it never takes a pool slot those commands
-        need (a pool of one still works). It waits under the session's
-        ``lock_timeout``. The unlock runs on every path, and the connection
-        is closed after it, which also ends the lock if the unlock failed.
+        need (a pool of one still works). At most ``pool_max`` such
+        connections are open at once; a caller that waits longer than the
+        pool timeout for one gets ``PoolExhaustedError``, as a pool timeout
+        does. The lock waits under the session's ``lock_timeout``. The
+        unlock runs on every path, and the connection is closed after it,
+        which also ends the lock if the unlock failed.
         """
         verb: LiteralString = "pg_advisory_lock_shared" if shared else "pg_advisory_lock"
         undo: LiteralString = "pg_advisory_unlock_shared" if shared else "pg_advisory_unlock"
+        if not self._lock_slots.acquire(timeout=self._config.pool_timeout_seconds):
+            raise PoolExhaustedError()
+        try:
+            with self._lock_connection(key, params, verb, undo):
+                yield
+        finally:
+            self._lock_slots.release()
+
+    @contextmanager
+    def _lock_connection(self, key: LiteralString, params: Params, verb: LiteralString,
+                         undo: LiteralString) -> Iterator[None]:
         try:
             conn = psycopg.connect(self._config.conninfo, autocommit=True,
                                    application_name=self._config.application_name,

@@ -243,6 +243,10 @@ def import_file(runner: Runner, inbox_dir: str, objects: StorageBackend, file_id
         if not header.startswith(_HEADER):
             raise _refuse(runner, file_id, "File does not look like a valid PDF (missing %PDF header).")
         stored = _store(runner, objects, file_id, source, str(row["filename"] or os.path.basename(source)))
+        if row["restore_hold"] and stored.source.sha256 != row["restore_sha256"]:
+            # The file changed after the check above: what was stored is not
+            # the backed-up file. Its keys are orphans for the sweep (§11.2).
+            raise ValueError(HELD)
         work_id, sha256 = _commit(runner, objects, file_id, stored, build)
         # The file is removed only while it is the one ingested; another
         # writer's replacement stays, and the next scan lists it as new.

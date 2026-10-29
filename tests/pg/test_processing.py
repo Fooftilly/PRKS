@@ -24,7 +24,7 @@ import psycopg
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database, Isolation
-from backend.db.errors import ConstraintViolationError
+from backend.db.errors import ConstraintViolationError, PoolExhaustedError
 from backend.domain.identity import library_scope
 from backend.domain.identity.authorization import AccessRefused, Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command
@@ -131,6 +131,18 @@ class InboxLockTests(ProcessingTestCase):
         out = library.import_processing_file(staged[0]["id"])
         self.assertIsNotNone(library.get_work(out["work_id"]))
         self.assertTrue(self.lock_is_free())
+
+    def test_lock_connections_are_bounded_by_the_pool_size(self) -> None:
+        small = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0, pool_max=1,
+                                        pool_timeout_seconds=0.2))
+        self.addCleanup(small.close)
+        with small.advisory_lock("hashtextextended('prks.test:' || %s, 0)", ("a",)):
+            with self.assertRaises(PoolExhaustedError):
+                with small.advisory_lock("hashtextextended('prks.test:' || %s, 0)", ("b",)):
+                    pass  # pragma: no cover - no slot is free
+            self.assertEqual(small.command(lambda tx: tx.execute("SELECT 1 AS one").fetchone())["one"], 1)
+        with small.advisory_lock("hashtextextended('prks.test:' || %s, 0)", ("b",)):
+            pass
 
     def test_the_lock_is_held_across_the_commit_and_the_removal(self) -> None:
         self.put("held.pdf")
@@ -371,6 +383,20 @@ class RestoreHoldTests(ProcessingTestCase):
         self.put("nohash.pdf")
         with self.assertRaises(ValueError):
             self.library.import_processing_file(nohash)
+
+    def test_a_held_file_changed_after_its_check_is_not_imported(self) -> None:
+        expected = hashlib.sha256(PDF).hexdigest()
+        file_id = self.held("swap.pdf", expected)
+        self.put("swap.pdf", b"%PDF-1.4 written after the check")
+        with mock.patch.object(inbox, "file_sha256", return_value=expected):
+            with self.assertRaises(ValueError) as ctx:
+                self.library.import_processing_file(file_id)
+        self.assertEqual(str(ctx.exception), inbox.HELD)
+        row = self.row(file_id)
+        assert row is not None
+        self.assertTrue(row["restore_hold"])
+        self.assertEqual(self.count("works"), 0)
+        self.assertTrue(os.path.isfile(os.path.join(self.inbox, "swap.pdf")))
 
     def test_a_hold_without_a_hash_stays(self) -> None:
         file_id = self.held("nohash.pdf", None)
