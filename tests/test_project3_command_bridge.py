@@ -188,7 +188,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_missing_project_token_never_claims(self):
         with self.assertRaisesRegex(bridge.BridgeError, "not configured"):
-            self.go(token="")
+            self.go(token=None)
         self.assertFalse(self.api.claimed)
 
     def test_partial_write_failure_keeps_replay_claim(self):
