@@ -160,8 +160,10 @@ async function verifyCanonicalFolderFieldAcknowledgements() {
     for (const [field, raw, expected] of cases) {
         const base = { id, title: 'Old title', description: 'Old description',
             private_notes: 'Old notes', parent_id: null };
-        await store.putList('folders:index', [base, untouched], '');
-        await store.putEntity('folder', id, base, '');
+        // List and detail are distinct snapshots: an accidental in-place
+        // mutation in one projection must not satisfy the other's assertion.
+        await store.putList('folders:index', [{ ...base }, { ...untouched }], '');
+        await store.putEntity('folder', id, { ...base }, '');
         const reconciled = await runtime.reconcileFolderField({
             code: 'ACKNOWLEDGED', folder_id: id, field,
             server_revision: 7, member_work_ids: [],
