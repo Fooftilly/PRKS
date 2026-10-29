@@ -10,6 +10,7 @@
 const path = require('path');
 const rootDir = path.resolve(__dirname, '../..');
 const mod = require(path.join(rootDir, 'frontend/js/offline-runtime.js'));
+require(path.join(rootDir, 'frontend/js/folder-state.js'));
 
 let passed = 0;
 let failed = 0;
@@ -138,7 +139,56 @@ function domainErrorResponse(status) {
     return { ok: false, status: status };
 }
 
+async function verifyCanonicalFolderFieldAcknowledgements() {
+    // These are cache ACK paths, not pending drafts: server canonical_wire
+    // strips Python whitespace and substitutes a title for an empty result.
+    const store = makeFakeStore({ isAvailable: async () => true });
+    const runtime = mod.createPrksOfflineRuntime({
+        store, prksRequest: () => Promise.reject(Error('offline')),
+        setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+        window: null, caches: null, navigator: null,
+    });
+    const id = 'F-CANONICAL';
+    const untouched = { id: 'F-OTHER', title: 'Unchanged', description: 'Keep' };
+    const cases = [
+        ['title', ' \t Reading list \u00a0 ', 'Reading list'],
+        ['title', ' \u001c \u001f ', 'Untitled Folder'],
+        ['description', ' \u001c Description \u001f ', 'Description'],
+        ['description', ' \t \u00a0 ', ''],
+        ['private_notes', ' \t Notes \u00a0 ', 'Notes'],
+    ];
+    for (const [field, raw, expected] of cases) {
+        const base = { id, title: 'Old title', description: 'Old description',
+            private_notes: 'Old notes', parent_id: null };
+        await store.putList('folders:index', [base, untouched], '');
+        await store.putEntity('folder', id, base, '');
+        const reconciled = await runtime.reconcileFolderField({
+            code: 'ACKNOWLEDGED', folder_id: id, field,
+            server_revision: 7, member_work_ids: [],
+        }, { payload: { value: raw } });
+        assertEq(field + ' canonical ACK applied', reconciled, true);
+        const list = (await store.getList('folders:index')).value;
+        assertEq(field + ' canonical Folder list row', list[0][field], expected);
+        assertEq(field + ' other Folder untouched', list[1], untouched);
+        const detail = (await store.getEntity('folder', id)).value;
+        assertEq(field + ' canonical Folder detail', detail[field], expected);
+    }
+    // Parent IDs are pointers, not text; the ACK invalidates stale parent
+    // objects in the detail cache instead of treating their ID as a title.
+    await store.putList('folders:index', [{ id, parent_id: null }], '');
+    await store.putEntity('folder', id, { id, parent: { id: 'F-OLD' } }, '');
+    const moved = await runtime.reconcileFolderField({
+        code: 'ACKNOWLEDGED', folder_id: id,
+        field: 'parent_id', server_revision: 8,
+    }, { payload: { value: 'F-PARENT' } });
+    assertEq('parent-id ACK applied', moved, true);
+    assertEq('parent-id list row retains the pointer',
+        (await store.getList('folders:index')).value[0].parent_id, 'F-PARENT');
+    assertEq('parent-id ACK invalidates stale detail', await store.getEntity('folder', id), null);
+}
+
 async function run() {
+    await verifyCanonicalFolderFieldAcknowledgements();
     /* Fifth-domain cleanup is audited: no sweep may touch another domain. */
     {
         const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups'];
