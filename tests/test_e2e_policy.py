@@ -1893,6 +1893,60 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             self.assertTrue(needed, reason)
 
 
+class ExternalShardCompletionGuardTests(unittest.TestCase):
+    """Green external shards must have a completion for every selected ID."""
+
+    def test_exact_completed_ids_are_accepted(self):
+        from tests.e2e import run as runner
+
+        ids = [
+            "tests.e2e.test_app.FooTests.test_first",
+            "tests.e2e.test_app.FooTests.test_second",
+        ]
+        self.assertIsNone(
+            runner._external_shard_completion_error(ids, {ids[1]: 2.0, ids[0]: 1.0})
+        )
+
+    def test_missing_extra_and_duplicate_ids_fail_closed(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        c = "tests.e2e.test_app.FooTests.test_unselected"
+        missing = runner._external_shard_completion_error([a, b], {a: 1.0})
+        self.assertIn("missing=1", missing)
+        self.assertIn(b, missing)
+        extra = runner._external_shard_completion_error([a], {a: 1.0, c: 2.0})
+        self.assertIn("unexpected=1", extra)
+        self.assertIn(c, extra)
+        duplicate = runner._external_shard_completion_error([a, a], {a: 1.0})
+        self.assertIn("duplicate test IDs", duplicate)
+
+    def test_green_unittest_result_with_missing_completion_fails_shard(self):
+        from tests.e2e import run as runner
+
+        ids = [
+            "tests.e2e.test_app.FooTests.test_first",
+            "tests.e2e.test_app.FooTests.test_second",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(runner, "REPO", Path(tmp)))
+                stack.enter_context(mock.patch.object(runner, "discover_test_ids", return_value=ids))
+                stack.enter_context(mock.patch.object(runner, "full_gate_timeout_s", return_value=0))
+                stack.enter_context(mock.patch.object(runner, "ensure_chromium_installed"))
+                stack.enter_context(mock.patch.object(runner, "run_serial",
+                    return_value=(True, {ids[0]: 1.0}, [], {})))
+                pointer = stack.enter_context(mock.patch.object(runner, "_run_pointer_capture"))
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    code = runner.main(["--shard", "1/1", "--no-pointer-capture"])
+            self.assertEqual(code, 1)
+            self.assertIn("external E2E shard completion mismatch", stderr.getvalue())
+            self.assertIn("missing=1", stderr.getvalue())
+            pointer.assert_not_called()
+
+
 class BenchmarkModeTests(unittest.TestCase):
     """Effective benchmark configuration — CLI flags are exported into env first."""
 
