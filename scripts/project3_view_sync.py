@@ -140,11 +140,11 @@ def views(transport: Transport) -> list[dict[str, Any]]:
 def identify(items: list[dict]) -> tuple[dict, dict | None]:
     queue = [v for v in items if v["number"] == QUEUE_NUMBER]
     ready = [v for v in items if v["name"] == READY_NAME]
-    if len(queue) != 1 or queue[0]["name"] != QUEUE_NAME or queue[0]["layout"] != "TABLE":
+    if len(queue) != 1 or queue[0]["name"] != QUEUE_NAME or queue[0]["layout"] != "TABLE_LAYOUT":
         raise ViewError("View #9 is no longer the expected Agent Queue table; refusing to modify")
     if len(ready) > 1:
         raise ViewError("Multiple Agent Ready views; refusing to guess")
-    if ready and ready[0]["layout"] != "TABLE":
+    if ready and ready[0]["layout"] != "TABLE_LAYOUT":
         raise ViewError("Existing Agent Ready view is not a table")
     return queue[0], ready[0] if ready else None
 
@@ -187,13 +187,13 @@ def reconcile(transport: Transport, *, apply: bool) -> list[str]:
             if found is not None:
                 raise ViewError("Agent Ready was concurrently created; rerun")
             created = mutate(transport, CREATE_VIEW, "createProjectV2View", {
-                "input": {"projectId": PROJECT_ID, "name": READY_NAME, "layout": "TABLE"}
+                "input": {"projectId": PROJECT_ID, "name": READY_NAME, "layout": "TABLE_LAYOUT"}
             })
             # Creation precedes filter assignment because CreateProjectV2ViewInput
             # does not accept a filter. Verify and set it immediately.
             fresh = views(transport)
             ready = next((v for v in fresh if v["id"] == created["id"]), None)
-            if ready is None or ready["name"] != READY_NAME or ready["layout"] != "TABLE":
+            if ready is None or ready["name"] != READY_NAME or ready["layout"] != "TABLE_LAYOUT":
                 raise ViewError("Created Agent Ready view needs inspection")
             update_filter(transport, ready, READY_FILTER)
     elif ready["filter"] != READY_FILTER:
