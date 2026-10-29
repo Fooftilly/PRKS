@@ -7341,13 +7341,12 @@ class WorkspaceTilingTests(_BrowserE2E):
             "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
             arg=ids["mainTabId"],
         )
-        manage_btn = page.locator("#panel-content button", has_text="Manage relationships")
-        # Reopening the focused Work's relationship editor is part of the
-        # assertion: a missing action must not pass because role text was
-        # already rendered in the read-only panel.
-        manage_btn.wait_for(state="visible", timeout=15000)
-        manage_btn.click()
-        editor_role = page.locator(".work-linked-persons__role", has_text="Editor")
+        # The relationship editor was opened on Main before the delayed
+        # link, and it can remain expanded when focus returns. Requiring its
+        # collapsed "Manage relationships" opener here is incorrect; that
+        # button is absent while the editor is already open. Assert the
+        # actual refreshed role within Main's owned panel instead.
+        editor_role = page.locator("#panel-content .work-linked-persons__role", has_text="Editor")
         editor_role.wait_for()
         self.assertIn(PERSON_DISPLAY, editor_role.inner_text())
 
@@ -13043,9 +13042,12 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#work-folder-search").fill("Uncategorized")
         page.locator("#folder-results .result-item", has_text="Uncategorized").first.click()
         page.locator("#work-folder-error").wait_for(state="hidden")
+        # Selecting the default "Uncategorized" does not make the form dirty;
+        # create an actual unsaved draft before exercising the leave guard.
+        page.locator("#work-title").fill("E2E Discarded Folder Draft")
         page.locator("#work-modal-cancel").click()
-        # The modal contains an edited title and Folder selection. Silently
-        # skipping a missing dirty-draft confirmation would hide data-loss UX.
+        # A dirty title must produce a discard confirmation; a missing guard
+        # must fail rather than being bypassed conditionally.
         page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for(
             state="visible", timeout=15000
         )
