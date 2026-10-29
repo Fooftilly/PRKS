@@ -27,6 +27,12 @@ Do not encode conflicting overrides of load-bearing root invariants (storage
 safety, privacy/logging, issue taxonomy, etc.); keep nested files additive
 refinements and routers instead of relying on root precedence to win a conflict.
 
+## Agent task discovery (Project #3)
+
+Before choosing new PRKS work, check the Project #3 custom **Agent** field (not native issue Assignees). Where a local shell is available, run `bash scripts/agent-queue.sh cursor|claude|chatgpt` for the current executor. Claude Code, Cursor Cloud and ChatGPT/Codex are distinct Agent options; ChatGPT and Codex share the `chatgpt` queue. See `docs/agent-workflows/agent-queue.md` for the read-only workflow and hosted-agent fallback.
+
+An assigned issue is not necessarily actionable. Verify live Status/Execution, acceptance (including candidate labels), native open blockers, another agent's ownership, roadmap supersession and overlapping PRs *before* implementation. In particular, do not independently repair SQLite-only paths being replaced by the PostgreSQL roadmap or work on code that an accepted architecture slice will retire. Do not change Project fields, labels or Status merely to make a task appear ready. If the Project data cannot be read and validated, treat readiness as unknown instead of inferring assignments.
+
 ## Pull request merge coordination
 
 - Every PR merge into `master` requires the maintainer's explicit approval. Agents may prepare, review, and fix PRs but must not merge them, enable GitHub auto-merge, comment `@mergifyio queue`, or enable Mergify's Merge Queue or auto-merge rules. The Mergify Merge Queue product is intentionally disabled in the dashboard; the `.mergify.yml` file cannot disable it by itself.
