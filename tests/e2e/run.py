@@ -333,6 +333,20 @@ def _supervise_full_gate(argv, timeout_s: int) -> int:
     return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
 
 
+def _unexpected_skips_error(skipped) -> str | None:
+    """A unittest skip counts as a run, but did not execute the test contract.
+
+    The Chromium E2E gate must fail closed instead of reporting full coverage.
+    Include only test IDs, never arbitrary skip reasons or fixture content.
+    """
+    if not skipped:
+        return None
+    ids = sorted(test.id() for test, _reason in skipped)
+    return "E2E skipped %d selected test(s): %s" % (
+        len(ids), ", ".join(ids[:3])
+    )
+
+
 def _execution_count_error(selected_ids, executed_count: int) -> str | None:
     """Check unittest's actual execution count separately from timing-map keys."""
     expected = len(selected_ids)
@@ -877,6 +891,12 @@ def run_worker(
             if count_error:
                 report["kind"] = "execution-count-mismatch"
                 report["detail"] = count_error
+                rc = 1
+        if rc == 0:
+            skip_error = _unexpected_skips_error(result.skipped)
+            if skip_error:
+                report["kind"] = "unexpected-skip"
+                report["detail"] = skip_error
                 rc = 1
         junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
         if junit_dir:
@@ -1534,6 +1554,11 @@ def run_serial(
         count_error = _execution_count_error(test_ids, result.testsRun)
         if count_error:
             print("::error::%s" % count_error, file=sys.stderr)
+            success = False
+    if success:
+        skip_error = _unexpected_skips_error(result.skipped)
+        if skip_error:
+            print("::error::%s" % skip_error, file=sys.stderr)
             success = False
     return (
         success,
