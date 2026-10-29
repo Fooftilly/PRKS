@@ -333,6 +333,28 @@ def _supervise_full_gate(argv, timeout_s: int) -> int:
     return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
 
 
+def _skipped_test_ids(skipped) -> list[str]:
+    """Recover rerunnable parent IDs, never SubTest parameter reprs or reasons."""
+    ids = set()
+    for test, _reason in skipped:
+        parent = getattr(test, "test_case", None)
+        # _SubTest.id() appends reprs of parameter values. Only a real
+        # TestCase parent is safe to use; mocks are not subtests.
+        case = parent if isinstance(parent, unittest.TestCase) else test
+        ids.add(case.id())
+    return sorted(ids)
+
+
+def _unexpected_skips_error(skipped) -> str | None:
+    """Reject skipped Chromium cases; print only parent test IDs, no reasons."""
+    ids = _skipped_test_ids(skipped)
+    if not ids:
+        return None
+    return "E2E skipped %d selected test(s): %s" % (
+        len(ids), ", ".join(ids[:3])
+    )
+
+
 def _execution_count_error(selected_ids, executed_count: int) -> str | None:
     """Check unittest's actual execution count separately from timing-map keys."""
     expected = len(selected_ids)
@@ -671,6 +693,18 @@ def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
     if (report or {}).get("kind") == "execution-count-mismatch":
         if re.fullmatch(r"E2E execution count mismatch: selected=\d+ completed=\d+", detail):
             return detail
+    if (report or {}).get("kind") == "unexpected-skip":
+        ids = list((report or {}).get("failed_ids") or [])
+        # Reconstruct a fixed-format summary from safe parent test IDs.
+        # Never forward raw unittest text, skip reasons, or subtest parameters.
+        if ids and all(
+            isinstance(tid, str)
+            and re.fullmatch(r"tests\.e2e\.[A-Za-z0-9_.]+", tid)
+            for tid in ids
+        ):
+            return "E2E skipped %d selected test(s): %s" % (
+                len(ids), ", ".join(sorted(set(ids))[:3])
+            )
     return ""
 
 
@@ -867,7 +901,9 @@ def run_worker(
         report["failures"] = len(result.failures)
         report["errors"] = len(result.errors)
         report["skipped"] = len(result.skipped)
-        report["failed_ids"] = _failed_ids_from_result(result)
+        report["failed_ids"] = sorted(set(
+            _failed_ids_from_result(result) + _skipped_test_ids(result.skipped)
+        ))
         report["timings"] = {k: round(v, 3) for k, v in result.timings.items()}
         report["phase_timings"] = result.phase_timings
         report["detail"] = _failure_detail(result)
@@ -877,6 +913,12 @@ def run_worker(
             if count_error:
                 report["kind"] = "execution-count-mismatch"
                 report["detail"] = count_error
+                rc = 1
+        if rc == 0:
+            skip_error = _unexpected_skips_error(result.skipped)
+            if skip_error:
+                report["kind"] = "unexpected-skip"
+                report["detail"] = skip_error
                 rc = 1
         junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
         if junit_dir:
@@ -1251,10 +1293,15 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             report is not None
                             and report.get("kind") == "execution-count-mismatch"
                         )
+                        is_unexpected_skip = (
+                            report is not None
+                            and report.get("kind") == "unexpected-skip"
+                        )
                         if (
                             not reported_failed
                             and active_id
                             and not is_count_mismatch
+                            and not is_unexpected_skip
                             and active_id not in failed_ids
                         ):
                             failed_ids.append(active_id)
@@ -1265,6 +1312,11 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                                 reported_failed or ([active_id] if active_id else [])
                             )
                             tid = active_id or (reported_failed[0] if reported_failed else "")
+                        elif is_unexpected_skip:
+                            kind = "unexpected-skip"
+                            record_failed = list(reported_failed)
+                            tid = record_failed[0] if record_failed else ""
+                            stage = ""
                         elif reported_failed:
                             kind = "assertion-failure"
                             record_failed = list(reported_failed)
@@ -1535,10 +1587,15 @@ def run_serial(
         if count_error:
             print("::error::%s" % count_error, file=sys.stderr)
             success = False
+    if success:
+        skip_error = _unexpected_skips_error(result.skipped)
+        if skip_error:
+            print("::error::%s" % skip_error, file=sys.stderr)
+            success = False
     return (
         success,
         {k: round(v, 3) for k, v in result.timings.items()},
-        _failed_ids_from_result(result),
+        sorted(set(_failed_ids_from_result(result) + _skipped_test_ids(result.skipped))),
         result.phase_timings,
     )
 
