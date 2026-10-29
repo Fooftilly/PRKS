@@ -6,10 +6,13 @@ if [[ $# -ne 1 ]]; then
   echo 'Usage: bash scripts/agent-queue.sh cursor|claude|chatgpt' >&2
   exit 2
 fi
-case "$1" in
-  cursor|'Cursor Cloud') role='Cursor Cloud' ;;
-  claude|'Claude Code') role='Claude Code' ;;
-  chatgpt|codex|'ChatGPT/Codex') role='ChatGPT/Codex' ;;
+# Accept common spellings without creating extra Project Agent options.
+# Normalize separators and case, then resolve to the canonical option.
+agent_key="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's#[/_-]+# #g; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
+case "$agent_key" in
+  cursor|'cursor cloud') role='Cursor Cloud' ;;
+  claude|'claude code') role='Claude Code' ;;
+  chatgpt|codex|'chatgpt codex') role='ChatGPT/Codex' ;;
   *) echo "Unknown agent: $1" >&2; exit 2 ;;
 esac
 
@@ -30,9 +33,15 @@ printf '%s\n' "$project_json" | jq -er --arg role "$role" '
   else
     (["Issue", "Status", "Execution", "Title", "URL"] | @tsv),
     (.items[]
-      # ChatGPT/Codex is the current option (renamed by the maintainer).
-      # Include old Codex values from historical/unrefreshed Project exports.
-      | select(.agent == $role or ($role == "ChatGPT/Codex" and .agent == "Codex"))
+      # Apply the same agent groups to Project values, including old aliases.
+      | select(
+          ((.agent // "" | ascii_downcase
+            | gsub("[[:space:]_/-]+"; " ") | sub("^ +"; "") | sub(" +$"; "")) as $value
+          | if $role == "Cursor Cloud" then ($value == "cursor" or $value == "cursor cloud")
+            elif $role == "Claude Code" then ($value == "claude" or $value == "claude code")
+            else ($value == "chatgpt" or $value == "codex" or $value == "chatgpt codex")
+            end)
+        )
       | select(.content.type == "Issue" and .content.repository == "Fooftilly/PRKS")
       | select((.content.number | type) == "number")
       | ["#\(.content.number)", (.status // "(unset)"),
