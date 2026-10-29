@@ -144,7 +144,8 @@ class PackagedCoverageAuditTests(unittest.TestCase):
         for env_name in (
             "PRKS_E2E_CLASSIC_SW_TRANSITIONS", "PRKS_E2E_AXE"
         ):
-            with self.subTest(env_name=env_name), (
+            with (
+                self.subTest(env_name=env_name),
                 patch.dict(os.environ, {env_name: "1"}),
                 patch.object(run, "DEFAULT_E2E_MODULES", tuple(modules)),
                 patch.object(run, "discover_test_ids", return_value=all_ids) as discover,
