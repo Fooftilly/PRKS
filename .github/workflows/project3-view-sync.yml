@@ -1,0 +1,46 @@
+name: Project 3 agent view policy
+
+# Versioned view configuration applied only from merged master code.
+# No comments, inbox issues, webhook text, or arbitrary workflow inputs.
+on:
+  push:
+    branches: [master]
+    paths:
+      - scripts/project3_view_sync.py
+      - .github/workflows/project3-view-sync.yml
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: project3-agent-view-policy
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  views:
+    if: >-
+      github.repository == 'Fooftilly/PRKS' &&
+      github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: project-automation
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify or reconcile the versioned Project #3 views
+        env:
+          PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          PROJECT3_VIEW_APPLY: ${{ github.event_name == 'push' }}
+        run: |
+          if [[ "${PROJECT3_VIEW_APPLY}" == "true" ]]; then
+            python3 scripts/project3_view_sync.py --apply
+          else
+            python3 scripts/project3_view_sync.py
+          fi
