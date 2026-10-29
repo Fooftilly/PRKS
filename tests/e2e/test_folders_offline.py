@@ -493,7 +493,32 @@ class FoldersOfflineTests(unittest.TestCase):
         # a regression, not an acceptable no-op for the offline assertion.
         btn.wait_for(state='visible', timeout=10000)
         self.assertFalse(btn.is_disabled())
-        page.wait_for_timeout(300)
+        self.assertEqual(btn.get_attribute('data-delete-folder-id'), str(ids['folder_unvisited']))
+
+        # Clicking Delete must reach the real confirmation, not just render an
+        # enabled but disconnected control.
+        btn.click()
+        confirm = page.locator('#prks-modal-confirm:not(.hidden)')
+        confirm.wait_for(state='visible', timeout=10000)
+        self.assertIn('Delete folder?', confirm.inner_text())
+        page.locator('#prks-modal-confirm-ok').click()
+
+        # Offline deletion is durable, not an HTTP DELETE. Prove the operation
+        # was actually written; a dead click handler must fail this test.
+        wait_for_async(
+            page,
+            """id => prksSync.store.listOperations().then(rows =>
+                rows.some(op => op.operation === 'DELETE_FOLDER'
+                    && String(op.entity_id) === String(id)))""",
+            arg=ids['folder_unvisited'],
+            timeout=20000,
+            message='offline Folder Delete did not enqueue DELETE_FOLDER',
+        )
+        # Negative request assertions require a bounded observation window:
+        # a broken sync path could schedule HTTP DELETE shortly after the
+        # local queue write. This is not a readiness sleep.
+        # prks-allow-wait-for-timeout: bounded negative HTTP DELETE observation after durable write
+        page.wait_for_timeout(500)
         self.assertEqual(deletes, [])
 
     # ---- Work-side Folder card ----------------------------------------------
