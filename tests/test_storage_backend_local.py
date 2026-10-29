@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import tracemalloc
 import unittest
 from unittest.mock import patch
 
@@ -213,6 +214,7 @@ class TestLocalSpecifics(LocalStorageTestCase):
             self.backend.put_new(self.key, _writer(b"x"))
         self.assertIsNone(self.backend.verify(self.key, "0" * 64))
         self.assertEqual(list(self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS)), [])
+        self.assertEqual(self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, limit=10), [])
         with open(outside, "rb") as handle:
             self.assertEqual(handle.read(), b"secret")
 
@@ -227,6 +229,8 @@ class TestLocalSpecifics(LocalStorageTestCase):
             self.backend.put_new(self.key, _writer(b"x"))
         with self.assertRaises(ObjectIntegrityError):
             list(self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS))
+        with self.assertRaises(ObjectIntegrityError):
+            self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, limit=10)
         self.assertEqual(os.listdir(elsewhere), [])
 
     def test_root_is_resolved_once_at_construction(self):
@@ -253,6 +257,62 @@ class TestLocalSpecifics(LocalStorageTestCase):
             open(os.path.join(pdfs, name), "w").close()
         os.mkdir(os.path.join(pdfs, "subdir"))
         self.assertEqual([k.name for k in self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS)], [self.key.name])
+        self.assertEqual([k.name for k in self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, limit=1)],
+                         [self.key.name], "skipped names take no place in a page")
+
+    def _fill(self, count):
+        pdfs = os.path.join(self.root, "pdfs")
+        os.makedirs(pdfs, exist_ok=True)
+        names = [f"{1700000000 + index}_{index:08x}_paper-with-a-longer-title.pdf" for index in range(count)]
+        for name in names:
+            open(os.path.join(pdfs, name), "wb").close()
+        return sorted(names)
+
+    def test_list_keys_reads_the_directory_once_per_page(self):
+        names = self._fill(50)
+        read: list[int] = []
+        real_scandir = os.scandir
+
+        def counting_scandir(path):
+            read.append(0)
+            with real_scandir(path) as it:
+                for entry in it:
+                    read[-1] += 1
+                    yield entry
+
+        class _Scandir:
+            def __init__(self, path):
+                self._it = counting_scandir(path)
+
+            def __enter__(self):
+                return self._it
+
+            def __exit__(self, *exc):
+                self._it.close()
+
+        pages, after = [], None
+        with patch.object(objects.os, "scandir", _Scandir):
+            while page := self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, after=after, limit=20):
+                pages.append([k.name for k in page])
+                after = page[-1].name
+        self.assertEqual([len(page) for page in pages], [20, 20, 10])
+        self.assertEqual(sum(pages, []), names)
+        self.assertEqual(read, [50, 50, 50, 50], "one streaming pass per page, never one per key")
+
+    def test_list_keys_holds_a_page_not_the_namespace(self):
+        self._fill(4000)
+
+        def peak(listing):
+            tracemalloc.start()
+            try:
+                listing()
+                return tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+
+        full = peak(lambda: next(self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS)))
+        page = peak(lambda: self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, limit=10))
+        self.assertLess(page * 10, full, f"a page of 10 peaked at {page} bytes; the sorted listing at {full}")
 
     def test_drive_qualified_names_are_refused_with_windows_semantics(self):
         key = StorageKey(NAMESPACE_ASSET_OBJECTS, "C:paper.pdf")

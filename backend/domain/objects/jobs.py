@@ -13,8 +13,8 @@ claims it) and each bounded:
   period that nothing names. It never deletes: the claims are settled by the
   cleanup job. When keys are left, the pass enqueues the next one with a
   cursor (the namespace and the last key name examined) in its payload;
-  :meth:`~backend.storage.objects.LocalFilesystemStorage.iter_keys` lists in
-  name order, so the next pass resumes after it.
+  :meth:`~backend.storage.objects.StorageBackend.list_keys` returns a
+  bounded page in name order after a name, so the next pass resumes after it.
 
 **Fencing.** Every transaction of a pass runs through
 :meth:`~backend.jobs.runner.JobRun.command`, which locks the job row with its
@@ -34,8 +34,10 @@ in turn:
 
 - ``objects.cleanup`` when a claim is due and no cleanup job is queued or
   running (claims left by a restart, claims stamped by an earlier pass);
-- ``objects.sweep`` when no sweep job is queued or running and none was
-  enqueued in the last :data:`SWEEP_EVERY`.
+- ``objects.sweep`` when no sweep job is queued or running and no sweep
+  cycle completed in the last :data:`SWEEP_EVERY`. A cycle is complete when
+  its last pass succeeds having reached the end of the listing; a cycle cut
+  short by a failed pass starts again from the beginning at the next tick.
 
 So an idle instance with nothing to settle enqueues nothing, and a missed
 NOTIFY is covered by the worker's poll.
@@ -103,10 +105,14 @@ SELECT EXISTS (
 _ACTIVE: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.jobs WHERE kind = %(kind)s AND state IN ('queued', 'running')) AS active
 """
+# A sweep cycle completed recently: its last pass succeeded and said so. A
+# failed or partial cycle does not count. ``jobs.prune`` keeps a finished job
+# for ``prune.RETENTION``, which is no shorter than :data:`SWEEP_EVERY`.
 _RECENT: LiteralString = """
 SELECT EXISTS (
   SELECT 1 FROM prks.jobs
-  WHERE kind = %(kind)s AND created_at > now() - make_interval(secs => %(every)s)
+  WHERE kind = %(kind)s AND state = 'succeeded' AND progress @> '{"complete": true}'
+    AND finished_at > now() - make_interval(secs => %(every)s)
 ) AS recent
 """
 
@@ -198,10 +204,14 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
                batch: int = SWEEP_BATCH) -> int:
     """Claim the orphans among at most ``batch`` stored keys after the payload's cursor; how many.
 
-    Listing and ``stat`` change nothing; each claim is its own fenced
-    transaction that checks the references under the per-object lock. A key
-    younger than ``grace`` is left alone (a write may still adopt it). When
-    keys are left, the next pass is enqueued with this pass's last key.
+    Each namespace is read with one bounded
+    :meth:`~backend.storage.objects.StorageBackend.list_keys` call, so a pass
+    holds at most ``batch + 1`` names. Listing and ``stat`` change nothing;
+    each claim is its own fenced transaction that checks the references under
+    the per-object lock. A key younger than ``grace`` is left alone (a write
+    may still adopt it). When keys are left, the next pass is enqueued with
+    this pass's last key; the pass that reaches the end records
+    ``{"complete": true}`` in its progress, which ends the sweep cycle.
     """
     if grace < timedelta(0):
         raise ValueError("grace must not be negative")
@@ -213,14 +223,10 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
     examined = claimed = 0
     last: Optional[StorageKey] = None
     for namespace in SWEEP_NAMESPACES[start:]:
-        for key in storage.iter_keys(namespace):
-            if cursor is not None and namespace == cursor[0] and key.name <= cursor[1]:
-                continue
-            if last is not None and examined == batch:
-                position = (last.namespace, last.name)
-                run.command(lambda tx, position=position: enqueue_sweep(tx, position))
-                run.heartbeat({"examined": examined, "claimed": claimed})
-                return claimed
+        after = cursor[1] if cursor is not None and namespace == cursor[0] else None
+        remaining = batch - examined
+        keys = storage.list_keys(namespace, after=after, limit=remaining + 1)
+        for key in keys[:remaining]:
             run.check()
             examined += 1
             last = key
@@ -233,7 +239,12 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
                     claimed += 1
             if examined % HEARTBEAT_EVERY == 0:
                 run.heartbeat({"examined": examined, "claimed": claimed})
-    run.heartbeat({"examined": examined, "claimed": claimed})
+        if len(keys) > remaining and last is not None:
+            position = (last.namespace, last.name)
+            run.command(lambda tx, position=position: enqueue_sweep(tx, position))
+            run.heartbeat({"examined": examined, "claimed": claimed})
+            return claimed
+    run.heartbeat({"examined": examined, "claimed": claimed, "complete": True})
     return claimed
 
 

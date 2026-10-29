@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import heapq
 import logging
 import os
 import re
@@ -228,6 +229,8 @@ class StorageBackend(Protocol):
 
     def iter_keys(self, namespace: str) -> Iterator[StorageKey]: ...
 
+    def list_keys(self, namespace: str, *, after: Optional[str] = None, limit: int) -> list[StorageKey]: ...
+
 
 @runtime_checkable
 class LocalPathCapable(Protocol):
@@ -253,6 +256,14 @@ def mint_name(namespace: str, hint: str) -> str:
     if namespace in NAMESPACES:
         raise InvalidStorageKey("names in this namespace are not minted")
     raise InvalidStorageKey("unknown storage namespace")
+
+
+def _is_key_name(name: str) -> bool:
+    try:
+        validate_key_name(name)
+    except InvalidStorageKey:
+        return False
+    return True
 
 
 def _check_key(key: object) -> StorageKey:
@@ -539,6 +550,31 @@ class LocalFilesystemStorage:
                 yield StorageKey(namespace, name)
             except InvalidStorageKey:
                 continue  # temporaries, reserved and unrepresentable names
+
+    def list_keys(self, namespace: str, *, after: Optional[str] = None, limit: int) -> list[StorageKey]:
+        """Maintenance only: at most ``limit`` keys named after ``after``, in name order.
+
+        One streaming pass over the namespace directory that holds at most
+        ``limit`` names at a time (a bounded heap), so a caller pages through
+        a namespace of any size in bounded memory by passing the last name
+        of the previous page as ``after``. Nothing is ``stat``-ed.
+        """
+        if namespace not in NAMESPACES:
+            raise InvalidStorageKey("unknown storage namespace")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        if after is not None:
+            validate_key_name(after)
+        directory = self._namespace_dir(namespace, create=False)
+        if directory is None:
+            return []
+        with os.scandir(directory) as it:
+            names = heapq.nsmallest(limit, (
+                entry.name for entry in it
+                if (after is None or entry.name > after)
+                and entry.is_file(follow_symlinks=False) and _is_key_name(entry.name)
+            ))
+        return [StorageKey(namespace, name) for name in names]
 
     # -- local-only extension (§10.3) -------------------------------------------------
 

@@ -25,7 +25,7 @@ import psycopg
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import jobs, lifecycle
 from backend.domain.objects.lifecycle import Settled
-from backend.jobs import queue
+from backend.jobs import prune, queue
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.jobs.worker import Worker, WorkerSettings
@@ -341,14 +341,33 @@ class SweepPassTests(ObjectJobsTestCase):
             return real_stat(stored)
 
         self.objects.stat = counting_stat  # type: ignore[method-assign]
+        listings: list[list[tuple[str, int, int]]] = []
+        real_list_keys = self.objects.list_keys
+
+        def counting_list_keys(namespace: str, *, after: Any = None, limit: int) -> list[StorageKey]:
+            page = real_list_keys(namespace, after=after, limit=limit)
+            listings[-1].append((namespace, limit, len(page)))
+            return page
+
+        self.objects.list_keys = counting_list_keys  # type: ignore[method-assign]
 
         def one_pass(run: JobRun) -> int:
             examined.append([])
+            listings.append([])
             return jobs.sweep_pass(run, self.objects, grace=NO_GRACE, batch=3)
 
         self.enqueue(jobs.enqueue_sweep)
         self.assertEqual(self.run_until_done(jobs.SWEEP_KIND, one_pass), [3, 3, 1])
         self.assertEqual([len(names) for names in examined], [3, 3, 1])
+        # One bounded listing per namespace a pass reaches, each asking for at most batch + 1 names.
+        self.assertEqual(listings, [
+            [(NAMESPACE_ASSET_OBJECTS, 4, 4)],
+            [(NAMESPACE_ASSET_OBJECTS, 4, 2), (NAMESPACE_PORTRAITS, 2, 2)],
+            [(NAMESPACE_PORTRAITS, 4, 1)],
+        ])
+        progress = [row["progress"] for row in self.sql(
+            "SELECT progress FROM prks.jobs WHERE kind = %s ORDER BY created_at, id", (jobs.SWEEP_KIND,))]
+        self.assertEqual([p.get("complete") for p in progress], [None, None, True], "only the last pass ends the cycle")
         self.assertEqual(set(self.claims()), {stored.name for stored in pdfs + pictures})
         self.assertEqual(sum(examined, []), sorted(s.name for s in pdfs) + sorted(s.name for s in pictures),
                          "each key once, in order")
@@ -430,8 +449,50 @@ class SchedulingTests(ObjectJobsTestCase):
         self.assertEqual(self.enqueue(jobs.schedule), [], "already queued")
         self.run_until_done(jobs.CLEANUP_KIND, lambda run: jobs.cleanup_pass(run, self.objects))
         self.assertEqual(self.enqueue(jobs.schedule), [])
-        self.sql("UPDATE prks.jobs SET created_at = now() - interval '8 days' WHERE kind = %s", (jobs.SWEEP_KIND,))
+        self.sql("UPDATE prks.jobs SET finished_at = now() - interval '8 days' WHERE kind = %s", (jobs.SWEEP_KIND,))
         self.assertEqual(self.enqueue(jobs.schedule), [jobs.SWEEP_KIND], "a week later")
+
+    def sweep_registry(self, *, fail: bool) -> HandlerRegistry:
+        registry = HandlerRegistry()
+
+        def handler(run: JobRun) -> None:
+            if fail:
+                raise OSError("the listing failed")
+            jobs.sweep_pass(run, self.objects, grace=NO_GRACE, batch=3)
+
+        registry.register(jobs.SWEEP_KIND, handler)
+        return registry
+
+    def run_last_attempt(self, *, fail: bool) -> Outcome:
+        """Run the queued sweep pass as its last allowed attempt (a queued cleanup is not this test's)."""
+        self.sql("DELETE FROM prks.jobs WHERE kind = %s", (jobs.CLEANUP_KIND,))
+        self.sql("UPDATE prks.jobs SET max_attempts = 1 WHERE kind = %s AND state = 'queued'", (jobs.SWEEP_KIND,))
+        run = self.claimed(jobs.SWEEP_KIND)
+        return run_job(self.db, run.job, registry=self.sweep_registry(fail=fail), lease=LEASE)
+
+    def test_an_exhausted_first_sweep_is_scheduled_again_at_the_next_tick(self) -> None:
+        self.orphans(2)
+        self.assertEqual(self.enqueue(jobs.schedule), [jobs.SWEEP_KIND])
+        self.assertEqual(self.run_last_attempt(fail=True), Outcome.FAILED)
+        self.assertEqual(self.enqueue(jobs.schedule), [jobs.SWEEP_KIND], "no week-long gap")
+        self.assertEqual(self.jobs_of(jobs.SWEEP_KIND, "queued")[0]["payload"], {})
+
+    def test_an_exhausted_continuation_restarts_the_cycle_at_the_next_tick(self) -> None:
+        pdfs = self.orphans(5)
+        self.assertEqual(self.enqueue(jobs.schedule), [jobs.SWEEP_KIND])
+        self.assertEqual(self.run_last_attempt(fail=False), Outcome.SUCCEEDED, "the first page")
+        self.assertNotIn(jobs.SWEEP_KIND, self.enqueue(jobs.schedule), "the continuation is queued")
+        self.assertEqual(self.run_last_attempt(fail=True), Outcome.FAILED, "the continuation")
+        self.assertIn(jobs.SWEEP_KIND, self.enqueue(jobs.schedule),
+                      "a succeeded first page does not count as a completed cycle")
+        self.assertEqual(self.jobs_of(jobs.SWEEP_KIND, "queued")[0]["payload"], {}, "from the beginning")
+        self.sql("DELETE FROM prks.jobs WHERE kind = %s", (jobs.CLEANUP_KIND,))
+        self.run_until_done(jobs.SWEEP_KIND, lambda run: jobs.sweep_pass(run, self.objects, grace=NO_GRACE, batch=3))
+        self.assertEqual(set(self.claims()), {stored.name for stored in pdfs})
+        self.assertNotIn(jobs.SWEEP_KIND, self.enqueue(jobs.schedule), "the cycle completed")
+
+    def test_the_sweep_window_is_no_longer_than_finished_jobs_are_kept(self) -> None:
+        self.assertLessEqual(jobs.SWEEP_EVERY, prune.RETENTION)
 
     def test_a_running_sweep_or_cleanup_suppresses_only_a_duplicate(self) -> None:
         self.claim(self.put().key)

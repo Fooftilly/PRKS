@@ -1933,8 +1933,11 @@ part of the Assets lane, against the new schema, not against SQLite.
   grace period (24 h default), so an ordinary write is not claimed; a write
   that stalls past the grace period is caught by its adoption check above
   rather than by age. It
-  runs on demand and weekly, in bounded passes that resume after a cursor;
-  it never deletes directly, it only records claims, and claims are
+  runs on demand and weekly, in bounded passes that resume after a cursor:
+  each pass reads a namespace with one `list_keys` call that holds at most
+  a page of names. The week counts from the last completed cycle, the
+  succeeded pass that reached the end of the listing; a cycle cut short by
+  a failed pass starts again at the next idle tick. It never deletes directly, it only records claims, and claims are
   settled by the usual three-valued check. It runs only on a root that
   holds no SQLite catalogue: until the cutover, a root that also serves
   SQLite keeps files the PostgreSQL catalogue does not name.

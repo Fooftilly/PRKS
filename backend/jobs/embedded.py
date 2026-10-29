@@ -110,7 +110,7 @@ class EmbeddedWorker:
     def attach_objects(self, root: str) -> None:
         """Bind the object maintenance jobs to the process's bound data root; before :meth:`start`."""
         if self._thread.ident is not None:
-            raise RuntimeError("the objects lane is attached before the worker starts")
+            raise RuntimeError("the objects lane must be attached before the worker starts")
         object_jobs.attach(self.registry, root)
 
     def start(self) -> None:
