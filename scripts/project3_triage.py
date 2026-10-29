@@ -275,6 +275,14 @@ def apply(plan: dict, project: pm.Project, read: Callable[[str], Any]) -> int:
     return changed
 
 
+def external_plan_path(path: Path) -> Path:
+    """Plans and proposals stay out of the repository, including symlinks."""
+    target = path.expanduser().resolve()
+    if target.is_relative_to(Path(__file__).resolve().parents[1]):
+        raise TriageError("plans and proposals must be outside the PRKS repository")
+    return target
+
+
 def main(argv: list[str] | None = None, *, transport=None, read=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -296,9 +304,10 @@ def main(argv: list[str] | None = None, *, transport=None, read=None) -> int:
         gql = pm.GraphQL(transport, allow_mutations=args.command == "apply")
         project = pm.Project(gql)
         if args.command == "propose":
-            plan = propose(load_proposals(args.input), project, read)
+            plan = propose(load_proposals(external_plan_path(args.input)), project, read)
             # Use an out-of-repository local plan; do not commit approvals or
             # snapshots of Project fields. Do not overwrite an existing plan.
+            args.out = external_plan_path(args.out)
             if args.out.exists():
                 raise TriageError("output plan exists; refusing to overwrite")
             args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +316,7 @@ def main(argv: list[str] | None = None, *, transport=None, read=None) -> int:
                 f.write("\n")
             print(f"Plan written to {args.out}; all rows approved=false. Review it before check/apply.")
             return 0
-        raw = args.plan.read_bytes()
+        raw = external_plan_path(args.plan).read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
         plan = load_plan(raw)
         if args.command == "apply" and args.plan_sha256 != digest:
