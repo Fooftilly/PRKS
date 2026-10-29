@@ -10,18 +10,20 @@ remaining target is the cost *inside one test*.
 ## Committed timing baseline
 
 Fresh checkouts (especially cloud agents) have no machine-local timing history.
-`tests/e2e/timing-baseline.json` supplies coarse `module.*` / `module.Class.*`
-prefix weights so LPT sharding is useful on the first run. At schedule time the
-runner merges:
+`tests/e2e/timing-baseline.json` now contains 847 calibrated exact test-ID
+weights plus coarse `module.*` / `module.Class.*` fallback weights for new or
+renamed tests. The exact values are medians from complete six-shard timing
+artifacts, not measurements of the current run. At schedule time the runner merges:
 
-1. committed baseline prefixes;
-2. machine-local exact timings from `.tests/e2e-timings.json`, which override the baseline.
+1. committed exact/fallback weights;
+2. machine-local exact timings from `.tests/e2e-timings.json`, which override them.
 
 Invariants:
 
-- local exact IDs always win over baseline prefixes;
+- local exact IDs always win over committed weights;
 - the baseline is never copied into `.tests/e2e-timings.json`;
-- the human "slowest tests" report uses observed/local exact timings only — never baseline prefixes.
+- the "slowest tests" report uses observed/local exact timings only — never committed metadata;
+- E2E test selection, full six-shard coverage and the LPT assignment algorithm are unchanged.
 
 ### Refreshing the baseline
 
@@ -38,18 +40,35 @@ scripts/e2e update-timing-baseline --from /tmp/ci-e2e-timings.json
 scripts/e2e update-timing-baseline \
   --from /tmp/ci-run-a.json \
   --from /tmp/ci-run-b.json \
-  --write
+  --include-exact --write
 ```
 
 `--write` updates `tests/e2e/timing-baseline.json`. Review the result as an
-ordinary JSON diff in the PR. The generator emits only `prefix.*` keys (module
-medians, plus class-level prefixes when a class is a clear outlier), so the
-committed file stays small and does not absorb exact per-test IDs.
+ordinary JSON diff in the PR. With `--include-exact`, the generator combines
+median-calibrated exact IDs with module/class fallbacks; without it, the
+legacy prefix-only output remains available. Baseline data is scheduling
+metadata, not an assertion of measured speedup.
+
+The 2026-10-28 weights use complete `e2e-timings-*-of-6` artifacts from
+[standard run #40769898987](https://github.com/Fooftilly/PRKS/actions/runs/40769898987)
+and [class-locality run #40769904276](https://github.com/Fooftilly/PRKS/actions/runs/40769904276),
+both green on the same commit. An offline held-out schedule simulation
+indicated a better-balanced six-shard distribution, but the real performance
+effect was measured by [manual full gate #40779596638](https://github.com/Fooftilly/PRKS/actions/runs/40779596638),
+which passed all 847 unique tests with no failures, errors, or skips: longest
+test step **606s → 589s** and workflow **673s → 651s** versus the previous
+standard run, with aggregate six-shard job time **3587s → 3622s**. This is one
+positive wall-clock sample, not a demonstrated reduction in runner-minutes.
+No class-locality scheduling policy is enabled.
 
 Committed writes fail closed unless the measurement export covers **every**
 current E2E module and every discovered exact test ID (so a single shard or
 affected-run file cannot wipe most bootstrap weights). Partial / experimental
 generation needs `--allow-partial` or an alternate `--output` path.
+Committed writes also require `--include-exact` even when the measurement
+export is complete, to prevent accidental loss of calibrated exact weights.
+Prefix-only output without the flag remains available for dry-run or alternate
+`--output` experiments.
 
 ## Current per-test path
 
