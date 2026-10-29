@@ -187,12 +187,53 @@ class FoldersOfflineTests(unittest.TestCase):
         page.wait_for_timeout(400)
         self.assertIn(FOLDER_UNVISITED_TITLE, o._content_text(page))
 
+        # The seeded parent has a child, so a missing expand/collapse
+        # control is a regression. Verify actual state transitions, not merely
+        # clicks that could be ignored by a missing handler.
         toggle = page.locator('#prks-folder-library-expand-toggle')
-        if toggle.count():
-            toggle.click()
-            page.wait_for_timeout(300)
-            toggle.click()
-            page.wait_for_timeout(300)
+        toggle.wait_for(state='visible', timeout=10000)
+        initial_label = toggle.get_attribute('aria-label')
+        self.assertIn(initial_label, ('Expand all', 'Collapse all'))
+
+        def wait_for_rendered_tree(expected_label):
+            # The toolbar label reflects the collapse map, but the branch DOM
+            # is updated independently. Assert the seeded child's actual
+            # rendered visibility as well as the parent row's ARIA state.
+            page.wait_for_function(
+                """([parentId, childId, label]) => {
+                    const host = document.querySelector('[data-prks-folder-tree-host]');
+                    const button = document.getElementById('prks-folder-library-expand-toggle');
+                    if (!host || !button || button.getAttribute('aria-label') !== label) return false;
+                    const byId = (selector, id, scope) => Array.from(
+                        scope.querySelectorAll(selector)
+                    ).find(el => el.getAttribute('data-folder-id') === id);
+                    const branch = byId('.prks-folder-tree__branch', parentId, host);
+                    const parent = byId('.prks-folder-tree__row', parentId, host);
+                    const child = branch && byId('.prks-folder-tree__row', childId, branch);
+                    if (!branch || !parent || !child) return false;
+                    const collapsed = label === 'Expand all';
+                    if (branch.classList.contains('is-collapsed') !== collapsed ||
+                        parent.getAttribute('aria-expanded') !== (collapsed ? 'false' : 'true')) {
+                        return false;
+                    }
+                    const b = branch.getBoundingClientRect();
+                    const c = child.getBoundingClientRect();
+                    if (collapsed) return b.height <= 1;
+                    // After the CSS grid transition the entire child row must
+                    // be visible within the branch, not merely present in DOM.
+                    const overlap = Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top);
+                    return c.height > 1 && overlap >= c.height - 1;
+                }""",
+                arg=[server.ids['folder_parent'], server.ids['folder_child'], expected_label],
+                timeout=10000,
+            )
+
+        wait_for_rendered_tree(initial_label)
+        toggle.click()
+        next_label = 'Collapse all' if initial_label == 'Expand all' else 'Expand all'
+        wait_for_rendered_tree(next_label)
+        toggle.click()
+        wait_for_rendered_tree(initial_label)
         # Local filtering and hierarchy toggling are pure cache operations.
         self.assertEqual([p for p in seen if p.startswith('/api/')], [])
 
@@ -388,12 +429,19 @@ class FoldersOfflineTests(unittest.TestCase):
 
         self.offline(page, context)
         posts = self.watch(page, {'POST'})
+        # Never substitute a direct API call if the modal lost its Save button:
+        # the real user-action path and its offline durability are the contract.
         save = page.locator('#save-folder-btn')
-        if save.count():
-            save.click()
-        else:
-            page.evaluate("async () => { try { await createFolder('Race Folder', ''); } catch (_) {} }")
-        page.wait_for_timeout(600)
+        save.wait_for(state='visible', timeout=10000)
+        save.click()
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.some(op => op.operation === 'CREATE_FOLDER'
+                    && op.payload?.title === 'Race Folder'))""",
+            timeout=20000,
+            message='offline Folder modal did not enqueue its create operation',
+        )
         self.assertEqual(posts, [])
 
     def test_every_canonical_folder_wrapper_issues_no_network_offline(self):
