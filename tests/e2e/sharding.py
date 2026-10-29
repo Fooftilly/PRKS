@@ -17,6 +17,12 @@ from pathlib import Path
 # tests evenly instead of piling them onto one worker.
 DEFAULT_TEST_SECONDS = 3.0
 
+# Manual-only pilot; a soft first-use preference, NOT an extra execution cost.
+# This small bias prefers reuse of a module-scoped Chromium fixture when the
+# candidate runner's existing test load is close. Unlike whole-class/module
+# packing it does not force a large slow group onto one shard.
+MODULE_AFFINITY_PENALTY_SECONDS = 1.0
+
 # 18000 + MAX_JOBS * 1000 must stay below the Linux ephemeral range (32768),
 # so a worker window can never collide with a kernel-assigned port.
 MAX_JOBS = 12
@@ -91,7 +97,10 @@ def parse_shard(value, env_value=None):
     return index - 1, total
 
 
-def select_external_shard(test_ids, shard_index, shard_total, timings=None, default=DEFAULT_TEST_SECONDS):
+def select_external_shard(
+    test_ids, shard_index, shard_total, timings=None, default=DEFAULT_TEST_SECONDS,
+    *, module_affinity=False,
+):
     """Return the test IDs owned by one external shard.
 
     ``shard_index`` is 0-based. Assignment is the same LPT partition used by
@@ -104,13 +113,22 @@ def select_external_shard(test_ids, shard_index, shard_total, timings=None, defa
         raise ValueError(
             "shard index %d out of range for %d shards" % (shard_index, shard_total)
         )
-    buckets = assign_shards(test_ids, shard_total, timings, default=default)
+    buckets = assign_shards(
+        test_ids, shard_total, timings, default=default,
+        module_affinity=module_affinity,
+    )
     return buckets[shard_index]
 
 
-def partition_external_shards(test_ids, shard_total, timings=None, default=DEFAULT_TEST_SECONDS):
+def partition_external_shards(
+    test_ids, shard_total, timings=None, default=DEFAULT_TEST_SECONDS,
+    *, module_affinity=False,
+):
     """Return all external-shard buckets (convenience for coverage / CI plan)."""
-    return assign_shards(test_ids, shard_total, timings, default=default)
+    return assign_shards(
+        test_ids, shard_total, timings, default=default,
+        module_affinity=module_affinity,
+    )
 
 
 def aggregate_external_shard_results(reports):
@@ -614,7 +632,10 @@ def agent_default_jobs(cpu_count=None, memory_limit_bytes=None) -> int:
     return max(1, jobs)
 
 
-def assign_shards(test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECONDS):
+def assign_shards(
+    test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECONDS,
+    *, module_affinity=False,
+):
     """Split test IDs across `jobs` workers, longest-processing-time-first.
 
     Every discovered ID lands in exactly one shard. Tests are placed heaviest
@@ -635,14 +656,42 @@ def assign_shards(test_ids, jobs: int, timings=None, default=DEFAULT_TEST_SECOND
     ordered = sorted(ids, key=lambda t: (-estimate_seconds(t, timings, default), t))
     loads = [0.0] * jobs
     buckets = [[] for _ in range(jobs)]
+    # Pilot only: prefer an already-used module when loads are sufficiently
+    # close. Track actual predicted test load WITHOUT the module bias; never
+    # treat the preference as measured execution time.
+    assigned_modules = [set() for _ in range(jobs)] if module_affinity else None
     for test_id in ordered:
-        target = min(range(jobs), key=lambda i: (loads[i], i))
+        duration = estimate_seconds(test_id, timings, default)
+        if module_affinity:
+            module = module_of(test_id)
+            target = min(
+                range(jobs),
+                key=lambda i: (
+                    loads[i] + (
+                        0.0 if module in assigned_modules[i]
+                        else MODULE_AFFINITY_PENALTY_SECONDS
+                    ),
+                    loads[i], i,
+                ),
+            )
+            assigned_modules[target].add(module)
+        else:
+            target = min(range(jobs), key=lambda i: (loads[i], i))
         buckets[target].append(test_id)
-        loads[target] += estimate_seconds(test_id, timings, default)
+        loads[target] += duration
 
-    module_order = {}
-    for test_id in ids:
-        module_order.setdefault(module_of(test_id), len(module_order))
+    if module_affinity:
+        # Module order must be stable across independent shard discovery
+        # processes, even if unittest discovers modules in a different order.
+        module_order = {
+            name: index
+            for index, name in enumerate(sorted({module_of(test_id) for test_id in ids}))
+        }
+    else:
+        # Preserve the established discovery order for normal PR/master CI.
+        module_order = {}
+        for test_id in ids:
+            module_order.setdefault(module_of(test_id), len(module_order))
     for bucket in buckets:
         bucket.sort(key=lambda t: (module_order.get(module_of(t), len(module_order)), t))
     return buckets

@@ -60,6 +60,35 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
         self.assertEqual(shard.count("path: .tests/e2e-timings.json"), 1)
         self.assertNotIn("path: .tests/\n", step)
 
+    def test_soft_module_affinity_pilot_is_manual_and_full_only(self):
+        workflow = SOURCE.read_text(encoding="utf-8")
+        inputs = re.findall(
+            r"(?m)^      module_affinity:\\n((?:^        [^\\n]*\\n)+)",
+            workflow,
+        )
+        self.assertEqual(len(inputs), 1)
+        self.assertIn("        type: boolean\\n", inputs[0])
+        self.assertIn("        default: false\\n", inputs[0])
+        shard = job_source(workflow, "e2e")
+        step = named_upload_step(shard, "Run E2E selection shard")
+        self.assertIn(
+            "PRKS_E2E_MODULE_AFFINITY_PILOT: ${{ "
+            "github.event_name == 'workflow_dispatch' && inputs.module_affinity "
+            "&& '1' || '0' }}",
+            step,
+        )
+        guarded = (
+            '          if [[ "${PRKS_E2E_MODULE_AFFINITY_PILOT}" == "1" ]]; then\\n'
+            '            if [[ "$mode" != "full" ]]; then\\n'
+            '              echo "::error::module affinity pilot requires full suite"\\n'
+            '              exit 1\\n'
+            '            fi\\n'
+            '            args+=(--module-affinity-pilot)\\n'
+            '          fi\\n'
+        )
+        self.assertIn(guarded, step)
+        self.assertEqual(step.count("args+=(--module-affinity-pilot)"), 1)
+
     def test_manual_packaged_full_and_compare_not_smoke_or_pr(self):
         workflow = PACKAGED.read_text(encoding="utf-8")
         shard = job_source(workflow, "packaged-frontend")
