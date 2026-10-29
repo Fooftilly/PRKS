@@ -78,6 +78,8 @@ CLAIM_PREFIX = ".prks-claimed-"
 _CLAIM = re.compile(re.escape(CLAIM_PREFIX) + r"[0-9a-f]{32}")
 # The longest file name, in bytes, on the file systems PRKS supports.
 _NAME_MAX = 255
+SHARED = ("The Files for Processing inbox is not available while this instance has more than one Library: "
+          "the inbox folder is shared, and which Library its files belong to is not decided yet.")
 HELD = "This file was restored from a backup, and the file at its path is not the one backed up."
 
 
@@ -113,7 +115,7 @@ def discover(inbox_dir: str) -> list[tuple[str, str]]:
     root = os.path.realpath(inbox_dir)
     found: list[tuple[str, str]] = []
     for directory, dirs, names in os.walk(root):
-        dirs[:] = [name for name in dirs if not name.startswith(CLAIM_PREFIX)]
+        dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
         for name in sorted(names):
             if not name.lower().endswith(".pdf"):
                 continue
@@ -291,11 +293,10 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     if not os.path.isdir(root):
         return unsettled
     for directory, dirs, _names in os.walk(root):
-        claims = [name for name in dirs if name.startswith(CLAIM_PREFIX)]
-        dirs[:] = [name for name in dirs if not name.startswith(CLAIM_PREFIX)]
+        claims = [name for name in dirs if _CLAIM.fullmatch(name) is not None]
+        dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
         for name in claims:
-            if _CLAIM.fullmatch(name) is not None:
-                _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled)
+            _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled)
     return unsettled
 
 
@@ -332,9 +333,26 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
 # -- scan -------------------------------------------------------------------------
 
 
+class SharedInbox(RuntimeError):
+    """The inbox is refused because more than one Library shares it (:data:`SHARED`)."""
+
+
+def _refuse_shared(runner: Runner) -> None:
+    """Fail closed while the instance has more than one Library.
+
+    The inbox is one folder per instance (``StorageConfig.processing_dir``)
+    while its rows and lock are per Library, so an editor of one Library
+    could stage, and import, a file dropped for another. Until the inbox
+    has an owner per Library (PG-C1, #311), neither scan nor import runs.
+    """
+    if runner.database.query(files.library_count) > 1:
+        raise SharedInbox(SHARED)
+
+
 def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
     """Reconcile the Library's rows with the inbox, under the inbox lock (module docs)."""
     with inbox_lock(runner.database, runner.library_id):
+        _refuse_shared(runner)
         rows = runner.read(files.scan_rows)
         unsettled = recover_claims(inbox_dir, {str(row["rel_path"]): str(row["import_sha256"]) for row in rows
                                                if row["status"] == files.IMPORTED})
@@ -404,6 +422,7 @@ def import_file(runner: Runner, inbox_dir: str, objects: StorageBackend, file_id
     create. Raises ``ValueError`` with SQLite's messages.
     """
     with inbox_lock(runner.database, runner.library_id):
+        _refuse_shared(runner)
         row = runner.read(lambda scope: files.peek(scope, file_id))
         if row is None:
             raise ValueError(files.NOT_FOUND)

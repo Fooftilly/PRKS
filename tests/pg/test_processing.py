@@ -475,6 +475,11 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNone(self.row(imported_id))
         self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
 
+    def test_a_folder_named_like_a_claim_is_still_scanned(self) -> None:
+        self.put(f"{inbox.CLAIM_PREFIX}archive/report.pdf")
+        self.assertEqual([row["rel_path"] for row in self.library.scan_processing_files()],
+                         [f"{inbox.CLAIM_PREFIX}archive/report.pdf"])
+
     def test_an_empty_claim_directory_is_removed(self) -> None:
         os.mkdir(os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'2' * 32}"))  # a crash before the rename
         self.assertEqual(self.library.scan_processing_files(), [])
@@ -603,10 +608,26 @@ class AccessTests(ProcessingTestCase):
             self.assertIsNone(self.library.get_processing_file_pdf_path(file_id))
             with self.assertRaises(ValueError):
                 self.library.update_processing_file(file_id, {"title": "Theirs"})
-            with self.assertRaises(ValueError):
+            with self.assertRaises(inbox.SharedInbox):
                 self.library.import_processing_file(file_id)
         self.assertTrue(os.path.isfile(os.path.join(self.inbox, "mine.pdf")))
         self.assertEqual(self.library.get_processing_file(file_id)["title"], "")
+
+    def test_a_shared_inbox_is_refused_to_every_library(self) -> None:
+        self.put("shared.pdf")
+        file_id = self.staged("shared.pdf")
+        other = self.other_actor()  # a second Library on the instance
+        with facade_context.acting_as(other.context):
+            with self.assertRaises(inbox.SharedInbox):
+                self.library.scan_processing_files()
+            self.assertEqual(self.library.get_processing_files(), [])
+        with self.assertRaises(inbox.SharedInbox):
+            self.library.scan_processing_files()
+        with self.assertRaises(inbox.SharedInbox):
+            self.library.import_processing_file(file_id)
+        self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.processing_files")[0]["n"], 1)
+        self.assertTrue(os.path.isfile(os.path.join(self.inbox, "shared.pdf")))
+        self.assertTrue(self.lock_is_free())
 
     def test_a_reader_may_list_but_not_scan_or_import(self) -> None:
         self.put("r.pdf")

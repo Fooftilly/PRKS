@@ -45,6 +45,11 @@ the same scan on a worker, and routing ``?rescan=1`` to it is the cutover's
 - An import removes its source only while it still has the ingested bytes'
   hash: a file another writer put at the path meanwhile stays, and the next
   scan lists it as new.
+- The inbox folder is one per instance while rows are per Library, so
+  while the instance has more than one Library, ``scan_processing_files``
+  and ``import_processing_file`` raise
+  :class:`~backend.domain.processing.inbox.SharedInbox` (fail closed) until
+  the inbox has an owner per Library (PG-C1, #311).
 - A deleted target Folder clears the file's target (the key's ``SET
   NULL``), so the import files the Work in "Uncategorized".
 - List ties (equal status and case-folded path) are ordered by discovery,

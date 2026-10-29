@@ -18,6 +18,7 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
+from backend.db.database import Transaction
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import folders
 
@@ -412,6 +413,15 @@ def _update_fields(scope: LibraryScope, file_id: str, fields: dict[str, Any]) ->
 
 
 # -- the scan's database half ---------------------------------------------------
+
+
+_LIBRARY_COUNT_SQL: LiteralString = "SELECT count(*) AS libraries FROM prks.libraries"
+
+
+def library_count(tx: Transaction) -> int:
+    """How many Libraries the instance holds (the inbox is shared by all of them); an instance read."""
+    row = tx.execute(_LIBRARY_COUNT_SQL).fetchone()
+    return int(row["libraries"]) if row else 0
 
 
 def scan_rows(scope: LibraryScope) -> list[dict[str, Any]]:
