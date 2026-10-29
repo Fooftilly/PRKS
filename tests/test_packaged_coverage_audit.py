@@ -102,6 +102,7 @@ class PackagedCoverageAuditTests(unittest.TestCase):
             {"bad": {"selectors": ()}},
             {"bad": {"selectors": None}},
             {"bad": {"selectors": ("not a selector!",)}},
+            {"bad": {"selectors": ("tests.e2e.nonexistent.UnknownClass",)}},
             {"bad": {"selectors": ("tests.e2e.test_app", "tests.e2e.test_app")}},
         ):
             with self.subTest(mapping=broken):
@@ -134,6 +135,9 @@ class PackagedCoverageAuditTests(unittest.TestCase):
         self.assertEqual(first["critical_rows"], second["critical_rows"])
         self.assertEqual(first["unmatched_source_ids"], second["unmatched_source_ids"])
         self.assertIn(unmatched, first["unmatched_source_ids"])
+        self.assertTrue(first["coverage_complete"])  # unmapped != missing
+        self.assertEqual(first["unmatched_feature_selectors"],
+                         second["unmatched_feature_selectors"])
         self.assertEqual(
             staged.format_packaged_coverage_audit(first).split("Critical obligation |")[1],
             staged.format_packaged_coverage_audit(second).split("Critical obligation |")[1],
