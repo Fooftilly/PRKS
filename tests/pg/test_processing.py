@@ -378,6 +378,42 @@ class CrashRecoveryTests(ProcessingTestCase):
         with open(os.path.join(self.inbox, staged[0]), "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 B")
 
+    def test_a_long_name_is_claimed_and_put_back_under_a_name_that_fits(self) -> None:
+        name = "é" * 120 + ".pdf"  # 244 bytes: the full claim name would not fit
+        path = self.put(name, b"%PDF-1.4 long")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        self.assertLessEqual(len(os.fsencode(os.path.basename(claimed))), 255)
+        self.assertTrue(os.path.basename(claimed).endswith(".pdf"))
+        staged = [row["rel_path"] for row in self.library.scan_processing_files()]
+        self.assertEqual(len(staged), 1)
+        self.assertTrue(staged[0].startswith("é") and staged[0].endswith(".pdf"))
+        with open(os.path.join(self.inbox, staged[0]), "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 long")
+        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
+
+    def test_a_long_named_import_is_finished_and_its_claim_removed(self) -> None:
+        name = "x" * 240 + ".pdf"
+        path = self.put(name)
+        file_id = self.staged(name)
+        self.crash_after_commit(file_id)
+        self.assertIsNotNone(inbox._claim(path))  # the process dies here
+        self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(os.listdir(self.inbox), [])
+
+    def test_a_claim_named_link_is_never_followed(self) -> None:
+        outside = os.path.join(os.path.dirname(os.path.realpath(self.inbox)), "outside.pdf")
+        with open(outside, "wb") as handle:
+            handle.write(b"%PDF-1.4 outside")
+        link = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'0' * 32}-stolen.pdf")
+        os.symlink(outside, link)
+        self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertTrue(os.path.islink(link))
+        self.assertFalse(os.path.exists(os.path.join(self.inbox, "stolen.pdf")))
+        with open(outside, "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 outside")
+
     def test_an_absent_file_only_loses_the_row(self) -> None:
         path = self.put("a.pdf")
         file_id = self.staged("a.pdf")
