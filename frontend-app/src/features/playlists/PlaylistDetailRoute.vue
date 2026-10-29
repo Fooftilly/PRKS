@@ -315,13 +315,29 @@ function onDelete(): void {
   })
 }
 
-function onAddFocus(): void {
+function openAddResults(): void {
   addOpen.value = true
+  // Tag-panel results stay collapsed until `is-open`. The class binding owns
+  // that flag; the shared helper then scrolls the field into view.
+  void nextTick(() => {
+    if (!addOpen.value) return
+    const root = rootEl.value
+    if (!root) return
+    const input = root.querySelector<HTMLInputElement>('#prks-playlist-add-search')
+    const results = root.querySelector<HTMLElement>('#prks-playlist-add-results')
+    if (!input || !results) return
+    const show = window.prksShowInlineComboboxResults
+    if (typeof show === 'function') show(input, results)
+  })
+}
+
+function onAddFocus(): void {
+  openAddResults()
   void refreshChoices()
 }
 
 function onAddInput(): void {
-  addOpen.value = true
+  openAddResults()
 }
 
 function activateRouteLink(event: KeyboardEvent): void {
@@ -446,7 +462,7 @@ function onAddBlur(): void {
           <div
             id="prks-playlist-add-results"
             class="combobox-results combobox-results--tag-panel"
-            :class="{ hidden: !addOpen }"
+            :class="{ hidden: !addOpen, 'is-open': addOpen }"
           >
             <div v-if="catalogueUnavailable" class="result-item no-results">
               Videos are not available right now.
