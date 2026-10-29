@@ -432,8 +432,10 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_offline_banner(page)
         deletes = self.watch(page, {'DELETE'})
         btn = page.locator('[data-delete-folder-id]')
-        if btn.count():
-            self.assertFalse(btn.is_disabled())
+        # This fixture uses an empty deletable folder: a missing control is
+        # a regression, not an acceptable no-op for the offline assertion.
+        btn.wait_for(state='visible', timeout=10000)
+        self.assertFalse(btn.is_disabled())
         page.wait_for_timeout(300)
         self.assertEqual(deletes, [])
 
@@ -452,8 +454,9 @@ class FoldersOfflineTests(unittest.TestCase):
         page.wait_for_timeout(500)
 
         edit = page.locator('#prks-work-folder-edit-btn')
-        if edit.count():
-            self.assertTrue(edit.is_disabled())
+        # Require the live card before asserting its offline disabled state.
+        edit.wait_for(state='visible', timeout=10000)
+        self.assertTrue(edit.is_disabled())
         # The closed card must not fetch the folder catalog either.
         self.assertEqual([p for p in seen if p == '/api/folders'], [])
         # ... and the current folder stays an ordinary navigable link.
@@ -468,8 +471,8 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_entity_cached(page, 'work', ids['work_a'])
         o._open_details_drawer_if_tiled(page)
         edit = page.locator('#prks-work-folder-edit-btn')
-        if not edit.count():
-            self.skipTest('Work Folder card not mounted in this layout')
+        # No silent skip: losing this card must fail the offline regression.
+        edit.wait_for(state='visible', timeout=10000)
         edit.click()
         page.wait_for_selector('#prks-work-folder-set-btn')
 
