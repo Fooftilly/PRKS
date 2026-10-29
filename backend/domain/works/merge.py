@@ -129,6 +129,9 @@ RELATIONSHIPS: tuple[Relationship, ...] = (
                  OnSourceDelete.REFUSED, "L-R-1", peer=True),
     Relationship("argument_sources", "argument_sources_manifestation_fkey", "manifestations",
                  Disposition.FOLLOWS, OnSourceDelete.NOT_REACHED, "L-R-1", peer=True),
+    # Nothing to do: an annotation, and its asset-annotation scope, follow the Asset.
+    Relationship("annotations", "annotations_asset_fkey", "assets", Disposition.FOLLOWS,
+                 OnSourceDelete.NOT_REACHED, "L-A-1", peer=False),
 )
 
 
@@ -142,8 +145,6 @@ class Deferred:
 DEFERRED: tuple[Deferred, ...] = (
     Deferred("processing_files", "L-PR-1",
              "re-points imported_work_id, which ON DELETE SET NULL would otherwise drop"),
-    Deferred("annotations", "L-A-1",
-             "nothing: an annotation follows its Asset"),
     Deferred("manifestation_credit_overrides", "#60 Slice K (after 0.8)",
              "freezes the source's spelling of a colliding Work-scoped credit on each moved Version "
              "(§10.4 step 4)"),

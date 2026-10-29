@@ -23,6 +23,7 @@ read in the Work detail's snapshot.
 from __future__ import annotations
 
 import hashlib
+import json
 import inspect
 import os
 from collections.abc import Callable
@@ -281,21 +282,25 @@ class WorksMixin(FacadeMixin):
 
         from backend.domain.works import wiki_links
 
-        def read(scope: LibraryScope) -> Optional[tuple[dict, List[dict], Optional[str]]]:
+        from backend.domain.annotations import store as annotation_store
+
+        def read(scope: LibraryScope) -> Optional[tuple[dict, List[dict], Optional[str], List[dict]]]:
             found = queries.work(scope, work_id)
             if found is None:
                 return None
             text = found.get("text_content")
             # The Research Note's links resolve in the snapshot the Work was read in.
             html_content = wiki_links.render(scope, text) if text else None
-            return found, links.tags_of(scope, links.WORK, work_id), html_content
+            return (found, links.tags_of(scope, links.WORK, work_id), html_content,
+                    annotation_store.work_annotations(scope, work_id))
 
         detail = self._read(read)
         if detail is None:
             return None
-        core, tags, html_content = detail
+        core, tags, html_content, annotations = detail
         work = projection.work_detail(core)
         work["tags"] = tags  # the Organization lane's (L-O-1), in the same snapshot
+        work["annotations"] = json.dumps(annotations)  # the Annotations lane's (L-A-1), likewise
         if html_content is not None:
             work["html_content"] = html_content
         self._finish([work])

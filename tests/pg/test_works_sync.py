@@ -175,8 +175,10 @@ class LedgerTests(SyncTestCase):
 
     def test_families_without_a_handler_are_not_ported(self) -> None:
         work_id = self.library.add_work("Work")
-        with self.assertRaises(NotPortedError):
-            self.send(self.envelope("DELETE_PDF_ANNOTATION", work_id, {}))
+        # Every SQLite family has a handler now; one without is refused, typed.
+        with mock.patch.dict(protocol._HANDLERS), self.assertRaises(NotPortedError):
+            del protocol._HANDLERS["MARK_WORK_OPENED"]
+            self.send(self.envelope("MARK_WORK_OPENED", work_id, {}))
         self.assertEqual(self.send(self.envelope("NO_SUCH_OPERATION", work_id, {})),
                          (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.ledger(), [])
