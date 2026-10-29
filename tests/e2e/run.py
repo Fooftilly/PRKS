@@ -53,6 +53,7 @@ from tests.e2e.policy import (
     FAILURE_DIAGNOSTICS_PATH,
     FULL_GATE_EXTERNAL_SHARDS,
     LAST_FAILED_PATH,
+    MODULE_AFFINITY_ENV,
     PROFILE_ENV,
     SEED_CACHE_ENV,
     ChangeDiscoveryError,
@@ -461,6 +462,8 @@ def _apply_runtime_modes(args) -> tuple:
         os.environ[PROFILE_ENV] = "1"
     if args.no_seed_cache:
         os.environ[SEED_CACHE_ENV] = "0"
+    if args.module_affinity_pilot:
+        os.environ[MODULE_AFFINITY_ENV] = "1"
     return benchmark_modes(os.environ)
 
 
@@ -1796,7 +1799,10 @@ def main(argv=None) -> int:
     workers and the harness see them, which would otherwise leak into a later
     in-process main() and silently suppress that run's history persistence.
     """
-    saved_modes = {name: os.environ.get(name) for name in (PROFILE_ENV, SEED_CACHE_ENV)}
+    saved_modes = {
+        name: os.environ.get(name)
+        for name in (PROFILE_ENV, SEED_CACHE_ENV, MODULE_AFFINITY_ENV)
+    }
     try:
         return _main(argv)
     finally:

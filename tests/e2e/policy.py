@@ -28,6 +28,8 @@ PROFILE_ENV = "PRKS_E2E_PROFILE"
 SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
 # Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
 ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
+# Manual soft module-affinity sharding pilot; never train normal history.
+MODULE_AFFINITY_ENV = "PRKS_E2E_MODULE_AFFINITY_PILOT"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -57,6 +59,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("no-seed-cache")
     if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
         modes.append("route-fastpath")
+    if env_flag_enabled(MODULE_AFFINITY_ENV, environ=environ):
+        modes.append("module-affinity")
     return tuple(modes)
 
 

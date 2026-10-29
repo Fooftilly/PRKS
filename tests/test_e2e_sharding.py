@@ -172,6 +172,10 @@ class ShardAssignmentTests(unittest.TestCase):
         def module_pairs(buckets):
             return sum(len({module_of(t) for t in bucket}) for bucket in buckets)
         self.assertLess(module_pairs(pilot), module_pairs(baseline))
+        self.assertEqual(
+            max(shard_estimates(pilot, timings)),
+            max(shard_estimates(baseline, timings)),
+        )
         self.assertEqual(sorted(t for b in pilot for t in b), sorted(ids))
 
         # A very heavy test may still be assigned separately; this is NOT

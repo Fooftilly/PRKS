@@ -671,6 +671,7 @@ def assign_shards(
                         0.0 if module in assigned_modules[i]
                         else MODULE_AFFINITY_PENALTY_SECONDS
                     ),
+                    0 if module in assigned_modules[i] else 1,
                     loads[i], i,
                 ),
             )
