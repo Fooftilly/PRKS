@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Version-controlled GitHub Project #3 agent views, reconciled on master.
+"""Versioned GitHub Project #3 Agent Queue (#9) filter policy.
 
-Agent ownership and execution readiness are different:
-- Agent Queue (#9): every open issue assigned to a named coding agent,
-  including pending/blocked/in-progress work. This is an OWNERSHIP view.
-- Agent Ready: only Ready issues with Agent/Mixed execution and named owner.
-  Open native dependencies must STILL be checked before starting.
+Agent ownership is not execution readiness. The Agent Queue shows every open
+issue owned by a named coding agent, including pending, blocked and in-progress
+work. The existing view's Status grouping distinguishes their lifecycle states.
+An agent may start work only when Status=Ready, Execution=Agent/Mixed, the issue
+is accepted and no native Blocked-by dependency is open.
 
-Run without --apply to inspect view drift. On a protected master push the
-GitHub Actions job uses --apply, an environment-scoped Project token and a
-fixed project identity. No issue status, execution, owner, or labels are edited.
+On a protected master push, reconcile only the view #9 filter; preserve its
+name, layout, visible columns, grouping, sort and all other project views.
+A daily --fail-on-drift job checks the policy without writing GitHub.
 """
 from __future__ import annotations
 
@@ -23,18 +23,15 @@ import project3_migrate as pm
 PROJECT_ID = pm.PROJECT_ID
 OWNER = pm.OWNER
 PROJECT_NUMBER = pm.PROJECT_NUMBER
+QUEUE_NUMBER = 9
+QUEUE_NAME = "Agent Queue"
+QUEUE_LAYOUT = "TABLE_LAYOUT"
+MAX_PAGES = 10
 
 OWNED_FILTER = (
     'is:open is:issue -label:dependencies '
     'agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"'
 )
-READY_FILTER = (
-    OWNED_FILTER + ' execution:Agent,Mixed status:Ready'
-)
-QUEUE_NUMBER = 9
-QUEUE_NAME = "Agent Queue"
-READY_NAME = "Agent Ready"
-MAX_PAGES = 10
 
 VIEWS_QUERY = """query($owner:String!,$number:Int!,$after:String){
   user(login:$owner) {
@@ -52,11 +49,6 @@ UPDATE_VIEW = """mutation($input:UpdateProjectV2ViewInput!){
     projectV2View { id number name filter layout }
   }
 }"""
-CREATE_VIEW = """mutation($input:CreateProjectV2ViewInput!){
-  createProjectV2View(input:$input){
-    projectV2View { id number name filter layout }
-  }
-}"""
 
 Transport = Callable[[str, dict], dict]
 
@@ -66,7 +58,6 @@ class ViewError(Exception):
 
 
 def _connection(result: Any) -> dict:
-    """Require the exact user-owned Project #3, never a similarly named board."""
     if not isinstance(result, dict) or not isinstance(result.get("user"), dict):
         raise ViewError("Project owner could not be queried")
     project = result["user"].get("projectV2")
@@ -137,80 +128,41 @@ def views(transport: Transport) -> list[dict[str, Any]]:
     raise ViewError("Too many Project views to verify")
 
 
-def identify(items: list[dict]) -> tuple[dict, dict | None]:
-    queue = [v for v in items if v["number"] == QUEUE_NUMBER]
-    ready = [v for v in items if v["name"] == READY_NAME]
-    if len(queue) != 1 or queue[0]["name"] != QUEUE_NAME or queue[0]["layout"] != "TABLE_LAYOUT":
+def queue(items: list[dict]) -> dict:
+    candidates = [v for v in items if v["number"] == QUEUE_NUMBER]
+    if (len(candidates) != 1 or candidates[0]["name"] != QUEUE_NAME
+            or candidates[0]["layout"] != QUEUE_LAYOUT):
         raise ViewError("View #9 is no longer the expected Agent Queue table; refusing to modify")
-    if len(ready) > 1:
-        raise ViewError("Multiple Agent Ready views; refusing to guess")
-    if ready and ready[0]["layout"] != "TABLE_LAYOUT":
-        raise ViewError("Existing Agent Ready view is not a table")
-    return queue[0], ready[0] if ready else None
-
-
-def mutate(transport: Transport, document: str, name: str, variables: dict) -> dict:
-    result = transport(document, variables)
-    payload = result.get(name) if isinstance(result, dict) else None
-    view = payload.get("projectV2View") if isinstance(payload, dict) else None
-    if not isinstance(view, dict) or not isinstance(view.get("id"), str):
-        raise ViewError(f"{name} response is invalid; inspect live Project view before retrying")
-    return view
-
-
-def update_filter(transport: Transport, view: dict, new_filter: str) -> None:
-    latest = next((v for v in views(transport) if v["id"] == view["id"]), None)
-    if latest != view:
-        raise ViewError(f"{view['name']}: view changed concurrently; no write made")
-    mutate(transport, UPDATE_VIEW, "updateProjectV2View", {
-        "input": {"viewId": view["id"], "filter": new_filter}
-    })
-    updated = next((v for v in views(transport) if v["id"] == view["id"]), None)
-    if (updated is None or updated["filter"] != new_filter
-            or updated["name"] != view["name"] or updated["layout"] != view["layout"]):
-        raise ViewError(f"{view['name']}: post-write verification failed")
+    return candidates[0]
 
 
 def reconcile(transport: Transport, *, apply: bool) -> list[str]:
-    state = views(transport)
-    queue, ready = identify(state)
-    changes: list[str] = []
-    if queue["filter"] != OWNED_FILTER:
-        changes.append(f"View #9 {QUEUE_NAME}: update ownership filter")
-        if apply:
-            update_filter(transport, queue, OWNED_FILTER)
-    if ready is None:
-        changes.append(f"Create {READY_NAME} table (Ready-only filter)")
-        if apply:
-            current = views(transport)
-            _, found = identify(current)
-            if found is not None:
-                raise ViewError("Agent Ready was concurrently created; rerun")
-            created = mutate(transport, CREATE_VIEW, "createProjectV2View", {
-                "input": {"projectId": PROJECT_ID, "name": READY_NAME, "layout": "TABLE_LAYOUT"}
-            })
-            # Creation precedes filter assignment because CreateProjectV2ViewInput
-            # does not accept a filter. Verify and set it immediately.
-            fresh = views(transport)
-            ready = next((v for v in fresh if v["id"] == created["id"]), None)
-            if ready is None or ready["name"] != READY_NAME or ready["layout"] != "TABLE_LAYOUT":
-                raise ViewError("Created Agent Ready view needs inspection")
-            update_filter(transport, ready, READY_FILTER)
-    elif ready["filter"] != READY_FILTER:
-        changes.append(f"{READY_NAME}: update actionable-only filter")
-        if apply:
-            update_filter(transport, ready, READY_FILTER)
-    if apply:
-        final_queue, final_ready = identify(views(transport))
-        if final_queue["filter"] != OWNED_FILTER or final_ready is None or final_ready["filter"] != READY_FILTER:
-            raise ViewError("Post-reconciliation policy mismatch")
-    return changes
+    current = queue(views(transport))
+    if current["filter"] == OWNED_FILTER:
+        return []
+    if not apply:
+        return ["View #9 Agent Queue: ownership filter differs from policy"]
+    # Guard against an independent UI edit while the view list was fetched.
+    if queue(views(transport)) != current:
+        raise ViewError("Agent Queue changed concurrently; no mutation made")
+    result = transport(UPDATE_VIEW, {
+        "input": {"viewId": current["id"], "filter": OWNED_FILTER}
+    })
+    payload = result.get("updateProjectV2View") if isinstance(result, dict) else None
+    updated = payload.get("projectV2View") if isinstance(payload, dict) else None
+    if not isinstance(updated, dict) or updated.get("id") != current["id"]:
+        raise ViewError("Invalid update response; inspect view #9 before retrying")
+    after = queue(views(transport))
+    if (after["filter"] != OWNED_FILTER or after["id"] != current["id"]
+            or after["name"] != current["name"] or after["layout"] != current["layout"]):
+        raise ViewError("Agent Queue post-write verification failed")
+    return ["View #9 Agent Queue: ownership filter reconciled"]
 
 
 def main(argv: list[str] | None = None, *, transport: Transport | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true",
-                        help="reconcile both views (protected GitHub Actions master only)")
+                        help="reconcile view #9 (protected GitHub Actions master only)")
     parser.add_argument("--fail-on-drift", action="store_true",
                         help="read-only verification exits nonzero on configuration drift")
     args = parser.parse_args(argv)
@@ -226,15 +178,14 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
                 raise ViewError("PROJECT_SYNC_TOKEN not configured")
             transport = pm.http_transport(token)
         changes = reconcile(transport, apply=args.apply)
-        if not changes:
-            print("Project #3 agent views already match policy.")
-        else:
-            for change in changes:
-                print(("Applied: " if args.apply else "Drift: ") + change)
+        for change in changes:
+            print(("Applied: " if args.apply else "Drift: ") + change)
         if not args.apply:
             print("Read-only check; no Project views changed.")
             if changes and args.fail_on_drift:
                 raise ViewError("Project view configuration drift detected")
+        if not changes:
+            print("Agent Queue already matches the versioned filter policy.")
         return 0
     except (ViewError, pm.MigrationError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"Project #3 view sync refused: {type(exc).__name__}: {exc}", file=sys.stderr)
