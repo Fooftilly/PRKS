@@ -449,7 +449,8 @@ Only after that collector has verified the Project is public, its identity
 and field types are correct, every page was retrieved and the snapshot is
 valid does `scripts/project3_agent_queue.py publish` extract a minimal
 ownership inventory. The output contains only open, non-archived Project #3
-PRKS issues with a recognized Agent value, their `number`, `agent`,
+PRKS issues with a recognized coding-agent value (explicitly excluding `Manual` and
+`Unassigned`), their `number`, `agent`,
 `status`, and `execution`, together with the Project identity, completeness,
 generation time, expiry, count and optional originating workflow run ID.
 It publishes no Project mutations, assignees, issue descriptions, hidden

@@ -68,6 +68,7 @@ class PublisherTests(unittest.TestCase):
             {"number": 106, "state": "OPEN", "in_project": False,
              "project_item_id": None, "archived": None,
              "status": None, "execution": None, "agent": None, "assignees": []},
+            item(107, "Manual"), item(108, "Unassigned"),
         ])
         result = queue.build_queue(src, now=NOW)
         self.assertEqual([r["number"] for r in result["issues"]], [101, 105])
@@ -214,6 +215,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}", content)
         self.assertIn("contents: write", content)
         self.assertIn("git push origin HEAD:refs/heads/project3-agent-queue", content)
+        self.assertIn("git switch --orphan project3-agent-queue", content)
+        self.assertNotIn("git rm -rfq -- .", content)
         self.assertIn("scripts/project3_readiness.py snapshot", content)
         self.assertIn("scripts/project3_agent_queue.py publish", content)
         for ref in re.findall(r"uses:\s*(\S+)", content):

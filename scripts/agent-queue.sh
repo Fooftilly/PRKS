@@ -40,6 +40,10 @@ if command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
                   end)
               )
             | select(.content.type == "Issue" and .content.repository == "Fooftilly/PRKS")
+            # Some gh versions expose state / archival status; exclude them
+            # when available rather than treating completed work as active.
+            | select(.content.state != "CLOSED" and .content.state != "MERGED")
+            | select(.isArchived != true and .archived != true)
             | select((.content.number | type) == "number")
             | ["#\(.content.number)", (.status // "(unset)"),
                (.execution // "(unset)"), (.title // .content.title // ""),

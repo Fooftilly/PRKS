@@ -46,7 +46,8 @@ def build_queue(snapshot: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     for issue in snapshot["issues"]:
         if not issue["in_project"] or issue["archived"] or issue["state"] != "OPEN":
             continue
-        if issue["agent"] is None:
+        # These are valid Project Agent options, but not coding agents.
+        if issue["agent"] in (None, "Manual", "Unassigned"):
             continue
         entries.append({
             "number": issue["number"],

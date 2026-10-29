@@ -66,7 +66,7 @@ jobs:
             }
           else
             git switch --orphan project3-agent-queue
-            git rm -rfq -- .
+            # switch --orphan already clears tracked files from the worktree.
           fi
           install -m 0644 "$RUNNER_TEMP/agent-queue.json" agent-queue.json
           git add -- agent-queue.json
