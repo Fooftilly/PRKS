@@ -149,7 +149,7 @@ Only a review's *first* answer can release Changes requested, and only when it i
 
 `project-sync` never writes an issue item, never moves an item out of Blocked or Done, and leaves any item whose current Status is not in its "allowed from" list unchanged, logging that it did so.
 
-## 7. Views as filtered projections (view #9 and Agent Ready now version-controlled; others proposed)
+## 7. Views as filtered projections (view #9 filter version-controlled; others proposed)
 
 Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`, field names such as `status:`, `work-type:`, `execution:`, `roadmap-stage:`, `has:`/`no:`, `updated:`, `reason:`, `parent-issue:`). `execution:` and `roadmap-stage:` work once those fields exist. **There is no blocked-by filter qualifier**, so views cannot hide items with an open native prerequisite (§9).
 
@@ -160,7 +160,6 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 | Work Board (#8) | board | `-label:dependencies -work-type:Epic -status:Inbox,Backlog,Idea,Parked` | columns: Status (hide Inbox and Backlog columns) | – | Title, Status, Linked pull requests, Parent issue, Execution, Labels |
 | Triage (new, optional) | table | `is:open status:Inbox -label:dependencies` | – | Updated ↓ | Title, Labels, Parent issue, Created |
 | Agent Queue (#9, all ownership) | table | `is:open is:issue -label:dependencies agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"` | Status | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
-| Agent Ready (new, actionable candidates) | table | `is:open is:issue -label:dependencies agent:"Cursor Cloud","Claude Code","ChatGPT/Codex" execution:Agent,Mixed status:Ready` | – | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
 | Research Queue (#10) | table | `is:open label:research -status:Done` | – | Updated ↓ | Title, Status, Assignees, Parent issue, Labels |
 | Roadmap Research (new, optional) | table | `is:open work-type:Epic roadmap-stage:"Research / Design"` | – | Roadmap Order ↑ | Title, Status, Horizon, Commitment, Sub-issues progress |
 | Research History (new) | table | `label:research is:closed` | – | Closed ↓ | Title, Closed, Labels, Linked pull requests |
@@ -170,8 +169,8 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 - **Work Board** keeps Done visible. If the Done column grows too long, add a date bound in the UI and check that the preview shows the expected items, because GitHub documents the `updated:` comparison operators ambiguously. Inbox (hundreds of backfilled findings) and Backlog stay out of it; Inbox has its own Triage view. In a board view, a hidden column is a view setting, not a filter.
 - **Research:** Research Queue holds actual research tasks (the `research` label). Roadmap epics that are still being researched or designed are in Roadmap Research or the Roadmap view, not mixed into Research Queue. Research History holds closed research, including #181, #234 and #246 once they are added (§13).
 - **Dependency PRs** (`dependencies` label: Dependabot, plus the human-authored #335) appear only in Maintenance. Maintenance does not filter on Status, because Dependabot PRs never get a `project-sync` Status (§10).
-- **Agent Queue (#9) is the ownership inventory, not permission to start work.** It includes open issues owned by coding agents in Inbox, Backlog, Ready, In Progress, Review and Blocked. The separate **Agent Ready** view is the stricter pickup candidate list. Neither view can exclude items with an open native Blocked-by prerequisite; check Relationships and the approved roadmap before starting work.
-- **View configuration is now managed as code:** `scripts/project3_view_sync.py` declaratively reconciles only view #9's filter and the Agent Ready view on trusted `master` pushes, using the protected `project-automation` token. A daily read-only job reports drift. No Project issue Status, Execution or Agent values are inferred or changed by view reconciliation. Other views and the existing view #9 layout/grouping/sort are preserved. See `docs/agent-workflows/agent-queue.md`.
+- **Agent Queue (#9) is the ownership inventory, not permission to start work.** It includes open issues owned by coding agents in Inbox, Backlog, Ready, In Progress, Review and Blocked. The existing Status grouping distinguishes actionable Ready issues from planned, blocked or active assignments. The view cannot exclude items with an open native Blocked-by prerequisite; check Relationships and the approved roadmap before starting work.
+- **View #9's filter is now managed as code:** `scripts/project3_view_sync.py` reconciles only the ownership filter on trusted `master` pushes, using the protected `project-automation` token. A daily read-only job fails on drift. No Project issue Status, Execution or Agent values are inferred or changed. Other views and view #9's name, layout, columns, grouping and sort are preserved. See `docs/agent-workflows/agent-queue.md`.
 - **Timeline** stays sparse until Start date and Target date are filled in (no item has them today).
 
 ### Authenticated assignment command bridge
