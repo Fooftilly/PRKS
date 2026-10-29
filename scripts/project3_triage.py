@@ -281,7 +281,13 @@ def apply(plan: dict, project: pm.Project, read: Callable[[str], Any]) -> int:
             if (verified is None or {f: verified["values"].get(f) for f in FIELDS} != expected
                     or verified["state"] != "OPEN" or verified["archived"]):
                 raise TriageError(f"#{row['number']}: post-write verification failed; STOP and inspect live fields")
+            # Dependencies and candidate approval can change between the
+            # pre-write read and GitHub's separate Project field mutation.
+            if inspect_issue(row["number"], read) != row["expected_issue"]:
+                raise TriageError(f"#{row['number']}: issue changed during write; inspect live state")
             changed += 1
+        if inspect_issue(row["number"], read) != row["expected_issue"]:
+            raise TriageError(f"#{row['number']}: issue changed after field updates; inspect live state")
         print(f"#{row['number']}: verified")
     return changed
 
