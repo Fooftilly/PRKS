@@ -1988,6 +1988,100 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
         self.assertIn("selected=2 completed=3", report["detail"])
 
 
+    def test_worker_count_mismatch_is_not_misreported_as_a_crash(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        detail = runner._execution_count_error([a, b], 3)
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "execution-count-mismatch", "detail": detail},
+                watchdog=False,
+            ),
+            detail,
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "execution-count-mismatch", "detail": "private file content"},
+                watchdog=False,
+            ),
+            "",
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "worker-crash", "detail": detail}, watchdog=False
+            ),
+            "",
+        )
+
+        for worker_report, expected_kind in (
+            (
+                {
+                    "kind": "execution-count-mismatch",
+                    "tests": 3,
+                    "failures": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "failed_ids": [],
+                    "timings": {a: 1.0, b: 2.0},
+                    "phase_timings": {},
+                    "detail": detail,
+                    "watchdog": False,
+                },
+                "execution-count-mismatch",
+            ),
+            (None, "worker-crash"),
+        ):
+            with self.subTest(kind=expected_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    proc = mock.Mock()
+                    proc.poll.return_value = 1
+                    proc.returncode = 1
+                    worker = {
+                        "index": 0,
+                        "proc": proc,
+                        "handle": io.StringIO(),
+                        "shard": [a, b],
+                        "started": runner.time.perf_counter(),
+                        "report_file": root / "report.json",
+                        "log_file": root / "worker.log",
+                        "heartbeat_file": root / "heartbeat.json",
+                    }
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(mock.patch.object(runner, "REPO", root))
+                        stack.enter_context(mock.patch.object(
+                            runner, "apply_e2e_playwright_env", return_value=root
+                        ))
+                        stack.enter_context(mock.patch.object(
+                            runner, "_spawn_worker", return_value=worker
+                        ))
+                        stack.enter_context(mock.patch.object(
+                            runner, "_read_report", return_value=worker_report
+                        ))
+                        stack.enter_context(mock.patch.object(runner, "_stop_worker"))
+                        stack.enter_context(mock.patch.object(
+                            runner, "per_test_watchdog_s", return_value=0
+                        ))
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            with contextlib.redirect_stderr(io.StringIO()):
+                                ok, _observed, failed, _phases = runner.run_parallel(
+                                    [a, b], 1, {a: 1.0, b: 1.0}, False
+                                )
+                    saved = policy.load_failure_diagnostics(
+                        root / ".tests" / "e2e-failure-diagnostics.json"
+                    )
+                self.assertFalse(ok)
+                self.assertEqual(failed, [])
+                self.assertEqual(saved["kind"], expected_kind)
+                self.assertEqual(saved["failed_ids"], [])
+                self.assertEqual(saved["stuck_test_id"], "")
+                self.assertEqual(
+                    saved["detail"],
+                    detail if worker_report is not None else "",
+                )
+
     def test_green_unittest_result_with_missing_completion_fails_shard(self):
         from tests.e2e import run as runner
 
@@ -2006,7 +2100,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
                 pointer = stack.enter_context(mock.patch.object(runner, "_run_pointer_capture"))
                 stderr = io.StringIO()
                 with contextlib.redirect_stderr(stderr):
-                    code = runner.main(["--shard", "1/1", "--no-pointer-capture"])
+                    code = runner.main(["--shard", "1/1", "--jobs", "1", "--no-pointer-capture"])
             self.assertEqual(code, 1)
             self.assertIn("external E2E shard completion mismatch", stderr.getvalue())
             self.assertIn("missing=1", stderr.getvalue())
