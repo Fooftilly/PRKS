@@ -333,11 +333,21 @@ def _supervise_full_gate(argv, timeout_s: int) -> int:
     return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
 
 
+def _execution_count_error(selected_ids, executed_count: int) -> str | None:
+    """Check unittest's actual execution count separately from timing-map keys."""
+    expected = len(selected_ids)
+    if executed_count == expected:
+        return None
+    return "E2E execution count mismatch: selected=%d completed=%d" % (
+        expected, executed_count,
+    )
+
+
 def _external_shard_completion_error(selected_ids, observed) -> str | None:
     """Reject green shards that silently omit or invent test completions.
 
     Timings are captured by unittest stopTest, independently of test discovery.
-    A successful external shard must finish each selected ID exactly once.
+    The count check separately detects duplicate executions of selected IDs.
     This applies to both source and packaged E2E without extra CI jobs.
     """
     selected = list(selected_ids)
@@ -862,6 +872,11 @@ def run_worker(
         report["phase_timings"] = result.phase_timings
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
+        if rc == 0:
+            count_error = _execution_count_error(test_ids, result.testsRun)
+            if count_error:
+                report["detail"] = count_error
+                rc = 1
         junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
         if junit_dir:
             try_write_junit_report(
@@ -1503,8 +1518,14 @@ def run_serial(
         "E2E workers=1 tests=%d failures=%d errors=%d skipped=%d in %.1fs"
         % (result.testsRun, len(result.failures), len(result.errors), len(result.skipped), wall)
     )
+    success = result.wasSuccessful()
+    if success:
+        count_error = _execution_count_error(test_ids, result.testsRun)
+        if count_error:
+            print("::error::%s" % count_error, file=sys.stderr)
+            success = False
     return (
-        result.wasSuccessful(),
+        success,
         {k: round(v, 3) for k, v in result.timings.items()},
         _failed_ids_from_result(result),
         result.phase_timings,
