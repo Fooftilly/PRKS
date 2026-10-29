@@ -211,8 +211,12 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true",
                         help="reconcile both views (protected GitHub Actions master only)")
+    parser.add_argument("--fail-on-drift", action="store_true",
+                        help="read-only verification exits nonzero on configuration drift")
     args = parser.parse_args(argv)
     try:
+        if args.apply and args.fail_on_drift:
+            raise ViewError("--apply and --fail-on-drift cannot be combined")
         if args.apply and (os.environ.get("GITHUB_REPOSITORY") != pm.REPOSITORY
                            or os.environ.get("GITHUB_REF") != "refs/heads/master"):
             raise ViewError("--apply requires the protected PRKS master-branch workflow")
@@ -229,6 +233,8 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
                 print(("Applied: " if args.apply else "Drift: ") + change)
         if not args.apply:
             print("Read-only check; no Project views changed.")
+            if changes and args.fail_on_drift:
+                raise ViewError("Project view configuration drift detected")
         return 0
     except (ViewError, pm.MigrationError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"Project #3 view sync refused: {type(exc).__name__}: {exc}", file=sys.stderr)
