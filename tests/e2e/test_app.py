@@ -2642,8 +2642,8 @@ def _open_focused_pdf_annotation_drawer(page):
     """Open the focused pane's overlay from its PDF toolbar.
 
     The right-panel Annotations tab no longer paints rows. Persistence tests
-    read `.annotation-row` from this drawer. A work without a viewer toolbar
-    leaves the tab shell alone. Show on PDF is a separate entry point.
+    read `.annotation-row` from this drawer, so losing the focused pane or
+    its PDF toolbar must fail these tests. Show on PDF is a separate entry point.
     """
     tab_id = page.evaluate(
         """() => {
@@ -2652,13 +2652,15 @@ def _open_focused_pdf_annotation_drawer(page):
         }"""
     )
     if not tab_id:
-        return
+        raise AssertionError("PDF annotation test lost its focused pane")
     button = page.locator(
         '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-viewer"] [aria-label="Annotations"]'
         % tab_id
     )
-    if button.count() == 0:
-        return
+    # This helper is used by the PDF annotation persistence regressions.
+    # Silently returning when the focused viewer toolbar disappears lets
+    # those tests pass against an unrelated/right-panel annotation list.
+    button.first.wait_for(state="visible", timeout=15000)
     if button.first.get_attribute("aria-pressed") != "true":
         button.first.click()
     page.wait_for_selector(
