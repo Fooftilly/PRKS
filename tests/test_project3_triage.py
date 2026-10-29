@@ -143,6 +143,20 @@ class BatchTriageTests(unittest.TestCase):
         self.assertEqual(len(self.fx.api.mutations), 3)
         self.assertEqual(self.fx.api.items["I509"]["values"]["Status"], "Inbox")
 
+    def test_new_blocker_after_project_write_fails_post_write_verification(self):
+        plan = self.approve(self.fx.plan(intent()))
+
+        def disturb(name, variables):
+            if not self.fx.api.mutations:
+                self.fx.dependencies[815] = [{"number": 123, "state": "open"}]
+
+        self.fx.api.before_mutation = disturb
+        with self.assertRaisesRegex(t.TriageError, "issue changed during write"):
+            t.apply(plan, self.fx.project(apply=True), self.fx.read)
+        self.assertEqual(len(self.fx.api.mutations), 1)
+        self.assertEqual(self.fx.api.items["I815"]["values"]["Agent"], "Cursor Cloud")
+        # Project field mutation cannot be rolled back, so the error is required.
+
     def test_partial_approved_item_respects_other_field_change(self):
         plan = self.approve(self.fx.plan(intent()))
         def disturb(name, variables):
