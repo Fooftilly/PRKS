@@ -230,11 +230,54 @@ class AnnotationParityTests(WorksParityTestCase):
                          (["ann-note-1"], 1, 1))
         self.assert_same_reads()
 
+    def test_marks_that_need_no_new_bytes(self) -> None:
+        def outcome(call: Callable[[], Any]) -> Any:
+            try:
+                return call()
+            except (LookupError, ValueError) as exc:
+                return type(exc).__name__, str(exc)
+
+        stale = ("ValueError", "ANNOTATION_MATERIALIZATION_STALE")
+        # The uploaded bytes embed the empty set (revision 0) on both backends.
+        for call, expected in (
+                (lambda db, work_id: db.mark_work_pdf_materialized_if_claim_current(work_id, 0), 0),
+                (lambda db, work_id: db.mark_work_pdf_materialized(work_id), 0),
+                (lambda db, work_id: db.mark_work_pdf_materialized(work_id, at_revision=0), 0),
+                (lambda db, work_id: db.mark_work_pdf_materialized(work_id, at_revision=1), stale),
+                (lambda db, work_id: db.mark_work_pdf_materialized_if_claim_current(work_id, 1), stale),
+                (lambda db, work_id: db.mark_work_pdf_materialized_if_claim_current(work_id, False), stale),
+                (lambda db, work_id: db.mark_work_pdf_materialized(_MISSING), 0),
+                (lambda db, work_id: db.mark_work_pdf_materialized_if_claim_current(_MISSING, 0),
+                 ("LookupError", "ENTITY_NOT_FOUND"))):
+            self.assertEqual(self.same_outcome(lambda db, work_id, call=call: outcome(lambda: call(db, work_id))),
+                             expected)
+        self.assert_same_reads()
+
+    def test_materialization_claims(self) -> None:
+        for side, work_id in ((self.leg, self.ids[0]), (self.ref, self.ids[1])):
+            side.db.save_work_annotations(work_id, json.dumps([HIGHLIGHT]), base_set_revision=0)
+
+        def accept(db: Any, work_id: str, claim: Any) -> Any:
+            try:
+                return db.accept_work_pdf_materialization_claim(work_id, claim)
+            except (LookupError, ValueError) as exc:
+                return type(exc).__name__, str(exc)
+
+        for claim in (1, 0, 2, True, 1.0, "1", None):
+            with self.subTest(claim=claim):
+                outcome = self.same_outcome(lambda db, work_id, claim=claim: accept(db, work_id, claim))
+                self.assertEqual(outcome, 1 if claim == 1 and type(claim) is int
+                                 else ("ValueError", "ANNOTATION_MATERIALIZATION_STALE"))
+        missing = self.same_outcome(lambda db, work_id: accept(db, _MISSING, 0))
+        self.assertEqual(missing[0], "LookupError")
+        self.assert_same_reads()
+
     def leg_mark_materialized(self) -> None:
         if self.parity_backend == "sqlite":
             self.leg.db.mark_work_pdf_materialized(self.ids[0])
             return
-        # Materialization is not ported yet (it comes with the PDF rewrite).
+        # PostgreSQL acknowledges only bytes it committed, and those get a new
+        # key (another file_path than SQLite's): mark the column directly.
         self.leg.db.parity_library.database.command(lambda tx: tx.execute(
             "UPDATE prks.assets SET materialized_pdf_annotation_revision = canonical_annotation_set_revision"
             " WHERE work_id = %s", (self.ids[0],)))
