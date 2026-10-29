@@ -16,9 +16,9 @@ class FakeGraphQL:
         self.items = [
             {"id": "V9", "number": 9, "name": "Agent Queue",
              "filter": 'is:open is:issue execution:Agent,Mixed status:Ready,"In Progress"',
-             "layout": "TABLE"},
+             "layout": "TABLE_LAYOUT"},
             {"id": "V7", "number": 7, "name": "Active Work",
-             "filter": "status:Review", "layout": "TABLE"},
+             "filter": "status:Review", "layout": "TABLE_LAYOUT"},
         ]
         self.mutations: list[tuple[str, dict]] = []
         self.fail_after_write = False
@@ -84,7 +84,7 @@ class AgentViewTests(unittest.TestCase):
 
     def test_existing_ready_view_is_reconciled_not_duplicated(self):
         self.api.items.append({"id": "V11", "number": 11, "name": sync.READY_NAME,
-                               "filter": "bad", "layout": "TABLE"})
+                               "filter": "bad", "layout": "TABLE_LAYOUT"})
         sync.reconcile(self.api, apply=True)
         self.assertEqual([x[0] for x in self.api.mutations], ["update", "update"])
         self.assertEqual(self.api.items[2]["filter"], sync.READY_FILTER)
@@ -92,7 +92,7 @@ class AgentViewTests(unittest.TestCase):
     def test_partial_create_is_recovered(self):
         self.api.items[0]["filter"] = sync.OWNED_FILTER
         self.api.items.append({"id": "V11", "number": 11, "name": sync.READY_NAME,
-                               "filter": None, "layout": "TABLE"})
+                               "filter": None, "layout": "TABLE_LAYOUT"})
         sync.reconcile(self.api, apply=True)
         self.assertEqual(len(self.api.items), 3)
         self.assertEqual(self.api.items[2]["filter"], sync.READY_FILTER)
@@ -111,7 +111,7 @@ class AgentViewTests(unittest.TestCase):
     def test_duplicate_ready_views_refused(self):
         for i in range(2):
             self.api.items.append({"id": f"VR{i}", "number": 20 + i,
-                                   "name": sync.READY_NAME, "filter": "", "layout": "TABLE"})
+                                   "name": sync.READY_NAME, "filter": "", "layout": "TABLE_LAYOUT"})
         with self.assertRaisesRegex(sync.ViewError, "Multiple"):
             sync.reconcile(self.api, apply=True)
         self.assertFalse(self.api.mutations)
