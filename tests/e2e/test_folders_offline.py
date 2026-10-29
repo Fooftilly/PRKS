@@ -187,12 +187,31 @@ class FoldersOfflineTests(unittest.TestCase):
         page.wait_for_timeout(400)
         self.assertIn(FOLDER_UNVISITED_TITLE, o._content_text(page))
 
+        # The seeded parent has a child, so a missing expand/collapse
+        # control is a regression. Verify actual state transitions, not merely
+        # clicks that could be ignored by a missing handler.
         toggle = page.locator('#prks-folder-library-expand-toggle')
-        if toggle.count():
-            toggle.click()
-            page.wait_for_timeout(300)
-            toggle.click()
-            page.wait_for_timeout(300)
+        toggle.wait_for(state='visible', timeout=10000)
+        initial_label = toggle.get_attribute('aria-label')
+        self.assertIn(initial_label, ('Expand all', 'Collapse all'))
+        toggle.click()
+        page.wait_for_function(
+            """initial => {
+                const control = document.getElementById('prks-folder-library-expand-toggle');
+                return !!control && control.getAttribute('aria-label') !== initial;
+            }""",
+            arg=initial_label,
+            timeout=10000,
+        )
+        toggle.click()
+        page.wait_for_function(
+            """initial => {
+                const control = document.getElementById('prks-folder-library-expand-toggle');
+                return !!control && control.getAttribute('aria-label') === initial;
+            }""",
+            arg=initial_label,
+            timeout=10000,
+        )
         # Local filtering and hierarchy toggling are pure cache operations.
         self.assertEqual([p for p in seen if p.startswith('/api/')], [])
 
@@ -388,12 +407,19 @@ class FoldersOfflineTests(unittest.TestCase):
 
         self.offline(page, context)
         posts = self.watch(page, {'POST'})
+        # Never substitute a direct API call if the modal lost its Save button:
+        # the real user-action path and its offline durability are the contract.
         save = page.locator('#save-folder-btn')
-        if save.count():
-            save.click()
-        else:
-            page.evaluate("async () => { try { await createFolder('Race Folder', ''); } catch (_) {} }")
-        page.wait_for_timeout(600)
+        save.wait_for(state='visible', timeout=10000)
+        save.click()
+        wait_for_async(
+            page,
+            """() => prksSync.store.listOperations().then(rows =>
+                rows.some(op => op.operation === 'CREATE_FOLDER'
+                    && op.payload?.title === 'Race Folder'))""",
+            timeout=20000,
+            message='offline Folder modal did not enqueue its create operation',
+        )
         self.assertEqual(posts, [])
 
     def test_every_canonical_folder_wrapper_issues_no_network_offline(self):
