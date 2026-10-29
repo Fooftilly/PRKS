@@ -48,11 +48,14 @@ def job(name: str, start_offset: int = 0, duration: int = 600, step: str = "") -
     started = START + timedelta(seconds=start_offset)
     return {
         "name": name,
+        "status": "completed",
+        "run_attempt": 1,
         "conclusion": "success",
         "started_at": started.isoformat(),
         "completed_at": (started + timedelta(seconds=duration)).isoformat(),
         "steps": ([{
             "name": step,
+            "status": "completed",
             "conclusion": "success",
             "started_at": (started + timedelta(seconds=20)).isoformat(),
             "completed_at": (started + timedelta(seconds=duration - 10)).isoformat(),
@@ -257,6 +260,78 @@ class CompareFullE2EGatesTests(unittest.TestCase):
                         run("source"), observed, "source",
                         source_plan=("full", "true", "6", "true"),
                     )
+
+    def test_reject_missing_active_job_verification_fields(self):
+        for mode in ("source", "packaged"):
+            for index in (0, -1):  # required guard and browser shard
+                for field in ("status", "run_attempt"):
+                    with self.subTest(mode=mode, job=index, field=field):
+                        sample = jobs(mode)
+                        sample[index].pop(field)
+                        with self.assertRaisesRegex(InvalidBenchmark, "unverified"):
+                            summarize(
+                                run(mode), sample, mode,
+                                source_plan=("full", "true", "6", "true")
+                                if mode == "source" else None,
+                            )
+
+    def test_out_of_order_nonoverlapping_steps_are_rejected(self):
+        for mode in ("source", "packaged"):
+            sample = jobs(mode)
+            target = sample[-1]
+            job_start = datetime.fromisoformat(target["started_at"])
+            # Listed after the test, but timestamps are strictly before it.
+            target["steps"].append({
+                "name": "Late-listed setup",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": (job_start + timedelta(seconds=1)).isoformat(),
+                "completed_at": (job_start + timedelta(seconds=4)).isoformat(),
+            })
+            with self.assertRaisesRegex(InvalidBenchmark, "out-of-order"):
+                summarize(
+                    run(mode), sample, mode,
+                    source_plan=("full", "true", "6", "true")
+                    if mode == "source" else None,
+                )
+
+    def test_nonblocking_mergify_failure_is_counted_in_residual(self):
+        sample = jobs("source")
+        target = sample[-1]
+        job_start = datetime.fromisoformat(target["started_at"])
+        optional = {
+            "name": "Report E2E test results to Mergify",
+            "status": "completed",
+            "conclusion": "failure",
+            "started_at": (job_start + timedelta(seconds=590)).isoformat(),
+            "completed_at": (job_start + timedelta(seconds=595)).isoformat(),
+        }
+        target["steps"].append(optional)
+        result = summarize(
+            run("source"), sample, "source",
+            source_plan=("full", "true", "6", "true"),
+        )
+        self.assertEqual(result["shards"], 6)
+        self.assertAlmostEqual(result["runner_minutes"], 60)
+        self.assertAlmostEqual(result["non_test_minutes"], 3)
+        # The exception is only for that source-gate reporting step.
+        optional["name"] = "Install runtime and E2E dependencies"
+        with self.assertRaisesRegex(InvalidBenchmark, "Failed or incomplete"):
+            summarize(
+                run("source"), sample, "source",
+                source_plan=("full", "true", "6", "true"),
+            )
+        optional["name"] = "Report E2E test results to Mergify"
+        target["steps"][0]["conclusion"] = "failure"
+        with self.assertRaisesRegex(InvalidBenchmark, "Missing or unsuccessful test"):
+            summarize(
+                run("source"), sample, "source",
+                source_plan=("full", "true", "6", "true"),
+            )
+        package = jobs("packaged")
+        package[-1]["steps"].append(dict(optional))
+        with self.assertRaisesRegex(InvalidBenchmark, "Failed or incomplete"):
+            summarize(run("packaged"), package, "packaged")
 
     def test_workflow_wall_requires_explicit_consistent_completion(self):
         payload = run("source")
