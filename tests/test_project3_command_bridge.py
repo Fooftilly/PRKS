@@ -23,6 +23,8 @@ def payload(*items, operation="apply"):
 
 class GitHubStub:
     def __init__(self, body: str):
+        # Opaque sentinel: confirm REST reads use the separate Actions token.
+        self.token = object()
         timestamp = NOW.isoformat().replace("+00:00", "Z")
         self.comment_data = {
             "id": 53, "url": bridge.API + "/issues/comments/53",
@@ -68,8 +70,8 @@ class BridgeTests(unittest.TestCase):
         self.api = GitHubStub(payload(intent()))
         self.transport = mock.patch.object(bridge.pm, "http_transport", return_value=self.fx.api)
         self.issue_reader = mock.patch.object(bridge.triage, "rest_client", return_value=self.fx.read)
-        self.transport.start()
-        self.issue_reader.start()
+        self.transport_mock = self.transport.start()
+        self.issue_reader_mock = self.issue_reader.start()
         self.addCleanup(self.transport.stop)
         self.addCleanup(self.issue_reader.stop)
 
@@ -84,6 +86,11 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(len(self.fx.api.mutations), 3)
         self.assertEqual(self.fx.api.items["I815"]["values"]["Agent"], "Cursor Cloud")
         self.assertIn("APPLIED", self.api.receipts[0])
+
+    def test_issue_reads_use_actions_token_and_projects_use_environment_token(self):
+        self.go(mode="")
+        self.transport_mock.assert_called_once_with("test-only-token")
+        self.issue_reader_mock.assert_called_once_with(self.api.token)
 
     def test_default_mode_makes_no_change(self):
         message = self.go(mode="")
