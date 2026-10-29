@@ -305,41 +305,51 @@ def replace_object(scope: LibraryScope, storage: StorageBackend, asset_id: str,
 # -- maintenance ------------------------------------------------------------------------
 
 
-def settle(db: Database, storage: StorageBackend, key: StorageKey) -> Settled:
-    """Settle the claim on ``key`` in one transaction: delete the bytes only if nothing names them."""
-
-    def run(tx: Transaction) -> Settled:
-        params = _key_params(key)
-        tx.execute(OBJECT_LOCK_SQL, (str(key),))
-        claim = tx.execute(_CLAIM_FOR_SETTLE, params).fetchone()
-        if claim is None:
-            return Settled.ABSENT
-        if claim["hold"]:
-            return Settled.HELD
-        if claim["library_id"] is not None:
-            locked = tx.execute(_TRY_OBJECTS_LOCK_SQL, (claim["library_id"],)).fetchone()
-            if locked is None or not locked["locked"]:
-                # Stamped like an attempt, so the bounded pass rotates past
-                # a Library under backup instead of retrying it first.
-                tx.execute(_NOTE_ATTEMPT, params)
-                return Settled.BUSY
-        referenced = references(tx, key)
-        if referenced:
-            tx.execute(_FORGET_CLAIM, params)
-            return Settled.REFERENCED
-        if referenced is None:
+def settle_tx(tx: Transaction, storage: StorageBackend, key: StorageKey) -> Settled:
+    """Settle a claim inside the caller's transaction (job lease fencing applies)."""
+    params = _key_params(key)
+    tx.execute(OBJECT_LOCK_SQL, (str(key),))
+    claim = tx.execute(_CLAIM_FOR_SETTLE, params).fetchone()
+    if claim is None:
+        return Settled.ABSENT
+    if claim["hold"]:
+        return Settled.HELD
+    if claim["library_id"] is not None:
+        locked = tx.execute(_TRY_OBJECTS_LOCK_SQL, (claim["library_id"],)).fetchone()
+        if locked is None or not locked["locked"]:
+            # Stamped like an attempt, so the bounded pass rotates past
+            # a Library under backup instead of retrying it first.
             tx.execute(_NOTE_ATTEMPT, params)
-            return Settled.UNKNOWN
-        try:
-            storage.delete(key)
-        except (OSError, StorageObjectError) as exc:
-            LOGGER.warning("object_cleanup_failed namespace=%s error=%s", key.namespace, type(exc).__name__)
-            tx.execute(_NOTE_ATTEMPT, params)
-            return Settled.FAILED
+            return Settled.BUSY
+    referenced = references(tx, key)
+    if referenced:
         tx.execute(_FORGET_CLAIM, params)
-        return Settled.REMOVED
+        return Settled.REFERENCED
+    if referenced is None:
+        tx.execute(_NOTE_ATTEMPT, params)
+        return Settled.UNKNOWN
+    try:
+        storage.delete(key)
+    except (OSError, StorageObjectError) as exc:
+        LOGGER.warning("object_cleanup_failed namespace=%s error=%s", key.namespace, type(exc).__name__)
+        tx.execute(_NOTE_ATTEMPT, params)
+        return Settled.FAILED
+    tx.execute(_FORGET_CLAIM, params)
+    return Settled.REMOVED
 
-    return db.command(run)
+
+
+def settle(db: Database, storage: StorageBackend, key: StorageKey) -> Settled:
+    """Settle one cleanup claim in its own transaction."""
+    return db.command(lambda tx: settle_tx(tx, storage, key))
+
+def due_claim_keys(tx: Transaction, *, limit: int = DEFAULT_RETRY_LIMIT,
+                   library_id: Optional[str] = None) -> list[tuple[str, str]]:
+    """Select one bounded retry pass; suitable for a lease-fenced job transaction."""
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    return [(row["namespace"], row["name"]) for row in tx.execute(
+        _DUE_CLAIMS, {"library_id": library_id, "limit": limit}).fetchall()]
 
 
 def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[str] = None,
@@ -347,8 +357,7 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
     """One bounded pass over due claims (never-attempted first), each settled in its own transaction."""
     if limit < 1:
         raise ValueError("limit must be at least 1")
-    rows = db.query(lambda tx: [(row["namespace"], row["name"]) for row in tx.execute(
-        _DUE_CLAIMS, {"library_id": library_id, "limit": limit}).fetchall()])
+    rows = db.query(lambda tx: due_claim_keys(tx, limit=limit, library_id=library_id))
     outcomes: Counter[Settled] = Counter()
     for namespace, name in rows:
         try:
@@ -385,12 +394,12 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
                 continue
             if info is None or info.modified_at is None or info.modified_at > cutoff:
                 continue
-            if db.command(lambda tx, key=key: _claim_orphan(tx, key)):
+            if db.command(lambda tx, key=key: claim_orphan(tx, key)):
                 claimed += 1
     return claimed
 
 
-def _claim_orphan(tx: Transaction, key: StorageKey) -> bool:
+def claim_orphan(tx: Transaction, key: StorageKey) -> bool:
     tx.execute(OBJECT_LOCK_SQL, (str(key),))
     if references(tx, key) is not False:
         return False
