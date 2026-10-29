@@ -337,10 +337,10 @@ class TestLocalSpecifics(LocalStorageTestCase):
 
     def test_backend_is_not_wired_into_production_paths_yet(self):
         # Phase A adds the abstraction only; Phase B routes operations through
-        # it. Phase B starts on PostgreSQL (L-A-1 #635): the facade, which the
-        # running app does not construct yet, and the PostgreSQL workers'
-        # object maintenance, which a SQLite root never gets, are the only
-        # other users.
+        # it. Phase B starts on PostgreSQL (L-A-1 #635, L-PR-1 #636): the
+        # facade, which the running app does not construct yet, and the
+        # PostgreSQL workers' object maintenance, which a SQLite root never
+        # gets, are the only other users.
         import subprocess
 
         out = subprocess.run(
@@ -350,7 +350,8 @@ class TestLocalSpecifics(LocalStorageTestCase):
         if out.returncode not in (0, 1):  # pragma: no cover - no git
             self.skipTest("git unavailable")
         self.assertEqual(out.stdout.split(), ["backend/domain/objects/jobs.py", "backend/pg_facade/annotations.py",
-                                              "backend/pg_facade/works.py", "backend/storage/objects.py"])
+                                              "backend/pg_facade/processing.py", "backend/pg_facade/works.py",
+                                              "backend/storage/objects.py"])
 
 
 if __name__ == "__main__":
