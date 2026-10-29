@@ -1893,6 +1893,79 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             self.assertTrue(needed, reason)
 
 
+class UnexpectedE2ESkipGuardTests(unittest.TestCase):
+    """Skipped unittest cases count as run but do not exercise browser contracts."""
+
+    @staticmethod
+    def skipped_result(test_id):
+        case = mock.Mock()
+        case.id.return_value = test_id
+        result = mock.Mock()
+        result.testsRun = 1
+        result.failures = []
+        result.errors = []
+        result.skipped = [(case, "private unsupported-browser detail")]
+        result.timings = {test_id: 0.1}
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        return result
+
+    def test_skips_fail_closed_without_exposing_skip_reasons(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        self.assertIsNone(runner._unexpected_skips_error([]))
+        message = runner._unexpected_skips_error(self.skipped_result(tid).skipped)
+        self.assertIn(tid, message)
+        self.assertIn("skipped 1 selected test", message)
+        self.assertNotIn("private unsupported-browser detail", message)
+
+    def test_serial_green_result_with_skipped_case_fails(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        result = self.skipped_result(tid)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+            stack.enter_context(mock.patch.object(runner, "_suite_for"))
+            stack.enter_context(mock.patch.object(runner, "_write_serial_benchmark_result"))
+            fake_runner = stack.enter_context(mock.patch.object(runner.unittest, "TextTestRunner"))
+            fake_runner.return_value.run.return_value = result
+            stderr = io.StringIO()
+            stack.enter_context(contextlib.redirect_stderr(stderr))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            ok, observed, failures, _phases = runner.run_serial([tid], fail_fast=False)
+        self.assertFalse(ok)
+        self.assertEqual(observed, {tid: 0.1})
+        self.assertEqual(failures, [])
+        self.assertIn(tid, stderr.getvalue())
+        self.assertNotIn("private unsupported-browser detail", stderr.getvalue())
+
+    def test_worker_green_result_with_skipped_case_fails(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        result = self.skipped_result(tid)
+        with tempfile.TemporaryDirectory() as raw:
+            tests_path = Path(raw) / "selected.json"
+            report_path = Path(raw) / "report.json"
+            tests_path.write_text(json.dumps([tid]), encoding="utf-8")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+                stack.enter_context(mock.patch.object(runner, "_install_shutdown_handlers"))
+                stack.enter_context(mock.patch.object(runner, "apply_e2e_playwright_env"))
+                stack.enter_context(mock.patch.object(runner, "_suite_for"))
+                fake_runner = stack.enter_context(mock.patch.object(runner.unittest, "TextTestRunner"))
+                fake_runner.return_value.run.return_value = result
+                rc = runner.run_worker(0, 1, str(tests_path), str(report_path))
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(rc, 1)
+        self.assertEqual(report["kind"], "unexpected-skip")
+        self.assertEqual(report["skipped"], 1)
+        self.assertIn(tid, report["detail"])
+        self.assertNotIn("private unsupported-browser detail", report["detail"])
+
+
 class ExternalShardCompletionGuardTests(unittest.TestCase):
     """Green external shards must have a completion for every selected ID."""
 
