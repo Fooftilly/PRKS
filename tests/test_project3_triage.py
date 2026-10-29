@@ -138,7 +138,7 @@ class BatchTriageTests(unittest.TestCase):
             if len(self.fx.api.mutations) == 0:
                 self.fx.issues[509]["updated_at"] = "2026-10-29T17:01:00Z"
         self.fx.api.before_mutation = disturb
-        with self.assertRaisesRegex(t.TriageError, "changed since review"):
+        with self.assertRaisesRegex(t.TriageError, "concurrent change"):
             t.apply(plan, self.fx.project(apply=True), self.fx.read)
         self.assertEqual(len(self.fx.api.mutations), 3)
         self.assertEqual(self.fx.api.items["I509"]["values"]["Status"], "Inbox")
