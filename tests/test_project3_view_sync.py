@@ -145,6 +145,7 @@ class AgentQueueViewTests(unittest.TestCase):
         self.assertNotIn("status:", sync.OWNED_FILTER)
         self.assertNotIn("execution:", sync.OWNED_FILTER)
         self.assertIn("is:issue", sync.OWNED_FILTER)
+        self.assertNotIn("-label:dependencies", sync.OWNED_FILTER)
 
 
 if __name__ == "__main__":
