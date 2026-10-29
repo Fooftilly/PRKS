@@ -2217,6 +2217,26 @@
           "name": "updated_at",
           "not_null": true,
           "type": "timestamp with time zone"
+        },
+        {
+          "name": "portrait_locator",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "portrait_sha256",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "portrait_byte_size",
+          "not_null": false,
+          "type": "bigint"
+        },
+        {
+          "name": "portrait_source_url",
+          "not_null": false,
+          "type": "text"
         }
       ],
       "constraints": {
@@ -2237,12 +2257,15 @@
         "persons_link_wikipedia_not_null": "NOT NULL link_wikipedia",
         "persons_links_other_not_null": "NOT NULL links_other",
         "persons_pkey": "PRIMARY KEY (id)",
+        "persons_portrait_check": "CHECK (portrait_locator IS NULL AND portrait_sha256 IS NULL AND portrait_byte_size IS NULL AND portrait_source_url IS NULL OR portrait_locator IS NOT NULL AND portrait_sha256 IS NOT NULL AND portrait_byte_size IS NOT NULL AND portrait_source_url IS NOT NULL AND portrait_sha256 ~ '^[0-9a-f]{64}$'::text AND portrait_byte_size > 0 AND portrait_source_url = image_url AND image_url <> ''::text)",
+        "persons_portrait_locator_check": "CHECK (portrait_locator ~ '^[^/\\\\]+$'::text AND portrait_locator !~ '^\\s|\\s$'::text AND (portrait_locator <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(portrait_locator) <= 255 AND \"left\"(portrait_locator, 6) <> '.prks-'::text AND \"left\"(portrait_locator, 12) <> '.linearized_'::text)",
         "persons_updated_at_not_null": "NOT NULL updated_at"
       },
       "indexes": {
         "persons_library_id_id_key": "CREATE UNIQUE INDEX persons_library_id_id_key ON prks.persons USING btree (library_id, id)",
         "persons_library_last_name": "CREATE INDEX persons_library_last_name ON prks.persons USING btree (library_id, last_name, id)",
-        "persons_pkey": "CREATE UNIQUE INDEX persons_pkey ON prks.persons USING btree (id)"
+        "persons_pkey": "CREATE UNIQUE INDEX persons_pkey ON prks.persons USING btree (id)",
+        "persons_portrait_locator": "CREATE INDEX persons_portrait_locator ON prks.persons USING btree (portrait_locator) WHERE (portrait_locator IS NOT NULL)"
       }
     },
     "prks.playlist_items": {

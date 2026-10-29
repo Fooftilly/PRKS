@@ -2,12 +2,11 @@
 
 **References.** One data root serves every Library (§6.2), so a key is
 referenced when any catalogue row names it, whatever its Library: an Asset's
-``storage_locator`` or ``source_locator`` (``asset-objects``), or a staged
-key of a restore run that is neither committed nor failed
-(``restore_run_objects``). The check is three-valued, as on SQLite
-(``backend/AGENTS.md``): ``None`` means "not known", and nothing is deleted
-on it. Person portraits have no catalogue column before the portrait
-migration, so a ``portraits`` key that no restore run holds is ``None``.
+``storage_locator`` or ``source_locator`` (``asset-objects``), a Person's
+``portrait_locator`` (``portraits``), or a staged key of a restore run that
+is neither committed nor failed (``restore_run_objects``). The check is
+three-valued, as on SQLite (``backend/AGENTS.md``): ``None`` means "not
+known" (a namespace with no catalogue), and nothing is deleted on it.
 
 **The per-object lock.** ``pg_advisory_xact_lock`` on the key
 (:data:`OBJECT_LOCK_SQL`) serializes the three things that decide a key's
@@ -83,6 +82,9 @@ _ASSET_REFERENCES: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.assets WHERE storage_locator = %(name)s)
     OR EXISTS (SELECT 1 FROM prks.assets WHERE source_locator = %(name)s) AS referenced
 """
+_PORTRAIT_REFERENCES: LiteralString = """
+SELECT EXISTS (SELECT 1 FROM prks.persons WHERE portrait_locator = %(name)s) AS referenced
+"""
 _STAGED_REFERENCES: LiteralString = """
 SELECT EXISTS (
   SELECT 1 FROM prks.restore_run_objects o JOIN prks.restore_runs r ON r.id = o.run_id
@@ -97,6 +99,9 @@ SELECT 1 FROM prks.assets
 WHERE library_id <> %(library_id)s AND (storage_locator = %(name)s OR source_locator = %(name)s)
 LIMIT 1
 """
+_PORTRAIT_NAMED_BY_ANOTHER_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.persons WHERE library_id <> %(library_id)s AND portrait_locator = %(name)s LIMIT 1
+"""
 # A key another Library released is not this Library's to adopt either.
 _CLAIMED_BY_ANOTHER_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.object_cleanup_claims
@@ -107,6 +112,9 @@ SELECT 1 FROM prks.assets
 WHERE library_id = %(library_id)s AND (storage_locator = %(name)s OR source_locator = %(name)s)
 LIMIT 1
 """
+_PORTRAIT_NAMED_IN_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.persons WHERE library_id = %(library_id)s AND portrait_locator = %(name)s LIMIT 1
+"""
 # A claim names the Library that released the key; an orphan's claim (no
 # Library) is taken over, another Library's claim is left as it is.
 _RECORD_CLAIM: LiteralString = """
@@ -115,6 +123,14 @@ VALUES (%(namespace)s, %(name)s, %(library_id)s, %(hold)s)
 ON CONFLICT (namespace, name) DO UPDATE
   SET library_id = coalesce(c.library_id, EXCLUDED.library_id), hold = c.hold OR EXCLUDED.hold
 """
+_NAMED_ELSEWHERE: dict[str, LiteralString] = {
+    NAMESPACE_ASSET_OBJECTS: _NAMED_BY_ANOTHER_LIBRARY,
+    NAMESPACE_PORTRAITS: _PORTRAIT_NAMED_BY_ANOTHER_LIBRARY,
+}
+_NAMED_HERE: dict[str, LiteralString] = {
+    NAMESPACE_ASSET_OBJECTS: _NAMED_IN_LIBRARY,
+    NAMESPACE_PORTRAITS: _PORTRAIT_NAMED_IN_LIBRARY,
+}
 _RECORD_ORPHAN: LiteralString = """
 INSERT INTO prks.object_cleanup_claims (namespace, name) VALUES (%(namespace)s, %(name)s)
 ON CONFLICT (namespace, name) DO NOTHING
@@ -205,7 +221,8 @@ def references(tx: Transaction, key: StorageKey) -> Optional[bool]:
         row = tx.execute(_ASSET_REFERENCES, params).fetchone()
         return bool(row is not None and row["referenced"])
     if key.namespace == NAMESPACE_PORTRAITS:
-        return None  # no portrait catalogue on PostgreSQL yet
+        row = tx.execute(_PORTRAIT_REFERENCES, params).fetchone()
+        return bool(row is not None and row["referenced"])
     return None
 
 
@@ -225,8 +242,9 @@ def adopt(scope: LibraryScope, storage: StorageBackend, obj: StoredObject) -> No
     hold it in a snapshot.
     """
     scope.execute_unscoped(OBJECT_LOCK_SQL, (str(obj.key),))
-    if obj.key.namespace == NAMESPACE_ASSET_OBJECTS and scope.execute(
-            _NAMED_BY_ANOTHER_LIBRARY, {"name": obj.key.name}).fetchone() is not None:
+    named_elsewhere = _NAMED_ELSEWHERE.get(obj.key.namespace)
+    if named_elsewhere is not None and scope.execute(
+            named_elsewhere, {"name": obj.key.name}).fetchone() is not None:
         raise ObjectMissing()
     if scope.execute(_CLAIMED_BY_ANOTHER_LIBRARY, _key_params(obj.key)).fetchone() is not None:
         raise ObjectMissing()
@@ -251,8 +269,8 @@ def release(scope: LibraryScope, key: StorageKey, *, hold: bool = False) -> bool
     releasing several keys releases them in a fixed order.
     """
     scope.execute_unscoped(OBJECT_LOCK_SQL, (str(key),))
-    if key.namespace == NAMESPACE_ASSET_OBJECTS and scope.execute(
-            _NAMED_IN_LIBRARY, {"name": key.name}).fetchone() is not None:
+    named_here = _NAMED_HERE.get(key.namespace)
+    if named_here is not None and scope.execute(named_here, {"name": key.name}).fetchone() is not None:
         return False
     scope.execute(_RECORD_CLAIM, {**_key_params(key), "hold": hold})
     return True
@@ -348,13 +366,13 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
 
 
 def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_SWEEP_GRACE,
-          now: Optional[float] = None, namespaces: Iterable[str] = (NAMESPACE_ASSET_OBJECTS,)) -> int:
+          now: Optional[float] = None,
+          namespaces: Iterable[str] = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS)) -> int:
     """Claim every object older than ``grace`` that nothing names; returns how many were claimed.
 
     Never deletes: the claims are settled by :func:`settle` like any other.
     A write still in progress is younger than the grace period; one that
-    stalls past it is caught by its own :func:`adopt`. ``portraits`` is not
-    swept before its catalogue exists (its references are never known).
+    stalls past it is caught by its own :func:`adopt`.
     """
     moment = time.time() if now is None else now
     cutoff = moment - grace.total_seconds()

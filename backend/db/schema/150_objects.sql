@@ -7,9 +7,8 @@
 -- catalogue to it. One data root serves every Library of the instance
 -- (§6.2), so a key is referenced if ANY catalogue row names it: an Asset's
 -- `storage_locator` or `source_locator` (namespace `asset-objects`), or a
--- live restore run's staged key. Person portraits get their catalogue
--- column with the portrait migration; until then a `portraits` key is never
--- known to be unreferenced (backend/domain/objects).
+-- live restore run's staged key, or a Person's cached portrait
+-- (`portraits`, below).
 
 -- One restore of a Library (§11.4). Only what the reference check needs:
 -- whether the run is still live. Backup and restore (L-B-1) add the lease,
@@ -69,3 +68,30 @@ CREATE INDEX object_cleanup_claims_library ON prks.object_cleanup_claims (librar
 -- (`assets_storage_locator` is the Works schema's).
 CREATE INDEX assets_source_locator ON prks.assets (source_locator)
   WHERE source_locator IS NOT NULL;
+
+-- A Person's cached portrait (namespace `portraits`): the image its
+-- `image_url` names, fetched and transcoded (backend/person_image.py), as an
+-- immutable object (backend/domain/objects/portraits.py). The four columns
+-- are set together or not at all, and only for the `image_url` the bytes
+-- were made from: changing the URL clears them in the same transaction, so
+-- a portrait never outlives its source. `image_url` stays the Person's
+-- profile field; the locator is never exposed as one.
+ALTER TABLE prks.persons
+  ADD COLUMN portrait_locator    text,
+  ADD COLUMN portrait_sha256     text,
+  ADD COLUMN portrait_byte_size  bigint,
+  ADD COLUMN portrait_source_url text,
+  ADD CONSTRAINT persons_portrait_check CHECK (
+    (portrait_locator IS NULL AND portrait_sha256 IS NULL AND portrait_byte_size IS NULL
+     AND portrait_source_url IS NULL)
+    OR (portrait_locator IS NOT NULL AND portrait_sha256 IS NOT NULL AND portrait_byte_size IS NOT NULL
+        AND portrait_source_url IS NOT NULL
+        AND portrait_sha256 ~ '^[0-9a-f]{64}$' AND portrait_byte_size > 0
+        AND portrait_source_url = image_url AND image_url <> '')),
+  ADD CONSTRAINT persons_portrait_locator_check CHECK (
+    portrait_locator ~ '^[^/\\]+$' AND portrait_locator !~ '^\s|\s$' AND portrait_locator NOT IN ('.', '..')
+    AND octet_length(portrait_locator) <= 255
+    AND left(portrait_locator, 6) <> '.prks-' AND left(portrait_locator, 12) <> '.linearized_');
+-- The reference check reads portraits by key, across Libraries.
+CREATE INDEX persons_portrait_locator ON prks.persons (portrait_locator)
+  WHERE portrait_locator IS NOT NULL;
