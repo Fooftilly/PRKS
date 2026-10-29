@@ -104,6 +104,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/annotations/store.py",
     "backend/domain/objects/__init__.py",
     "backend/domain/objects/ingest.py",
+    "backend/domain/objects/jobs.py",
     "backend/domain/objects/lifecycle.py",
     "backend/domain/objects/portraits.py",
     "backend/domain/objects/replace.py",
