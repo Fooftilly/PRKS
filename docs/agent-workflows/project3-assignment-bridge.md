@@ -43,6 +43,6 @@ The workflow accepts only **new issue comments** on #982, on master. It fetches 
 
 A single serialized workflow checks for a previous claim receipt for the command ID and posts a new single-use claim **before** any Project mutation. On completion, the receipt is updated to APPLIED, CHECK ONLY, DRY RUN, or FAILED / POSSIBLY PARTIAL. Re-running a claimed command cannot replay it. An interrupted or partially applied batch must be inspected before submitting a new command.
 
-The workflow uses the built-in GITHUB_TOKEN with issues-write permission only to record receipt comments. The existing protected PROJECT_SYNC_TOKEN handles Project GraphQL reads/writes. No new secret, agent label, GitHub Assignee, or automatic agent launcher is introduced.
+The workflow uses the built-in GITHUB_TOKEN with scoped issues-write permission for private PRKS issue/dependency REST reads and receipt comments. The existing protected PROJECT_SYNC_TOKEN handles only Project V2 GraphQL reads/writes, keeping the classic project-scoped credential separate from repository issue access. No new secret, agent label, GitHub Assignee, or automatic agent launcher is introduced.
 
 Read current agent ownership with scripts/agent-queue.sh. For manually reviewed batches, see docs/agent-workflows/project3-triage.md.
