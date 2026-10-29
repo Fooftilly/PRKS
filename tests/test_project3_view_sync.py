@@ -16,9 +16,9 @@ class FakeGraphQL:
         self.items = [
             {"id": "V9", "number": 9, "name": "Agent Queue",
              "filter": 'is:open is:issue execution:Agent,Mixed status:Ready,"In Progress"',
-             "layout": "TABLE_LAYOUT"},
+             "layout": "TABLE_LAYOUT", "updatedAt": "2026-10-29T18:00:00Z"},
             {"id": "V7", "number": 7, "name": "Active Work",
-             "filter": "status:Review", "layout": "TABLE_LAYOUT"},
+             "filter": "status:Review", "layout": "TABLE_LAYOUT", "updatedAt": "2026-10-29T18:00:00Z"},
         ]
         self.mutations: list[dict] = []
         self.fail_after_write = False
@@ -42,6 +42,7 @@ class FakeGraphQL:
             self.mutations.append(copy.deepcopy(values))
             if not self.fail_after_write:
                 item["filter"] = values["filter"]
+                item["updatedAt"] = "2026-10-29T18:00:01Z"
             return {"updateProjectV2View": {"projectV2View": copy.deepcopy(item)}}
         raise AssertionError("unexpected GraphQL document")
 
@@ -109,6 +110,25 @@ class AgentQueueViewTests(unittest.TestCase):
             return x
         with self.assertRaisesRegex(sync.ViewError, "identity"):
             sync.reconcile(wrong_project, apply=True)
+        self.assertFalse(self.api.mutations)
+
+    def test_unchanged_filter_with_concurrent_metadata_edit_refuses_write(self):
+        calls = 0
+        def concurrently_edited(document, variables):
+            nonlocal calls
+            if document == sync.VIEWS_QUERY:
+                calls += 1
+                if calls == 2:
+                    self.api.items[0]["updatedAt"] = "2026-10-29T18:00:02Z"
+            return self.api(document, variables)
+        with self.assertRaisesRegex(sync.ViewError, "changed concurrently"):
+            sync.reconcile(concurrently_edited, apply=True)
+        self.assertEqual(self.api.mutations, [])
+
+    def test_missing_view_updated_at_fails_closed(self):
+        del self.api.items[0]["updatedAt"]
+        with self.assertRaisesRegex(sync.ViewError, "unknown field values"):
+            sync.reconcile(self.api, apply=True)
         self.assertFalse(self.api.mutations)
 
     def test_post_write_verification_refuses_stale_output(self):
