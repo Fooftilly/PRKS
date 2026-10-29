@@ -83,10 +83,56 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
     return [by_name[name] for name in required_names], step_name
 
 
+def _timestamp(value: str, label: str) -> datetime:
+    """Parse an explicit GitHub UTC/offset timestamp; never assume a timezone."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError, TypeError) as exc:
+        raise InvalidBenchmark(f"Missing or invalid {label} timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise InvalidBenchmark(f"Timezone missing from {label} timestamp")
+    return parsed
+
+
+def _validated_steps(job: dict, step_name: str, job_start: datetime,
+                     job_end: datetime) -> float:
+    """Check every executed step for chronology, not just the browser step."""
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps or any(not isinstance(s, dict) for s in steps):
+        raise InvalidBenchmark("Missing or malformed shard step timings")
+    selected = [s for s in steps if s.get("name") == step_name]
+    if len(selected) != 1 or selected[0].get("conclusion") != "success":
+        raise InvalidBenchmark(f"Missing or unsuccessful test step: {step_name}")
+
+    windows = []
+    for step in steps:
+        conclusion = step.get("conclusion")
+        status = step.get("status")
+        if status is not None and status != "completed":
+            raise InvalidBenchmark("Partial or unfinished E2E step")
+        if conclusion == "skipped":
+            continue  # GitHub may give a skipped step equal or absent timestamps.
+        if conclusion != "success":
+            raise InvalidBenchmark("Failed or incomplete E2E shard step")
+        start = _timestamp(step.get("started_at"), "step start")
+        end = _timestamp(step.get("completed_at"), "step completion")
+        if start < job_start or end > job_end or end < start:
+            raise InvalidBenchmark("Test step falls outside its job or step timestamps reversed")
+        if step is selected[0] and end <= start:
+            raise InvalidBenchmark("Non-positive browser test step duration")
+        windows.append((start, end))
+
+    windows.sort()
+    if any(current[0] < previous[1] for previous, current in zip(windows, windows[1:])):
+        raise InvalidBenchmark("Overlapping executed E2E step windows")
+    return ( _timestamp(selected[0]["completed_at"], "test completion")
+             - _timestamp(selected[0]["started_at"], "test start") ).total_seconds()
+
+
 def summarize(
     run: dict, jobs: list[dict], mode: str, *, source_plan: tuple[str, str, str, str] | None = None
 ) -> dict:
-    """Require verified source full mode, six complete shards and test steps."""
+    """Require same-head full mode, six complete jobs and nonoverlapping steps."""
     _check_run(run, mode)
     if mode == "source" and source_plan != ("full", "true", "6", "true"):
         raise InvalidBenchmark("Source planner full mode was not verified")
@@ -95,25 +141,57 @@ def summarize(
     test_seconds = 0.0
     durations = []
     starts = []
-    for job in shards:
-        job_duration = _seconds(job["started_at"], job["completed_at"])
-        steps = job.get("steps")
-        if not isinstance(steps, list):
-            raise InvalidBenchmark("Missing shard step timings")
-        selected = [s for s in steps if isinstance(s, dict) and s.get("name") == step_name]
-        if len(selected) != 1 or selected[0].get("conclusion") != "success":
-            raise InvalidBenchmark(f"Missing or unsuccessful test step: {step_name}")
-        step_duration = _seconds(selected[0]["started_at"], selected[0]["completed_at"])
-        start = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
-        end = datetime.fromisoformat(job["completed_at"].replace("Z", "+00:00"))
-        step_start = datetime.fromisoformat(selected[0]["started_at"].replace("Z", "+00:00"))
-        step_end = datetime.fromisoformat(selected[0]["completed_at"].replace("Z", "+00:00"))
-        if step_start < start or step_end > end or step_duration > job_duration:
-            raise InvalidBenchmark("Test step falls outside its job")
+    ends = []
+    individual = []
+    queue_seconds = []
+    for index, job in enumerate(shards, 1):
+        if job.get("status") not in (None, "completed"):
+            raise InvalidBenchmark("Unfinished shard job")
+        if job.get("run_attempt") not in (None, 1):
+            raise InvalidBenchmark("Retried or unverified shard job")
+        if job.get("run_id") not in (None, run["id"]):
+            raise InvalidBenchmark("Shard job belongs to another run")
+        start = _timestamp(job.get("started_at"), "job start")
+        end = _timestamp(job.get("completed_at"), "job completion")
+        job_duration = _seconds(job.get("started_at"), job.get("completed_at"))
+        step_duration = _validated_steps(job, step_name, start, end)
+        if step_duration > job_duration:
+            raise InvalidBenchmark("Test step exceeds job span")
+
+        # Job creation is not necessarily the moment a runner becomes eligible:
+        # dependencies and scheduler delay may also be included in this lag.
+        lag = None
+        if job.get("created_at") is not None:
+            created = _timestamp(job["created_at"], "job creation")
+            lag = (start - created).total_seconds()
+            if lag < 0:
+                raise InvalidBenchmark("Job created after it started")
+            queue_seconds.append(lag)
+
+        non_test = job_duration - step_duration
         job_seconds += job_duration
         test_seconds += step_duration
         durations.append(job_duration)
         starts.append(start)
+        ends.append(end)
+        individual.append({
+            "shard": index,
+            "job_seconds": job_duration,
+            "test_seconds": step_duration,
+            "non_test_seconds": non_test,
+            "created_to_start_seconds": lag,
+        })
+
+    # GitHub Actions' workflow-run updated_at is not a reliable completion
+    # timestamp; only compute wall time from an explicit completed_at field.
+    workflow_wall_seconds = None
+    if run.get("completed_at") is not None:
+        wall_start = _timestamp(run.get("run_started_at"), "workflow start")
+        wall_end = _timestamp(run["completed_at"], "workflow completion")
+        if wall_end <= wall_start or min(starts) < wall_start or max(ends) > wall_end:
+            raise InvalidBenchmark("Contradictory workflow wall timestamps")
+        workflow_wall_seconds = (wall_end - wall_start).total_seconds()
+
     return {
         "mode": mode,
         "sha": run["head_sha"],
@@ -126,6 +204,12 @@ def summarize(
         "test_share_percent": 100 * test_seconds / job_seconds,
         "longest_job_minutes": max(durations) / 60,
         "start_skew_seconds": (max(starts) - min(starts)).total_seconds(),
+        "shard_envelope_minutes": (max(ends) - min(starts)).total_seconds() / 60,
+        "created_to_start_count": len(queue_seconds),
+        "created_to_start_minutes": sum(queue_seconds) / 60 if len(queue_seconds) == SHARDS else None,
+        "workflow_wall_minutes": (workflow_wall_seconds / 60
+                                  if workflow_wall_seconds is not None else None),
+        "per_shard": individual,
     }
 
 
@@ -194,6 +278,10 @@ def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> t
     return found[0]
 
 
+def _minutes(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else "unavailable"
+
+
 def compare(source: dict, packaged: dict) -> str:
     if (source["mode"], packaged["mode"]) != ("source", "packaged"):
         raise InvalidBenchmark("Expected source and packaged full suites")
@@ -201,24 +289,48 @@ def compare(source: dict, packaged: dict) -> str:
         raise InvalidBenchmark("Source and packaged runs must share SHA and trigger event")
     if source["run_id"] == packaged["run_id"]:
         raise InvalidBenchmark("Expected distinct GitHub Actions runs")
-    return "\n".join((
+    rows = [
         "Same-commit source vs packaged E2E: " + chr(96) + source["sha"] + chr(96),
         "",
         "| Six-shard measure | Source checkout | Packaged distribution |",
         "| --- | ---: | ---: |",
+        f"| Passing browser shards | {source['shards']} | {packaged['shards']} |",
         f"| Summed shard runner-min | {source['runner_minutes']:.2f} | {packaged['runner_minutes']:.2f} |",
         f"| Browser execution step min | {source['test_minutes']:.2f} | {packaged['test_minutes']:.2f} |",
-        f"| Setup/teardown and other job min | {source['non_test_minutes']:.2f} | {packaged['non_test_minutes']:.2f} |",
+        f"| Non-test job residual min | {source['non_test_minutes']:.2f} | {packaged['non_test_minutes']:.2f} |",
         f"| Browser execution share | {source['test_share_percent']:.1f}% | {packaged['test_share_percent']:.1f}% |",
         f"| Longest shard job min | {source['longest_job_minutes']:.2f} | {packaged['longest_job_minutes']:.2f} |",
         f"| Shard start-time spread sec | {source['start_skew_seconds']:.0f} | {packaged['start_skew_seconds']:.0f} |",
+        f"| Browser-shard envelope min (overlaps included) | {source['shard_envelope_minutes']:.2f} | {packaged['shard_envelope_minutes']:.2f} |",
+        f"| Job created-to-start observations | {source['created_to_start_count']}/6 | {packaged['created_to_start_count']}/6 |",
+        f"| Sum job created-to-start lag min (6/6 only) | {_minutes(source['created_to_start_minutes'])} | {_minutes(packaged['created_to_start_minutes'])} |",
+        f"| Workflow wall min (explicit start/end only) | {_minutes(source['workflow_wall_minutes'])} | {_minutes(packaged['workflow_wall_minutes'])} |",
+        "",
+        "| Mode | Shard | Created-to-start sec | Job span sec | Browser step sec | Non-test residual sec |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for item in (source, packaged):
+        for shard in item["per_shard"]:
+            lag = shard["created_to_start_seconds"]
+            rows.append(
+                f"| {item['mode']} | {shard['shard']}/6 | "
+                f"{_minutes(lag)} | {shard['job_seconds']:.2f} | "
+                f"{shard['test_seconds']:.2f} | {shard['non_test_seconds']:.2f} |"
+            )
+    rows.extend((
         "",
         f"GitHub runs: source #{source['run_id']}; packaged #{packaged['run_id']}.",
-        "Job-span minutes are not billing units; start skew is not total queue delay.",
-        "Only six browser shards are measured here; Docker, SW and pointer guards are verified but excluded from these minute totals.",
+        "Job created-to-start lag is a scheduling/queue proxy, not a measured runner-only wait: it can include unmet dependencies.",
+        "Unavailable timestamps are not zero. A partial queue sample is shown per shard but no partial sum is compared.",
+        "Summed job spans overlap in real time; the browser-shard envelope is not complete workflow wall time.",
+        "Workflow wall time is unavailable unless GitHub supplies reliable explicit workflow start AND completion timestamps; updated_at is excluded.",
+        "Job-span minutes are NOT GitHub-billed minutes (billing/rounding not queried). Start skew is not queue delay.",
+        "The non-test residual includes setup, installation, post-processing, idle gaps and teardown together; these are not separately attributed.",
+        "Only six browser shards are measured here; Docker, SW and pointer guards are verified but excluded from shard sums.",
         "Passing identical tests on both distributions does not establish equivalence with a narrower packaged smoke pilot.",
         "No automatic E2E selection or required gate policy is changed.",
     ))
+    return "\n".join(rows)
 
 
 def main() -> int:
