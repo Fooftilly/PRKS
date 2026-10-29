@@ -514,6 +514,10 @@ class FoldersOfflineTests(unittest.TestCase):
             timeout=20000,
             message='offline Folder Delete did not enqueue DELETE_FOLDER',
         )
+        # Negative request assertions require a bounded observation window:
+        # a broken sync path could schedule HTTP DELETE shortly after the
+        # local queue write. This is not a readiness sleep.
+        page.wait_for_timeout(500)
         self.assertEqual(deletes, [])
 
     # ---- Work-side Folder card ----------------------------------------------
