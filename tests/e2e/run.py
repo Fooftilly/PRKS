@@ -333,6 +333,33 @@ def _supervise_full_gate(argv, timeout_s: int) -> int:
     return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
 
 
+def _external_shard_completion_error(selected_ids, observed) -> str | None:
+    """Reject green shards that silently omit or invent test completions.
+
+    Timings are captured by unittest stopTest, independently of test discovery.
+    A successful external shard must finish each selected ID exactly once.
+    This applies to both source and packaged E2E without extra CI jobs.
+    """
+    selected = list(selected_ids)
+    expected = set(selected)
+    completed = set(observed)
+    if len(selected) != len(expected):
+        return "external shard selected duplicate test IDs"
+    missing = sorted(expected - completed)
+    extra = sorted(completed - expected)
+    if not missing and not extra:
+        return None
+    return (
+        "external E2E shard completion mismatch: selected=%d completed=%d; "
+        "missing=%d (%s); unexpected=%d (%s)"
+        % (
+            len(selected), len(completed), len(missing),
+            ", ".join(missing[:3]) or "-",
+            len(extra), ", ".join(extra[:3]) or "-",
+        )
+    )
+
+
 def _executed_ids_from_observation(observed, failed_ids) -> list:
     """IDs that actually completed this run (timings + any reported failures)."""
     executed = list(observed or ())
@@ -2199,6 +2226,16 @@ def _main(argv=None) -> int:
         ok, observed, failed_ids, phase_timings = run_parallel(
             test_ids, jobs, timings, args.fail_fast
         )
+
+    # Successful unittest status alone does not prove a shard actually ran
+    # every selected case. Compare independent stopTest observations before
+    # reporting a green source or packaged CI shard.
+    if ok and shard is not None:
+        completion_error = _external_shard_completion_error(test_ids, observed)
+        if completion_error:
+            print("::error::%s" % completion_error, file=sys.stderr)
+            note = (note + "; " + completion_error) if note else completion_error
+            ok = False
 
     if "profile" in active_benchmark_modes and phase_timings:
         totals = {}
