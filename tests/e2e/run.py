@@ -333,6 +333,43 @@ def _supervise_full_gate(argv, timeout_s: int) -> int:
     return _run_with_deadline(cmd, timeout_s, env=env, cwd=str(REPO))
 
 
+def _execution_count_error(selected_ids, executed_count: int) -> str | None:
+    """Check unittest's actual execution count separately from timing-map keys."""
+    expected = len(selected_ids)
+    if executed_count == expected:
+        return None
+    return "E2E execution count mismatch: selected=%d completed=%d" % (
+        expected, executed_count,
+    )
+
+
+def _external_shard_completion_error(selected_ids, observed) -> str | None:
+    """Reject green shards that silently omit or invent test completions.
+
+    Timings are captured by unittest stopTest, independently of test discovery.
+    The count check separately detects duplicate executions of selected IDs.
+    This applies to both source and packaged E2E without extra CI jobs.
+    """
+    selected = list(selected_ids)
+    expected = set(selected)
+    completed = set(observed)
+    if len(selected) != len(expected):
+        return "external shard selected duplicate test IDs"
+    missing = sorted(expected - completed)
+    extra = sorted(completed - expected)
+    if not missing and not extra:
+        return None
+    return (
+        "external E2E shard completion mismatch: selected=%d completed=%d; "
+        "missing=%d (%s); unexpected=%d (%s)"
+        % (
+            len(selected), len(completed), len(missing),
+            ", ".join(missing[:3]) or "-",
+            len(extra), ", ".join(extra[:3]) or "-",
+        )
+    )
+
+
 def _executed_ids_from_observation(observed, failed_ids) -> list:
     """IDs that actually completed this run (timings + any reported failures)."""
     executed = list(observed or ())
@@ -627,13 +664,13 @@ def _persist_failure_diagnostics(payload: dict) -> None:
 
 
 def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
-    """Watchdog detail is runner-authored; other report detail may carry paths."""
-    if not watchdog:
-        return ""
+    """Retain only validated runner-authored details, never unittest traces."""
     detail = str((report or {}).get("detail") or "").strip()
-    # Only keep the known privacy-safe watchdog attribution line.
-    if detail.startswith("per-test watchdog:"):
+    if watchdog and detail.startswith("per-test watchdog:"):
         return detail
+    if (report or {}).get("kind") == "execution-count-mismatch":
+        if re.fullmatch(r"E2E execution count mismatch: selected=\d+ completed=\d+", detail):
+            return detail
     return ""
 
 
@@ -835,6 +872,12 @@ def run_worker(
         report["phase_timings"] = result.phase_timings
         report["detail"] = _failure_detail(result)
         rc = 0 if result.wasSuccessful() else 1
+        if rc == 0:
+            count_error = _execution_count_error(test_ids, result.testsRun)
+            if count_error:
+                report["kind"] = "execution-count-mismatch"
+                report["detail"] = count_error
+                rc = 1
         junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
         if junit_dir:
             try_write_junit_report(
@@ -1204,9 +1247,14 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                         # not promote the last log line — that test may have
                         # passed. Log attribution stays in the printed diagnostic.
                         # Cancelled --fail-fast siblings never enter this branch.
+                        is_count_mismatch = (
+                            report is not None
+                            and report.get("kind") == "execution-count-mismatch"
+                        )
                         if (
                             not reported_failed
                             and active_id
+                            and not is_count_mismatch
                             and active_id not in failed_ids
                         ):
                             failed_ids.append(active_id)
@@ -1221,6 +1269,11 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             kind = "assertion-failure"
                             record_failed = list(reported_failed)
                             tid = record_failed[0]
+                            stage = ""
+                        elif is_count_mismatch:
+                            kind = "execution-count-mismatch"
+                            record_failed = []
+                            tid = ""
                             stage = ""
                         else:
                             kind = "worker-crash"
@@ -1476,8 +1529,14 @@ def run_serial(
         "E2E workers=1 tests=%d failures=%d errors=%d skipped=%d in %.1fs"
         % (result.testsRun, len(result.failures), len(result.errors), len(result.skipped), wall)
     )
+    success = result.wasSuccessful()
+    if success:
+        count_error = _execution_count_error(test_ids, result.testsRun)
+        if count_error:
+            print("::error::%s" % count_error, file=sys.stderr)
+            success = False
     return (
-        result.wasSuccessful(),
+        success,
         {k: round(v, 3) for k, v in result.timings.items()},
         _failed_ids_from_result(result),
         result.phase_timings,
@@ -2199,6 +2258,16 @@ def _main(argv=None) -> int:
         ok, observed, failed_ids, phase_timings = run_parallel(
             test_ids, jobs, timings, args.fail_fast
         )
+
+    # Successful unittest status alone does not prove a shard actually ran
+    # every selected case. Compare independent stopTest observations before
+    # reporting a green source or packaged CI shard.
+    if ok and shard is not None:
+        completion_error = _external_shard_completion_error(test_ids, observed)
+        if completion_error:
+            print("::error::%s" % completion_error, file=sys.stderr)
+            note = (note + "; " + completion_error) if note else completion_error
+            ok = False
 
     if "profile" in active_benchmark_modes and phase_timings:
         totals = {}

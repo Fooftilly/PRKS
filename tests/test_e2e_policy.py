@@ -1893,6 +1893,220 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             self.assertTrue(needed, reason)
 
 
+class ExternalShardCompletionGuardTests(unittest.TestCase):
+    """Green external shards must have a completion for every selected ID."""
+
+    def test_exact_completed_ids_are_accepted(self):
+        from tests.e2e import run as runner
+
+        ids = [
+            "tests.e2e.test_app.FooTests.test_first",
+            "tests.e2e.test_app.FooTests.test_second",
+        ]
+        self.assertIsNone(
+            runner._external_shard_completion_error(ids, {ids[1]: 2.0, ids[0]: 1.0})
+        )
+
+    def test_missing_extra_and_duplicate_ids_fail_closed(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        c = "tests.e2e.test_app.FooTests.test_unselected"
+        missing = runner._external_shard_completion_error([a, b], {a: 1.0})
+        self.assertIn("missing=1", missing)
+        self.assertIn(b, missing)
+        extra = runner._external_shard_completion_error([a], {a: 1.0, c: 2.0})
+        self.assertIn("unexpected=1", extra)
+        self.assertIn(c, extra)
+        duplicate = runner._external_shard_completion_error([a, a], {a: 1.0})
+        self.assertIn("duplicate test IDs", duplicate)
+
+    def test_duplicate_execution_count_fails_despite_matching_timing_keys(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        observed = {a: 1.0, b: 2.0}
+        self.assertIsNone(runner._external_shard_completion_error([a, b], observed))
+        self.assertIn(
+            "selected=2 completed=3", runner._execution_count_error([a, b], 3)
+        )
+        self.assertIsNone(runner._execution_count_error([a, b], 2))
+
+        result = mock.Mock()
+        result.testsRun = 3
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.timings = observed
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        with mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}):
+            with mock.patch.object(runner.unittest, "TextTestRunner") as test_runner:
+                test_runner.return_value.run.return_value = result
+                with mock.patch.object(runner, "_suite_for"):
+                    with mock.patch.object(runner, "_write_serial_benchmark_result"):
+                        with contextlib.redirect_stderr(io.StringIO()) as err:
+                            ok, recorded, failed, _ = runner.run_serial(
+                                [a, b], fail_fast=False
+                            )
+        self.assertFalse(ok)
+        self.assertEqual(recorded, observed)
+        self.assertEqual(failed, [])
+        self.assertIn("execution count mismatch", err.getvalue())
+
+    def test_worker_report_rejects_duplicate_execution_count(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        result = mock.Mock()
+        result.testsRun = 3
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.timings = {a: 1.0, b: 2.0}
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = Path(tmp) / "selected.json"
+            report_file = Path(tmp) / "report.json"
+            selected.write_text(json.dumps([a, b]), encoding="utf-8")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+                stack.enter_context(mock.patch.object(runner, "_install_shutdown_handlers"))
+                stack.enter_context(mock.patch.object(runner, "apply_e2e_playwright_env"))
+                stack.enter_context(mock.patch.object(runner, "_suite_for"))
+                test_runner = stack.enter_context(
+                    mock.patch.object(runner.unittest, "TextTestRunner")
+                )
+                test_runner.return_value.run.return_value = result
+                rc = runner.run_worker(0, 1, str(selected), str(report_file))
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+        self.assertEqual(rc, 1)
+        self.assertIn("selected=2 completed=3", report["detail"])
+
+
+    def test_worker_count_mismatch_is_not_misreported_as_a_crash(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        detail = runner._execution_count_error([a, b], 3)
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "execution-count-mismatch", "detail": detail},
+                watchdog=False,
+            ),
+            detail,
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "execution-count-mismatch", "detail": "private file content"},
+                watchdog=False,
+            ),
+            "",
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "worker-crash", "detail": detail}, watchdog=False
+            ),
+            "",
+        )
+
+        for worker_report, expected_kind in (
+            (
+                {
+                    "kind": "execution-count-mismatch",
+                    "tests": 3,
+                    "failures": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "failed_ids": [],
+                    "timings": {a: 1.0, b: 2.0},
+                    "phase_timings": {},
+                    "detail": detail,
+                    "watchdog": False,
+                },
+                "execution-count-mismatch",
+            ),
+            (None, "worker-crash"),
+        ):
+            with self.subTest(kind=expected_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    proc = mock.Mock()
+                    proc.poll.return_value = 1
+                    proc.returncode = 1
+                    worker = {
+                        "index": 0,
+                        "proc": proc,
+                        "handle": io.StringIO(),
+                        "shard": [a, b],
+                        "started": runner.time.perf_counter(),
+                        "report_file": root / "report.json",
+                        "log_file": root / "worker.log",
+                        "heartbeat_file": root / "heartbeat.json",
+                    }
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(mock.patch.object(runner, "REPO", root))
+                        stack.enter_context(mock.patch.object(
+                            runner, "apply_e2e_playwright_env", return_value=root
+                        ))
+                        stack.enter_context(mock.patch.object(
+                            runner, "_spawn_worker", return_value=worker
+                        ))
+                        stack.enter_context(mock.patch.object(
+                            runner, "_read_report", return_value=worker_report
+                        ))
+                        stack.enter_context(mock.patch.object(runner, "_stop_worker"))
+                        stack.enter_context(mock.patch.object(
+                            runner, "per_test_watchdog_s", return_value=0
+                        ))
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            with contextlib.redirect_stderr(io.StringIO()):
+                                ok, _observed, failed, _phases = runner.run_parallel(
+                                    [a, b], 1, {a: 1.0, b: 1.0}, False
+                                )
+                    saved = policy.load_failure_diagnostics(
+                        root / ".tests" / "e2e-failure-diagnostics.json"
+                    )
+                self.assertFalse(ok)
+                self.assertEqual(failed, [])
+                self.assertEqual(saved["kind"], expected_kind)
+                self.assertEqual(saved["failed_ids"], [])
+                self.assertEqual(saved["stuck_test_id"], "")
+                self.assertEqual(
+                    saved["detail"],
+                    detail if worker_report is not None else "",
+                )
+
+    def test_green_unittest_result_with_missing_completion_fails_shard(self):
+        from tests.e2e import run as runner
+
+        ids = [
+            "tests.e2e.test_app.FooTests.test_first",
+            "tests.e2e.test_app.FooTests.test_second",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(runner, "REPO", Path(tmp)))
+                stack.enter_context(mock.patch.object(runner, "discover_test_ids", return_value=ids))
+                stack.enter_context(mock.patch.object(runner, "full_gate_timeout_s", return_value=0))
+                stack.enter_context(mock.patch.object(runner, "ensure_chromium_installed"))
+                stack.enter_context(mock.patch.object(runner, "run_serial",
+                    return_value=(True, {ids[0]: 1.0}, [], {})))
+                pointer = stack.enter_context(mock.patch.object(runner, "_run_pointer_capture"))
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    code = runner.main(["--shard", "1/1", "--jobs", "1", "--no-pointer-capture"])
+            self.assertEqual(code, 1)
+            self.assertIn("external E2E shard completion mismatch", stderr.getvalue())
+            self.assertIn("missing=1", stderr.getvalue())
+            pointer.assert_not_called()
+
+
 class BenchmarkModeTests(unittest.TestCase):
     """Effective benchmark configuration — CLI flags are exported into env first."""
 
