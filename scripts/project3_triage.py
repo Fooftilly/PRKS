@@ -30,6 +30,7 @@ STATUS = {"Inbox", "Backlog", "Ready", "In Progress"}
 AGENTS = {"Cursor Cloud", "Claude Code", "ChatGPT/Codex", "Unassigned", "Manual"}
 EXECUTION = {"Human", "Agent", "Mixed"}
 MAX_ITEMS = 25
+TRIAGE_DIR = Path.home() / "prks-project3-triage"
 AGENT_ALIASES = {
     "cursor": "Cursor Cloud", "cursor cloud": "Cursor Cloud",
     "claude": "Claude Code", "claude code": "Claude Code",
@@ -276,8 +277,12 @@ def apply(plan: dict, project: pm.Project, read: Callable[[str], Any]) -> int:
 
 
 def external_plan_path(path: Path) -> Path:
-    """Plans and proposals stay out of the repository, including symlinks."""
+    """Constrain all input/output to a dedicated maintainer-local JSON folder."""
+    root = TRIAGE_DIR.expanduser().resolve()
     target = path.expanduser().resolve()
+    if (not target.is_relative_to(root) or target == root
+            or target.suffix != ".json"):
+        raise TriageError(f"plan paths must be .json files under {root}")
     if target.is_relative_to(Path(__file__).resolve().parents[1]):
         raise TriageError("plans and proposals must be outside the PRKS repository")
     return target
