@@ -156,6 +156,123 @@ class CompareFullE2EGatesTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidBenchmark, "was not verified"):
             summarize(run("source"), jobs("source"), "source")
 
+    def test_six_shard_created_to_start_lag_and_accounting_are_disjoint(self):
+        for mode in ("source", "packaged"):
+            observed = jobs(mode)
+            for entry in observed:
+                if "steps" in entry and entry["steps"]:
+                    entry["created_at"] = (
+                        datetime.fromisoformat(entry["started_at"]) - timedelta(seconds=12)
+                    ).isoformat()
+            summary = summarize(
+                run(mode), observed, mode,
+                source_plan=("full", "true", "6", "true") if mode == "source" else None,
+            )
+            self.assertEqual(summary["created_to_start_count"], 6)
+            self.assertAlmostEqual(summary["created_to_start_minutes"], 1.2)
+            self.assertAlmostEqual(summary["test_minutes"], 57)
+            self.assertAlmostEqual(summary["non_test_minutes"], 3)
+            self.assertAlmostEqual(
+                sum(row["test_seconds"] + row["non_test_seconds"]
+                    for row in summary["per_shard"]) / 60,
+                summary["runner_minutes"],
+            )
+            self.assertIsNone(summary["workflow_wall_minutes"])
+            self.assertAlmostEqual(summary["shard_envelope_minutes"], 650 / 60)
+            for row in summary["per_shard"]:
+                self.assertEqual(row["created_to_start_seconds"], 12)
+
+    def test_missing_created_to_start_sample_is_unavailable_not_zero(self):
+        observed = jobs("source")
+        for entry in observed[3:]:
+            entry["created_at"] = (
+                datetime.fromisoformat(entry["started_at"]) - timedelta(seconds=5)
+            ).isoformat()
+        summary = summarize(
+            run("source"), observed, "source",
+            source_plan=("full", "true", "6", "true"),
+        )
+        self.assertEqual(summary["created_to_start_count"], 6)
+        self.assertAlmostEqual(summary["created_to_start_minutes"], 0.5)
+        observed[-1].pop("created_at")
+        summary = summarize(
+            run("source"), observed, "source",
+            source_plan=("full", "true", "6", "true"),
+        )
+        self.assertEqual(summary["created_to_start_count"], 5)
+        self.assertIsNone(summary["created_to_start_minutes"])
+        self.assertIsNone(summary["per_shard"][-1]["created_to_start_seconds"])
+        report = compare(summary, summarize(run("packaged", 12), jobs("packaged"), "packaged"))
+        self.assertIn("5/6", report)
+        self.assertIn("unavailable", report)
+
+    def test_created_after_start_and_malformed_creation_fail_closed(self):
+        for value in (
+            (START + timedelta(hours=1)).isoformat(),
+            "not-a-date",
+            START.replace(tzinfo=None).isoformat(),
+        ):
+            with self.subTest(value=value):
+                observed = jobs("source")
+                observed[3]["created_at"] = value
+                with self.assertRaises(InvalidBenchmark):
+                    summarize(
+                        run("source"), observed, "source",
+                        source_plan=("full", "true", "6", "true"),
+                    )
+
+    def test_overlapping_steps_and_unfinished_steps_fail_closed(self):
+        for mode in ("source", "packaged"):
+            observed = jobs(mode)
+            selected = observed[-1]["steps"][0]
+            # A successful setup step must not overlap the browser step.
+            overlap = dict(
+                name="Install dependencies", conclusion="success", status="completed",
+                started_at=(datetime.fromisoformat(selected["started_at"])
+                            - timedelta(seconds=5)).isoformat(),
+                completed_at=(datetime.fromisoformat(selected["started_at"])
+                              + timedelta(seconds=2)).isoformat(),
+            )
+            observed[-1]["steps"].append(overlap)
+            with self.assertRaisesRegex(InvalidBenchmark, "Overlapping"):
+                summarize(
+                    run(mode), observed, mode,
+                    source_plan=("full", "true", "6", "true") if mode == "source" else None,
+                )
+            observed[-1]["steps"].pop()
+            selected["status"] = "in_progress"
+            with self.assertRaisesRegex(InvalidBenchmark, "unfinished"):
+                summarize(
+                    run(mode), observed, mode,
+                    source_plan=("full", "true", "6", "true") if mode == "source" else None,
+                )
+
+    def test_job_attempt_status_and_run_identity_are_verified(self):
+        for key, value in (("run_attempt", 2), ("status", "in_progress"), ("run_id", 999)):
+            with self.subTest(key=key):
+                observed = jobs("source")
+                observed[-1][key] = value
+                with self.assertRaises(InvalidBenchmark):
+                    summarize(
+                        run("source"), observed, "source",
+                        source_plan=("full", "true", "6", "true"),
+                    )
+
+    def test_workflow_wall_requires_explicit_consistent_completion(self):
+        payload = run("source")
+        payload["run_started_at"] = START.isoformat()
+        payload["completed_at"] = (START + timedelta(seconds=700)).isoformat()
+        kwargs = {"source_plan": ("full", "true", "6", "true")}
+        summary = summarize(payload, jobs("source"), "source", **kwargs)
+        self.assertAlmostEqual(summary["workflow_wall_minutes"], 700 / 60)
+        payload["completed_at"] = (START + timedelta(seconds=200)).isoformat()
+        with self.assertRaisesRegex(InvalidBenchmark, "Contradictory"):
+            summarize(payload, jobs("source"), "source", **kwargs)
+        payload.pop("completed_at")
+        self.assertIsNone(
+            summarize(payload, jobs("source"), "source", **kwargs)["workflow_wall_minutes"]
+        )
+
     def test_plan_log_proves_full_not_affected_selection(self):
         plan_jobs = jobs("source")
         plan_jobs[0]["id"] = 122
