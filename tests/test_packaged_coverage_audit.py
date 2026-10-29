@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -137,6 +138,24 @@ class PackagedCoverageAuditTests(unittest.TestCase):
             staged.format_packaged_coverage_audit(first).split("Critical obligation |")[1],
             staged.format_packaged_coverage_audit(second).split("Critical obligation |")[1],
         )
+
+    def test_audit_pins_default_modules_even_with_opt_in_flags(self):
+        all_ids, modules = complete_fixture()
+        for env_name in (
+            "PRKS_E2E_CLASSIC_SW_TRANSITIONS", "PRKS_E2E_AXE"
+        ):
+            with self.subTest(env_name=env_name), (
+                patch.dict(os.environ, {env_name: "1"}),
+                patch.object(run, "DEFAULT_E2E_MODULES", tuple(modules)),
+                patch.object(run, "discover_test_ids", return_value=all_ids) as discover,
+            ):
+                self.assertEqual(
+                    staged._discover_complete_e2e_ids(default_modules=True), all_ids
+                )
+                discover.assert_called_once_with(modules=tuple(modules))
+                discover.reset_mock()
+                self.assertEqual(staged._discover_complete_e2e_ids(), all_ids)
+                discover.assert_called_once_with()
 
     def test_cli_is_read_only_and_exits_nonzero_on_partial_discovery(self):
         all_ids, modules = complete_fixture()
