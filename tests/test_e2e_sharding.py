@@ -129,6 +129,63 @@ class ShardAssignmentTests(unittest.TestCase):
         second = assign_shards(list(reversed(ids)), 4, timings)
         self.assertEqual(first, second)
 
+    def test_module_affinity_pilot_preserves_all_ids_and_determinism(self):
+        ids = []
+        for module in ("tests.e2e.alpha", "tests.e2e.bravo", "tests.e2e.charlie"):
+            for klass in ("One", "Two"):
+                ids.extend(_ids(module, klass, *("test_%02d" % i for i in range(9))))
+        timings = {t: 1.0 for t in ids}
+        for count in (1, 2, 3, 6, 8):
+            pilot = assign_shards(ids, count, timings, module_affinity=True)
+            self.assertEqual(
+                pilot,
+                assign_shards(list(reversed(ids)), count, timings, module_affinity=True),
+            )
+            self.assertEqual(sorted(t for bucket in pilot for t in bucket), sorted(ids))
+            self.assertEqual(
+                pilot,
+                partition_external_shards(ids, count, timings, module_affinity=True),
+            )
+            for index in range(count):
+                self.assertEqual(
+                    pilot[index],
+                    select_external_shard(
+                        ids, index, count, timings, module_affinity=True,
+                    ),
+                )
+            # Explicitly selecting the normal policy never changes its layout.
+            self.assertEqual(
+                assign_shards(ids, count, timings),
+                assign_shards(ids, count, timings, module_affinity=False),
+            )
+
+    def test_module_affinity_prefers_reuse_without_forcing_whole_modules(self):
+        ids = []
+        for module in ("tests.e2e.alpha", "tests.e2e.bravo", "tests.e2e.charlie"):
+            ids.extend(_ids(module, "Case", "test_0", "test_1", "test_2"))
+        # Representative unequal weights: a small preference avoids a duplicate
+        # module fixture without growing the critical-path test estimate.
+        timings = dict(zip(ids, (4, 2, 2, 1, 5, 3, 2, 3, 4)))
+        baseline = assign_shards(ids, 2, timings)
+        pilot = assign_shards(ids, 2, timings, module_affinity=True)
+
+        def module_pairs(buckets):
+            return sum(len({module_of(t) for t in bucket}) for bucket in buckets)
+        self.assertLess(module_pairs(pilot), module_pairs(baseline))
+        self.assertEqual(
+            max(shard_estimates(pilot, timings)),
+            max(shard_estimates(baseline, timings)),
+        )
+        self.assertEqual(sorted(t for b in pilot for t in b), sorted(ids))
+
+        # A very heavy test may still be assigned separately; this is NOT
+        # whole-module packing, which regressed the previous benchmark.
+        heavy = _ids("tests.e2e.slow", "Case", "test_heavy", "test_small_a", "test_small_b")
+        weights = {heavy[0]: 200.0, heavy[1]: 1.0, heavy[2]: 1.0}
+        result = assign_shards(heavy, 2, weights, module_affinity=True)
+        self.assertEqual(sorted(t for b in result for t in b), sorted(heavy))
+        self.assertEqual(len([b for b in result if b]), 2)
+
     def test_missing_timing_entries_fall_back_to_the_default_estimate(self):
         ids = _ids("tests.e2e.test_app", "C", "known", "unknown")
         timings = {"tests.e2e.test_app.C.known": 12.0}

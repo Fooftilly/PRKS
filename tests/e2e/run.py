@@ -53,6 +53,7 @@ from tests.e2e.policy import (
     FAILURE_DIAGNOSTICS_PATH,
     FULL_GATE_EXTERNAL_SHARDS,
     LAST_FAILED_PATH,
+    MODULE_AFFINITY_ENV,
     PROFILE_ENV,
     SEED_CACHE_ENV,
     ChangeDiscoveryError,
@@ -461,6 +462,8 @@ def _apply_runtime_modes(args) -> tuple:
         os.environ[PROFILE_ENV] = "1"
     if args.no_seed_cache:
         os.environ[SEED_CACHE_ENV] = "0"
+    if args.module_affinity_pilot:
+        os.environ[MODULE_AFFINITY_ENV] = "1"
     return benchmark_modes(os.environ)
 
 
@@ -1535,6 +1538,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--module-affinity-pilot",
+        action="store_true",
+        help=(
+            "Manual full external-shard benchmark only: softly prefer reusing "
+            "module Chromium fixtures when scheduled test loads are close. "
+            "Normal PR/master keeps the existing per-test LPT scheduler."
+        ),
+    )
+    parser.add_argument(
         "--ci-plan",
         action="store_true",
         help=(
@@ -1787,7 +1799,10 @@ def main(argv=None) -> int:
     workers and the harness see them, which would otherwise leak into a later
     in-process main() and silently suppress that run's history persistence.
     """
-    saved_modes = {name: os.environ.get(name) for name in (PROFILE_ENV, SEED_CACHE_ENV)}
+    saved_modes = {
+        name: os.environ.get(name)
+        for name in (PROFILE_ENV, SEED_CACHE_ENV, MODULE_AFFINITY_ENV)
+    }
     try:
         return _main(argv)
     finally:
@@ -1992,6 +2007,10 @@ def _main(argv=None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    if args.module_affinity_pilot and shard is None:
+        print("--module-affinity-pilot requires --shard INDEX/TOTAL", file=sys.stderr)
+        return 2
+
     # Resolve selection before Chromium install so docs/unit --affected and
     # --list-tests are cheap no-ops (no browser download).
     apply_e2e_playwright_env()
@@ -2027,6 +2046,10 @@ def _main(argv=None) -> int:
             tier = "agent" if args.agent else "dev"
             note = (note + "; fail-fast") if note else "fail-fast"
 
+    if args.module_affinity_pilot and tier != "full":
+        print("--module-affinity-pilot requires a complete full-suite selection", file=sys.stderr)
+        return 2
+
     # External shard filter shares the LPT partitioner with --jobs so CI matrix
     # slices are disjoint and timing-balanced when baseline/local weights exist.
     if shard is not None and tier not in ("affected-noop", "last-failed-stale"):
@@ -2036,13 +2059,15 @@ def _main(argv=None) -> int:
         timings_for_shard = merge_timing_sources(baseline_timings, local_timings)
         before = len(test_ids)
         test_ids = select_external_shard(
-            test_ids, shard_index, shard_total, timings_for_shard
+            test_ids, shard_index, shard_total, timings_for_shard,
+            module_affinity=args.module_affinity_pilot,
         )
-        shard_note = "shard %d/%d (%d of %d tests)" % (
+        shard_note = "shard %d/%d (%d of %d tests)%s" % (
             shard_index + 1,
             shard_total,
             len(test_ids),
             before,
+            "; module-affinity pilot" if args.module_affinity_pilot else "",
         )
         note = ("%s; %s" % (note, shard_note)) if note else shard_note
         # Pointer capture belongs to the full gate once, not once per matrix

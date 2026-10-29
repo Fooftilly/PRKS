@@ -1926,6 +1926,20 @@ class BenchmarkModeTests(unittest.TestCase):
             ("profile", "route-fastpath"),
         )
 
+    def test_module_affinity_pilot_does_not_train_default_history(self):
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_MODULE_AFFINITY_PILOT": "0"}), ())
+        self.assertEqual(
+            policy.benchmark_modes({"PRKS_E2E_MODULE_AFFINITY_PILOT": "1"}),
+            ("module-affinity",),
+        )
+        self.assertEqual(
+            policy.benchmark_modes({
+                "PRKS_E2E_PROFILE": "1",
+                "PRKS_E2E_MODULE_AFFINITY_PILOT": "yes",
+            }),
+            ("profile", "module-affinity"),
+        )
+
     def test_env_truthiness_is_shared_with_the_harness(self):
         """One definition decides how the harness reads a switch and how the
         runner judges the same switch."""
