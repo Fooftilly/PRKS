@@ -29,7 +29,8 @@
     "120_organization.sql",
     "130_research.sql",
     "140_annotations.sql",
-    "150_objects.sql"
+    "150_objects.sql",
+    "160_processing.sql"
   ],
   "schemas": [
     "derived",
@@ -2422,6 +2423,343 @@
       "indexes": {
         "positions_library_id_id_key": "CREATE UNIQUE INDEX positions_library_id_id_key ON prks.positions USING btree (library_id, id)",
         "positions_pkey": "CREATE UNIQUE INDEX positions_pkey ON prks.positions USING btree (id)"
+      }
+    },
+    "prks.processing_file_roles": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "processing_file_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "person_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "role_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "order_index",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "identity": "d",
+          "name": "seq",
+          "not_null": true,
+          "type": "bigint"
+        }
+      ],
+      "constraints": {
+        "processing_file_roles_file_fkey": "FOREIGN KEY (library_id, processing_file_id) REFERENCES prks.processing_files(library_id, id) ON DELETE CASCADE",
+        "processing_file_roles_library_id_not_null": "NOT NULL library_id",
+        "processing_file_roles_order_index_check": "CHECK (order_index >= 0)",
+        "processing_file_roles_order_index_not_null": "NOT NULL order_index",
+        "processing_file_roles_person_fkey": "FOREIGN KEY (library_id, person_id) REFERENCES prks.persons(library_id, id) ON DELETE CASCADE",
+        "processing_file_roles_person_id_not_null": "NOT NULL person_id",
+        "processing_file_roles_pkey": "PRIMARY KEY (processing_file_id, person_id, role_type)",
+        "processing_file_roles_processing_file_id_not_null": "NOT NULL processing_file_id",
+        "processing_file_roles_role_type_check": "CHECK (role_type = ANY (ARRAY['Author'::text, 'Editor'::text, 'Reviewer'::text, 'Translator'::text, 'Introduction'::text, 'Foreword'::text, 'Afterword'::text]))",
+        "processing_file_roles_role_type_not_null": "NOT NULL role_type",
+        "processing_file_roles_seq_key": "UNIQUE (seq)",
+        "processing_file_roles_seq_not_null": "NOT NULL seq"
+      },
+      "indexes": {
+        "processing_file_roles_person": "CREATE INDEX processing_file_roles_person ON prks.processing_file_roles USING btree (library_id, person_id)",
+        "processing_file_roles_pkey": "CREATE UNIQUE INDEX processing_file_roles_pkey ON prks.processing_file_roles USING btree (processing_file_id, person_id, role_type)",
+        "processing_file_roles_seq_key": "CREATE UNIQUE INDEX processing_file_roles_seq_key ON prks.processing_file_roles USING btree (seq)"
+      }
+    },
+    "prks.processing_file_roles_seq_seq": {
+      "cache": 1,
+      "cycle": false,
+      "increment": 1,
+      "kind": "sequence",
+      "max": 9223372036854775807,
+      "min": 1,
+      "owned_by": "prks.processing_file_roles.seq",
+      "start": 1,
+      "type": "bigint"
+    },
+    "prks.processing_file_tags": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "processing_file_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "tag_id",
+          "not_null": true,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "processing_file_tags_file_fkey": "FOREIGN KEY (library_id, processing_file_id) REFERENCES prks.processing_files(library_id, id) ON DELETE CASCADE",
+        "processing_file_tags_library_id_not_null": "NOT NULL library_id",
+        "processing_file_tags_pkey": "PRIMARY KEY (processing_file_id, tag_id)",
+        "processing_file_tags_processing_file_id_not_null": "NOT NULL processing_file_id",
+        "processing_file_tags_tag_fkey": "FOREIGN KEY (library_id, tag_id) REFERENCES prks.tags(library_id, id)",
+        "processing_file_tags_tag_id_not_null": "NOT NULL tag_id"
+      },
+      "indexes": {
+        "processing_file_tags_pkey": "CREATE UNIQUE INDEX processing_file_tags_pkey ON prks.processing_file_tags USING btree (processing_file_id, tag_id)",
+        "processing_file_tags_tag": "CREATE INDEX processing_file_tags_tag ON prks.processing_file_tags USING btree (library_id, tag_id)"
+      }
+    },
+    "prks.processing_files": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "rel_path",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "filename",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'pending'::text",
+          "name": "status",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "last_error",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "imported_work_id",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "imported_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "import_sha256",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "false",
+          "name": "restore_hold",
+          "not_null": true,
+          "type": "boolean"
+        },
+        {
+          "name": "restore_sha256",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "discovered_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "''::text",
+          "name": "title",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'Not Started'::text",
+          "name": "status_draft",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "published_date",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "abstract",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "source_url",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "author_text",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "year",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "publisher",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "location",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "edition",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "journal",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "volume",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "issue",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "pages",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "isbn",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "doi",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'article'::text",
+          "name": "doc_type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "private_notes",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "thumb_page",
+          "not_null": false,
+          "type": "integer"
+        },
+        {
+          "name": "target_folder_id",
+          "not_null": false,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "processing_files_abstract_not_null": "NOT NULL abstract",
+        "processing_files_author_text_not_null": "NOT NULL author_text",
+        "processing_files_discovered_at_not_null": "NOT NULL discovered_at",
+        "processing_files_doc_type_not_null": "NOT NULL doc_type",
+        "processing_files_doi_not_null": "NOT NULL doi",
+        "processing_files_edition_not_null": "NOT NULL edition",
+        "processing_files_filename_not_null": "NOT NULL filename",
+        "processing_files_id_check": "CHECK (id ~ '^PF-[0-9A-F]{32}$'::text)",
+        "processing_files_id_not_null": "NOT NULL id",
+        "processing_files_import_sha256_check": "CHECK (import_sha256 ~ '^[0-9a-f]{64}$'::text)",
+        "processing_files_imported_check": "CHECK ((status = 'imported'::text) = (import_sha256 IS NOT NULL AND imported_at IS NOT NULL))",
+        "processing_files_imported_work_fkey": "FOREIGN KEY (library_id, imported_work_id) REFERENCES prks.works(library_id, id) ON DELETE SET NULL (imported_work_id)",
+        "processing_files_isbn_not_null": "NOT NULL isbn",
+        "processing_files_issue_not_null": "NOT NULL issue",
+        "processing_files_journal_not_null": "NOT NULL journal",
+        "processing_files_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id)",
+        "processing_files_library_id_id_key": "UNIQUE (library_id, id)",
+        "processing_files_library_id_not_null": "NOT NULL library_id",
+        "processing_files_library_id_rel_path_key": "UNIQUE (library_id, rel_path)",
+        "processing_files_location_not_null": "NOT NULL location",
+        "processing_files_pages_not_null": "NOT NULL pages",
+        "processing_files_pkey": "PRIMARY KEY (id)",
+        "processing_files_private_notes_not_null": "NOT NULL private_notes",
+        "processing_files_published_date_not_null": "NOT NULL published_date",
+        "processing_files_publisher_not_null": "NOT NULL publisher",
+        "processing_files_rel_path_check": "CHECK (length(rel_path) > 0 AND (\"left\"(rel_path, 1) <> ALL (ARRAY['/'::text, '\\'::text])))",
+        "processing_files_rel_path_not_null": "NOT NULL rel_path",
+        "processing_files_restore_check": "CHECK (restore_sha256 IS NULL OR restore_hold)",
+        "processing_files_restore_hold_not_null": "NOT NULL restore_hold",
+        "processing_files_restore_sha256_check": "CHECK (restore_sha256 ~ '^[0-9a-f]{64}$'::text)",
+        "processing_files_source_url_not_null": "NOT NULL source_url",
+        "processing_files_status_check": "CHECK (status = ANY (ARRAY['pending'::text, 'error'::text, 'imported'::text]))",
+        "processing_files_status_draft_check": "CHECK (status_draft = ANY (ARRAY['Planned'::text, 'In Progress'::text, 'Completed'::text, 'Paused'::text, 'Not Started'::text]))",
+        "processing_files_status_draft_not_null": "NOT NULL status_draft",
+        "processing_files_status_not_null": "NOT NULL status",
+        "processing_files_target_folder_fkey": "FOREIGN KEY (library_id, target_folder_id) REFERENCES prks.folders(library_id, id) ON DELETE SET NULL (target_folder_id)",
+        "processing_files_thumb_page_check": "CHECK (thumb_page >= 1)",
+        "processing_files_title_not_null": "NOT NULL title",
+        "processing_files_updated_at_not_null": "NOT NULL updated_at",
+        "processing_files_volume_not_null": "NOT NULL volume",
+        "processing_files_year_not_null": "NOT NULL year"
+      },
+      "indexes": {
+        "processing_files_imported_work": "CREATE INDEX processing_files_imported_work ON prks.processing_files USING btree (library_id, imported_work_id) WHERE (imported_work_id IS NOT NULL)",
+        "processing_files_library_id_id_key": "CREATE UNIQUE INDEX processing_files_library_id_id_key ON prks.processing_files USING btree (library_id, id)",
+        "processing_files_library_id_rel_path_key": "CREATE UNIQUE INDEX processing_files_library_id_rel_path_key ON prks.processing_files USING btree (library_id, rel_path)",
+        "processing_files_pkey": "CREATE UNIQUE INDEX processing_files_pkey ON prks.processing_files USING btree (id)",
+        "processing_files_target_folder": "CREATE INDEX processing_files_target_folder ON prks.processing_files USING btree (library_id, target_folder_id) WHERE (target_folder_id IS NOT NULL)"
       }
     },
     "prks.publisher_aliases": {

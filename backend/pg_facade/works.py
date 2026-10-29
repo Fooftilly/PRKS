@@ -36,12 +36,45 @@ from backend.pg_facade.registry import FacadeMixin, ported
 if TYPE_CHECKING:
     from backend.db_manager import DeletedWorkRecord
     from backend.domain.identity.library_scope import LibraryScope
-    from backend.domain.works.commands import ManagedFile, NewAsset
+    from backend.domain.works.commands import ManagedFile, NewAsset, NewWork
     from backend.storage.objects import StorageBackend, Writer
 
 T = TypeVar("T")
 
 _HASH_CHUNK = 1024 * 1024
+
+
+def new_work(fields: dict[str, Any], asset: Optional[NewAsset], url: Optional[str]) -> NewWork:
+    """The Work ``add_work`` creates from its arguments (``fields``), its Asset and source URL.
+
+    ``fields`` holds every ``add_work`` argument; ``url`` is the canonical
+    source URL (``_canonical_new_source``). Also the import's
+    (``ProcessingMixin.import_processing_file``).
+    """
+    from backend.db_manager import normalize_doc_type
+    from backend.domain.works import commands
+    from backend.entity_ids import generate
+
+    bibliographic = {name: fields[name] for name in (
+        "year", "published_date", "edition", "publisher", "location", "journal", "volume",
+        "issue", "pages", "isbn", "doi")}
+    bibliographic["doc_type"] = normalize_doc_type(fields["doc_type"])
+    bibliographic["urldate"] = (fields["urldate"] or "").strip() or None
+    stream = isinstance(asset.source, commands.Stream) if asset is not None else False
+    return commands.NewWork(
+        work_id=generate("W"),
+        manifestation_id=generate("MF"),
+        title=fields["title"],
+        status=fields["status"],
+        abstract=fields["abstract"],
+        author_text=fields["author_text"],
+        bibliographic=bibliographic,
+        citation_url=None if stream else (url or "").strip() or None,
+        asset_id=generate("AS") if asset is not None else None,
+        asset=asset,
+        research_note=fields["text_content"],
+        private_note=(fields["private_notes"] or "").strip() or None,
+    )
 
 
 class WorksMixin(FacadeMixin):
@@ -190,7 +223,7 @@ class WorksMixin(FacadeMixin):
         return self._add_work(arguments, (file_name, write))
 
     def _add_work(self, fields: dict[str, Any], upload: Optional[tuple[str, Writer]]) -> str:
-        from backend.db_manager import _canonical_new_source, normalize_doc_type
+        from backend.db_manager import _canonical_new_source
         from backend.domain.objects import ingest
         from backend.domain.works import commands
 
@@ -207,26 +240,7 @@ class WorksMixin(FacadeMixin):
             managed = ingest.store_pdf(self._objects(), *upload).managed_file()
         asset = self._new_asset(kind, file_path, url, provider, provider_id, fields["source_mime"],
                                 fields["thumb_url"], fields["thumb_page"], managed)
-        bibliographic = {name: fields[name] for name in (
-            "year", "published_date", "edition", "publisher", "location", "journal", "volume",
-            "issue", "pages", "isbn", "doi")}
-        bibliographic["doc_type"] = normalize_doc_type(fields["doc_type"])
-        bibliographic["urldate"] = (fields["urldate"] or "").strip() or None
-        stream = isinstance(asset.source, commands.Stream) if asset is not None else False
-        new = commands.NewWork(
-            work_id=self.generate_id("W"),
-            manifestation_id=self.generate_id("MF"),
-            title=fields["title"],
-            status=fields["status"],
-            abstract=fields["abstract"],
-            author_text=fields["author_text"],
-            bibliographic=bibliographic,
-            citation_url=None if stream else (url or "").strip() or None,
-            asset_id=self.generate_id("AS") if asset is not None else None,
-            asset=asset,
-            research_note=fields["text_content"],
-            private_note=(fields["private_notes"] or "").strip() or None,
-        )
+        new = new_work(fields, asset, url)
         objects = self._objects() if asset is not None and isinstance(asset.source, commands.ManagedFile) else None
         return self._command(lambda scope: commands.create_work(scope, new, objects=objects),
                              serializable=True)

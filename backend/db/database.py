@@ -13,6 +13,10 @@ offers the two ways domain code touches PostgreSQL:
 - :meth:`Database.query` runs a function in one ``REPEATABLE READ READ ONLY``
   snapshot, so a projection built from several statements never mixes pre-
   and post-write state.
+- :meth:`Database.advisory_lock` holds a session-level advisory lock on a
+  pooled connection of its own while a block runs, for work that spans
+  several commands and something outside the database (§11.3, the inbox
+  lock).
 
 Both commit when the function returns, roll back when it raises, and turn
 psycopg errors into the PRKS errors of :mod:`backend.db.errors`. Pool
@@ -31,7 +35,7 @@ from random import SystemRandom
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, TypeVar
+from typing import Any, LiteralString, TypeVar
 
 import psycopg
 from psycopg import sql
@@ -240,6 +244,34 @@ class Database:
                     attempt += 1
                     continue
                 raise map_database_error(exc, self._registry) from exc
+
+    @contextmanager
+    def advisory_lock(self, key: LiteralString, params: Params, *, shared: bool = False) -> Iterator[None]:
+        """Hold the advisory lock ``key`` (a SQL expression of ``params``) while the block runs.
+
+        The lock is session-level, taken on a pooled connection borrowed for
+        the block, so it spans the commits of the commands the block runs on
+        other connections. It waits under the session's ``lock_timeout``. The
+        unlock runs on every path; a connection that cannot confirm it is
+        closed, so the pool never hands out a connection holding the lock.
+        """
+        verb: LiteralString = "pg_advisory_lock_shared" if shared else "pg_advisory_lock"
+        undo: LiteralString = "pg_advisory_unlock_shared" if shared else "pg_advisory_unlock"
+        with self._borrow() as conn:
+            try:
+                conn.execute("SELECT " + verb + "(" + key + ")", params)
+            except psycopg.Error as exc:
+                raise map_database_error(exc, self._registry) from exc
+            try:
+                yield
+            finally:
+                try:
+                    row = conn.execute("SELECT " + undo + "(" + key + ") AS released", params).fetchone()
+                    released = row is not None and bool(row[0])
+                except psycopg.Error:
+                    released = False
+                if not released:
+                    conn.close()
 
     def query(self, fn: Callable[[Transaction], T]) -> T:
         """Run ``fn`` in one REPEATABLE READ READ ONLY snapshot."""

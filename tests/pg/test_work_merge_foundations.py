@@ -531,6 +531,8 @@ class RegistryTests(MergeTestCase):
                     self.assertEqual(key["on_delete"], "c")
                 elif relationship.on_source_delete is merge.OnSourceDelete.REFUSED:
                     self.assertIn(key["on_delete"], ("a", "r"))
+                elif relationship.on_source_delete is merge.OnSourceDelete.SET_NULL:
+                    self.assertEqual(key["on_delete"], "n")
                 if relationship.disposition is merge.Disposition.FOLLOWS and "work_id" in key["columns"]:
                     self.assertEqual(key["on_update"], "c")  # the Work moves with the parent
 
@@ -556,7 +558,7 @@ class RegistryTests(MergeTestCase):
         # docs/postgresql-architecture.md §7.1, less the tables still deferred.
         self.assertEqual({r.table for r in merge.RELATIONSHIPS if r.peer},
                          {"manifestations", "work_notes", "work_tags", "folder_files", "playlist_items", "roles",
-                          "argument_sources"})
+                          "argument_sources", "processing_files"})
 
 
 class IsolationTests(MergeTestCase):
