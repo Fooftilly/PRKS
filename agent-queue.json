@@ -1,0 +1,137 @@
+{
+  "complete": true,
+  "count": 20,
+  "generated_at": "2026-10-29T21:47:07Z",
+  "issues": [
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 193,
+      "status": "Ready"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": null,
+      "number": 509,
+      "status": "Inbox"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 557,
+      "status": "Ready"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 562,
+      "status": "Ready"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 629,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 630,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 631,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 634,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": "Agent",
+      "number": 635,
+      "status": "In Progress"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 636,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 637,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 638,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 639,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 640,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 641,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Claude Code",
+      "execution": null,
+      "number": 642,
+      "status": "Inbox"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Mixed",
+      "number": 740,
+      "status": "In Progress"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 815,
+      "status": "Ready"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": null,
+      "number": 969,
+      "status": "Inbox"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 993,
+      "status": "Ready"
+    }
+  ],
+  "project": {
+    "id": "PVT_kwHOAsc2_s4BkAo3",
+    "number": 3,
+    "owner": "Fooftilly",
+    "public": true
+  },
+  "repository": "Fooftilly/PRKS",
+  "schema": "prks-project3-agent-queue/v1",
+  "source_run_id": 40960648508,
+  "stale_after": "2026-10-30T09:47:07Z"
+}
