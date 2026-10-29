@@ -67,10 +67,10 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
     active = [j for j in jobs if j.get("conclusion") != "skipped"]
     if any(j.get("conclusion") != "success" for j in active):
         raise InvalidBenchmark("A workflow job did not succeed")
-    if any(j.get("status") not in (None, "completed") for j in active):
-        raise InvalidBenchmark("Partial or unfinished workflow job")
-    if any(j.get("run_attempt") not in (None, 1) for j in active):
-        raise InvalidBenchmark("Retried workflow job")
+    if any(j.get("status") != "completed" for j in active):
+        raise InvalidBenchmark("Partial or unverified workflow job")
+    if any(j.get("run_attempt") != 1 for j in active):
+        raise InvalidBenchmark("Retried or unverified workflow job")
     _, template, step_name, guards = KINDS[mode]
     names = [j.get("name") for j in active]
     for guard in guards:
@@ -102,21 +102,30 @@ def _validated_steps(job: dict, step_name: str, job_start: datetime,
                      job_end: datetime) -> float:
     """Check every executed step for chronology, not just the browser step."""
     steps = job.get("steps")
-    if not isinstance(steps, list) or not steps or any(not isinstance(s, dict) for s in steps):
+    if not isinstance(steps, list) or any(not isinstance(s, dict) for s in steps):
         raise InvalidBenchmark("Missing or malformed shard step timings")
+    if not steps:
+        raise InvalidBenchmark(f"Missing or unsuccessful test step: {step_name}")
     selected = [s for s in steps if s.get("name") == step_name]
     if len(selected) != 1 or selected[0].get("conclusion") != "success":
         raise InvalidBenchmark(f"Missing or unsuccessful test step: {step_name}")
 
-    windows = []
+    last_end = None
     for step in steps:
         conclusion = step.get("conclusion")
-        status = step.get("status")
-        if status is not None and status != "completed":
+        if step.get("status") != "completed":
             raise InvalidBenchmark("Partial or unfinished E2E step")
         if conclusion == "skipped":
             continue  # GitHub may give a skipped step equal or absent timestamps.
-        if conclusion != "success":
+        # Source gate explicitly tolerates a failure of its optional Mergify
+        # reporting action. It is still accounted for inside the non-test
+        # residual, never mistaken for a successful browser test.
+        optional_reporting_failure = (
+            step_name == "Run E2E selection shard"
+            and step.get("name") == "Report E2E test results to Mergify"
+            and conclusion == "failure"
+        )
+        if conclusion != "success" and not optional_reporting_failure:
             raise InvalidBenchmark("Failed or incomplete E2E shard step")
         start = _timestamp(step.get("started_at"), "step start")
         end = _timestamp(step.get("completed_at"), "step completion")
@@ -124,11 +133,11 @@ def _validated_steps(job: dict, step_name: str, job_start: datetime,
             raise InvalidBenchmark("Test step falls outside its job or step timestamps reversed")
         if step is selected[0] and end <= start:
             raise InvalidBenchmark("Non-positive browser test step duration")
-        windows.append((start, end))
-
-    windows.sort()
-    if any(current[0] < previous[1] for previous, current in zip(windows, windows[1:])):
-        raise InvalidBenchmark("Overlapping executed E2E step windows")
+        # GitHub returns steps in workflow order, including post-job actions.
+        # Sorting would hide reversed, impossible but nonoverlapping windows.
+        if last_end is not None and start < last_end:
+            raise InvalidBenchmark("Overlapping or out-of-order executed E2E step windows")
+        last_end = end
     return (
         _timestamp(selected[0]["completed_at"], "test completion")
         - _timestamp(selected[0]["started_at"], "test start")
@@ -151,9 +160,9 @@ def summarize(
     individual = []
     queue_seconds = []
     for index, job in enumerate(shards, 1):
-        if job.get("status") not in (None, "completed"):
+        if job.get("status") != "completed":
             raise InvalidBenchmark("Unfinished shard job")
-        if job.get("run_attempt") not in (None, 1):
+        if job.get("run_attempt") != 1:
             raise InvalidBenchmark("Retried or unverified shard job")
         if job.get("run_id") not in (None, run["id"]):
             raise InvalidBenchmark("Shard job belongs to another run")
