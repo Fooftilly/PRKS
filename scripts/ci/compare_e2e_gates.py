@@ -191,8 +191,8 @@ def summarize(
     # GitHub Actions' workflow-run updated_at is not a reliable completion
     # timestamp; only compute wall time from an explicit completed_at field.
     workflow_wall_seconds = None
-    if run.get("completed_at") is not None:
-        wall_start = _timestamp(run.get("run_started_at"), "workflow start")
+    if run.get("completed_at") is not None and run.get("run_started_at") is not None:
+        wall_start = _timestamp(run["run_started_at"], "workflow start")
         wall_end = _timestamp(run["completed_at"], "workflow completion")
         if wall_end <= wall_start:
             raise InvalidBenchmark("Contradictory workflow wall timestamps")
