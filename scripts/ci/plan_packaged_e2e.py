@@ -313,6 +313,18 @@ def _validated_coverage_inventory(all_ids, required_modules, feature_map) -> tup
             raise ValueError("malformed E2E feature selectors: " + name)
     modules_present = {tid.rsplit(".", 2)[0] for tid in all_ids}
     missing = sorted(set(required_modules) - modules_present)
+    # A wholly disconnected feature map is not usable. Some individual
+    # selectors may intentionally match zero tests (e.g. optional classes),
+    # so list those as advisory diagnostics instead of rejecting the suite.
+    prefixes = [
+        prefix for definition in feature_map.values()
+        for prefix in definition["selectors"]
+    ]
+    if not any(
+        tid == prefix or tid.startswith(prefix + ".")
+        for prefix in prefixes for tid in all_ids
+    ):
+        raise ValueError("feature mapping has no discovered E2E coverage")
     return sorted(all_ids), missing
 
 
@@ -374,11 +386,15 @@ def audit_packaged_coverage(
             "guard_verification": "requires an independently passing Actions guard job",
         })
     mapped = set()
+    unmatched_selectors = set()
     for definition in feature_map.values():
         for prefix in definition["selectors"]:
-            mapped.update(
+            matches = {
                 tid for tid in full if tid == prefix or tid.startswith(prefix + ".")
-            )
+            }
+            if not matches:
+                unmatched_selectors.add(prefix)
+            mapped.update(matches)
     missing_required = sorted(
         (set(smoke_floor) | {tid for _, tid in CRITICAL_BROWSER_OBLIGATIONS})
         - full_set
@@ -399,6 +415,7 @@ def audit_packaged_coverage(
         "missing_required_ids": missing_required,
         "unknown_candidate_ids": unknown_candidate,
         "unmatched_source_ids": sorted(full_set - mapped),
+        "unmatched_feature_selectors": sorted(unmatched_selectors),
         "critical_rows": rows,
         "limitation": (
             "Class/ID membership cannot prove defect equivalence; separate CI "
@@ -427,7 +444,7 @@ def format_packaged_coverage_audit(report: dict) -> str:
             f"{row.get('test_id') or row['guard_job']}"
         )
     for key in ("missing_modules", "missing_required_ids", "unknown_candidate_ids",
-                "unmatched_source_ids"):
+                "unmatched_source_ids", "unmatched_feature_selectors"):
         values = report[key]
         lines.append("")
         lines.append(f"{key}: {len(values)}")
