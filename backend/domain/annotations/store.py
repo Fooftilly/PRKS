@@ -20,7 +20,9 @@ every Works command uses) and then the Asset row ``FOR UPDATE`` (§7.4), so
 the writes on one Asset's annotations are serialized and each decides on
 committed state: revisions are read under that lock and a scope row is
 locked only to advance it. A Work delete takes the Work ``FOR UPDATE`` and
-so waits for, or is waited for by, any annotation write.
+so waits for, or is waited for by, any annotation write. A materialization
+(:mod:`backend.domain.annotations.materialize`) takes the Work ``FOR UPDATE``
+from the start, as ``lifecycle.replace_object`` does.
 """
 
 from __future__ import annotations
@@ -42,6 +44,11 @@ _MAX_PAGE_INDEX = 2**31 - 1
 
 _LOCK_WORK: LiteralString = (
     "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s FOR NO KEY UPDATE"
+)
+# A materialization rewrites the Asset's bytes: it takes the Work row the way
+# ``lifecycle.replace_object`` does, never upgrading a weaker lock it holds.
+_LOCK_WORK_FOR_REWRITE: LiteralString = (
+    "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s FOR UPDATE"
 )
 _WORK_EXISTS: LiteralString = (
     "SELECT id FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s"
@@ -160,6 +167,13 @@ def read_target(scope: LibraryScope, work_id: str) -> Optional[Target]:
 def lock_target(scope: LibraryScope, work_id: str) -> Optional[Target]:
     """Lock the Work, then its Asset, for a write; None when there is no such Work."""
     if scope.execute(_LOCK_WORK, {"work_id": work_id}).fetchone() is None:
+        return None
+    return _resolve(scope, work_id, lock=True)
+
+
+def lock_for_rewrite(scope: LibraryScope, work_id: str) -> Optional[Target]:
+    """Lock the Work ``FOR UPDATE``, then its Asset, for a rewrite of the bytes; None when there is no such Work."""
+    if scope.execute(_LOCK_WORK_FOR_REWRITE, {"work_id": work_id}).fetchone() is None:
         return None
     return _resolve(scope, work_id, lock=True)
 

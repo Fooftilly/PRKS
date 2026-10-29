@@ -1389,6 +1389,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/research/positions.py",
                 "backend/domain/research/reindex.py",
                 "backend/domain/annotations/__init__.py",
+                "backend/domain/annotations/materialize.py",
                 "backend/domain/annotations/operations.py",
                 "backend/domain/annotations/store.py",
                 "backend/domain/objects/__init__.py",
