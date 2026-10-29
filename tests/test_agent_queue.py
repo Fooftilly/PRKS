@@ -44,6 +44,13 @@ class AgentQueueTests(unittest.TestCase):
                 + ("exit 84\n" if fail_gh else 'cat "$AGENT_QUEUE_FIXTURE"\n')
             )
             gh.chmod(0o755)
+            # The published queue fallback must not consult a real remote or
+            # public URL when the mocked Project API fails. Keep this fixture
+            # hermetic for both the direct-API and fallback implementations.
+            for command in ("git", "curl"):
+                stub = fake_bin / command
+                stub.write_text("#!/bin/sh\nexit 85\n")
+                stub.chmod(0o755)
             env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", AGENT_QUEUE_FIXTURE=str(payload))
             return subprocess.run(["bash", str(SCRIPT), role], env=env, capture_output=True, text=True)
 
