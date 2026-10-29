@@ -170,8 +170,9 @@ class LocalStoreDurabilityTests(unittest.TestCase):
                 return (await indexedDB.databases()).map((d) => d.name).filter(Boolean).sort();
             }"""
         )
-        if names is None:
-            self.skipTest('indexedDB.databases() unsupported in this browser')
+        # This E2E suite runs pinned Chromium, which supports this API.
+        # Do not silently skip the physical database-isolation contract.
+        self.assertIsNotNone(names, 'pinned Chromium must expose indexedDB.databases()')
         self.assertIn('prks-offline-v1', names)
         self.assertIn('prks-local-v1', names)
 
