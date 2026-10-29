@@ -67,6 +67,10 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
     active = [j for j in jobs if j.get("conclusion") != "skipped"]
     if any(j.get("conclusion") != "success" for j in active):
         raise InvalidBenchmark("A workflow job did not succeed")
+    if any(j.get("status") not in (None, "completed") for j in active):
+        raise InvalidBenchmark("Partial or unfinished workflow job")
+    if any(j.get("run_attempt") not in (None, 1) for j in active):
+        raise InvalidBenchmark("Retried workflow job")
     _, template, step_name, guards = KINDS[mode]
     names = [j.get("name") for j in active]
     for guard in guards:
@@ -125,8 +129,10 @@ def _validated_steps(job: dict, step_name: str, job_start: datetime,
     windows.sort()
     if any(current[0] < previous[1] for previous, current in zip(windows, windows[1:])):
         raise InvalidBenchmark("Overlapping executed E2E step windows")
-    return ( _timestamp(selected[0]["completed_at"], "test completion")
-             - _timestamp(selected[0]["started_at"], "test start") ).total_seconds()
+    return (
+        _timestamp(selected[0]["completed_at"], "test completion")
+        - _timestamp(selected[0]["started_at"], "test start")
+    ).total_seconds()
 
 
 def summarize(
@@ -188,8 +194,13 @@ def summarize(
     if run.get("completed_at") is not None:
         wall_start = _timestamp(run.get("run_started_at"), "workflow start")
         wall_end = _timestamp(run["completed_at"], "workflow completion")
-        if wall_end <= wall_start or min(starts) < wall_start or max(ends) > wall_end:
+        if wall_end <= wall_start:
             raise InvalidBenchmark("Contradictory workflow wall timestamps")
+        for active_job in (j for j in jobs if j.get("conclusion") != "skipped"):
+            active_start = _timestamp(active_job.get("started_at"), "active job start")
+            active_end = _timestamp(active_job.get("completed_at"), "active job completion")
+            if active_start < wall_start or active_end > wall_end or active_end < active_start:
+                raise InvalidBenchmark("Contradictory workflow wall timestamps")
         workflow_wall_seconds = (wall_end - wall_start).total_seconds()
 
     return {
