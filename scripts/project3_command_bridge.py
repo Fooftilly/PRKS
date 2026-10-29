@@ -230,8 +230,9 @@ def execute(event: dict, *, github: GitHubAPI, project_token: str,
             github.receipt(receipt_id, comment_id,
                            "FAILED / POSSIBLY PARTIAL — inspect current Project values before a new request. "
                            + type(exc).__name__)
-        except Exception:
-            pass
+        except Exception as receipt_error:
+            print("assignment receipt update failed: "
+                  + type(receipt_error).__name__, file=sys.stderr)
         raise
 
 
