@@ -517,6 +517,7 @@ class FoldersOfflineTests(unittest.TestCase):
         # Negative request assertions require a bounded observation window:
         # a broken sync path could schedule HTTP DELETE shortly after the
         # local queue write. This is not a readiness sleep.
+        # prks-allow-wait-for-timeout: bounded negative HTTP DELETE observation after durable write
         page.wait_for_timeout(500)
         self.assertEqual(deletes, [])
 
