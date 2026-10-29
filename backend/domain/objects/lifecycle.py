@@ -169,11 +169,16 @@ class ObjectMissing(ValueError):
 
 @dataclass(frozen=True)
 class StoredObject:
-    """An object a writer has just stored: its key and what it wrote."""
+    """An object a writer has just stored: its key and what it wrote.
+
+    ``version`` is the backend's version token from the write, when the
+    writer has it: adoption then also refuses bytes replaced since.
+    """
 
     key: StorageKey
     size: int
     sha256: str
+    version: Optional[str] = None
 
 
 class Settled(Enum):
@@ -212,8 +217,9 @@ def adopt(scope: LibraryScope, storage: StorageBackend, obj: StoredObject) -> No
 
     Every transaction that first references a key it wrote calls this
     before it names the key (§11.2). The lock is held until the caller's
-    transaction ends. Raises :class:`ObjectMissing` when the bytes are gone
-    or have another size (a settle unlinked them first), or when another
+    transaction ends. Raises :class:`ObjectMissing` when the bytes are gone,
+    have another size (a settle unlinked them first) or another version than
+    the write reported (they were replaced since), or when another
     Library names the key or released it. So no key is ever named by two
     Libraries, and the claim's Library is the only one whose backups can
     hold it in a snapshot.
@@ -228,7 +234,7 @@ def adopt(scope: LibraryScope, storage: StorageBackend, obj: StoredObject) -> No
         info = storage.stat(obj.key)
     except ObjectIntegrityError as exc:
         raise ObjectMissing() from exc
-    if info is None or info.size != obj.size:
+    if info is None or info.size != obj.size or (obj.version is not None and info.version != obj.version):
         raise ObjectMissing()
 
 

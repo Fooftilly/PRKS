@@ -27,7 +27,7 @@ import re
 import stat
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import BinaryIO, Callable, Iterator, Mapping, Optional, Protocol, runtime_checkable
 
@@ -236,7 +236,7 @@ class LocalPathCapable(Protocol):
     Use the path only inside the ``with`` block; never store, log or return it.
     """
 
-    def local_path(self, key: StorageKey): ...
+    def local_path(self, key: StorageKey) -> AbstractContextManager[str]: ...
 
 
 def mint_name(namespace: str, hint: str) -> str:

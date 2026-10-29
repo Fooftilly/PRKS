@@ -47,12 +47,12 @@ VALUES (%(library_id)s, %(manifestation_id)s, %(work_id)s, %(doc_type)s, %(year)
         %(isbn)s, %(doi)s, %(url)s, %(urldate)s, %(asset_id)s)
 """
 _INSERT_ASSET: LiteralString = """
-INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, storage_locator, provider,
-                         provider_id, url, media_type, byte_size, ingest_sha256, content_sha256,
-                         origin, thumb_page, thumb_url)
+INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, storage_locator,
+                         source_locator, provider, provider_id, url, media_type, byte_size,
+                         ingest_sha256, content_sha256, origin, thumb_page, thumb_url)
 VALUES (%(library_id)s, %(asset_id)s, %(manifestation_id)s, %(work_id)s, %(kind)s, %(storage_locator)s,
-        %(provider)s, %(provider_id)s, %(url)s, %(media_type)s, %(byte_size)s, %(sha256)s, %(sha256)s,
-        %(origin)s, %(thumb_page)s, %(thumb_url)s)
+        %(source_locator)s, %(provider)s, %(provider_id)s, %(url)s, %(media_type)s, %(byte_size)s,
+        %(ingest_sha256)s, %(sha256)s, %(origin)s, %(thumb_page)s, %(thumb_url)s)
 """
 _INSERT_NOTE: LiteralString = """
 INSERT INTO prks.work_notes (library_id, work_id, kind, body)
@@ -62,12 +62,22 @@ VALUES (%(library_id)s, %(work_id)s, %(kind)s, %(body)s)
 
 @dataclass(frozen=True)
 class ManagedFile:
-    """Bytes already stored under the managed key ``storage_locator``."""
+    """Bytes already stored under the managed key ``storage_locator``.
+
+    An ingest (``objects.ingest.IngestedPdf.managed_file``) also passes the
+    write's ``version`` token, so adoption refuses bytes replaced since, and,
+    when it linearized into a second key, the pristine ``source`` it keeps
+    (``source_locator``) and the raw stream's ``ingest_sha256``.
+    """
 
     storage_locator: str
     sha256: str
     byte_size: int
     origin: str = "upload"
+    version: Optional[str] = None
+    source: Optional[lifecycle.StoredObject] = None
+    # SHA-256 of the bytes as received; the working file's own when nothing rewrote them.
+    ingest_sha256: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -184,15 +194,25 @@ def _insert_asset(scope: LibraryScope, ids: dict[str, Optional[str]], asset: New
     if isinstance(source, ManagedFile):
         if objects is None:
             raise ValueError("a managed file is adopted through the storage backend")
-        lifecycle.adopt(scope, objects, lifecycle.StoredObject(
-            StorageKey(NAMESPACE_ASSET_OBJECTS, source.storage_locator), source.byte_size, source.sha256))
-        values.update(kind="managed_file", storage_locator=source.storage_locator, provider=None,
-                      provider_id=None, url=None, byte_size=source.byte_size, sha256=source.sha256,
+        working = lifecycle.StoredObject(StorageKey(NAMESPACE_ASSET_OBJECTS, source.storage_locator),
+                                         source.byte_size, source.sha256, source.version)
+        stored = [working]
+        if source.source is not None:
+            if source.source.key.namespace != NAMESPACE_ASSET_OBJECTS or source.source.key == working.key:
+                raise ValueError("a kept source is another asset object")
+            stored.append(source.source)
+        # Per-object locks in key order, as every multi-key writer takes them.
+        for obj in sorted(stored, key=lambda found: str(found.key)):
+            lifecycle.adopt(scope, objects, obj)
+        values.update(kind="managed_file", storage_locator=source.storage_locator,
+                      source_locator=source.source.key.name if source.source is not None else None,
+                      provider=None, provider_id=None, url=None, byte_size=source.byte_size,
+                      sha256=source.sha256, ingest_sha256=source.ingest_sha256 or source.sha256,
                       origin=source.origin)
     else:
-        values.update(kind="external_stream", storage_locator=None, provider=source.provider,
-                      provider_id=source.provider_id, url=source.url, byte_size=None, sha256=None,
-                      origin=None)
+        values.update(kind="external_stream", storage_locator=None, source_locator=None,
+                      provider=source.provider, provider_id=source.provider_id, url=source.url,
+                      byte_size=None, sha256=None, ingest_sha256=None, origin=None)
     scope.execute(_INSERT_ASSET, values)
 
 
