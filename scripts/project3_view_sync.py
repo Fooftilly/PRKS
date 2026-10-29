@@ -29,7 +29,7 @@ QUEUE_LAYOUT = "TABLE_LAYOUT"
 MAX_PAGES = 10
 
 OWNED_FILTER = (
-    'is:open is:issue -label:dependencies '
+    'is:open is:issue '
     'agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"'
 )
 
