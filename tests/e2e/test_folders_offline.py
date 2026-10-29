@@ -483,10 +483,15 @@ class FoldersOfflineTests(unittest.TestCase):
             timeout=20000,
         )
         for sel in ('#prks-work-folder-set-btn', '#prks-work-folder-search'):
-            self.assertTrue(page.locator(sel).is_disabled(), sel)
+            control = page.locator(sel)
+            control.wait_for(state='visible', timeout=10000)
+            self.assertTrue(control.is_disabled(), sel)
         for sel in ('#prks-work-folder-clear-btn', '#prks-work-folder-new-btn',
                     '#prks-work-folder-edit-btn'):
-            self.assertFalse(page.locator(sel).is_disabled(), sel)
+            control = page.locator(sel)
+            # A missing Clear/New/Done button must not count as enabled.
+            control.wait_for(state='visible', timeout=10000)
+            self.assertFalse(control.is_disabled(), sel)
         page.wait_for_timeout(300)
         self.assertEqual(seen, [])
 
