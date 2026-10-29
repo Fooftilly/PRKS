@@ -18,9 +18,13 @@ python scripts/ci/compare_e2e_gates.py \
 ```
 
 It fetches GitHub's run/job/step snapshots and verifies the successful
-source planner's **full** mode from its job log. It rejects retries, missing
-or failed guard jobs, incomplete six-shard matrices, wrong SHA, stale/incorrect
-workflow mode, missing test-step timestamps and impossible step chronology.
+source planner's **full** mode from its job log. It rejects missing or
+unverified job status/attempt fields, retries, missing or failed guard jobs,
+incomplete six-shard matrices, wrong SHA, stale/incorrect workflow mode,
+missing test-step timestamps and out-of-order/overlapping executed steps.
+The source gate's explicitly non-blocking Mergify reporting step may fail;
+its elapsed time remains in the non-test residual, and a failed browser-test
+step or any other executed step still invalidates the comparison.
 This report is read-only: it does **not** dispatch E2E runs, change required
 checks or modify source/packaged test selection. No benchmark CI runners
 are added.
