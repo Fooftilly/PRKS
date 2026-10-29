@@ -31,7 +31,7 @@ from backend.entity_ids import generate
 from backend.pdf_materialization import STALE_CODE
 from backend.pg_facade import PostgresLibrary
 from backend.pg_facade import context as facade_context
-from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, annotation
 from tests.pg.test_annotations_materialize import RENDERED, MaterializeTestCase, writing
 
@@ -41,6 +41,25 @@ LINEARIZED = b"%PDF-1.7\n/Linearized 1\n% qpdf output\n" + b"l" * 200 + b"\n%%EO
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+class BoundedReads:
+    """An object handle that refuses an unbounded ``read()``, or one above ``limit`` bytes."""
+
+    def __init__(self, handle: Any, limit: int) -> None:
+        self.handle, self.limit, self.sizes = handle, limit, []
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0 or size > self.limit:
+            raise AssertionError(f"unbounded read({size})")
+        self.sizes.append(size)
+        return self.handle.read(size)
+
+    def __enter__(self) -> BoundedReads:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.handle.close()
 
 
 class ReplaceTestCase(MaterializeTestCase):
@@ -168,6 +187,30 @@ class SuccessTests(ReplaceTestCase):
         self.replace(work_id, NEW + b"\n% [[Smith]]\n")
         self.assertTrue(self.library.has_work_role(high_id, work_id, "Mentioned"))
         self.assertFalse(self.library.has_work_role(low_id, work_id, "Mentioned"))
+
+    def test_mentions_are_scanned_in_bounded_reads(self) -> None:
+        person = self.library.add_person("Ada", "Lovelace")
+        work_id = self.add_pdf_work()
+        handles: list[BoundedReads] = []
+        real = LocalFilesystemStorage.open_read
+
+        def bounded(storage: LocalFilesystemStorage, key: StorageKey) -> BoundedReads:
+            handles.append(BoundedReads(real(storage, key), 7))
+            return handles[-1]
+
+        # With 7-byte reads, "[[", the name and "]]" each straddle a read boundary.
+        data = NEW + b"\n%xyz [[Ada Lovelace]]\n"
+        with mock.patch.object(replace, "READ_CHUNK", 7), \
+                mock.patch.object(LocalFilesystemStorage, "open_read", bounded):
+            self.replace(work_id, data)
+        self.assertTrue(self.library.has_work_role(person, work_id, "Mentioned"))
+        self.assertTrue(handles)
+        self.assertGreater(len(handles[0].sizes), len(data) // 7)
+
+    def test_a_document_links_at_most_max_labels_people(self) -> None:
+        key = self.put(b"[[Ada]] [[Bob]] [[Ada]] [[Cy]] [[Dee]]").key
+        with mock.patch.object(replace, "MAX_LABELS", 3):
+            self.assertEqual(replace.stored_labels(self.objects, key), ["Ada", "Bob", "Cy"])
 
     def test_a_materialization_links_mentioned_people_too(self) -> None:
         person = self.library.add_person("Grace", "Hopper")

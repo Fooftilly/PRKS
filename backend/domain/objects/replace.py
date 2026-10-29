@@ -36,7 +36,10 @@ materializes the set into the new document.
 **Mentioned roles.** :func:`mention` is SQLite's best-effort
 ``_sync_mentioned_roles``: a ``[[label]]`` in the bytes names the first
 Person whose full or last name equals it, and that Person is linked to the
-Work as ``Mentioned`` unless it already holds the role.
+Work as ``Mentioned`` unless it already holds the role. The bytes are
+scanned in bounded chunks (:func:`stored_labels`) and at most
+``MAX_LABELS`` distinct names are linked, so neither an object's size nor its
+markup bounds the memory or the commands used.
 """
 
 from __future__ import annotations
@@ -53,6 +56,8 @@ from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, Sto
 
 NOT_FOUND = "ENTITY_NOT_FOUND"
 MENTIONED = "Mentioned"
+READ_CHUNK = 1 << 20  # bytes per read while scanning for mentions
+MAX_LABELS = 1000  # distinct mentions linked per document
 
 _LOCATORS: LiteralString = """
 SELECT storage_locator, source_locator FROM prks.assets
@@ -152,12 +157,21 @@ def mention(scope: LibraryScope, work_id: str, label: str) -> bool:
 
 
 def stored_labels(storage: StorageBackend, key: StorageKey) -> list[str]:
-    """The distinct ``[[label]]`` names in an object's bytes, in first-seen order."""
-    from backend.pdf_byte_mentions import iter_pdf_mentioned_labels
+    """The distinct ``[[label]]`` names in an object's bytes, in first-seen order.
 
+    Streams the object in ``READ_CHUNK`` reads, so memory stays bounded
+    whatever its size, and keeps the first ``MAX_LABELS`` names.
+    """
+    from backend.pdf_byte_mentions import iter_pdf_mentioned_labels_chunked
+
+    labels: dict[str, None] = {}
     with storage.open_read(key) as handle:
-        data = handle.read()
-    return list(dict.fromkeys(iter_pdf_mentioned_labels(data)))
+        chunks = iter(lambda: handle.read(READ_CHUNK), b"")
+        for label in iter_pdf_mentioned_labels_chunked(chunks):
+            labels[label] = None
+            if len(labels) >= MAX_LABELS:
+                break
+    return list(labels)
 
 
 def result(replaced: Replaced) -> dict[str, Any]:
