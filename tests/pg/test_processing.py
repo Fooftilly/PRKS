@@ -351,6 +351,21 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertTrue(os.path.isfile(pending))
         self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
 
+    def test_a_claimed_import_is_removed_even_when_its_name_was_taken(self) -> None:
+        path = self.put("paper.pdf")
+        file_id = self.staged("paper.pdf")
+        self.crash_after_commit(file_id)
+        claimed = inbox._claim(path)  # the process dies here
+        assert claimed is not None
+        replacement = b"%PDF-1.4 written after the crash"
+        self.put("paper.pdf", replacement)
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["rel_path"], row["status"]) for row in staged], [("paper.pdf", "pending")])
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(sorted(os.listdir(self.inbox)), ["paper.pdf"])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), replacement)
+
     def test_a_claimed_file_whose_name_was_taken_gets_a_new_name(self) -> None:
         path = self.put("taken.pdf", b"%PDF-1.4 B")
         claimed = inbox._claim(path)

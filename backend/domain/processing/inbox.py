@@ -199,12 +199,14 @@ def _put_back(claim: str, path: str) -> bool:
     return False
 
 
-def recover_claims(inbox_dir: str) -> None:
-    """Put back every claimed file a crash left in the inbox (:func:`_claim`).
+def recover_claims(inbox_dir: str, imported: dict[str, str]) -> None:
+    """Settle every claimed file a crash left in the inbox (:func:`_claim`).
 
     Runs under the inbox lock, so no claim of a running import or scan is
-    among them. A file whose import finished is then removed again by the
-    scan's own rule, by its hash.
+    among them. ``imported`` maps the ``rel_path`` of each ``imported`` row
+    to its ``import_sha256``: a claim with the bytes its path's import
+    ingested is removed, never published again (even when another file
+    has taken the path); any other claim is put back (:func:`_put_back`).
     """
     root = os.path.realpath(inbox_dir)
     if not os.path.isdir(root):
@@ -212,8 +214,13 @@ def recover_claims(inbox_dir: str) -> None:
     for directory, _dirs, names in os.walk(root):
         for name in names:
             found = _CLAIM.fullmatch(name)
-            if found is not None:
-                _put_back(os.path.join(directory, name), os.path.join(directory, found.group(1)))
+            if found is None:
+                continue
+            claim, path = os.path.join(directory, name), os.path.join(directory, found.group(1))
+            expected = imported.get(os.path.relpath(path, root).replace(os.sep, "/"))
+            if expected is not None and file_sha256(claim) == expected and _remove(inbox_dir, claim, path):
+                continue
+            _put_back(claim, path)
 
 
 # -- scan -------------------------------------------------------------------------
@@ -222,8 +229,9 @@ def recover_claims(inbox_dir: str) -> None:
 def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
     """Reconcile the Library's rows with the inbox, under the inbox lock (module docs)."""
     with inbox_lock(runner.database, runner.library_id):
-        recover_claims(inbox_dir)
         rows = runner.read(files.scan_rows)
+        recover_claims(inbox_dir, {str(row["rel_path"]): str(row["import_sha256"]) for row in rows
+                                   if row["status"] == files.IMPORTED})
         finished: list[str] = []
         for row in rows:
             if row["status"] == files.IMPORTED and _finish_import(inbox_dir, row):
