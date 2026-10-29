@@ -320,8 +320,14 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
             continue
         rel_path = os.path.relpath(path, root).replace(os.sep, "/")
         expected = imported.get(rel_path)
-        if expected is not None and file_sha256(claim) == expected and _remove(inbox_dir, claim, path):
-            continue
+        if expected is not None:
+            # Published again only once a hash proves it is not the import's bytes.
+            digest = file_sha256(claim)
+            if digest is None or (digest == expected and not _remove(inbox_dir, claim, path)):
+                unsettled.add(rel_path)
+                continue
+            if digest == expected:
+                continue
         if not _put_back(claim, path):
             unsettled.add(rel_path)
     try:

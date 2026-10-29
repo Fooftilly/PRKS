@@ -475,6 +475,26 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNone(self.row(imported_id))
         self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
 
+    def test_an_imported_claim_stays_private_until_its_hash_is_known(self) -> None:
+        path = self.put("kept.pdf")
+        file_id = self.staged("kept.pdf")
+        self.crash_after_commit(file_id)
+        self.assertIsNotNone(inbox._claim(path))  # the process dies here
+        self.put("kept.pdf", b"%PDF-1.4 newer")
+        for fault in (mock.patch.object(inbox, "file_sha256", return_value=None),
+                      mock.patch.object(inbox, "_remove", return_value=False)):
+            with fault:
+                staged = [row["rel_path"] for row in self.library.scan_processing_files()]
+            self.assertEqual(staged, [])  # the path is still claimed, so its new file waits
+            self.assertIsNotNone(self.row(file_id))
+            self.assertEqual(sorted(os.listdir(self.inbox))[1:], ["kept.pdf"])
+        staged = [row["rel_path"] for row in self.library.scan_processing_files()]
+        self.assertEqual(staged, ["kept.pdf"])
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(os.listdir(self.inbox), ["kept.pdf"])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+
     def test_a_folder_named_like_a_claim_is_still_scanned(self) -> None:
         self.put(f"{inbox.CLAIM_PREFIX}archive/report.pdf")
         self.assertEqual([row["rel_path"] for row in self.library.scan_processing_files()],
