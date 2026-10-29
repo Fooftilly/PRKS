@@ -7340,8 +7340,11 @@ class WorkspaceTilingTests(_BrowserE2E):
             arg=ids["mainTabId"],
         )
         manage_btn = page.locator("#panel-content button", has_text="Manage relationships")
-        if manage_btn.count():
-            manage_btn.click()
+        # Reopening the focused Work's relationship editor is part of the
+        # assertion: a missing action must not pass because role text was
+        # already rendered in the read-only panel.
+        manage_btn.wait_for(state="visible", timeout=15000)
+        manage_btn.click()
         editor_role = page.locator(".work-linked-persons__role", has_text="Editor")
         editor_role.wait_for()
         self.assertIn(PERSON_DISPLAY, editor_role.inner_text())
@@ -13039,8 +13042,12 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#folder-results .result-item", has_text="Uncategorized").first.click()
         page.locator("#work-folder-error").wait_for(state="hidden")
         page.locator("#work-modal-cancel").click()
-        if page.locator("#prks-modal-unsaved-confirm:not(.hidden)").count():
-            page.locator("#prks-modal-unsaved-confirm-discard").click()
+        # The modal contains an edited title and Folder selection. Silently
+        # skipping a missing dirty-draft confirmation would hide data-loss UX.
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for(
+            state="visible", timeout=15000
+        )
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
         page.locator("#work-modal").wait_for(state="hidden")
 
         # A destination deleted after it was chosen is refused before anything
