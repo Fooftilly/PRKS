@@ -81,6 +81,49 @@ class AgentQueueTests(unittest.TestCase):
         self.assertIn("#815", run.stdout)
         self.assertNotIn("#740", run.stdout)
 
+    def test_input_aliases_are_equivalent(self):
+        groups = {
+            740: ("chatgpt", "codex", "ChatGPT/Codex", "CHATGPT/CODEX", "chatgpt-codex", "chatgpt_codex", " Codex "),
+            815: ("cursor", "Cursor", "Cursor Cloud", "cursor-cloud", "CURSOR_CLOUD", " Cursor  Cloud "),
+            635: ("claude", "Claude", "Claude Code", "claude-code", "CLAUDE_CODE", " claude code "),
+        }
+        for number, names in groups.items():
+            for name in names:
+                with self.subTest(name=name):
+                    run = self.run_queue(name)
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    self.assertIn(f"#{number}\t", run.stdout)
+                    for other in groups:
+                        if other != number:
+                            self.assertNotIn(f"#{other}\t", run.stdout)
+
+    def test_project_agent_field_aliases_are_equivalent(self):
+        rows = [
+            item(740, agent="Codex"), item(741, agent="ChatGPT"), item(742, agent="ChatGPT/Codex"),
+            item(815, agent="Cursor Cloud"), item(816, agent="Cursor"),
+            item(635, agent="Claude Code"), item(636, agent="Claude"),
+        ]
+        expectations = {
+            "codex": ({740, 741, 742}, {815, 816, 635, 636}),
+            "cursor": ({815, 816}, {740, 741, 742, 635, 636}),
+            "claude": ({635, 636}, {740, 741, 742, 815, 816}),
+        }
+        for role, (expected, excluded) in expectations.items():
+            with self.subTest(role=role):
+                run = self.run_queue(role, items=rows)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                for number in expected:
+                    self.assertIn(f"#{number}\t", run.stdout)
+                for number in excluded:
+                    self.assertNotIn(f"#{number}\t", run.stdout)
+
+    def test_similar_but_unknown_agent_is_rejected(self):
+        for role in ("chatgpt pro", "Cursor Cloud Backup", "claudecodev", "", "Manual"):
+            with self.subTest(role=role):
+                run = self.run_queue(role)
+                self.assertEqual(run.returncode, 2)
+                self.assertIn("Unknown agent", run.stderr)
+
     def test_truncated_project_is_rejected(self):
         run = self.run_queue("cursor", total=1001)
         self.assertNotEqual(run.returncode, 0)
