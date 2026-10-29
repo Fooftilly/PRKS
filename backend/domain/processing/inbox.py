@@ -73,10 +73,9 @@ LOGGER = logging.getLogger("prks.processing")
 INBOX_LOCK_KEY: LiteralString = "hashtextextended('prks.inbox:' || %s, 0)"
 _CHUNK = 1024 * 1024
 _HEADER = b"%PDF-"
-# A file the inbox protocol has claimed for removal (``_claim``).
+# A directory holding one file the inbox protocol has claimed for removal (``_claim``).
 CLAIM_PREFIX = ".prks-claimed-"
-# ``-`` keeps the file's name after it; ``~`` a shortened name (``_claim_name``).
-_CLAIM = re.compile(re.escape(CLAIM_PREFIX) + r"[0-9a-f]{32}([-~])(.+)", re.DOTALL)
+_CLAIM = re.compile(re.escape(CLAIM_PREFIX) + r"[0-9a-f]{32}")
 # The longest file name, in bytes, on the file systems PRKS supports.
 _NAME_MAX = 255
 HELD = "This file was restored from a backup, and the file at its path is not the one backed up."
@@ -113,9 +112,10 @@ def discover(inbox_dir: str) -> list[tuple[str, str]]:
     os.makedirs(inbox_dir, exist_ok=True)
     root = os.path.realpath(inbox_dir)
     found: list[tuple[str, str]] = []
-    for directory, _dirs, names in os.walk(root):
+    for directory, dirs, names in os.walk(root):
+        dirs[:] = [name for name in dirs if not name.startswith(CLAIM_PREFIX)]
         for name in sorted(names):
-            if not name.lower().endswith(".pdf") or name.startswith(CLAIM_PREFIX):
+            if not name.lower().endswith(".pdf"):
                 continue
             path = os.path.realpath(os.path.join(directory, name))
             if path != root and not path.startswith(root + os.sep):
@@ -144,6 +144,14 @@ def file_sha256(path: str) -> Optional[str]:
     return digest.hexdigest()
 
 
+def _release(claim: str) -> None:
+    """Remove the private directory of a claim once its file has left it."""
+    try:
+        os.rmdir(os.path.dirname(claim))
+    except OSError:
+        pass
+
+
 def _remove(inbox_dir: str, claim: str, path: str) -> bool:
     """Remove a claimed inbox file (absent counts as removed) and the directories ``path`` leaves empty."""
     from backend.db_manager import prune_empty_processing_parent_dirs
@@ -155,72 +163,72 @@ def _remove(inbox_dir: str, claim: str, path: str) -> bool:
     except OSError as exc:
         LOGGER.warning("processing_source_remove_failed error=%s", type(exc).__name__)
         return False
+    _release(claim)
     prune_empty_processing_parent_dirs(inbox_dir, path)
     return True
 
 
-def _claim_name(name: str) -> str:
-    """The private name of a claim of the file called ``name``.
-
-    It keeps ``name`` after the prefix when that fits in one file name.
-    Otherwise it keeps a shortened name with the same extension, marked
-    ``~``, short enough that its recovered name (:func:`_put_back`) fits
-    too.
-    """
-    token = f"{CLAIM_PREFIX}{uuid.uuid4().hex}"
-    full = f"{token}-{name}"
-    if len(os.fsencode(full)) <= _NAME_MAX:
-        return full
-    stem, ext = os.path.splitext(name)
-    if len(os.fsencode(ext)) > 16:
-        stem, ext = name, ""
-    while stem and len(os.fsencode(f"{token}~{stem}{ext}")) > _NAME_MAX:
-        stem = stem[:-1]
-    return f"{token}~{stem}{ext}"
-
-
 def _claim(path: str) -> Optional[str]:
-    """Move the file at ``path`` to a private name beside it; None when there is none.
+    """Move the file at ``path`` into a private directory beside it; None when there is none.
 
     Writers outside PRKS do not take the inbox lock, so a path can be
     replaced at any time. After the rename the claimed name holds exactly
     one file, which no outside writer names: what is hashed is what is
-    removed. The private name keeps the file's name after the prefix
-    (:func:`_claim_name`), so after a crash the next scan puts it back
-    (:func:`recover_claims`); it is never offered for import under the
-    private name.
+    removed. The directory (``.prks-claimed-<id>``) keeps the file under
+    its own name, so after a crash the next scan knows its exact path and
+    puts it back (:func:`recover_claims`); discovery never enters it.
     """
-    claim = os.path.join(os.path.dirname(path), _claim_name(os.path.basename(path)))
+    directory = os.path.join(os.path.dirname(path), f"{CLAIM_PREFIX}{uuid.uuid4().hex}")
+    os.mkdir(directory, 0o700)
+    claim = os.path.join(directory, os.path.basename(path))
     try:
         os.rename(path, claim)
     except FileNotFoundError:
+        _release(claim)
         return None
+    except OSError:
+        _release(claim)
+        raise
     return claim
 
 
+def _recovered_name(path: str) -> str:
+    """A new name beside ``path`` for a claimed file whose name was taken (``<stem> (recovered <id>)<ext>``)."""
+    stem, ext = os.path.splitext(os.path.basename(path))
+    ext = ext or ".pdf"
+    suffix = f" (recovered {uuid.uuid4().hex[:8]}){ext}"
+    while stem and len(os.fsencode(stem + suffix)) > _NAME_MAX:
+        stem = stem[:-1]
+    return os.path.join(os.path.dirname(path), stem + suffix)
+
+
+_RECOVERED = re.compile(r"(.*) \(recovered [0-9a-f]{8}\)(\.[^.]*)", re.DOTALL)
+
+
 def _published(claim: str, path: str) -> bool:
-    """Whether ``path``, or a recovered name of it (:func:`_put_back`), is the claimed file."""
+    """Whether ``path``, or a recovered name of it (:func:`_recovered_name`), is the claimed file."""
     try:
         claimed = os.lstat(claim)
     except OSError:
         return False
     if claimed.st_nlink < 2:
         return False
-    directory = os.path.dirname(path)
-    stem, ext = os.path.splitext(os.path.basename(path))
-    recovered = re.compile(re.escape(stem) + r" \(recovered [0-9a-f]{8}\)" + re.escape(ext or ".pdf"), re.DOTALL)
+    directory, own = os.path.split(path)
+    stem, ext = os.path.splitext(own)
     try:
         names = os.listdir(directory)
     except OSError:
         return False
     for name in names:
-        if name != os.path.basename(path) and recovered.fullmatch(name) is None:
-            continue
+        if name != own:
+            found = _RECOVERED.fullmatch(name)
+            if found is None or found.group(2) != (ext or ".pdf") or not stem.startswith(found.group(1)):
+                continue
         try:
-            found = os.lstat(os.path.join(directory, name))
+            entry = os.lstat(os.path.join(directory, name))
         except OSError:
             continue
-        if (found.st_dev, found.st_ino) == (claimed.st_dev, claimed.st_ino):
+        if (entry.st_dev, entry.st_ino) == (claimed.st_dev, claimed.st_ino):
             return True
     return False
 
@@ -229,21 +237,21 @@ def _put_back(claim: str, path: str) -> bool:
     """Make a claimed file visible again; whether it is.
 
     It returns to ``path``, never over a file that has arrived there since;
-    then it takes a new name beside it (``<name> (recovered <id>).pdf``),
-    so both files are listed. On any other failure the claim stays, and the
-    next scan tries again. A claim already linked back by an earlier
-    attempt (a crash or a failed unlink after the link) only loses its
-    private name, so the file is never listed twice.
+    then it takes a new name beside it (:func:`_recovered_name`), so both
+    files are listed. On any other failure the claim stays, and the next
+    scan tries again. A claim already linked back by an earlier attempt (a
+    crash or a failed unlink after the link) only loses its private name,
+    so the file is never listed twice.
     """
-    stem, ext = os.path.splitext(path)
     if _published(claim, path):
         try:
             os.remove(claim)
         except OSError as exc:
             LOGGER.warning("processing_claim_unlink_failed error=%s", type(exc).__name__)
             return False
+        _release(claim)
         return True
-    for target in (path, f"{stem} (recovered {uuid.uuid4().hex[:8]}){ext or '.pdf'}"):
+    for target in (path, _recovered_name(path)):
         try:
             os.link(claim, target, follow_symlinks=False)
         except FileExistsError:
@@ -255,6 +263,8 @@ def _put_back(claim: str, path: str) -> bool:
             os.remove(claim)
         except OSError as exc:  # both names hold it; the next scan's recovery finds the claim again
             LOGGER.warning("processing_claim_unlink_failed error=%s", type(exc).__name__)
+        else:
+            _release(claim)
         return True
     LOGGER.warning("processing_claim_kept reason=names_taken")
     return False
@@ -268,40 +278,49 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> None:
     to its ``import_sha256``: a claim with the bytes its path's import
     ingested is removed, never published again (even when another file
     has taken the path); any other claim is put back (:func:`_put_back`).
-    A shortened claim (:func:`_claim_name`) no longer names its path, so it
-    is removed when it has the bytes of any import in its directory.
+    An empty claim directory (a crash before the rename) is removed.
 
-    Only a regular file is settled. Anything else with a claim's name (a
-    link, a directory, a device) is not one the protocol made; it is left
-    alone and never read, linked or published.
+    Only a real directory, and in it a regular file, is settled. Anything
+    else with a claim's name (a link, a device) is not one the protocol
+    made; it is left alone and never read, linked or published.
     """
     root = os.path.realpath(inbox_dir)
     if not os.path.isdir(root):
         return
-    by_directory: dict[str, set[str]] = {}
-    for rel_path, sha256 in imported.items():
-        by_directory.setdefault(os.path.dirname(rel_path), set()).add(sha256)
-    for directory, _dirs, names in os.walk(root):
-        for name in names:
-            found = _CLAIM.fullmatch(name)
-            if found is None:
-                continue
-            claim, path = os.path.join(directory, name), os.path.join(directory, found.group(2))
-            try:
-                regular = stat.S_ISREG(os.lstat(claim).st_mode)
-            except OSError:
-                continue
-            if not regular:
-                LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
-                continue
-            rel_path = os.path.relpath(path, root).replace(os.sep, "/")
-            if found.group(1) == "-":
-                expected = {imported[rel_path]} if rel_path in imported else set()
-            else:
-                expected = by_directory.get(os.path.dirname(rel_path), set())
-            if expected and file_sha256(claim) in expected and _remove(inbox_dir, claim, path):
-                continue
-            _put_back(claim, path)
+    for directory, dirs, _names in os.walk(root):
+        claims = [name for name in dirs if name.startswith(CLAIM_PREFIX)]
+        dirs[:] = [name for name in dirs if not name.startswith(CLAIM_PREFIX)]
+        for name in claims:
+            if _CLAIM.fullmatch(name) is not None:
+                _settle(inbox_dir, root, os.path.join(directory, name), imported)
+
+
+def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str]) -> None:
+    """Settle one claim directory a crash left (:func:`recover_claims`)."""
+    try:
+        if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
+            LOGGER.warning("processing_claim_skipped reason=not_a_directory")
+            return
+        names = os.listdir(claim_dir)
+    except OSError:
+        return
+    for name in names:
+        claim, path = os.path.join(claim_dir, name), os.path.join(os.path.dirname(claim_dir), name)
+        try:
+            regular = stat.S_ISREG(os.lstat(claim).st_mode)
+        except OSError:
+            continue
+        if not regular:
+            LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
+            continue
+        expected = imported.get(os.path.relpath(path, root).replace(os.sep, "/"))
+        if expected is not None and file_sha256(claim) == expected and _remove(inbox_dir, claim, path):
+            continue
+        _put_back(claim, path)
+    try:
+        os.rmdir(claim_dir)
+    except OSError:
+        pass
 
 
 # -- scan -------------------------------------------------------------------------

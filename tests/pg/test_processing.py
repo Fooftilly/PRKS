@@ -392,22 +392,22 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(staged, ["back.pdf", "moved (recovered 0123abcd).pdf", "moved.pdf"])
         self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
 
-    def test_a_long_name_is_claimed_and_put_back_under_a_name_that_fits(self) -> None:
-        name = "é" * 120 + ".pdf"  # 244 bytes: the full claim name would not fit
+    def test_a_long_named_pending_file_keeps_its_row_through_a_crash(self) -> None:
+        name = "é" * 125 + ".pdf"  # 254 bytes: one byte short of the limit
         path = self.put(name, b"%PDF-1.4 long")
-        claimed = inbox._claim(path)
+        file_id = self.staged(name)
+        self.library.update_processing_file(file_id, {"title": "Kept"})
+        claimed = inbox._claim(path)  # the process dies here
         assert claimed is not None
-        self.assertLessEqual(len(os.fsencode(os.path.basename(claimed))), 255)
-        self.assertTrue(os.path.basename(claimed).endswith(".pdf"))
-        staged = [row["rel_path"] for row in self.library.scan_processing_files()]
-        self.assertEqual(len(staged), 1)
-        self.assertTrue(staged[0].startswith("é") and staged[0].endswith(".pdf"))
-        with open(os.path.join(self.inbox, staged[0]), "rb") as handle:
+        self.assertEqual(os.path.basename(claimed), name)
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["id"], row["rel_path"], row["title"]) for row in staged], [(file_id, name, "Kept")])
+        with open(path, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 long")
-        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
+        self.assertEqual(os.listdir(self.inbox), [name])
 
     def test_a_long_named_import_is_finished_and_its_claim_removed(self) -> None:
-        name = "x" * 240 + ".pdf"
+        name = "x" * 251 + ".pdf"
         path = self.put(name)
         file_id = self.staged(name)
         self.crash_after_commit(file_id)
@@ -416,17 +416,51 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNone(self.row(file_id))
         self.assertEqual(os.listdir(self.inbox), [])
 
+    def test_a_claim_is_matched_to_its_own_path_not_to_equal_bytes(self) -> None:
+        self.put("paper.pdf")
+        imported_id = self.staged("paper.pdf")
+        self.crash_after_commit(imported_id)
+        twin_name = "t" * 240 + ".pdf"
+        twin = self.put(twin_name)  # the same bytes, still pending
+        twin_id = self.staged(twin_name)
+        self.assertIsNotNone(inbox._claim(twin))  # the process dies here
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["id"], row["rel_path"]) for row in staged], [(twin_id, twin_name)])
+        self.assertEqual(os.listdir(self.inbox), [twin_name])
+
+    def test_a_long_name_whose_place_was_taken_gets_a_recovered_name_that_fits(self) -> None:
+        name = "y" * 251 + ".pdf"
+        path = self.put(name, b"%PDF-1.4 B")
+        self.assertIsNotNone(inbox._claim(path))
+        self.put(name, b"%PDF-1.4 C")
+        staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
+        self.assertEqual(len(staged), 2)
+        recovered = next(rel for rel in staged if rel != name)
+        self.assertRegex(recovered, r"^y+ \(recovered [0-9a-f]{8}\)\.pdf$")
+        self.assertLessEqual(len(os.fsencode(recovered)), 255)
+
     def test_a_claim_named_link_is_never_followed(self) -> None:
-        outside = os.path.join(os.path.dirname(os.path.realpath(self.inbox)), "outside.pdf")
-        with open(outside, "wb") as handle:
+        outside = os.path.join(os.path.dirname(os.path.realpath(self.inbox)), "outside")
+        os.makedirs(outside)
+        secret = os.path.join(outside, "stolen.pdf")
+        with open(secret, "wb") as handle:
             handle.write(b"%PDF-1.4 outside")
-        link = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'0' * 32}-stolen.pdf")
-        os.symlink(outside, link)
+        linked_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'0' * 32}")
+        os.symlink(outside, linked_dir)  # a claim directory that is a link
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'1' * 32}")
+        os.mkdir(claim_dir)
+        os.symlink(secret, os.path.join(claim_dir, "other.pdf"))  # a claimed file that is a link
         self.assertEqual(self.library.scan_processing_files(), [])
-        self.assertTrue(os.path.islink(link))
-        self.assertFalse(os.path.exists(os.path.join(self.inbox, "stolen.pdf")))
-        with open(outside, "rb") as handle:
+        self.assertTrue(os.path.islink(linked_dir))
+        self.assertTrue(os.path.islink(os.path.join(claim_dir, "other.pdf")))
+        self.assertEqual(sorted(os.listdir(self.inbox)), sorted([os.path.basename(linked_dir), os.path.basename(claim_dir)]))
+        with open(secret, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 outside")
+
+    def test_an_empty_claim_directory_is_removed(self) -> None:
+        os.mkdir(os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'2' * 32}"))  # a crash before the rename
+        self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertEqual(os.listdir(self.inbox), [])
 
     def test_an_absent_file_only_loses_the_row(self) -> None:
         path = self.put("a.pdf")
