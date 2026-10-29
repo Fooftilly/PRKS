@@ -198,15 +198,51 @@ def _claim(path: str) -> Optional[str]:
     return claim
 
 
+def _published(claim: str, path: str) -> bool:
+    """Whether ``path``, or a recovered name of it (:func:`_put_back`), is the claimed file."""
+    try:
+        claimed = os.lstat(claim)
+    except OSError:
+        return False
+    if claimed.st_nlink < 2:
+        return False
+    directory = os.path.dirname(path)
+    stem, ext = os.path.splitext(os.path.basename(path))
+    recovered = re.compile(re.escape(stem) + r" \(recovered [0-9a-f]{8}\)" + re.escape(ext or ".pdf"), re.DOTALL)
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return False
+    for name in names:
+        if name != os.path.basename(path) and recovered.fullmatch(name) is None:
+            continue
+        try:
+            found = os.lstat(os.path.join(directory, name))
+        except OSError:
+            continue
+        if (found.st_dev, found.st_ino) == (claimed.st_dev, claimed.st_ino):
+            return True
+    return False
+
+
 def _put_back(claim: str, path: str) -> bool:
     """Make a claimed file visible again; whether it is.
 
     It returns to ``path``, never over a file that has arrived there since;
     then it takes a new name beside it (``<name> (recovered <id>).pdf``),
     so both files are listed. On any other failure the claim stays, and the
-    next scan tries again.
+    next scan tries again. A claim already linked back by an earlier
+    attempt (a crash or a failed unlink after the link) only loses its
+    private name, so the file is never listed twice.
     """
     stem, ext = os.path.splitext(path)
+    if _published(claim, path):
+        try:
+            os.remove(claim)
+        except OSError as exc:
+            LOGGER.warning("processing_claim_unlink_failed error=%s", type(exc).__name__)
+            return False
+        return True
     for target in (path, f"{stem} (recovered {uuid.uuid4().hex[:8]}){ext or '.pdf'}"):
         try:
             os.link(claim, target, follow_symlinks=False)

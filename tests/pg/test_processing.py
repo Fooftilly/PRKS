@@ -378,6 +378,20 @@ class CrashRecoveryTests(ProcessingTestCase):
         with open(os.path.join(self.inbox, staged[0]), "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 B")
 
+    def test_a_claim_already_linked_back_is_not_listed_twice(self) -> None:
+        path = self.put("back.pdf", b"%PDF-1.4 back")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        os.link(claimed, path)  # the process dies after the link, before the unlink
+        taken = self.put("moved.pdf", b"%PDF-1.4 moved")
+        moved = inbox._claim(taken)
+        assert moved is not None
+        self.put("moved.pdf", b"%PDF-1.4 newer")
+        os.link(moved, os.path.join(self.inbox, "moved (recovered 0123abcd).pdf"))  # the same, under a new name
+        staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
+        self.assertEqual(staged, ["back.pdf", "moved (recovered 0123abcd).pdf", "moved.pdf"])
+        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
+
     def test_a_long_name_is_claimed_and_put_back_under_a_name_that_fits(self) -> None:
         name = "é" * 120 + ".pdf"  # 244 bytes: the full claim name would not fit
         path = self.put(name, b"%PDF-1.4 long")
