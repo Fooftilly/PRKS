@@ -118,13 +118,7 @@ def inspect_issue(number: int, read: Callable[[str], Any]) -> dict[str, Any]:
             "labels": labels, "open_blockers": sorted(set(blockers))}
 
 
-def validate_row(row: Any, *, plan: bool) -> None:
-    if not isinstance(row, dict) or set(row) != ({"number", "set", "reason", "roadmap_checked", "overlap_checked", "approved", "expected_before", "expected_issue"} if plan else {"number", "set", "reason", "roadmap_checked", "overlap_checked"}):
-        raise TriageError("invalid triage row keys")
-    number = row["number"]
-    if type(number) is not int or number < 1:
-        raise TriageError("issue number must be a positive integer")
-    edits = row["set"]
+def _validate_edits(number: int, edits: Any) -> None:
     if not isinstance(edits, dict) or not edits or set(edits) - set(FIELDS):
         raise TriageError(f"#{number}: set may contain only Agent, Status and Execution")
     for field, value in edits.items():
@@ -135,23 +129,39 @@ def validate_row(row: Any, *, plan: bool) -> None:
             edits[field] = value
         if value not in ALLOWED[field]:
             raise TriageError(f"#{number}: unsupported {field} option {value!r}")
+
+
+def _validate_plan_snapshot(number: int, row: dict) -> None:
+    if type(row["approved"]) is not bool:
+        raise TriageError(f"#{number}: approved must be a boolean")
+    before = row["expected_before"]
+    if (not isinstance(before, dict) or set(before) != set(FIELDS)
+            or any(value is not None and not isinstance(value, str) for value in before.values())):
+        raise TriageError(f"#{number}: all expected_before fields must be explicit")
+    issue = row["expected_issue"]
+    if not isinstance(issue, dict) or set(issue) != {"state", "updated_at", "labels", "open_blockers"}:
+        raise TriageError(f"#{number}: expected_issue snapshot missing")
+    if issue["state"] != "OPEN" or not isinstance(issue["updated_at"], str):
+        raise TriageError(f"#{number}: invalid issue snapshot")
+    if not isinstance(issue["labels"], list) or not isinstance(issue["open_blockers"], list):
+        raise TriageError(f"#{number}: invalid issue snapshot")
+
+
+def validate_row(row: Any, *, plan: bool) -> None:
+    common = {"number", "set", "reason", "roadmap_checked", "overlap_checked"}
+    keys = common | ({"approved", "expected_before", "expected_issue"} if plan else set())
+    if not isinstance(row, dict) or set(row) != keys:
+        raise TriageError("invalid triage row keys")
+    number = row["number"]
+    if type(number) is not int or number < 1:
+        raise TriageError("issue number must be a positive integer")
+    _validate_edits(number, row["set"])
     if not isinstance(row["reason"], str) or len(row["reason"].strip()) < 16:
         raise TriageError(f"#{number}: provide a substantive reason")
     if row["roadmap_checked"] is not True or row["overlap_checked"] is not True:
         raise TriageError(f"#{number}: roadmap and overlapping PR review must be attested")
     if plan:
-        if type(row["approved"]) is not bool:
-            raise TriageError(f"#{number}: approved must be a boolean")
-        before = row["expected_before"]
-        if (not isinstance(before, dict) or set(before) != set(FIELDS)
-                or any(x is not None and not isinstance(x, str) for x in before.values())):
-            raise TriageError(f"#{number}: all expected_before fields must be explicit")
-        ie = row["expected_issue"]
-        if not isinstance(ie, dict) or set(ie) != {"state", "updated_at", "labels", "open_blockers"}:
-            raise TriageError(f"#{number}: expected_issue snapshot missing")
-        if ie["state"] != "OPEN" or not isinstance(ie["updated_at"], str) or not isinstance(ie["labels"], list) or not isinstance(ie["open_blockers"], list):
-            raise TriageError(f"#{number}: invalid issue snapshot")
-
+        _validate_plan_snapshot(number, row)
 
 def load_proposals(path: Path) -> list[dict]:
     data = json.loads(path.read_text("utf-8"))
