@@ -172,6 +172,10 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 - **Agent Queue** cannot exclude items with an open Blocked-by prerequisite, because no filter qualifier exists. Check the issue's Relationships panel before starting work.
 - **Timeline** stays sparse until Start date and Target date are filled in (no item has them today).
 
+### Authenticated assignment command bridge
+
+The optional, default-dry-run `project3-assignment-bridge.yml` accepts strictly formatted, verified GitHub App comments on dedicated issue #982 and uses the same existing-issue triage guards to update Agent, Status and Execution. It does **not** launch agents, approve candidate findings, edit issues/PRs or merge anything. Its Project token stays protected in the existing `project-automation` Environment, and repository variable `PROJECT3_ASSIGN_BRIDGE_MODE=apply` must be deliberately set after a check-only smoke test. See `docs/agent-workflows/project3-assignment-bridge.md` for trust boundary, replay behavior and operator verification.
+
 ### Reviewed issue triage batches
 
 The maintainer may use `scripts/project3_triage.py` to prepare and explicitly approve batches of **existing issue** Agent, Status and Execution edits. The workflow is separate from `project-sync`'s PR-only transitions and never updates PRs or infers acceptance from assignment. Its default operation is read-only: a proposed plan begins with all rows unapproved, and applying requires the exact reviewed plan SHA-256. It checks candidate acceptance, current issue state and native blockers, plus drift and verification; roadmap/overlapping-PR assessment remains an explicit maintainer review, not an automated claim. See `docs/agent-workflows/project3-triage.md` for commands and safety boundaries. This is an optional manual tool; it does not change the approved native Project workflow policy.
