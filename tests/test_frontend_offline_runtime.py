@@ -54,27 +54,45 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertNotIn("indexedDB.open", src)
         self.assertIn("createPrksOfflineStore", src)
 
-        def test_navigator_online_is_a_hint_not_authoritative(self):
-            src = _read(_RUNTIME)
-            # Both the browser's 'online' AND 'offline' events are hints only; each
-            # one only ever triggers a real probe request (runProbe), never a
-            # direct flip to STATE_ONLINE/STATE_OFFLINE by the listener itself.
-            self.assertIn("addEventListener('online', runProbe)", src)
-            self.assertIn("addEventListener('offline', runProbe)", src)
+    def test_navigator_online_is_a_hint_not_authoritative(self):
+        src = _read(_RUNTIME)
+        # Both browser connectivity events merely prompt real network probes,
+        # rather than directly flipping the runtime's connectivity state.
+        self.assertIn("addEventListener('online', runProbe)", src)
+        self.assertIn("addEventListener('offline', runProbe)", src)
 
-        def test_init_begins_a_real_probe_immediately(self):
-            src = _read(_RUNTIME)
-            init_start = src.index("function init()")
-            init_body = src[init_start : init_start + 400]
-            self.assertIn("runProbe()", init_body)
+    def test_init_begins_a_real_probe_immediately(self):
+        src = _read(_RUNTIME)
+        init_start = src.index("function init()")
+        init_body = src[init_start : init_start + 400]
+        self.assertIn("runProbe()", init_body)
 
-        def test_probe_reachability_is_any_http_response_not_just_ok(self):
-            src = _read(_RUNTIME)
-            probe_start = src.index("function runProbe()")
-            probe_body = src[probe_start : probe_start + 1600]
-            # Must react to a resolved response existing at all, not res.ok.
-            self.assertIn("if (res) {", probe_body)
-            self.assertNotIn("if (res && res.ok)", probe_body)
+    def test_probe_reachability_is_any_http_response_not_just_ok(self):
+        src = _read(_RUNTIME)
+        start = src.index("function completeProbe(res, failed)")
+        end = src.index("let p;", start)
+        complete_probe = src[start:end]
+        # A completed, non-failed HTTP response proves reachability even for
+        # 4xx/5xx statuses. Rejected/falsy probe results do not prove it.
+        # The Node selftest also verifies this with real simulated responses.
+        self.assertRegex(
+            complete_probe,
+            r"if\s*\(\s*!failed\s*&&\s*res\s*\)\s*\{",
+        )
+        self.assertNotIn("res.ok", complete_probe)
+        self.assertIn("setState(STATE_ONLINE)", complete_probe)
+
+    def test_connectivity_regressions_are_discoverable(self):
+        expected = {
+            "test_navigator_online_is_a_hint_not_authoritative",
+            "test_init_begins_a_real_probe_immediately",
+            "test_probe_reachability_is_any_http_response_not_just_ok",
+        }
+        discovered = set(unittest.defaultTestLoader.getTestCaseNames(type(self)))
+        self.assertTrue(
+            expected <= discovered,
+            "offline connectivity tests must be independently discovered by unittest",
+        )
 
     def test_mutation_guard_never_queues(self):
         src = _read(_RUNTIME)
