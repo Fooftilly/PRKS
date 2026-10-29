@@ -1456,8 +1456,9 @@ class TokenEnvironmentTests(unittest.TestCase):
             if "PROJECT_SYNC_TOKEN" in text:
                 readers[path.name] = text
         self.assertEqual(sorted(readers), [
-            "project-sync.yml", "project3-assignment-bridge.yml",
-            "project3-readiness.yml", "project3-view-sync.yml",
+            "project-sync.yml", "project3-agent-queue.yml",
+            "project3-assignment-bridge.yml", "project3-readiness.yml",
+            "project3-view-sync.yml",
         ])
         for name, text in readers.items():
             jobs = re.split(r"(?m)^  (?=[a-z][a-z0-9_-]*:\n)", text.split("\njobs:\n", 1)[1])

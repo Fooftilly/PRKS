@@ -32,6 +32,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: write
     steps:
       # issue_comment always runs from default branch, never untrusted PR code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,3 +49,11 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           PROJECT3_ASSIGN_BRIDGE_MODE: ${{ vars.PROJECT3_ASSIGN_BRIDGE_MODE }}
         run: python3 scripts/project3_command_bridge.py
+
+      # Only a successful, authenticated command requests an immediate queue
+      # refresh. workflow_dispatch is an explicit GITHUB_TOKEN event exception;
+      # unlike workflow_run it never consumes an untrusted upstream artifact.
+      - name: Refresh the public agent ownership queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master
