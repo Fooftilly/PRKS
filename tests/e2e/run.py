@@ -664,13 +664,13 @@ def _persist_failure_diagnostics(payload: dict) -> None:
 
 
 def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
-    """Watchdog detail is runner-authored; other report detail may carry paths."""
-    if not watchdog:
-        return ""
+    """Retain only validated runner-authored details, never unittest traces."""
     detail = str((report or {}).get("detail") or "").strip()
-    # Only keep the known privacy-safe watchdog attribution line.
-    if detail.startswith("per-test watchdog:"):
+    if watchdog and detail.startswith("per-test watchdog:"):
         return detail
+    if (report or {}).get("kind") == "execution-count-mismatch":
+        if re.fullmatch(r"E2E execution count mismatch: selected=\\d+ completed=\\d+", detail):
+            return detail
     return ""
 
 
@@ -875,6 +875,7 @@ def run_worker(
         if rc == 0:
             count_error = _execution_count_error(test_ids, result.testsRun)
             if count_error:
+                report["kind"] = "execution-count-mismatch"
                 report["detail"] = count_error
                 rc = 1
         junit_dir = os.environ.get("PRKS_JUNIT_REPORT_DIR")
@@ -1246,9 +1247,14 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                         # not promote the last log line — that test may have
                         # passed. Log attribution stays in the printed diagnostic.
                         # Cancelled --fail-fast siblings never enter this branch.
+                        is_count_mismatch = (
+                            report is not None
+                            and report.get("kind") == "execution-count-mismatch"
+                        )
                         if (
                             not reported_failed
                             and active_id
+                            and not is_count_mismatch
                             and active_id not in failed_ids
                         ):
                             failed_ids.append(active_id)
@@ -1263,6 +1269,11 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                             kind = "assertion-failure"
                             record_failed = list(reported_failed)
                             tid = record_failed[0]
+                            stage = ""
+                        elif is_count_mismatch:
+                            kind = "execution-count-mismatch"
+                            record_failed = []
+                            tid = ""
                             stage = ""
                         else:
                             kind = "worker-crash"
