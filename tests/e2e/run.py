@@ -335,10 +335,14 @@ def _supervise_full_gate(argv, timeout_s: int) -> int:
 
 def _skipped_test_ids(skipped) -> list[str]:
     """Recover rerunnable parent IDs, never SubTest parameter reprs or reasons."""
-    return sorted({
-        getattr(test, "test_case", test).id()
-        for test, _reason in skipped
-    })
+    ids = set()
+    for test, _reason in skipped:
+        parent = getattr(test, "test_case", None)
+        # _SubTest.id() appends reprs of parameter values. Only a real
+        # TestCase parent is safe to use; mocks are not subtests.
+        case = parent if isinstance(parent, unittest.TestCase) else test
+        ids.add(case.id())
+    return sorted(ids)
 
 
 def _unexpected_skips_error(skipped) -> str | None:
