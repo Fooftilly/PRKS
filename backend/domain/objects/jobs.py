@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections import Counter
 from datetime import timedelta
 from typing import LiteralString
 
+from backend.db.database import Transaction
 from backend.domain.objects import lifecycle
 from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
@@ -25,6 +27,7 @@ from backend.storage.objects import (
     StorageBackend,
     StorageKey,
     StorageObjectError,
+    validate_key_name,
 )
 
 CLEANUP_KIND = "objects.cleanup"
@@ -39,12 +42,12 @@ WHERE namespace = %(namespace)s AND name = %(name)s
 """
 
 
-def enqueue_cleanup(tx: object) -> object:
+def enqueue_cleanup(tx: Transaction) -> uuid.UUID | None:
     """Queue one instance-level retry pass; never store object names in payloads."""
     return queue.enqueue(tx, CLEANUP_KIND, dedupe_key=CLEANUP_KIND, singleton_key=CLEANUP_KIND)
 
 
-def enqueue_sweep(tx: object) -> object:
+def enqueue_sweep(tx: Transaction) -> uuid.UUID | None:
     """Queue one instance-level orphan scan; actual byte deletion is a later cleanup pass."""
     return queue.enqueue(tx, SWEEP_KIND, dedupe_key=SWEEP_KIND, singleton_key=SWEEP_KIND, priority=-5)
 
@@ -62,8 +65,7 @@ def cleanup_pass(run: JobRun, storage: StorageBackend, *, limit: int = CLEANUP_L
         run.check()
         try:
             key = StorageKey(namespace, name)
-            # StorageKey validates the namespace and the key name.
-            from backend.storage.objects import validate_key_name
+            # Validate a row that may have been written by an older schema.
             validate_key_name(key.name)
             if key.namespace not in (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS):
                 raise InvalidStorageKey("unsupported namespace")
