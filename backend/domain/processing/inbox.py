@@ -4,7 +4,7 @@ The inbox is a directory of configuration (``StorageConfig.processing_dir``);
 rows name files relative to it (``rel_path``). Every change PRKS makes to
 inbox files holds the Library's **inbox lock** (:data:`INBOX_LOCK_KEY`)
 exclusively across both its database commit and its file change. The lock
-is session-level, held on its own pooled connection
+is session-level, held on a connection of its own outside the pool
 (:meth:`~backend.db.database.Database.advisory_lock`), so it spans the
 commits and is released on every path. A backup takes it shared while it
 exports its snapshot and copies the inbox (L-B-1); restore's R3 takes it
@@ -20,7 +20,12 @@ exclusively to publish restored files.
 3. in one SERIALIZABLE command creates the Work (adopting the keys), gives it
    the staged roles and tags, files it in its Folder (or "Uncategorized") and
    sets the row ``imported`` with ``import_sha256``, the raw stream's hash;
-4. removes the source file, then deletes the row.
+4. removes the source file while it still has that hash (another writer's
+   replacement is left, and listed as new by the next scan), then deletes
+   the row.
+
+A row a restore holds (§11.4) is imported only while the file at its path
+has ``restore_sha256``.
 
 A crash or a failed removal between 3 and 4 leaves an ``imported`` row,
 which the next scan finishes. Bytes a failed or refused step 3 leaves under
@@ -65,6 +70,7 @@ LOGGER = logging.getLogger("prks.processing")
 INBOX_LOCK_KEY: LiteralString = "hashtextextended('prks.inbox:' || %s, 0)"
 _CHUNK = 1024 * 1024
 _HEADER = b"%PDF-"
+HELD = "This file was restored from a backup, and the file at its path is not the one backed up."
 
 
 class Runner(Protocol):
@@ -173,11 +179,15 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
 
     The source is removed only while the file at the path has the imported
     bytes' hash; a different file there is left alone (and listed as new).
+    A file that cannot be read keeps the row, for the next scan to retry.
     """
     path = resolve(inbox_dir, str(row["rel_path"]))
     if path is None or not os.path.isfile(path):
         return True
-    if file_sha256(path) != row["import_sha256"]:
+    digest = file_sha256(path)
+    if digest is None:
+        return False
+    if digest != row["import_sha256"]:
         return True
     return _remove(inbox_dir, path)
 
@@ -214,7 +224,13 @@ def import_file(runner: Runner, inbox_dir: str, objects: StorageBackend, file_id
         if target and not runner.read(lambda scope: folders.exists(scope, target)):
             raise ValueError("Unknown folder.")
         source = resolve(inbox_dir, str(row["rel_path"] or ""))
-        if not source or not os.path.isfile(source):
+        present = bool(source) and os.path.isfile(str(source))
+        if row["restore_hold"] and not (present and row["restore_sha256"]
+                                        and file_sha256(str(source)) == row["restore_sha256"]):
+            # A restore could not vouch for the file at this path (§11.4):
+            # the row and whatever is there are kept, never imported together.
+            raise ValueError(HELD)
+        if not source or not present:
             runner.command(lambda scope: files.delete(scope, file_id))
             raise ValueError("Inbox file no longer present.")
         if not source.lower().endswith(".pdf"):
@@ -227,8 +243,10 @@ def import_file(runner: Runner, inbox_dir: str, objects: StorageBackend, file_id
         if not header.startswith(_HEADER):
             raise _refuse(runner, file_id, "File does not look like a valid PDF (missing %PDF header).")
         stored = _store(runner, objects, file_id, source, str(row["filename"] or os.path.basename(source)))
-        work_id = _commit(runner, objects, file_id, stored, build)
-        if _remove(inbox_dir, source):
+        work_id, sha256 = _commit(runner, objects, file_id, stored, build)
+        # The file is removed only while it is the one ingested; another
+        # writer's replacement stays, and the next scan lists it as new.
+        if _finish_import(inbox_dir, {"rel_path": row["rel_path"], "import_sha256": sha256}):
             runner.command(lambda scope: files.finish(scope, file_id))
         return {"processing_file_id": file_id, "work_id": work_id}
 
@@ -248,16 +266,19 @@ def _store(runner: Runner, objects: StorageBackend, file_id: str, source: str, n
 
 
 def _commit(runner: Runner, objects: StorageBackend, file_id: str, stored: Any,
-            build: Callable[[dict[str, Any], ManagedFile], NewWork]) -> str:
+            build: Callable[[dict[str, Any], ManagedFile], NewWork]) -> tuple[str, str]:
+    """The import's transaction; ``(work_id, import_sha256)``."""
     from backend.db.errors import ConstraintViolationError
 
     managed = stored.managed_file(origin="processing_import")
+    sha256 = managed.ingest_sha256 or managed.sha256
     try:
-        return runner.command(lambda scope: _create(scope, objects, file_id, managed, build), serializable=True)
+        work_id = runner.command(lambda scope: _create(scope, objects, file_id, managed, build), serializable=True)
     except _Gone:
         raise ValueError(files.NOT_FOUND) from None
     except (ValueError, ConstraintViolationError) as exc:
         raise _refuse(runner, file_id, f"Failed to insert imported file into works table: {exc}") from None
+    return work_id, sha256
 
 
 def _create(scope: LibraryScope, objects: StorageBackend, file_id: str, managed: ManagedFile,

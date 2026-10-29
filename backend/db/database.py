@@ -14,7 +14,7 @@ offers the two ways domain code touches PostgreSQL:
   snapshot, so a projection built from several statements never mixes pre-
   and post-write state.
 - :meth:`Database.advisory_lock` holds a session-level advisory lock on a
-  pooled connection of its own while a block runs, for work that spans
+  connection of its own, outside the pool, while a block runs, for work that spans
   several commands and something outside the database (§11.3, the inbox
   lock).
 
@@ -249,16 +249,24 @@ class Database:
     def advisory_lock(self, key: LiteralString, params: Params, *, shared: bool = False) -> Iterator[None]:
         """Hold the advisory lock ``key`` (a SQL expression of ``params``) while the block runs.
 
-        The lock is session-level, taken on a pooled connection borrowed for
-        the block, so it spans the commits of the commands the block runs on
-        other connections. It waits under the session's ``lock_timeout``. The
-        unlock runs on every path; a connection that cannot confirm it is
-        closed, so the pool never hands out a connection holding the lock.
+        The lock is session-level, taken on a connection of its own, outside
+        the pool: it spans the commits of the commands the block runs on
+        pooled connections, and it never takes a pool slot those commands
+        need (a pool of one still works). It waits under the session's
+        ``lock_timeout``. The unlock runs on every path, and the connection
+        is closed after it, which also ends the lock if the unlock failed.
         """
         verb: LiteralString = "pg_advisory_lock_shared" if shared else "pg_advisory_lock"
         undo: LiteralString = "pg_advisory_unlock_shared" if shared else "pg_advisory_unlock"
-        with self._borrow() as conn:
+        try:
+            conn = psycopg.connect(self._config.conninfo, autocommit=True,
+                                   application_name=self._config.application_name,
+                                   connect_timeout=max(1, int(self._config.pool_timeout_seconds)))
+        except psycopg.Error as exc:
+            raise map_database_error(exc, self._registry) from exc
+        with conn:
             try:
+                self._configure_connection(conn)
                 conn.execute("SELECT " + verb + "(" + key + ")", params)
             except psycopg.Error as exc:
                 raise map_database_error(exc, self._registry) from exc
@@ -266,12 +274,9 @@ class Database:
                 yield
             finally:
                 try:
-                    row = conn.execute("SELECT " + undo + "(" + key + ") AS released", params).fetchone()
-                    released = row is not None and bool(row[0])
+                    conn.execute("SELECT " + undo + "(" + key + ")", params)
                 except psycopg.Error:
-                    released = False
-                if not released:
-                    conn.close()
+                    pass  # closing the connection below releases it
 
     def query(self, fn: Callable[[Transaction], T]) -> T:
         """Run ``fn`` in one REPEATABLE READ READ ONLY snapshot."""

@@ -152,8 +152,8 @@ SET status = 'imported', imported_work_id = %(work_id)s, imported_at = now(),
 WHERE library_id = %(library_id)s AND id = %(file_id)s
 """
 _PEEK_SQL: LiteralString = """
-SELECT id, rel_path, filename, status, imported_work_id, target_folder_id FROM prks.processing_files
-WHERE library_id = %(library_id)s AND id = %(file_id)s
+SELECT id, rel_path, filename, status, imported_work_id, target_folder_id, restore_hold, restore_sha256
+FROM prks.processing_files WHERE library_id = %(library_id)s AND id = %(file_id)s
 """
 _FINISH_ONE_SQL: LiteralString = """
 DELETE FROM prks.processing_files WHERE library_id = %(library_id)s AND id = %(file_id)s AND status = 'imported'

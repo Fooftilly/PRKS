@@ -22,7 +22,8 @@ from unittest import mock
 
 import psycopg
 
-from backend.db.database import Isolation
+from backend.db.config import DatabaseConfig
+from backend.db.database import Database, Isolation
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity import library_scope
 from backend.domain.identity.authorization import AccessRefused, Capability
@@ -32,6 +33,7 @@ from backend.domain.works import merge
 from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import Outcome, run_job
+from backend.pg_facade import PostgresLibrary
 from backend.pg_facade import context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
@@ -119,6 +121,17 @@ class StorageTests(ProcessingTestCase):
 
 
 class InboxLockTests(ProcessingTestCase):
+    def test_a_pool_of_one_connection_scans_and_imports(self) -> None:
+        small = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0, pool_max=1))
+        self.addCleanup(small.close)
+        library = PostgresLibrary(small, storage=self.storage)
+        self.put("one.pdf")
+        staged = library.scan_processing_files()
+        self.assertEqual([row["rel_path"] for row in staged], ["one.pdf"])
+        out = library.import_processing_file(staged[0]["id"])
+        self.assertIsNotNone(library.get_work(out["work_id"]))
+        self.assertTrue(self.lock_is_free())
+
     def test_the_lock_is_held_across_the_commit_and_the_removal(self) -> None:
         self.put("held.pdf")
         file_id = self.staged("held.pdf")
@@ -253,6 +266,41 @@ class CrashRecoveryTests(ProcessingTestCase):
         with open(path, "rb") as handle:
             self.assertEqual(handle.read(), replacement)
 
+    def test_an_unreadable_file_keeps_the_imported_row(self) -> None:
+        path = self.put("u.pdf")
+        file_id = self.staged("u.pdf")
+        self.crash_after_commit(file_id)
+        with mock.patch.object(inbox, "file_sha256", return_value=None):
+            self.assertEqual(self.library.scan_processing_files(), [])
+        row = self.row(file_id)
+        assert row is not None
+        self.assertEqual(row["status"], "imported")
+        self.assertTrue(os.path.isfile(path))
+        self.library.scan_processing_files()
+        self.assertIsNone(self.row(file_id))
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_file_replaced_during_the_import_is_kept_and_listed_as_new(self) -> None:
+        path = self.put("race.pdf")
+        file_id = self.staged("race.pdf")
+        replacement = b"%PDF-1.4\n%written by a scanner meanwhile\n%%EOF\n"
+        real = inbox._commit
+
+        def commit_then_replace(*args: Any, **kwargs: Any) -> Any:
+            result = real(*args, **kwargs)
+            self.put("race.pdf", replacement)
+            return result
+
+        with mock.patch.object(inbox, "_commit", commit_then_replace):
+            out = self.library.import_processing_file(file_id)
+        self.assertIsNotNone(self.library.get_work(out["work_id"]))
+        self.assertIsNone(self.row(file_id))
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), replacement)
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["rel_path"], row["status"]) for row in staged], [("race.pdf", "pending")])
+        self.assertNotEqual(staged[0]["id"], file_id)
+
     def test_an_absent_file_only_loses_the_row(self) -> None:
         path = self.put("a.pdf")
         file_id = self.staged("a.pdf")
@@ -301,6 +349,28 @@ class RestoreHoldTests(ProcessingTestCase):
         self.assertIsNone(row["restore_sha256"])
         os.remove(os.path.join(self.inbox, "held.pdf"))
         self.assertEqual(self.library.scan_processing_files(), [])
+
+    def test_a_held_row_is_imported_only_with_its_backed_up_file(self) -> None:
+        file_id = self.held("paper.pdf", hashlib.sha256(PDF).hexdigest())
+        for data in (None, b"%PDF-1.4 a different paper"):
+            with self.subTest(file="absent" if data is None else "different"):
+                if data is not None:
+                    self.put("paper.pdf", data)
+                with self.assertRaises(ValueError) as ctx:
+                    self.library.import_processing_file(file_id)
+                self.assertEqual(str(ctx.exception), inbox.HELD)
+                self.assertIsNotNone(self.row(file_id))
+                self.assertEqual(self.count("works"), 0)
+                if data is not None:
+                    self.assertTrue(os.path.isfile(os.path.join(self.inbox, "paper.pdf")))
+        self.put("paper.pdf")
+        out = self.library.import_processing_file(file_id)
+        self.assertIsNotNone(self.library.get_work(out["work_id"]))
+        self.assertIsNone(self.row(file_id))
+        nohash = self.held("nohash.pdf", None)
+        self.put("nohash.pdf")
+        with self.assertRaises(ValueError):
+            self.library.import_processing_file(nohash)
 
     def test_a_hold_without_a_hash_stays(self) -> None:
         file_id = self.held("nohash.pdf", None)

@@ -40,7 +40,11 @@ the same scan on a worker, and routing ``?rescan=1`` to it is the cutover's
   ``EDIT_LIBRARY`` (the scan writes rows); a reader's ``?rescan=1`` is
   refused.
 - A row a restore holds (``restore_hold``) is never deleted by a scan while
-  its file is missing (§11.4).
+  its file is missing, and is imported only while the file at its path has
+  the backed-up hash (§11.4).
+- An import removes its source only while it still has the ingested bytes'
+  hash: a file another writer put at the path meanwhile stays, and the next
+  scan lists it as new.
 - A deleted target Folder clears the file's target (the key's ``SET
   NULL``), so the import files the Work in "Uncategorized".
 - List ties (equal status and case-folded path) are ordered by discovery,
