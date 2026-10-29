@@ -69,11 +69,13 @@ SET storage_locator = %(storage_locator)s, source_locator = %(source_locator)s,
     materialized_pdf_annotation_revision = %(materialized)s, updated_at = now()
 WHERE library_id = %(library_id)s AND id = %(asset_id)s
 """
-# SQLite's lookup: full name or last name, the first match.
+# SQLite's lookup: full name or last name, the first match. SQLite's first is
+# its table order, the order the People were added; IDs are random, so the
+# oldest Person stands for it here.
 _PERSON_NAMED: LiteralString = """
 SELECT id FROM prks.persons
 WHERE library_id = %(library_id)s AND (first_name || ' ' || last_name = %(label)s OR last_name = %(label)s)
-ORDER BY id COLLATE "C"
+ORDER BY created_at, id COLLATE "C"
 LIMIT 1
 """
 
