@@ -63,12 +63,12 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
     def test_soft_module_affinity_pilot_is_manual_and_full_only(self):
         workflow = SOURCE.read_text(encoding="utf-8")
         inputs = re.findall(
-            r"(?m)^      module_affinity:\\n((?:^        [^\\n]*\\n)+)",
+            r"(?m)^      module_affinity:\n((?:^        [^\n]*\n)+)",
             workflow,
         )
         self.assertEqual(len(inputs), 1)
-        self.assertIn("        type: boolean\\n", inputs[0])
-        self.assertIn("        default: false\\n", inputs[0])
+        self.assertIn("        type: boolean\n", inputs[0])
+        self.assertIn("        default: false\n", inputs[0])
         shard = job_source(workflow, "e2e")
         step = named_upload_step(shard, "Run E2E selection shard")
         self.assertIn(
@@ -78,13 +78,13 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
             step,
         )
         guarded = (
-            '          if [[ "${PRKS_E2E_MODULE_AFFINITY_PILOT}" == "1" ]]; then\\n'
-            '            if [[ "$mode" != "full" ]]; then\\n'
-            '              echo "::error::module affinity pilot requires full suite"\\n'
-            '              exit 1\\n'
-            '            fi\\n'
-            '            args+=(--module-affinity-pilot)\\n'
-            '          fi\\n'
+            '          if [[ "${PRKS_E2E_MODULE_AFFINITY_PILOT}" == "1" ]]; then\n'
+            '            if [[ "$mode" != "full" ]]; then\n'
+            '              echo "::error::module affinity pilot requires full suite"\n'
+            '              exit 1\n'
+            '            fi\n'
+            '            args+=(--module-affinity-pilot)\n'
+            '          fi\n'
         )
         self.assertIn(guarded, step)
         self.assertEqual(step.count("args+=(--module-affinity-pilot)"), 1)
