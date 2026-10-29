@@ -2642,8 +2642,8 @@ def _open_focused_pdf_annotation_drawer(page):
     """Open the focused pane's overlay from its PDF toolbar.
 
     The right-panel Annotations tab no longer paints rows. Persistence tests
-    read `.annotation-row` from this drawer. A work without a viewer toolbar
-    leaves the tab shell alone. Show on PDF is a separate entry point.
+    read `.annotation-row` from this drawer, so losing the focused pane or
+    its PDF toolbar must fail these tests. Show on PDF is a separate entry point.
     """
     tab_id = page.evaluate(
         """() => {
@@ -2652,13 +2652,15 @@ def _open_focused_pdf_annotation_drawer(page):
         }"""
     )
     if not tab_id:
-        return
+        raise AssertionError("PDF annotation test lost its focused pane")
     button = page.locator(
         '.prks-tab-root[data-prks-tab-id="%s"] [data-prks-role="pdf-viewer"] [aria-label="Annotations"]'
         % tab_id
     )
-    if button.count() == 0:
-        return
+    # This helper is used by the PDF annotation persistence regressions.
+    # Silently returning when the focused viewer toolbar disappears lets
+    # those tests pass against an unrelated/right-panel annotation list.
+    button.first.wait_for(state="visible", timeout=15000)
     if button.first.get_attribute("aria-pressed") != "true":
         button.first.click()
     page.wait_for_selector(
@@ -7339,10 +7341,12 @@ class WorkspaceTilingTests(_BrowserE2E):
             "id => document.getElementById('panel-content').dataset.prksOwnerTabId === id",
             arg=ids["mainTabId"],
         )
-        manage_btn = page.locator("#panel-content button", has_text="Manage relationships")
-        if manage_btn.count():
-            manage_btn.click()
-        editor_role = page.locator(".work-linked-persons__role", has_text="Editor")
+        # The relationship editor was opened on Main before the delayed
+        # link, and it can remain expanded when focus returns. Requiring its
+        # collapsed "Manage relationships" opener here is incorrect; that
+        # button is absent while the editor is already open. Assert the
+        # actual refreshed role within Main's owned panel instead.
+        editor_role = page.locator("#panel-content .work-linked-persons__role", has_text="Editor")
         editor_role.wait_for()
         self.assertIn(PERSON_DISPLAY, editor_role.inner_text())
 
@@ -13038,9 +13042,16 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#work-folder-search").fill("Uncategorized")
         page.locator("#folder-results .result-item", has_text="Uncategorized").first.click()
         page.locator("#work-folder-error").wait_for(state="hidden")
+        # Selecting the default "Uncategorized" does not make the form dirty;
+        # create an actual unsaved draft before exercising the leave guard.
+        page.locator("#work-title").fill("E2E Discarded Folder Draft")
         page.locator("#work-modal-cancel").click()
-        if page.locator("#prks-modal-unsaved-confirm:not(.hidden)").count():
-            page.locator("#prks-modal-unsaved-confirm-discard").click()
+        # A dirty title must produce a discard confirmation; a missing guard
+        # must fail rather than being bypassed conditionally.
+        page.locator("#prks-modal-unsaved-confirm:not(.hidden)").wait_for(
+            state="visible", timeout=15000
+        )
+        page.locator("#prks-modal-unsaved-confirm-discard").click()
         page.locator("#work-modal").wait_for(state="hidden")
 
         # A destination deleted after it was chosen is refused before anything
