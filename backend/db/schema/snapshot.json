@@ -28,6 +28,7 @@
     "110_people.sql",
     "120_organization.sql",
     "130_research.sql",
+    "140_annotations.sql",
     "150_objects.sql"
   ],
   "schemas": [
@@ -148,6 +149,93 @@
       "indexes": {
         "work_note_state_library": "CREATE INDEX work_note_state_library ON derived.work_note_state USING btree (library_id, work_id)",
         "work_note_state_pkey": "CREATE UNIQUE INDEX work_note_state_pkey ON derived.work_note_state USING btree (work_id)"
+      }
+    },
+    "prks.annotations": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "asset_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "work_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "type",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "''::text",
+          "name": "content",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "page_index",
+          "not_null": false,
+          "type": "integer"
+        },
+        {
+          "default": "''::text",
+          "name": "color",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'{}'::jsonb",
+          "name": "geometry",
+          "not_null": true,
+          "type": "jsonb"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "annotations_asset_fkey": "FOREIGN KEY (library_id, asset_id, work_id) REFERENCES prks.assets(library_id, id, work_id) ON UPDATE CASCADE",
+        "annotations_asset_id_not_null": "NOT NULL asset_id",
+        "annotations_color_not_null": "NOT NULL color",
+        "annotations_content_not_null": "NOT NULL content",
+        "annotations_created_at_not_null": "NOT NULL created_at",
+        "annotations_geometry_check": "CHECK (jsonb_typeof(geometry) = 'object'::text)",
+        "annotations_geometry_not_null": "NOT NULL geometry",
+        "annotations_id_check": "CHECK (length(id) >= 1 AND length(id) <= 200)",
+        "annotations_id_not_null": "NOT NULL id",
+        "annotations_library_id_not_null": "NOT NULL library_id",
+        "annotations_page_index_check": "CHECK (page_index >= 0)",
+        "annotations_pkey": "PRIMARY KEY (asset_id, id)",
+        "annotations_type_not_null": "NOT NULL type",
+        "annotations_updated_at_not_null": "NOT NULL updated_at",
+        "annotations_work_id_not_null": "NOT NULL work_id"
+      },
+      "indexes": {
+        "annotations_asset": "CREATE INDEX annotations_asset ON prks.annotations USING btree (library_id, asset_id, work_id)",
+        "annotations_pkey": "CREATE UNIQUE INDEX annotations_pkey ON prks.annotations USING btree (asset_id, id)",
+        "annotations_work": "CREATE INDEX annotations_work ON prks.annotations USING btree (library_id, work_id)"
       }
     },
     "prks.argument_sources": {

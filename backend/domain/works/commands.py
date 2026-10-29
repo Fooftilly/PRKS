@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import LiteralString, Optional
 
 from backend import folder_sync, playlist_sync, work_metadata_sync, work_note_sync, work_source_sync
+from backend.domain.annotations import store as annotation_store
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
 from backend.domain.organization import folders, playlists
@@ -328,7 +329,8 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     ``playlists.release_work``, which advances the Playlist's order), its roles
     (``roles.drop_work_roles``, which tombstones their Manifestation scopes),
     its citations (``arguments.release_work``, which advances each citing
-    Argument's ``argument-sources``), notes, Assets, Manifestations and the Work are deleted level by level
+    Argument's ``argument-sources``), its annotations (``annotation_store.release_work``,
+    which tombstones their scopes), notes, Assets, Manifestations and the Work are deleted level by level
     (relations and identifiers go with their Manifestation), and every
     revision scope of the Work is tombstoned (§5.2): each one this Work ever
     advanced, and every fixed scope (``work_scopes``) even if never edited, so
@@ -363,6 +365,8 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     from backend.domain.research import arguments, reindex
 
     arguments.release_work(scope, work_id)
+    # Annotations own revision scopes, so they go before their Assets, leaving tombstones.
+    annotation_store.release_work(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:
         scope.execute(statement, {"work_id": work_id})
     # Its reindex runs after this COMMIT and removes whatever an earlier one
