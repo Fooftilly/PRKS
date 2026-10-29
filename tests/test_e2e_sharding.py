@@ -162,10 +162,13 @@ class ShardAssignmentTests(unittest.TestCase):
     def test_module_affinity_prefers_reuse_without_forcing_whole_modules(self):
         ids = []
         for module in ("tests.e2e.alpha", "tests.e2e.bravo", "tests.e2e.charlie"):
-            ids.extend(_ids(module, "Case", *("test_%02d" % i for i in range(18))))
-        timings = {t: 1.0 for t in ids}
-        baseline = assign_shards(ids, 3, timings)
-        pilot = assign_shards(ids, 3, timings, module_affinity=True)
+            ids.extend(_ids(module, "Case", "test_0", "test_1", "test_2"))
+        # Representative unequal weights: a small preference avoids a duplicate
+        # module fixture without growing the critical-path test estimate.
+        timings = dict(zip(ids, (4, 2, 2, 1, 5, 3, 2, 3, 4)))
+        baseline = assign_shards(ids, 2, timings)
+        pilot = assign_shards(ids, 2, timings, module_affinity=True)
+
         def module_pairs(buckets):
             return sum(len({module_of(t) for t in bucket}) for bucket in buckets)
         self.assertLess(module_pairs(pilot), module_pairs(baseline))
