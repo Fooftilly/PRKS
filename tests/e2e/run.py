@@ -772,7 +772,7 @@ def _persist_failure_diagnostics(payload: dict) -> None:
         pass
 
 
-def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
+def _privacy_safe_detail(report: dict | None, *, watchdog: bool, shard=None) -> str:
     """Retain only validated runner-authored details, never unittest traces."""
     detail = str((report or {}).get("detail") or "").strip()
     if watchdog:
@@ -783,7 +783,7 @@ def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
         )
         if match:
             tid, stage = match.group(1), match.group(2)
-            if (tid == "(unknown)" or _safe_worker_test_id(tid)) and (
+            if (tid == "(unknown)" or _safe_worker_test_id(tid, shard)) and (
                 _safe_watchdog_stage(stage) == stage
             ):
                 return detail
@@ -1148,7 +1148,9 @@ def _sanitize_worker_report(report, shard):
     ]
     if report.get("watchdog"):
         report["stage"] = _safe_watchdog_stage(report.get("stage"))
-        report["detail"] = _privacy_safe_detail(report, watchdog=True)
+        report["detail"] = _privacy_safe_detail(
+            report, watchdog=True, shard=shard
+        )
     return report
 
 
