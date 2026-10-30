@@ -209,9 +209,11 @@ def _drop_stale_links(claim: str) -> bool:
     """Remove other claims of the claimed file beside it; whether none is left.
 
     A put-back whose final unlink failed leaves the file under both its
-    public name and an old claim of that name. Once the file is claimed again, that old
-    claim is a second name for bytes this claim holds, so it goes: left
-    behind, the next scan would publish it again after this file's import.
+    public name and an old claim of that same name (:func:`_put_back`).
+    Once the file is claimed again, that old claim is a second name for
+    bytes this claim holds, so it goes: left behind, the next scan would
+    publish it again after this file's import. A claim of another name is
+    another path's, even when it is a hard link of this file.
     """
     try:
         claimed = os.lstat(claim)
@@ -234,7 +236,7 @@ def _drop_stale_links(claim: str) -> bool:
         except OSError:
             return False
         for name in names:
-            if not _same_name(os.path.basename(claim), name):
+            if name != os.path.basename(claim):
                 continue  # another path's claim, even of a hard link of this file: recovery settles it
             stale = os.path.join(directory, name)
             try:
@@ -250,15 +252,6 @@ def _drop_stale_links(claim: str) -> bool:
     return True
 
 
-def _same_name(name: str, claimed: str) -> bool:
-    """Whether ``name`` is ``claimed`` or one of its recovered names (:func:`_recovered_name`)."""
-    if name == claimed:
-        return True
-    found = _RECOVERED.fullmatch(name)
-    stem, ext = os.path.splitext(claimed)
-    return found is not None and found.group(2) == (ext or ".pdf") and stem.startswith(found.group(1))
-
-
 def _recovered_name(path: str) -> str:
     """A new name beside ``path`` for a claimed file whose name was taken (``<stem> (recovered <id>)<ext>``)."""
     stem, ext = os.path.splitext(os.path.basename(path))
@@ -269,35 +262,18 @@ def _recovered_name(path: str) -> str:
     return os.path.join(os.path.dirname(path), stem + suffix)
 
 
-_RECOVERED = re.compile(r"(.*) \(recovered [0-9a-f]{8}\)(\.[^.]*)", re.DOTALL)
-
-
 def _published(claim: str, path: str) -> bool:
-    """Whether ``path``, or a recovered name of it (:func:`_recovered_name`), is the claimed file."""
+    """Whether ``path`` is the claimed file (a put-back linked it, then failed to unlink the claim).
+
+    A claim published under a recovered name was renamed to that name in
+    its private directory first (:func:`_put_back`), so its own name says
+    where it was published.
+    """
     try:
-        claimed = os.lstat(claim)
+        claimed, entry = os.lstat(claim), os.lstat(path)
     except OSError:
         return False
-    if claimed.st_nlink < 2:
-        return False
-    directory, own = os.path.split(path)
-    stem, ext = os.path.splitext(own)
-    try:
-        names = os.listdir(directory)
-    except OSError:
-        return False
-    for name in names:
-        if name != own:
-            found = _RECOVERED.fullmatch(name)
-            if found is None or found.group(2) != (ext or ".pdf") or not stem.startswith(found.group(1)):
-                continue
-        try:
-            entry = os.lstat(os.path.join(directory, name))
-        except OSError:
-            continue
-        if (entry.st_dev, entry.st_ino) == (claimed.st_dev, claimed.st_ino):
-            return True
-    return False
+    return claimed.st_nlink > 1 and (entry.st_dev, entry.st_ino) == (claimed.st_dev, claimed.st_ino)
 
 
 def _put_back(claim: str, path: str) -> bool:
@@ -305,10 +281,12 @@ def _put_back(claim: str, path: str) -> bool:
 
     It returns to ``path``, never over a file that has arrived there since;
     then it takes a new name beside it (:func:`_recovered_name`), so both
-    files are listed. On any other failure the claim stays, and the next
-    scan tries again. A claim already linked back by an earlier attempt (a
-    crash or a failed unlink after the link) only loses its private name,
-    so the file is never listed twice.
+    files are listed. The claim is renamed to that new name inside its
+    private directory first, so a claim is only ever linked at its own
+    name. On any other failure the claim stays, and the next scan tries
+    again. A claim already linked back by an earlier attempt (a crash or a
+    failed unlink after the link) only loses its private name, so the
+    file is never listed twice.
     """
     if _published(claim, path):
         try:
@@ -318,7 +296,17 @@ def _put_back(claim: str, path: str) -> bool:
             return False
         _release(claim)
         return True
-    for target in (path, _recovered_name(path)):
+    target = path
+    for attempt in range(2):
+        if attempt:
+            target = _recovered_name(path)
+            renamed = os.path.join(os.path.dirname(claim), os.path.basename(target))
+            try:
+                os.rename(claim, renamed)
+            except OSError as exc:
+                LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
+                return False
+            claim = renamed
         try:
             os.link(claim, target, follow_symlinks=False)
         except FileExistsError:

@@ -409,7 +409,9 @@ class CrashRecoveryTests(ProcessingTestCase):
         moved = inbox._claim(taken)
         assert moved is not None
         self.put("moved.pdf", b"%PDF-1.4 newer")
-        os.link(moved, os.path.join(self.inbox, "moved (recovered 0123abcd).pdf"))  # the same, under a new name
+        renamed = os.path.join(os.path.dirname(moved), "moved (recovered 0123abcd).pdf")
+        os.rename(moved, renamed)  # the claim takes its new name first,
+        os.link(renamed, os.path.join(self.inbox, "moved (recovered 0123abcd).pdf"))  # then is published under it
         staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
         self.assertEqual(staged, ["back.pdf", "moved (recovered 0123abcd).pdf", "moved.pdf"])
         self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
@@ -442,10 +444,51 @@ class CrashRecoveryTests(ProcessingTestCase):
         file_id = self.staged("orig (recovered 0123abcd).pdf")
         stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 32}")
         os.mkdir(stale, 0o700)
-        os.link(recovered, os.path.join(stale, "orig.pdf"))  # put back under a new name; the unlink failed
+        os.link(recovered, os.path.join(stale, "orig (recovered 0123abcd).pdf"))  # put back; the unlink failed
         self.library.import_processing_file(file_id)
         self.assertEqual(os.listdir(self.inbox), [])
         self.assertEqual(self.library.scan_processing_files(), [])
+
+    def test_an_import_leaves_the_claim_of_a_hard_link_with_a_recovered_looking_name(self) -> None:
+        for imported, crashed in (("a.pdf", "a (recovered 0123abcd).pdf"),
+                                  ("c (recovered 0123abcd).pdf", "c.pdf")):
+            with self.subTest(imported=imported):
+                path = self.put(imported)
+                os.link(path, os.path.join(self.inbox, crashed))
+                imported_id = self.staged(imported)
+                crashed_id = self.staged(crashed)
+                self.library.update_processing_file(crashed_id, {"title": "Kept"})
+                self.assertIsNotNone(inbox._claim(os.path.join(self.inbox, crashed)))  # the process dies here
+                self.library.import_processing_file(imported_id)
+                staged = self.library.scan_processing_files()
+                self.assertEqual([(row["id"], row["rel_path"], row["title"]) for row in staged],
+                                 [(crashed_id, crashed, "Kept")])
+                self.assertEqual(os.listdir(self.inbox), [crashed])
+                os.remove(os.path.join(self.inbox, crashed))
+                self.library.scan_processing_files()
+
+    def test_a_claim_put_back_under_a_recovered_name_carries_that_name(self) -> None:
+        path = self.put("busy.pdf", b"%PDF-1.4 old")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        self.put("busy.pdf", b"%PDF-1.4 newer")
+        real = os.remove
+
+        def stuck(target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.path.basename(os.path.dirname(os.fspath(target))).startswith(inbox.CLAIM_PREFIX):
+                raise PermissionError(target)
+            real(target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "remove", stuck):
+            self.assertTrue(inbox._put_back(claimed, path))  # published, but its claim stays
+        published = sorted(name for name in os.listdir(self.inbox) if not name.startswith(inbox.CLAIM_PREFIX))
+        self.assertEqual(len(published), 2)
+        leftover = [name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)]
+        self.assertEqual(len(leftover), 1)
+        self.assertEqual(os.listdir(os.path.join(self.inbox, leftover[0])), [n for n in published if n != "busy.pdf"])
+        staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
+        self.assertEqual(staged, published)  # the leftover is recognised, never listed twice
+        self.assertEqual(sorted(os.listdir(self.inbox)), published)
 
     def test_a_leftover_claim_that_cannot_be_removed_keeps_the_imported_row(self) -> None:
         path = self.put("stays.pdf")
