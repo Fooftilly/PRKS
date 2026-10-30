@@ -143,6 +143,51 @@ class RequestRelayTests(unittest.TestCase):
                              ("actions-token", SHA, "success", "9007"))
             self.assertIn("APPLIED", audit.call_args.args[0])
 
+    def test_failed_apply_writes_failure_audit_and_keeps_claim(self):
+        fx = Fixture()
+        fx.dependencies[815] = [{"number": 999, "state": "open"}]
+        with tempfile.TemporaryDirectory() as temp:
+            event_file = Path(temp) / "event.json"
+            event_file.write_text(json.dumps(self.event), encoding="utf-8")
+            env = {**self.env, "GITHUB_EVENT_PATH": str(event_file),
+                   "GITHUB_TOKEN": "actions-token", "PROJECT_SYNC_TOKEN": "project-token",
+                   "GITHUB_RUN_ID": "9007", "PROJECT3_ASSIGN_DISPATCH_MODE": "apply"}
+            with (mock.patch.dict(os.environ, env, clear=True),
+                  mock.patch.object(relay, "provenance_client", return_value=self.rest),
+                  mock.patch.object(relay.triage, "rest_client", return_value=fx.read),
+                  mock.patch.object(relay.pm, "http_transport", return_value=fx.api),
+                  mock.patch.object(relay, "create_status") as audit,
+                  mock.patch.object(relay.dispatch, "report")):
+                self.assertEqual(relay.main(), 1)
+            self.assertEqual([call.args[2] for call in audit.call_args_list],
+                             ["pending", "failure"])
+            self.assertEqual(fx.api.mutations, [])
+
+    def test_request_tip_change_before_claim_blocks_project_write(self):
+        rest = RelayREST()
+        original = rest.__call__
+        def changing_tip(url):
+            result = original(url)
+            if url == relay.API + "/branches/" + relay.BRANCH and rest.calls.count(url) == 2:
+                return {"commit": {"sha": "f" * 40}}
+            return result
+        fx = Fixture()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "event.json"
+            path.write_text(json.dumps(self.event), encoding="utf-8")
+            env = {**self.env, "GITHUB_EVENT_PATH": str(path),
+                   "GITHUB_TOKEN": "actions-token",
+                   "PROJECT_SYNC_TOKEN": "project-token", "GITHUB_RUN_ID": "9007"}
+            with (mock.patch.dict(os.environ, env, clear=True),
+                  mock.patch.object(relay, "provenance_client", return_value=changing_tip),
+                  mock.patch.object(relay.triage, "rest_client", return_value=fx.read),
+                  mock.patch.object(relay.pm, "http_transport", return_value=fx.api),
+                  mock.patch.object(relay, "create_status") as writer,
+                  mock.patch.object(relay.dispatch, "report")):
+                self.assertEqual(relay.main(), 1)
+            writer.assert_not_called()
+            self.assertEqual(fx.api.mutations, [])
+
     def test_owner_pinned_single_file_request_passes(self):
         command, sha = self.load()
         self.assertEqual((command, sha), (self.rest.command, SHA))

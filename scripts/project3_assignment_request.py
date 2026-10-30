@@ -233,6 +233,9 @@ def create_status(token: str, sha: str, state: str, run_id: str) -> None:
 
 
 def main() -> int:
+    claimed_sha: str | None = None
+    claim_token: str | None = None
+    claim_run_id: str | None = None
     try:
         path = os.environ.get("GITHUB_EVENT_PATH")
         if not path:
@@ -251,8 +254,12 @@ def main() -> int:
         # A commit status is append-only, so it survives branch rewinds, retries,
         # and cases where the Project eventually returns to old field values.
         _status_history(provenance, sha)
+        # Minimize the time between the last live tip check and the claim.
+        if (provenance(API + "/branches/" + BRANCH).get("commit") or {}).get("sha") != sha:
+            raise RequestError("request branch advanced before claim")
         run_id = os.environ.get("GITHUB_RUN_ID", "")
         create_status(actions_token, sha, "pending", run_id)
+        claimed_sha, claim_token, claim_run_id = sha, actions_token, run_id
         issue_read = triage.rest_client(actions_token)
         operation, _, _, _ = dispatch.parse(command)
         mode = os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE", "")
@@ -261,6 +268,7 @@ def main() -> int:
         outcome, changed, issues = dispatch.execute(
             command, project=pm.Project(gql), read=issue_read, mode=mode)
         create_status(actions_token, sha, "success", run_id)
+        claimed_sha = None
         print("Validated assignment request commit " + sha[:12], flush=True)
         dispatch.report(outcome, changed, issues)
         return 0
@@ -268,6 +276,13 @@ def main() -> int:
             pm.MigrationError, OSError, ValueError, KeyError, TypeError) as error:
         # A failed triage apply might have written some Project fields.
         # The workflow refreshes the read-only queue even on this failure.
+        # A consumed SHA remains claimed even when recording the outcome fails.
+        if claimed_sha and claim_token and claim_run_id:
+            try:
+                create_status(claim_token, claimed_sha, "failure", claim_run_id)
+            except RequestError:
+                print("assignment claim completion failed; pending claim is durable",
+                      file=sys.stderr)
         print("assignment request refused or failed: "
               + type(error).__name__ + ": " + str(error), file=sys.stderr)
         dispatch.report("FAILED / POSSIBLY PARTIAL", 0, 0, failure=True)
