@@ -891,6 +891,34 @@ class EarlyFailureMarkersTests(unittest.TestCase):
             self.assertIn(case.id(), printed)
             self.assertNotIn("PRIVATE_BOOK_TITLE_IN_EXCEPTION", printed)
 
+    def test_module_fixture_error_holder_preserves_original_error(self):
+        # setUpModule/setUpClass failures have an id but are not TestCase objects.
+        # Early reporting must never turn one failure into a worker crash.
+        with _import_runner() as runner:
+            holder = unittest.suite._ErrorHolder(
+                "setUpModule (tests.e2e.test_app)"
+            )
+            result = unittest.TextTestRunner(
+                stream=io.StringIO(), verbosity=2, resultclass=runner._TimingResult
+            )._makeResult()
+            output = io.StringIO()
+            with mock.patch.object(
+                runner, "get_e2e_heartbeat",
+                return_value={"stage": "SERVER_READY"},
+            ), contextlib.redirect_stdout(output):
+                try:
+                    raise RuntimeError("PRIVATE_FIXTURE_SETUP_VALUE")
+                except RuntimeError:
+                    result.addError(holder, sys.exc_info())
+            self.assertEqual(len(result.errors), 1)
+            self.assertIn("PRIVATE_FIXTURE_SETUP_VALUE", result.errors[0][1])
+            self.assertIn(
+                "[e2e-early-failure] ERROR (unavailable) "
+                "exception=RuntimeError stage=SERVER_READY",
+                output.getvalue(),
+            )
+            self.assertNotIn("PRIVATE_FIXTURE_SETUP_VALUE", output.getvalue())
+
     def test_failure_and_subtest_markers_are_bounded_and_sanitized(self):
         from tests.e2e.runner_selfcheck_cases import FailingCases
 
