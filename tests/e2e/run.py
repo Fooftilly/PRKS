@@ -411,6 +411,46 @@ class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
         self.timings = {}
         self.phase_timings = {}
         self._started_at = None
+        self._early_failure_count = 0
+
+    def _print_early_failure(self, kind, test, exc_info):
+        """Emit bounded, content-free failure context before the suite ends.
+
+        unittest normally defers tracebacks until its final summary; an outer
+        E2E hard timeout can kill that summary after dozens of errors. Print
+        only fixed-shape test ids, exception class and a bounded stage, never
+        exception messages, selectors, stack traces or library data.
+        """
+        self._early_failure_count += 1
+        if self._early_failure_count > 3:
+            return
+        test_id = str(test.id())
+        if not _E2E_TEST_ID_LINE.fullmatch(test_id):
+            test_id = "(unavailable)"
+        exception = getattr(exc_info[0], "__name__", "")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", exception):
+            exception = "unknown"
+        stage = str((get_e2e_heartbeat() or {}).get("stage") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", stage):
+            stage = "unknown"
+        print(
+            "[e2e-early-failure] %s %s exception=%s stage=%s"
+            % (kind, test_id, exception, stage),
+            flush=True,
+        )
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._print_early_failure("ERROR", test, err)
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._print_early_failure("FAIL", test, err)
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            self._print_early_failure("SUBTEST", test, err)
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
