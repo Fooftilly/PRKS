@@ -218,6 +218,10 @@ ITEMS_QUERY = (
     "}\n"
 )
 
+# The queue publishes ownership, not issue assignees. Keep all other Project
+# item fields and pagination identical while avoiding the unrelated assignee cap.
+QUEUE_ITEMS_QUERY = ITEMS_QUERY.replace(_ASSIGNEES, "")
+
 ISSUES_QUERY = (
     "query($owner: String!, $name: String!, $after: String) {\n"
     "  repository(owner: $owner, name: $name) {\n"
@@ -231,7 +235,7 @@ ISSUES_QUERY = (
     "}\n"
 )
 
-QUERIES = (PROJECT_QUERY, ITEMS_QUERY, ISSUES_QUERY)
+QUERIES = (PROJECT_QUERY, ITEMS_QUERY, QUEUE_ITEMS_QUERY, ISSUES_QUERY)
 
 
 # --- parsing ------------------------------------------------------------------
@@ -338,7 +342,7 @@ def _pages(gql: ReadOnlyGraphQL, document: str, variables: dict[str, Any],
     raise Malformed(f"{what} has more than {MAX_PAGES} pages")
 
 
-def read_items(gql: ReadOnlyGraphQL) -> tuple[dict[int, dict[str, Any]], Counter[str]]:
+def read_items(gql: ReadOnlyGraphQL, *, include_assignees: bool = True) -> tuple[dict[int, dict[str, Any]], Counter[str]]:
     variables = {"owner": OWNER, "number": PROJECT_NUMBER, **FIELDS}
 
     def items(data: dict[str, Any]) -> dict[str, Any]:
@@ -350,7 +354,8 @@ def read_items(gql: ReadOnlyGraphQL) -> tuple[dict[int, dict[str, Any]], Counter
     issues: dict[int, dict[str, Any]] = {}
     item_ids: set[str] = set()
     skipped: Counter[str] = Counter()
-    for raw in _pages(gql, ITEMS_QUERY, variables, items, "project items"):
+    document = ITEMS_QUERY if include_assignees else QUEUE_ITEMS_QUERY
+    for raw in _pages(gql, document, variables, items, "project items"):
         node = _obj(raw, "project item")
         item_id = _str(node.get("id"), "project item id")
         if item_id in item_ids:
@@ -384,7 +389,8 @@ def read_items(gql: ReadOnlyGraphQL) -> tuple[dict[int, dict[str, Any]], Counter
             "project_item_id": item_id,
             "archived": _bool(node.get("isArchived"), f"issue #{number} isArchived"),
             **{key: _field_value(node.get(key), f"issue #{number} {name}") for key, name in FIELDS.items()},
-            "assignees": _assignees(content, f"issue #{number}"),
+            "assignees": (_assignees(content, f"issue #{number}")
+                          if include_assignees else []),
         }
     return issues, skipped
 

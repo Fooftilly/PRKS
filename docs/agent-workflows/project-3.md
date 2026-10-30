@@ -451,27 +451,44 @@ GraphQL authentication. Do not copy the classic `project`-scoped
 `PROJECT_SYNC_TOKEN` into an agent session solely to read assignments.
 
 `.github/workflows/project3-agent-queue.yml` uses the protected
-`project-automation` environment and the existing token, on `master`
-only, to call the same exhaustive, read-only collector described in §14.
-Only after that collector has verified the Project is public, its identity
-and field types are correct, every page was retrieved and the snapshot is
-valid does `scripts/project3_agent_queue.py publish` extract a minimal
-ownership inventory. The output contains only open, non-archived Project #3
-PRKS issues with a recognized coding-agent value (explicitly excluding `Manual` and
-`Unassigned`), their `number`, `agent`,
-`status`, and `execution`, together with the Project identity, completeness,
-generation time, expiry, count and optional originating workflow run ID.
-It publishes no Project mutations, assignees, issue descriptions, hidden
-fields, project item IDs or private-project data.
+`project-automation` environment and the existing token on `master`.
+Its `scripts/project3_agent_queue.py publish-live` path queries the same
+Project metadata and **every Project item page** as the full readiness
+collector in §14, but deliberately skips the separate scan of all open
+repository issues. The queue also omits assignee connections from its
+Project item query: agent ownership does not use GitHub issue assignees or
+the full snapshot's per-issue assignee pagination limit.
+
+The publisher retains the read-only GraphQL guard, exact Project/repository
+identity and public-visibility checks, Status/Execution/Agent field-type
+checks, complete bounded pagination and duplicate guards. It explicitly
+verifies the PRKS repository's identity and `isPrivate: false` separately
+from Project issue content, both before and after reading all item pages.
+This works even when no PRKS issue items are readable or the Project has
+zero items. The publisher rechecks Project identity and public visibility
+after reading every item page and fails closed if either the repository
+or Project becomes private or unreadable. The separate
+full-readiness collector and the backwards-compatible
+`project3_agent_queue.py publish --snapshot` interface are unchanged.
+
+The output contains only open, non-archived Project #3 PRKS issues with
+a recognized coding-agent value (explicitly excluding `Manual` and
+`Unassigned`), their `number`, `agent`, `status`, and `execution`,
+together with Project identity, completeness, generation time, expiry, count
+and optional originating workflow run ID. It publishes no Project mutations,
+assignees, issue descriptions, hidden fields, project item IDs or private data.
 
 A different, job-scoped `GITHUB_TOKEN` with `contents: write` publishes
 **only** `agent-queue.json` to the dedicated orphan branch
 `project3-agent-queue`, using trusted `master` workflow code. The Project
-token is available only in the query step and is not given to Git or the
-publisher. After each successful authenticated assignment-bridge command (including
-check-only commands), the bridge explicitly requests `workflow_dispatch`
-with its job-scoped `GITHUB_TOKEN` (`actions: write`). No `workflow_run`
-hook, upstream artifacts, external payloads, or new PAT are involved.
+token is available only in the protected **read-and-build** step; it is not
+passed to Git or the data-branch push step. After a successful assignment
+request or manual dispatch that changes Project fields (or a possibly partial
+failed write), the corresponding trusted writer triggers the publisher via
+`workflow_dispatch` using its job-scoped `GITHUB_TOKEN` (`actions: write`).
+Check-only assignments do not need to trigger a refresh. The queue publisher
+itself has no `workflow_run` hook, untrusted checkout, upstream artifacts,
+external payloads or new Project token.
 Publisher runs also occur hourly at minute 13 UTC to reconcile manual
 Project changes, on relevant `master` changes and on manual dispatch. GitHub scheduled workflows are
 best effort; the consumer enforces expiry independently. The data branch is
