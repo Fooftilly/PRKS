@@ -1,25 +1,14 @@
 #!/usr/bin/env python3
-"""Prove the current PDF-recovery and Person-coherence E2E oracles fail closed.
+"""Prepare isolated E2E oracle mutations for the acceptance workflow.
 
-Only run in the isolated acceptance-stress job. A temporary in-memory test
-mutation deliberately removes one required recovery/invalidation observation.
-The original test file is always restored, even on timeout or interruption.
+This script temporarily changes a tracked test source file on disk in the
+dedicated CI checkout. The invoking shell restores the original file via an
+EXIT trap after each control, including failures. No production files change.
 """
-from pathlib import Path
-import subprocess
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNER = ROOT / "tests/e2e/run.py"
-PDF_TEST = (
-    "tests.e2e.test_app.PdfAnnotationCommentEditTests."
-    "test_a_failed_highlight_is_settled_by_saving_it_again"
-)
-PERSON_TEST = (
-    "tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests."
-    "test_person_create_exclusion_and_delete_membership_coherence"
-)
-
 PDF_ANCHOR = """        _wait_pdf_annotation_durable(page)
         _save_annotation_comment(page, ann_id, "recovered highlight")
         _wait_server_comment(page, work_id, ann_id, "recovered highlight")
@@ -52,50 +41,23 @@ PERSON_MUTATION = """        o._wait_list_uncached(page, 'person-groups:index')
 """
 
 
-def run_control(name, relative_file, test_id, anchor, mutation, evidence):
-    path = ROOT / relative_file
-    original = path.read_text(encoding="utf-8")
-    if original.count(anchor) != 1:
-        raise RuntimeError(f"{name}: source anchor changed; refusing an unverified control")
-    try:
-        path.write_text(original.replace(anchor, mutation, 1), encoding="utf-8")
-        result = subprocess.run(
-            [sys.executable, str(RUNNER), "--jobs", "1", "--no-pointer-capture", test_id],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            timeout=180,
-            check=False,
-        )
-    finally:
-        path.write_text(original, encoding="utf-8")
-
-    output = result.stdout + "\n" + result.stderr
-    if result.returncode == 0 or not all(token in output for token in evidence):
-        print(f"FAIL: {name} mutation was not rejected for the required reason", flush=True)
-        print(output[-12000:], flush=True)
-        raise SystemExit(1)
-    print(f"PASS (expected rejection): {name}; E2E returned {result.returncode}", flush=True)
+CONTROLS = {
+    "pdf": ("tests/e2e/test_app.py", PDF_ANCHOR, PDF_MUTATION),
+    "person": ("tests/e2e/test_person_groups_offline.py", PERSON_ANCHOR, PERSON_MUTATION),
+}
 
 
 def main():
-    run_control(
-        "PDF recovery omitted",
-        "tests/e2e/test_app.py",
-        PDF_TEST,
-        PDF_ANCHOR,
-        PDF_MUTATION,
-        ("PRKS_NC_PDF_RECOVERY_OMITTED", "server never stored comment 'recovered highlight'"),
-    )
-    run_control(
-        "Person Group generation suppressed",
-        "tests/e2e/test_person_groups_offline.py",
-        PERSON_TEST,
-        PERSON_ANCHOR,
-        PERSON_MUTATION,
-        ("PRKS_NC_PERSON_GROUP_INVALIDATION_SUPPRESSED", "person-groups", "not greater than"),
-    )
-    print("PASS: both independent data-safety oracle negative controls rejected defects")
+    if len(sys.argv) != 2 or sys.argv[1] not in CONTROLS:
+        raise SystemExit("usage: e2e_flake_negative_controls.py pdf|person")
+    case = sys.argv[1]
+    relative_file, anchor, mutation = CONTROLS[case]
+    path = ROOT / relative_file
+    original = path.read_text(encoding="utf-8")
+    if original.count(anchor) != 1:
+        raise SystemExit(f"{case}: source anchor changed; refusing an unverified control")
+    path.write_text(original.replace(anchor, mutation, 1), encoding="utf-8")
+    print(f"Applied isolated {case} E2E negative control", flush=True)
 
 
 if __name__ == "__main__":
