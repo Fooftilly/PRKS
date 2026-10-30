@@ -164,17 +164,25 @@ class LivePublisherTests(unittest.TestCase):
                               side_effect=AssertionError("must not query unrelated open issues")),
         )
 
+    @staticmethod
+    def _transport(document, _variables):
+        if document == queue.REPOSITORY_SCOPE_QUERY:
+            return {"repository": {"nameWithOwner": "Fooftilly/PRKS", "isPrivate": False}}
+        return {}
+
     def test_live_path_keeps_full_project_guard_and_matches_snapshot_output(self):
         patches = self._mock_project_read()
         queries = []
-        def transport(document, _variables):
+        def transport(document, variables):
             queries.append(document)
-            return {}
+            return self._transport(document, variables)
         with patches[0], patches[1] as project_items, patches[2]:
             actual = queue.build_queue_live(transport, now=NOW, source_run_id=1234)
         project_items.assert_called_once()
         self.assertEqual(project_items.call_args.kwargs, {"include_assignees": False})
-        self.assertEqual(queries, [readiness.PROJECT_QUERY, readiness.PROJECT_QUERY])
+        self.assertEqual(queries, [readiness.PROJECT_QUERY, queue.REPOSITORY_SCOPE_QUERY,
+                                   readiness.PROJECT_QUERY, queue.REPOSITORY_SCOPE_QUERY])
+        self.assertTrue(readiness.is_read_only(queue.REPOSITORY_SCOPE_QUERY))
         self.assertEqual([r["number"] for r in actual["issues"]], [201, 203])
         self.assertEqual(actual["source_run_id"], 1234)
         self.assertEqual(actual["count"], 2)
@@ -188,17 +196,79 @@ class LivePublisherTests(unittest.TestCase):
         with mock.patch.object(readiness, "check_project",
                                side_effect=readiness.Confidential("private")):
             with self.assertRaises(readiness.Confidential):
-                queue.build_queue_live(lambda _q, _v: {}, now=NOW)
+                queue.build_queue_live(self._transport, now=NOW)
         patches = self._mock_project_read()
         with patches[0] as check, patches[1], patches[2]:
             check.side_effect = [snapshot()["project"], {**snapshot()["project"], "closed": True}]
             with self.assertRaises(readiness.ReadinessError):
-                queue.build_queue_live(lambda _q, _v: {}, now=NOW)
+                queue.build_queue_live(self._transport, now=NOW)
         with mock.patch.object(readiness, "check_project", return_value=snapshot()["project"]), \
              mock.patch.object(readiness, "read_items",
                                side_effect=readiness.Malformed("incomplete pagination")):
             with self.assertRaises(readiness.Malformed):
-                queue.build_queue_live(lambda _q, _v: {}, now=NOW)
+                queue.build_queue_live(self._transport, now=NOW)
+
+    def test_private_or_unreadable_repository_refused_without_project_issues(self):
+        self.assertTrue(readiness.is_read_only(queue.REPOSITORY_SCOPE_QUERY))
+        self.assertNotIn("issues(", queue.REPOSITORY_SCOPE_QUERY)
+        scenarios = [
+            ({"repository": {"nameWithOwner": "Fooftilly/PRKS", "isPrivate": True}},
+             readiness.Confidential),
+            ({"repository": None}, readiness.Malformed),
+            ({"repository": {"nameWithOwner": "elsewhere/PRKS", "isPrivate": False}},
+             readiness.ReadinessError),
+            ({"repository": {"nameWithOwner": "Fooftilly/PRKS"}}, readiness.Malformed),
+        ]
+        for data, error in scenarios:
+            with self.subTest(data=data):
+                def transport(document, _variables):
+                    return data if document == queue.REPOSITORY_SCOPE_QUERY else {}
+                with mock.patch.object(readiness, "check_project",
+                                       return_value=snapshot()["project"]), \
+                     mock.patch.object(readiness, "read_items",
+                                       return_value=({}, Counter())) as get_items:
+                    with self.assertRaises(error):
+                        queue.build_queue_live(transport, now=NOW)
+                get_items.assert_not_called()
+
+    def test_repo_turns_private_or_disappears_during_project_read(self):
+        for changed in (
+            {"repository": {"nameWithOwner": "Fooftilly/PRKS", "isPrivate": True}},
+            {"repository": None},
+        ):
+            with self.subTest(changed=changed):
+                checks = 0
+                def transport(document, variables):
+                    nonlocal checks
+                    if document == queue.REPOSITORY_SCOPE_QUERY:
+                        checks += 1
+                        if checks == 2:
+                            return changed
+                    return self._transport(document, variables)
+                with mock.patch.object(readiness, "check_project",
+                                       return_value=snapshot()["project"]), \
+                     mock.patch.object(readiness, "read_items",
+                                       return_value=({}, Counter())):
+                    with self.assertRaises(readiness.ReadinessError):
+                        queue.build_queue_live(transport, now=NOW)
+                self.assertEqual(checks, 2)
+
+    def test_missing_public_repo_does_not_overwrite_published_queue(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "agent-queue.json"
+            out.write_text("previous", encoding="utf-8")
+            with mock.patch.object(readiness, "check_project",
+                                   return_value=snapshot()["project"]), \
+                 mock.patch.object(readiness, "read_items",
+                                   return_value=({}, Counter())):
+                rc = queue.main(["publish-live", "--out", str(out)], now=NOW,
+                                env={"PROJECT3_READINESS_TOKEN": "test-token"},
+                                transport_factory=lambda _token: (
+                                    lambda document, _variables: (
+                                        {"repository": None} if document == queue.REPOSITORY_SCOPE_QUERY
+                                        else {})))
+            self.assertEqual(rc, 1)
+            self.assertEqual(out.read_text(encoding="utf-8"), "previous")
 
     def test_live_cli_requires_token_and_does_not_overwrite_on_failed_read(self):
         with tempfile.TemporaryDirectory() as td:
@@ -213,7 +283,7 @@ class LivePublisherTests(unittest.TestCase):
                                 env={"PROJECT3_READINESS_TOKEN": "test-token",
                                      "GITHUB_REPOSITORY": "Fooftilly/PRKS",
                                      "GITHUB_RUN_ID": "1234"},
-                                transport_factory=lambda token: (lambda _q, _v: {}))
+                                transport_factory=lambda token: self._transport)
             self.assertEqual(rc, 0)
             data = json.loads(out.read_text(encoding="utf-8"))
             self.assertEqual(data["source_run_id"], 1234)
