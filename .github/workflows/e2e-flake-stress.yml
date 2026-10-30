@@ -2,7 +2,7 @@ name: E2E Flake Acceptance Stress
 
 # Opt-in 20x acceptance for #456, #457, #458 and current flaky
 # candidates #1007, #1008, #1009. One automatic validation when this
-# workflow itself changes; no extra matrix on ordinary PRs/master.
+# workflow or its negative-control helper changes; no extra matrix on ordinary PRs/master.
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +16,7 @@ on:
       - master
     paths:
       - .github/workflows/e2e-flake-stress.yml
+      - .github/scripts/e2e_flake_negative_controls.py
 
 permissions:
   contents: read
