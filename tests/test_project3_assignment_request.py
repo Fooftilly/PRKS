@@ -272,6 +272,24 @@ class RequestRelayTests(unittest.TestCase):
                 rest.ruleset["updated_at"] = stamp
                 relay.require_branch_rules(rest, "1234", stamp)
 
+    def test_ruleset_revision_compares_same_instant_across_timezones(self):
+        rest = RelayREST()
+        rest.ruleset["updated_at"] = "2026-10-30T16:54:01.629Z"
+        relay.require_branch_rules(rest, "1234", "2026-10-30T17:54:01.629+01:00")
+        rest.ruleset["updated_at"] = "2026-10-30T16:54:01.630Z"
+        with self.assertRaisesRegex(relay.RequestError, "revision"):
+            relay.require_branch_rules(rest, "1234", "2026-10-30T17:54:01.629+01:00")
+        rest.ruleset["updated_at"] = "2026-10-30T16:54:01Z"
+        with self.assertRaisesRegex(relay.RequestError, "revision"):
+            relay.require_branch_rules(rest, "1234", "2026-10-30T17:54:01.629+01:00")
+
+    def test_ruleset_drift_diagnostics_do_not_echo_metadata(self):
+        rest = RelayREST()
+        rest.ruleset["conditions"]["ref_name"]["exclude"] = ["refs/heads/restricted"]
+        with self.assertRaisesRegex(relay.RequestError, "drift: exclude") as caught:
+            relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
+        self.assertNotIn("restricted", str(caught.exception))
+
     def test_missing_ruleset_binding_refuses_before_rest_read(self):
         for name, stamp in (
             ("", "2026-10-30T15:00:00Z"),
