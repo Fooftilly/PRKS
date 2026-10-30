@@ -1,7 +1,8 @@
 name: E2E Flake Acceptance Stress
 
-# Opt-in 20x acceptance for #456, #457, #458. One automatic validation
-# when this workflow itself changes; no extra matrix on ordinary PRs/master.
+# Opt-in 20x acceptance for #456, #457, #458 and current flaky
+# candidates #1007, #1008, #1009. One automatic validation when this
+# workflow itself changes; no extra matrix on ordinary PRs/master.
 on:
   workflow_dispatch:
     inputs:
@@ -40,6 +41,12 @@ jobs:
             test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_responsive_narrow_category_strip
           - case: settings-viewport-458
             test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_nav_orientation_updates_on_runtime_viewport_transition
+          - case: pdf-recovery-1007
+            test_id: tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
+          - case: pdf-reconnect-probe-1008
+            test_id: tests.e2e.test_offline.OfflineFoundationTests.test_reconnect_probe_race_settles_pdf_to_online_work_capable_state
+          - case: person-membership-1009
+            test_id: tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
