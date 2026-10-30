@@ -51,11 +51,19 @@ class RelayREST:
         self.command = command or valid_command()
         self.upstream = run_record()
         self.branch = {"commit": {"sha": SHA}}
-        self.commit = {"sha": SHA, "parents": [{"sha": "a" * 40}],
+        self.commit = {"sha": SHA, "author": {"id": relay.dispatch.OWNER_ID},
+                       "committer": {"id": relay.dispatch.OWNER_ID},
+                       "parents": [{"sha": "a" * 40}],
                        "files": [{"filename": relay.FILE, "status": "modified"}]}
         payload = self.command.encode()
         self.source = {"type": "file", "size": len(payload), "encoding": "base64",
                        "content": base64.b64encode(payload).decode()}
+        self.rulesets = [{"id": 1234}]
+        self.ruleset = {"id": 1234, "target": "branch", "enforcement": "active",
+                        "conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": []}},
+                        "bypass_actors": [],
+                        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]}
+        self.statuses = []
         self.calls = []
 
     def __call__(self, url):
@@ -65,6 +73,9 @@ class RelayREST:
             relay.API + "/branches/" + relay.BRANCH: self.branch,
             relay.API + "/commits/" + SHA: self.commit,
             relay.API + "/contents/" + relay.FILE + "?ref=" + SHA: self.source,
+            relay.API + "/rulesets?per_page=100&page=1": self.rulesets,
+            relay.API + "/rulesets/1234": self.ruleset,
+            relay.API + "/commits/" + SHA + "/statuses?per_page=100&page=1": self.statuses,
         }
         if url not in data:
             raise AssertionError("unexpected REST path: " + url)
@@ -109,7 +120,8 @@ class RequestRelayTests(unittest.TestCase):
             env = {**self.env, "GITHUB_EVENT_PATH": str(path),
                    "GITHUB_TOKEN": "actions-token",
                    "PROJECT_SYNC_TOKEN": "project-token",
-                   "PROJECT3_ASSIGN_DISPATCH_MODE": "apply"}
+                   "PROJECT3_ASSIGN_DISPATCH_MODE": "apply",
+                   "GITHUB_RUN_ID": "9007"}
             with (mock.patch.dict(os.environ, env, clear=True),
                   mock.patch.object(relay, "provenance_client",
                                     return_value=self.rest) as provenance,
@@ -117,12 +129,18 @@ class RequestRelayTests(unittest.TestCase):
                                     return_value=fx.read) as issue_client,
                   mock.patch.object(relay.pm, "http_transport",
                                     return_value=fx.api) as project_transport,
+                  mock.patch.object(relay, "create_status") as claim_writer,
                   mock.patch.object(relay.dispatch, "report") as audit):
                 self.assertEqual(relay.main(), 0)
             provenance.assert_called_once_with("actions-token")
             issue_client.assert_called_once_with("actions-token")
             project_transport.assert_called_once_with("project-token")
             self.assertEqual(len(fx.api.mutations), 3)
+            self.assertEqual(claim_writer.call_count, 2)
+            self.assertEqual(claim_writer.call_args_list[0].args,
+                             ("actions-token", SHA, "pending", "9007"))
+            self.assertEqual(claim_writer.call_args_list[1].args,
+                             ("actions-token", SHA, "success", "9007"))
             self.assertIn("APPLIED", audit.call_args.args[0])
 
     def test_owner_pinned_single_file_request_passes(self):
@@ -161,6 +179,85 @@ class RequestRelayTests(unittest.TestCase):
         with self.assertRaisesRegex(relay.RequestError, "differs"):
             self.load()
 
+    def test_author_and_committer_must_be_owner(self):
+        for key in ("author", "committer"):
+            with self.subTest(key=key):
+                rest = RelayREST()
+                rest.commit[key]["id"] = 777
+                with self.assertRaisesRegex(relay.RequestError, "author/committer"):
+                    relay.load_command(self.event, self.env, rest)
+
+    def test_protected_branch_rules_are_required(self):
+        relay.require_branch_rules(self.rest)
+        for changes in (
+            {"enforcement": "disabled"},
+            {"bypass_actors": [{"actor_id": 1, "actor_type": "RepositoryRole"}]},
+            {"conditions": {"ref_name": {"include": ["refs/heads/master"], "exclude": []}}},
+            {"conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": [relay.REQUEST_REF]}}},
+            {"rules": [{"type": "deletion"}]},
+            {"rules": [{"type": "non_fast_forward"}]},
+        ):
+            with self.subTest(changes=changes):
+                rest = RelayREST()
+                rest.ruleset.update(changes)
+                with self.assertRaisesRegex(relay.RequestError, "request branch must have"):
+                    relay.require_branch_rules(rest)
+
+    def test_provenance_url_policy_restricts_rulesets_and_statuses(self):
+        with mock.patch.object(relay.pm, "_https_only_opener"):
+            client = relay.provenance_client("test-token")
+            for url in (
+                relay.API + "/rulesets/1234/anything",
+                relay.API + "/rulesets?per_page=100&page=0",
+                relay.API + "/commits/" + SHA + "/statuses?per_page=100&page=1&extra=1",
+                relay.API + "/commits/" + SHA + "/statuses?per_page=101&page=1",
+            ):
+                with self.subTest(url=url), self.assertRaises(relay.RequestError):
+                    client(url)
+
+    def test_status_claim_blocks_reuse_even_after_state_resets(self):
+        relay._status_history(self.rest, SHA)
+        self.rest.statuses = [
+            {"context": relay.STATUS_CONTEXT, "state": "success"},
+            {"context": "other-check", "state": "success"},
+        ]
+        with self.assertRaisesRegex(relay.RequestError, "already claimed"):
+            relay._status_history(self.rest, SHA)
+        self.rest.statuses = [{"context": relay.STATUS_CONTEXT, "state": "pending"}]
+        with self.assertRaisesRegex(relay.RequestError, "already claimed"):
+            relay._status_history(self.rest, SHA)
+
+    def test_status_list_must_be_complete_and_well_formed(self):
+        self.rest.statuses = [{"context": "anything"}] * 100
+        with self.assertRaises(AssertionError):
+            relay._status_history(self.rest, SHA)  # attempts page two
+        self.rest.statuses = [{"context": "anything"}] * 101
+        with self.assertRaisesRegex(relay.RequestError, "malformed commit status"):
+            relay._status_history(self.rest, SHA)
+        self.rest.statuses = [{"context": "other"}, "unexpected"]
+        with self.assertRaisesRegex(relay.RequestError, "malformed commit status"):
+            relay._status_history(self.rest, SHA)
+
+    def test_claim_post_must_be_verified_before_mutation(self):
+        class Response:
+            def __enter__(self):
+                return self
+            def __exit__(self, *unused):
+                return False
+            def read(self):
+                return b'{"context":"wrong","state":"pending"}'
+        with mock.patch.object(relay.pm, "_https_only_opener") as opener:
+            opener.return_value.open.return_value = Response()
+            with self.assertRaisesRegex(relay.RequestError, "not verified"):
+                relay.create_status("token", SHA, "pending", "123")
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(request.full_url, relay.API + "/statuses/" + SHA)
+        with self.assertRaisesRegex(relay.RequestError, "invalid claim identity"):
+            relay.create_status("token", SHA, "pending", "")
+        with self.assertRaisesRegex(relay.RequestError, "unsupported claim state"):
+            relay.create_status("token", SHA, "invalid", "123")
+
     def test_old_request_refuses_even_if_its_signal_succeeded(self):
         self.rest.branch["commit"]["sha"] = "f" * 40
         with self.assertRaisesRegex(relay.RequestError, "no longer"):
@@ -180,7 +277,8 @@ class RequestRelayTests(unittest.TestCase):
         ]
         for changed in cases:
             with self.subTest(changed=changed):
-                self.rest.commit = changed
+                self.rest.commit = {**changed, "author": {"id": relay.dispatch.OWNER_ID},
+                                    "committer": {"id": relay.dispatch.OWNER_ID}}
                 with self.assertRaisesRegex(relay.RequestError, "only"):
                     self.load()
 
@@ -247,6 +345,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.actor.id == 46610174", text)
         self.assertIn("environment: project-automation", text)
         self.assertIn("PROJECT_SYNC_TOKEN", text)
+        self.assertIn("statuses: write", text)
+        self.assertIn("GITHUB_RUN_ID", text)
         self.assertIn("PROJECT3_ASSIGN_DISPATCH_MODE", text)
         self.assertIn("persist-credentials: false", text)
         self.assertIn("ref: master", text)

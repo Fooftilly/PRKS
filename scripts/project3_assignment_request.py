@@ -30,6 +30,9 @@ FILE = "project3-assignment-request.json"
 SIGNAL = ".github/workflows/project3-assignment-request-signal.yml"
 MAX_BYTES = 12000
 SHA = re.compile(r"^[0-9a-f]{40}$")
+STATUS_CONTEXT = "prks/project3-assignment-request-claim"
+MAX_PAGES = 10
+REQUEST_REF = "refs/heads/" + BRANCH
 
 
 class RequestError(Exception):
@@ -75,6 +78,9 @@ def provenance_client(token: str) -> Callable[[str], Any]:
         re.compile(re.escape(API + "/branches/" + BRANCH)),
         re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}"),
         re.compile(re.escape(API + "/contents/" + FILE + "?ref=") + r"[0-9a-f]{40}"),
+        re.compile(re.escape(API + "/rulesets") + r"\?per_page=100&page=[1-9][0-9]*"),
+        re.compile(re.escape(API + "/rulesets/") + r"[1-9][0-9]*"),
+        re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}/statuses\?per_page=100&page=[1-9][0-9]*"),
     )
 
     def read(url: str) -> Any:
@@ -92,7 +98,7 @@ def provenance_client(token: str) -> Callable[[str], Any]:
         except (urllib.error.URLError, OSError, ValueError) as error:
             raise RequestError("GitHub request provenance read failed: "
                                + type(error).__name__) from None
-        if not isinstance(value, dict):
+        if not isinstance(value, (dict, list)):
             raise RequestError("malformed GitHub provenance response")
         return value
 
@@ -118,6 +124,9 @@ def load_command(event: Any, env: Mapping[str, str],
     if (current.get("commit") or {}).get("sha") != sha:
         raise RequestError("request is no longer the current branch tip")
     commit = read(API + "/commits/" + sha)
+    if ((commit.get("author") or {}).get("id") != dispatch.OWNER_ID
+            or (commit.get("committer") or {}).get("id") != dispatch.OWNER_ID):
+        raise RequestError("request commit author/committer is not the authorized owner")
     changed = commit.get("files")
     if (commit.get("sha") != sha or not isinstance(commit.get("parents"), list)
             or len(commit["parents"]) != 1 or not isinstance(changed, list)
@@ -142,6 +151,87 @@ def load_command(event: Any, env: Mapping[str, str],
     return command, sha
 
 
+
+def require_branch_rules(read: Callable[[str], Any]) -> None:
+    """Refuse activation without an exact, active, no-bypass request-branch ruleset.
+
+    Branch deletion and non-fast-forward rewrites must be prohibited. These
+    checks are run before claiming or writing the Project; changes to
+    repository rule configuration cannot silently weaken the transport.
+    """
+    for page in range(1, MAX_PAGES + 1):
+        rulesets = read(API + "/rulesets?per_page=100&page=" + str(page))
+        if not isinstance(rulesets, list) or len(rulesets) > 100:
+            raise RequestError("malformed branch rulesets response")
+        for summary in rulesets:
+            if (not isinstance(summary, dict)
+                    or type(summary.get("id")) is not int):
+                raise RequestError("malformed branch ruleset record")
+            rule = read(API + "/rulesets/" + str(summary["id"]))
+            conditions = (rule.get("conditions") or {}).get("ref_name") or {}
+            if (rule.get("target") != "branch"
+                    or rule.get("enforcement") != "active"
+                    or REQUEST_REF not in conditions.get("include", [])
+                    or REQUEST_REF in conditions.get("exclude", [])
+                    or rule.get("bypass_actors")):
+                continue
+            rules = rule.get("rules")
+            if not isinstance(rules, list):
+                raise RequestError("malformed branch rules")
+            types = {r.get("type") for r in rules if isinstance(r, dict)}
+            if {"deletion", "non_fast_forward"} <= types:
+                return
+        if len(rulesets) < 100:
+            break
+    raise RequestError("request branch must have active no-bypass deletion and force-push protections")
+
+
+def _status_history(read: Callable[[str], Any], sha: str) -> None:
+    """Fail closed if any prior claim exists, even if it was later superseded."""
+    for page in range(1, MAX_PAGES + 1):
+        history = read(API + "/commits/" + sha
+                       + "/statuses?per_page=100&page=" + str(page))
+        if not isinstance(history, list) or len(history) > 100:
+            raise RequestError("malformed commit status history")
+        for item in history:
+            if not isinstance(item, dict):
+                raise RequestError("malformed commit status")
+            if item.get("context") == STATUS_CONTEXT:
+                raise RequestError("request commit already claimed; no replay")
+        if len(history) < 100:
+            return
+    raise RequestError("commit status history too large to prove non-replay")
+
+
+def create_status(token: str, sha: str, state: str, run_id: str) -> None:
+    """Write append-only GitHub commit status as the protected execution audit."""
+    if state not in ("pending", "success", "failure"):
+        raise RequestError("unsupported claim state")
+    if not SHA.fullmatch(sha) or not run_id.isdecimal() or not run_id:
+        raise RequestError("invalid claim identity")
+    payload = json.dumps({
+        "state": state,
+        "context": STATUS_CONTEXT,
+        "description": "Project #3 request " + state + " (run " + run_id + ")",
+        "target_url": "https://github.com/" + REPO + "/actions/runs/" + run_id,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        API + "/statuses/" + sha, method="POST", data=payload,
+        headers={"Authorization": "Bearer " + token,
+                 "Content-Type": "application/json",
+                 "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "User-Agent": "prks-project3-assignment-request"})
+    try:
+        with pm._https_only_opener().open(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        raise RequestError("GitHub claim write failed: "
+                           + type(error).__name__) from None
+    if not isinstance(result, dict) or (result.get("context"), result.get("state")) != (STATUS_CONTEXT, state):
+        raise RequestError("GitHub claim write was not verified")
+
+
 def main() -> int:
     try:
         path = os.environ.get("GITHUB_EVENT_PATH")
@@ -154,8 +244,15 @@ def main() -> int:
         project_token = os.environ.get("PROJECT_SYNC_TOKEN")
         if not actions_token or not project_token:
             raise RequestError("scoped Actions/Project token missing")
-        command, sha = load_command(event, os.environ,
-                                    provenance_client(actions_token))
+        provenance = provenance_client(actions_token)
+        command, sha = load_command(event, os.environ, provenance)
+        require_branch_rules(provenance)
+        # Serialize processors in the existing assignment-mutations group.
+        # A commit status is append-only, so it survives branch rewinds, retries,
+        # and cases where the Project eventually returns to old field values.
+        _status_history(provenance, sha)
+        run_id = os.environ.get("GITHUB_RUN_ID", "")
+        create_status(actions_token, sha, "pending", run_id)
         issue_read = triage.rest_client(actions_token)
         operation, _, _, _ = dispatch.parse(command)
         mode = os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE", "")
@@ -163,6 +260,7 @@ def main() -> int:
                          allow_mutations=(operation == "apply" and mode == "apply"))
         outcome, changed, issues = dispatch.execute(
             command, project=pm.Project(gql), read=issue_read, mode=mode)
+        create_status(actions_token, sha, "success", run_id)
         print("Validated assignment request commit " + sha[:12], flush=True)
         dispatch.report(outcome, changed, issues)
         return 0
