@@ -877,11 +877,22 @@ class CrashRecoveryTests(ProcessingTestCase):
 
         for _attempt in range(2):
             with mock.patch.object(inbox.os, "remove", stuck):
-                self.assertEqual(inbox.recover_claims(self.inbox, {}), {"a.pdf"})
+                inbox.recover_claims(self.inbox, {})  # published, its claim left behind
         self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
+        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
         recovered = [name for name in os.listdir(self.inbox) if name != "a.pdf"]
         self.assertEqual(len(recovered), 1)
         self.assertTrue(os.path.islink(os.path.join(self.inbox, recovered[0])))
+
+    def test_a_claimed_link_with_another_name_goes_back_to_its_own(self) -> None:
+        os.symlink("elsewhere.pdf", os.path.join(self.inbox, "a.pdf"))
+        os.link(os.path.join(self.inbox, "a.pdf"), os.path.join(self.inbox, "other.pdf"), follow_symlinks=False)
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'5' * 32}")
+        os.mkdir(claim_dir)
+        os.rename(os.path.join(self.inbox, "a.pdf"), os.path.join(claim_dir, "a.pdf"))  # claimed, then a crash
+        self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
+        self.assertEqual(sorted(os.listdir(self.inbox)), ["a.pdf", "other.pdf"])
+        self.assertTrue(os.path.islink(os.path.join(self.inbox, "a.pdf")))
 
     def test_a_claimed_directory_finds_a_free_name_however_many_are_taken(self) -> None:
         claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'6' * 32}")

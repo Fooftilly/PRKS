@@ -222,57 +222,23 @@ def _restore(claim: str, path: str) -> bool:
     """Return a claimed entry that is no regular file to the inbox, unread; whether it is.
 
     It goes back to ``path`` or, when that is taken, to a fresh recovered
-    name beside it (:func:`_recovered_name`), never over an entry there:
-    another entry is published by a link to itself
-    (``follow_symlinks=False``), unless an earlier attempt already linked
-    it beside its path, when it only loses its claim; a directory is
-    renamed over an empty directory made for it (:func:`_publish_directory`).
-    Left claimed, the next scan's recovery tries again.
+    name beside it (:func:`_recovered_name`), never over an entry there. A
+    directory is renamed over an empty directory made for it
+    (:func:`_publish_directory`); any other entry is put back as a claimed
+    file is, by a link to itself whose recovered name the claim directory
+    records (:func:`_put_back`), so a retry never publishes it twice. Left
+    claimed, the next scan's recovery tries again.
     """
-    claimed = os.lstat(claim)
-    directory = stat.S_ISDIR(claimed.st_mode)
-    if not directory and claimed.st_nlink > 1 and _linked_beside(claimed, os.path.dirname(path)):
-        targets: tuple[str, ...] = ()
-    else:
-        targets = (path, *(_recovered_name(path, uuid.uuid4().hex[:8]) for _attempt in range(3)))
+    if not stat.S_ISDIR(os.lstat(claim).st_mode):
+        return _put_back(claim, path)
     try:
-        for target in targets:
-            if directory:
-                if _publish_directory(claim, target):
-                    return True
-                continue
-            try:
-                os.link(claim, target, follow_symlinks=False)
-            except FileExistsError:
-                continue
-            break
-        else:
-            if targets:
-                LOGGER.warning("processing_claim_kept reason=names_taken")
-                return False
-        os.remove(claim)
+        for target in (path, *(_recovered_name(path, uuid.uuid4().hex[:8]) for _attempt in range(3))):
+            if _publish_directory(claim, target):
+                return True
     except OSError as exc:
         LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
         return False
-    _release(claim)
-    return True
-
-
-def _linked_beside(claimed: os.stat_result, directory: str) -> bool:
-    """Whether an entry in ``directory`` (outside any claim) is the claimed entry itself."""
-    try:
-        names = os.listdir(directory)
-    except OSError:
-        return False
-    for name in names:
-        if _CLAIM.fullmatch(name) is not None:
-            continue
-        try:
-            entry = os.lstat(os.path.join(directory, name))
-        except OSError:
-            continue
-        if (entry.st_dev, entry.st_ino) == (claimed.st_dev, claimed.st_ino):
-            return True
+    LOGGER.warning("processing_claim_kept reason=names_taken")
     return False
 
 
