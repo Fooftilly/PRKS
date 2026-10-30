@@ -1574,6 +1574,19 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
             self.assertEqual(report["stage"], "unknown")
             self.assertEqual(report["detail"], "")
 
+            # A syntactically valid detail is still unsafe when it names an
+            # E2E case belonging to a different worker's assigned shard.
+            foreign_detail = runner._format_watchdog_detail(
+                {"test_id": foreign, "stage": "APP_READY"}, 2, 3.0
+            )
+            forged = runner._sanitize_worker_report(
+                {"watchdog": True, "failed_ids": [foreign],
+                 "stage": "APP_READY", "detail": foreign_detail},
+                [own],
+            )
+            self.assertEqual(forged["failed_ids"], [])
+            self.assertEqual(forged["detail"], "")
+
             detail = runner._format_watchdog_detail(
                 {"test_id": own, "stage": "START"}, 2, 3.0
             )
