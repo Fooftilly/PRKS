@@ -17,6 +17,7 @@ import hashlib
 import os
 import threading
 import time
+import uuid
 from typing import Any, Optional
 from unittest import mock
 
@@ -585,6 +586,33 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(os.listdir(self.inbox), ["busy.pdf"])
         with open(path, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+
+    def test_a_recovered_name_already_taken_is_never_recorded_as_the_intent(self) -> None:
+        path = self.put("orig.pdf", b"%PDF-1.4 linked twice")
+        taken = os.path.join(self.inbox, "orig (recovered 0123abcd).pdf")
+        os.link(path, taken)  # another name of the same file, from outside PRKS
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        self.put("orig.pdf", b"%PDF-1.4 newer")
+        ids = iter([uuid.UUID("0123abcd" + "0" * 24), uuid.UUID("fedcba98" + "0" * 24)])
+        real_link = os.link
+
+        def crash_on_recovered(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if "(recovered " in os.fspath(target):
+                raise KeyboardInterrupt  # the process dies before the link
+            real_link(source, target, *args, **kwargs)
+
+        with mock.patch.object(inbox.uuid, "uuid4", lambda: next(ids)), \
+                mock.patch.object(inbox.os, "link", crash_on_recovered), self.assertRaises(KeyboardInterrupt):
+            inbox._put_back(claimed, path)
+        self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)],
+                         [os.path.basename(os.path.dirname(claimed)) + "-fedcba98"])
+        staged = {row["rel_path"]: row["id"] for row in self.library.scan_processing_files()}
+        with mock.patch.object(inbox, "_finish_import", lambda inbox_dir, row: inbox._claim(taken) is None):
+            self.library.import_processing_file(staged["orig (recovered 0123abcd).pdf"])  # dies after its claim
+        rows = self.library.scan_processing_files()
+        self.assertEqual(len(rows), 2)  # the newer orig.pdf, and the claimed file put back: never removed as the import's
+        self.assertIn("orig.pdf", [row["rel_path"] for row in rows])
 
     def test_a_late_put_back_under_a_recovered_name_is_staged_as_new(self) -> None:
         path = self.put("a.pdf", b"%PDF-1.4 ingested")

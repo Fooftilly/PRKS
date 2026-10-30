@@ -334,6 +334,8 @@ def _put_back(claim: str, path: str) -> bool:
     for attempt in range(3):
         if attempt:
             recovered_id = uuid.uuid4().hex[:8]
+            if os.path.lexists(_recovered_name(path, recovered_id)):
+                continue  # an intent names only a free name: a file there later is this link or a new file
             directory = os.path.dirname(claim)
             base = os.path.basename(directory)[:len(CLAIM_PREFIX) + 32]  # without an earlier id
             renamed = os.path.join(os.path.dirname(directory), f"{base}-{recovered_id}")
@@ -470,7 +472,9 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
             unsettled.update(_rel_paths(root, claim_dir, publics))
             continue
         # A link whose record failed (:func:`_record_linked`) and that an
-        # import has since claimed under the recovered name is a publication too.
+        # import has since claimed under the recovered name is a publication
+        # too: the name was free when the intent was recorded (:func:`_put_back`),
+        # so another claim of this file under it holds that link.
         publics += [public for public in _public_names(claim_dir, name)
                     if public not in publics and public in held.get((entry.st_dev, entry.st_ino), ())]
         rel_paths = _rel_paths(root, claim_dir, publics)
