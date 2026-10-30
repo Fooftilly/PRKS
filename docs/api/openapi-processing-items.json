@@ -137,6 +137,16 @@
               }
             }
           },
+          "408": {
+            "description": "The body stalled for 30 seconds, or did not arrive within 60 seconds plus its length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The key's item was deleted (PROCESSING_ITEM_DELETED).",
             "content": {

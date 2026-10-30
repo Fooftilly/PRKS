@@ -15,6 +15,8 @@ from __future__ import annotations
 import http.client
 import json
 import socket
+import threading
+import time
 import uuid
 from typing import Any, Optional
 from unittest import mock
@@ -203,6 +205,68 @@ class UploadTests(ProcessingHttpTestCase):
         self.assertEqual(json.loads(rest.partition(b"\r\n\r\n")[2])["code"], "PROCESSING_UPLOAD_INCOMPLETE")
         self.assertIn(b"Connection: close", rest)
         self.assertEqual(self.ok(self.get("/api/processing-items"))["items"], [])
+
+    def _stalled_upload(self, trickle: bool) -> tuple[bytes, float]:
+        """Declare a large body, send its start, then stall (or trickle a byte at a time)."""
+        head = (
+            f"POST {processing_api.COLLECTION} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+            f"Origin: {self.origin}\r\nCookie: prks_session={self.cookies['prks_session']}\r\n"
+            f"PRKS-Library-Epoch: {self.library_epoch()}\r\nIdempotency-Key: {uuid.uuid4().hex}\r\n"
+            "Content-Type: application/pdf\r\nContent-Length: 1000000\r\n\r\n"
+        ).encode()
+        started = time.monotonic()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+            sock.sendall(head + pdf()[:40])
+            if trickle:
+                sock.settimeout(0.1)
+                raw = b""
+                while not raw:
+                    try:
+                        raw = sock.recv(65536)
+                    except TimeoutError:
+                        sock.sendall(b"0")
+                sock.settimeout(10)
+            else:
+                raw = sock.recv(65536)
+            while chunk := sock.recv(65536):
+                raw += chunk
+        return raw, time.monotonic() - started
+
+    def assert_timed_out(self, raw: bytes) -> None:
+        status_line, _, rest = raw.partition(b"\r\n")
+        self.assertIn(b" 408 ", status_line)
+        body = json.loads(rest.partition(b"\r\n\r\n")[2])
+        contract.ProcessingItemRefusal.model_validate(body)
+        self.assertEqual(body["code"], "PROCESSING_UPLOAD_TIMEOUT")
+        self.assertIn(b"Connection: close", rest)
+        self.assertEqual(self.ok(self.get("/api/processing-items"))["items"], [])
+
+    def test_a_stalled_upload_times_out_and_frees_the_gate_for_a_restore(self) -> None:
+        gate = self.httpd.prks_access_gate
+        restored = threading.Event()
+
+        def restore() -> None:
+            while not gate.snapshot()["active_reads"]:
+                time.sleep(0.01)
+            with gate.restore():
+                restored.set()
+
+        waiter = threading.Thread(target=restore, daemon=True)
+        waiter.start()
+        with mock.patch.object(processing_api, "UPLOAD_IDLE_SECONDS", 0.5):
+            raw, elapsed = self._stalled_upload(trickle=False)
+        waiter.join(10)
+        self.assert_timed_out(raw)
+        self.assertLess(elapsed, 5)
+        self.assertTrue(restored.is_set())
+
+    def test_a_trickling_upload_misses_its_deadline(self) -> None:
+        # Each read gets a byte well within the idle timeout; only the deadline ends it.
+        with mock.patch.multiple(processing_api, UPLOAD_IDLE_SECONDS=5.0, UPLOAD_GRACE_SECONDS=0.6,
+                                 UPLOAD_MIN_BYTES_PER_SECOND=10**12):
+            raw, elapsed = self._stalled_upload(trickle=True)
+        self.assert_timed_out(raw)
+        self.assertLess(elapsed, 4)
 
     def test_a_deleted_key_is_refused_on_replay(self) -> None:
         key = uuid.uuid4().hex

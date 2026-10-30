@@ -17,7 +17,11 @@ filename, percent-encoded UTF-8, in ``PRKS-Filename``. ``server.py``
 dispatches it before any body is read and marks the request's body unread
 until :func:`handle_upload` has consumed it, so every answer decided earlier
 (admission, a header refusal, a used key, a refused body) carries
-``Connection: close``.
+``Connection: close``. The upload holds the Library's read gate while it
+streams, which a restore waits out, so the body must arrive within a bound:
+each read waits at most ``UPLOAD_IDLE_SECONDS``, and the whole body must
+arrive by a deadline set from its declared length. A stalled or trickling
+upload is answered 408 and its connection closed.
 
 Each command runs through :mod:`backend.domain.processing.commands` for the
 admitted :class:`~backend.domain.identity.request_context.RequestContext`, so
@@ -32,6 +36,7 @@ a PostgreSQL library: the SQLite runtime never loads psycopg.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote
 
@@ -44,6 +49,12 @@ BATCH_IMPORT = COLLECTION + "/import"
 # The largest PDF one upload may carry.
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MAX_BATCH = 500
+# How long one read of an upload's body may wait for a byte.
+UPLOAD_IDLE_SECONDS = 30.0
+# The whole body must arrive within the grace plus its length at this rate,
+# so a trickle cannot hold the read gate (and so a restore) forever.
+UPLOAD_GRACE_SECONDS = 60.0
+UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
 FILENAME_HEADER = "PRKS-Filename"
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 
@@ -56,6 +67,7 @@ _MESSAGES = {
     "PROCESSING_NOT_A_PDF": "The upload is not a PDF.",
     "PROCESSING_UPLOAD_TOO_LARGE": "The upload is larger than the upload limit.",
     "PROCESSING_UPLOAD_INCOMPLETE": "The upload ended before Content-Length bytes.",
+    "PROCESSING_UPLOAD_TIMEOUT": "The upload stalled or was too slow; send it again.",
     "PROCESSING_OBJECT_MISSING": "The item's stored file is missing.",
 }
 _UPLOAD_STATUS = {
@@ -211,6 +223,34 @@ def _single_header(handler: Any, name: str) -> Optional[str]:
     return values[0] if len(values) == 1 else None
 
 
+class UploadTimedOut(Exception):
+    """The body stalled for ``UPLOAD_IDLE_SECONDS`` or missed its deadline."""
+
+
+class _TimedBody:
+    """The request body, read with an idle timeout and an overall deadline.
+
+    Each ``read`` makes at most one socket read (``read1``), so a client that
+    sends a byte at a time cannot stretch one read past the deadline.
+    """
+
+    def __init__(self, rfile: Any, sock: Any, content_length: int) -> None:
+        self._read1 = getattr(rfile, "read1", rfile.read)
+        self._sock = sock
+        self._deadline = (time.monotonic() + UPLOAD_GRACE_SECONDS
+                          + content_length / UPLOAD_MIN_BYTES_PER_SECOND)
+
+    def read(self, size: int) -> bytes:
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise UploadTimedOut()
+        self._sock.settimeout(min(UPLOAD_IDLE_SECONDS, left))
+        try:
+            return self._read1(size)
+        except TimeoutError as exc:
+            raise UploadTimedOut() from exc
+
+
 def handle_upload(handler: Any, db: Any) -> None:
     """``POST /api/processing-items``: one PDF into the queue (§11.5 "Upload").
 
@@ -248,11 +288,19 @@ def handle_upload(handler: Any, db: Any) -> None:
     except UnicodeDecodeError:
         _invalid(handler, f"{FILENAME_HEADER} must be percent-encoded UTF-8.")
         return
+    sock = handler.connection
+    previous_timeout = sock.gettimeout()
     try:
         uploaded = commands.upload(
             library.database, handler._prks_request_context, _storage(library),
-            upload_key=upload_key or "", filename=filename, body=handler.rfile,
+            upload_key=upload_key or "", filename=filename,
+            body=_TimedBody(handler.rfile, sock, int(raw_length)),
             content_length=int(raw_length), max_bytes=MAX_UPLOAD_BYTES)
+    except UploadTimedOut:
+        # The body is unread, so this answer closes the connection.
+        LOGGER.warning("processing_upload_timed_out")
+        _error(handler, 408, "PROCESSING_UPLOAD_TIMEOUT")
+        return
     except uploads.UploadRefused as exc:
         _error(handler, _UPLOAD_STATUS[exc.code], exc.code)
         return
@@ -265,6 +313,11 @@ def handle_upload(handler: Any, db: Any) -> None:
     except ValueError as exc:
         _invalid(handler, str(exc))
         return
+    finally:
+        try:
+            sock.settimeout(previous_timeout)
+        except OSError:
+            pass
     if uploaded.body_read:
         handler._prks_unread_body = False
     LOGGER.info("processing_item_uploaded created=%s",

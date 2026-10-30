@@ -139,6 +139,7 @@ class HttpAuthTestCase(IdentityTestCase):
         self.addCleanup(httpd.server_close)
         self.addCleanup(httpd.shutdown)
         self.port = httpd.server_address[1]
+        self.httpd = httpd
         return auth
 
     @property

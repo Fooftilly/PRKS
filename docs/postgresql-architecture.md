@@ -2430,10 +2430,15 @@ the wire contract is `backend/api_contract/processing_items.py` and
 A response sent before the whole body was read (an idempotent hit, an
 authentication, maintenance, size or type refusal) carries
 `Connection: close` and the server closes the connection, so unread bytes
-can never be parsed as the next request on a persistent connection. A
-client that disconnects mid-upload, a short body or a crash before step 4
-leaves only an unreferenced object, which the orphan sweep collects; no
-item appears.
+can never be parsed as the next request on a persistent connection. The
+upload holds the Library's read gate while the body streams, and a restore
+waits for every read to finish, so the body must arrive within a bound:
+each read waits at most 30 seconds for data, and the whole body must arrive
+within 60 seconds plus its declared length at 256 KiB/s. A stalled or
+trickling upload is answered `408 PROCESSING_UPLOAD_TIMEOUT` with
+`Connection: close`, and nothing is published. A client that disconnects
+mid-upload, a short body or a crash before step 4 leaves only an
+unreferenced object, which the orphan sweep collects; no item appears.
 
 **Edit** (`PATCH /api/processing-items/{id}`): the request carries the
 `revision` it edited. The command locks the item `FOR NO KEY UPDATE`,

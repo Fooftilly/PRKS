@@ -1086,6 +1086,10 @@ def processing_items_openapi_document() -> dict[str, Any]:
                         "A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a "
                         "body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE)."
                     ),
+                    "408": _error(
+                        "The body stalled for 30 seconds, or did not arrive within 60 seconds plus "
+                        "its length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT)."
+                    ),
                     "409": _refusal("The key's item was deleted (PROCESSING_ITEM_DELETED)."),
                     "411": _error("No Content-Length (PROCESSING_LENGTH_REQUIRED)."),
                     "413": _error("Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE)."),
