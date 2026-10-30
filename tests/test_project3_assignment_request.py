@@ -4,6 +4,9 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import os
+import tempfile
+from unittest import mock
 from pathlib import Path
 import sys
 import unittest
@@ -76,6 +79,39 @@ class RequestRelayTests(unittest.TestCase):
 
     def load(self):
         return relay.load_command(self.event, self.env, self.rest)
+
+    def test_provenance_reader_is_separate_from_issue_rest_reader(self):
+        with mock.patch.object(relay.pm, "_https_only_opener") as opener:
+            client = relay.provenance_client("test-token")
+            with self.assertRaisesRegex(relay.RequestError, "outside fixed"):
+                client(relay.API + "/issues/815")
+            with self.assertRaisesRegex(relay.RequestError, "outside fixed"):
+                client("https://evil.example/anything")
+            opener.assert_called_once()
+
+    def test_main_uses_provenance_and_issue_clients_with_distinct_scopes(self):
+        fx = Fixture()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "event.json"
+            path.write_text(json.dumps(self.event), encoding="utf-8")
+            env = {**self.env, "GITHUB_EVENT_PATH": str(path),
+                   "GITHUB_TOKEN": "actions-token",
+                   "PROJECT_SYNC_TOKEN": "project-token",
+                   "PROJECT3_ASSIGN_DISPATCH_MODE": "apply"}
+            with (mock.patch.dict(os.environ, env, clear=True),
+                  mock.patch.object(relay, "provenance_client",
+                                    return_value=self.rest) as provenance,
+                  mock.patch.object(relay.triage, "rest_client",
+                                    return_value=fx.read) as issue_client,
+                  mock.patch.object(relay.pm, "http_transport",
+                                    return_value=fx.api) as project_transport,
+                  mock.patch.object(relay.dispatch, "report") as audit):
+                self.assertEqual(relay.main(), 0)
+            provenance.assert_called_once_with("actions-token")
+            issue_client.assert_called_once_with("actions-token")
+            project_transport.assert_called_once_with("project-token")
+            self.assertEqual(len(fx.api.mutations), 3)
+            self.assertIn("APPLIED", audit.call_args.args[0])
 
     def test_owner_pinned_single_file_request_passes(self):
         command, sha = self.load()

@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import re
 import sys
+import urllib.error
+import urllib.request
 from typing import Any, Callable, Mapping
 
 import project3_assignment_dispatch as dispatch
@@ -62,6 +64,39 @@ def _refuse_if_untrusted_event(event: Any, env: Mapping[str, str]) -> dict:
     if not isinstance(sha, str) or not SHA.fullmatch(sha):
         raise RequestError("invalid upstream commit")
     return run
+
+
+
+def provenance_client(token: str) -> Callable[[str], Any]:
+    """Read only the four fixed GitHub REST resource families used for proof."""
+    opener = pm._https_only_opener()
+    prefixes = (
+        API + "/actions/runs/",
+        API + "/branches/" + BRANCH,
+        API + "/commits/",
+        API + "/contents/" + FILE + "?ref=",
+    )
+
+    def read(url: str) -> Any:
+        if not any(url.startswith(prefix) for prefix in prefixes):
+            raise RequestError("refused request outside fixed provenance resources")
+        request = urllib.request.Request(url, headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "prks-project3-assignment-request",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        try:
+            with opener.open(request, timeout=30) as response:
+                value = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            raise RequestError("GitHub request provenance read failed: "
+                               + type(error).__name__) from None
+        if not isinstance(value, dict):
+            raise RequestError("malformed GitHub provenance response")
+        return value
+
+    return read
 
 
 def load_command(event: Any, env: Mapping[str, str],
@@ -118,14 +153,15 @@ def main() -> int:
         project_token = os.environ.get("PROJECT_SYNC_TOKEN")
         if not actions_token or not project_token:
             raise RequestError("scoped Actions/Project token missing")
-        read = triage.rest_client(actions_token)
-        command, sha = load_command(event, os.environ, read)
+        command, sha = load_command(event, os.environ,
+                                    provenance_client(actions_token))
+        issue_read = triage.rest_client(actions_token)
         operation, _, _, _ = dispatch.parse(command)
         mode = os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE", "")
         gql = pm.GraphQL(pm.http_transport(project_token),
                          allow_mutations=(operation == "apply" and mode == "apply"))
         outcome, changed, issues = dispatch.execute(
-            command, project=pm.Project(gql), read=read, mode=mode)
+            command, project=pm.Project(gql), read=issue_read, mode=mode)
         print("Validated assignment request commit " + sha[:12], flush=True)
         dispatch.report(outcome, changed, issues)
         return 0
