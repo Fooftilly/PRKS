@@ -1154,7 +1154,9 @@ class AppServer:
         env["PRKS_LOG_FILE"] = os.path.join(self.storage_root, "prks-errors.log")
         env["PYTHONUNBUFFERED"] = "1"
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
-        env.pop("PRKS_TEST_DATABASE_URL", None)
+        # Only this server's own database: never a live deployment's settings.
+        for name in ("PRKS_TEST_DATABASE_URL", "PRKS_DATABASE_URL_FILE"):
+            env.pop(name, None)
         env.update(self.library.server_env())
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
