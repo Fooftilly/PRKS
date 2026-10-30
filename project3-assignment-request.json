@@ -3,16 +3,50 @@
   "operation": "check",
   "items": [
     {
-      "number": 629,
+      "number": 1007,
       "set": {
+        "Agent": "ChatGPT/Codex",
+        "Status": "Ready",
         "Execution": "Agent"
       },
       "expected_before": {
-        "Agent": "Claude Code",
+        "Agent": null,
         "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "#740 P2 observed flaky E2E test confirmed in current master and screenshot; independent focused investigation, no overlapping PR or open blocker. Maintainer explicitly authorized assigning these three issues to ChatGPT.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1008,
+      "set": {
+        "Agent": "ChatGPT/Codex",
+        "Status": "Ready",
         "Execution": "Agent"
       },
-      "reason": "Check-only acceptance after pruning the request branch to assignment JSON and its unprivileged push signal. #629 stays open; its native prerequisite #626 is closed, roadmap and active PR overlap checked. Never change any Project fields in this probe.",
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "#740 P2 observed flaky E2E test confirmed in current master and screenshot; independent focused investigation, no overlapping PR or open blocker. Maintainer explicitly authorized assigning these three issues to ChatGPT.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1009,
+      "set": {
+        "Agent": "ChatGPT/Codex",
+        "Status": "Ready",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "#740 P2 observed flaky E2E test confirmed in current master and screenshot; independent focused investigation, no overlapping PR or open blocker. Maintainer explicitly authorized assigning these three issues to ChatGPT.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
