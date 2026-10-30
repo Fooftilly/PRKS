@@ -1,18 +1,18 @@
 {
   "version": 1,
-  "operation": "check",
+  "operation": "apply",
   "items": [
     {
-      "number": 630,
+      "number": 629,
       "set": {
         "Execution": "Agent"
       },
       "expected_before": {
         "Agent": "Claude Code",
         "Status": "Inbox",
-        "Execution": "Agent"
+        "Execution": null
       },
-      "reason": "Read-only retest after merged ruleset timestamp normalization PR #1003; issue #630 native blockers closed, approved roadmap checked and no conflicting implementation PR identified. No Project V2 field mutations authorized.",
+      "reason": "Previously approved Claude Code ownership for PostgreSQL L-F-1. Issue remains open and Inbox, its native prerequisite #626 is closed, and open PostgreSQL/offline-store PR overlap was reviewed. Set execution mode only; do not promote status, reassign Agent or start implementation.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
