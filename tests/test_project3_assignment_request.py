@@ -260,6 +260,13 @@ class RequestRelayTests(unittest.TestCase):
                 with self.assertRaises(relay.RequestError):
                     relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
 
+    def test_rule_revision_accepts_github_utc_and_offset_timestamps(self):
+        for stamp in ("2026-10-30T15:00:00Z", "2026-10-30T15:00:00.125+01:00"):
+            with self.subTest(stamp=stamp):
+                rest = RelayREST()
+                rest.ruleset["updated_at"] = stamp
+                relay.require_branch_rules(rest, "1234", stamp)
+
     def test_missing_ruleset_binding_refuses_before_rest_read(self):
         for name, stamp in (
             ("", "2026-10-30T15:00:00Z"),

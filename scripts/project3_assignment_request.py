@@ -163,7 +163,7 @@ def require_branch_rules(read: Callable[[str], Any], ruleset_id: str,
     if (not isinstance(ruleset_id, str)
             or not re.fullmatch(r"[1-9][0-9]*", ruleset_id)
             or not isinstance(reviewed_at, str)
-            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+", reviewed_at)):
+            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})", reviewed_at)):
         raise RequestError("reviewed request-branch ruleset configuration missing")
     rule = read(API + "/rulesets/" + ruleset_id)
     conditions = (rule.get("conditions") or {}).get("ref_name") or {}
