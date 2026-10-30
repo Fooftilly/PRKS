@@ -1,6 +1,0 @@
-3.4.17
-source: https://github.com/cure53/DOMPurify
-npm: dompurify@3.4.17
-asset: node_modules/dompurify/dist/purify.min.js
-sha256: cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31
-license: MPL-2.0 OR Apache-2.0
