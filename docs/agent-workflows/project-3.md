@@ -461,9 +461,13 @@ the full snapshot's per-issue assignee pagination limit.
 
 The publisher retains the read-only GraphQL guard, exact Project/repository
 identity and public-visibility checks, Status/Execution/Agent field-type
-checks, complete bounded pagination and duplicate guards. It rechecks
-Project identity and public visibility *after* reading every item page, and
-refuses to publish if the Project changes or becomes private. The separate
+checks, complete bounded pagination and duplicate guards. It explicitly
+verifies the PRKS repository's identity and `isPrivate: false` separately
+from Project issue content, both before and after reading all item pages.
+This works even when no PRKS issue items are readable or the Project has
+zero items. The publisher rechecks Project identity and public visibility
+after reading every item page and fails closed if either the repository
+or Project becomes private or unreadable. The separate
 full-readiness collector and the backwards-compatible
 `project3_agent_queue.py publish --snapshot` interface are unchanged.
 
