@@ -662,7 +662,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.assertFalse(page.evaluate(delete_invalidated, before))
         page.evaluate('() => { void deletePerson(); }')
         page.locator('#prks-modal-confirm-ok').click()
-        page.wait_for_function(delete_invalidated, arg=before, timeout=15000)
+        page.wait_for_function(delete_invalidated, arg=before)
         o._wait_list_uncached(page, 'person-groups:index')
         self.changed(page, before, {'people','person-groups'})
 
