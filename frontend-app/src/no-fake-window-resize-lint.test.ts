@@ -22,11 +22,13 @@ const allowed = [
   "document.body.dispatchEvent(new Event('resize'))",
   "window.dispatchEvent(new Event('scroll'))",
   "window.dispatchEvent(new CustomEvent('layout-resized'))",
+  "function dispatchEvent(event) { document.body.dispatchEvent(event) } dispatchEvent(new Event('resize'))",
 ]
 
 async function check(eslint: ESLint, filePath: string, code: string, expected: number) {
   const [result] = await eslint.lintText(code, { filePath })
-  const violations = result.messages.filter((message) => message.ruleId === 'no-restricted-syntax')
+  const violations = result.messages.filter((message) =>
+    message.ruleId === 'no-restricted-syntax' || message.ruleId === 'prks/no-bare-global-resize')
   expect(violations, code).toHaveLength(expected)
   if (expected) {
     expect(violations[0]?.message).toContain('ResizeObserver')
