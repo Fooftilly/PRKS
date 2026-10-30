@@ -1,18 +1,62 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 1007,
+      "number": 629,
       "set": {
-        "Status": "In Progress"
+        "Status": "Ready"
       },
       "expected_before": {
-        "Agent": "ChatGPT/Codex",
+        "Agent": "Claude Code",
+        "Status": "Inbox",
+        "Execution": "Agent"
+      },
+      "reason": "Approved L-F-1 browser store/sync scope; sole native prerequisite #626 is closed, no open overlapping frontend migration PR, and this is an already-owned Claude slice awaiting readiness.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 630,
+      "set": {
+        "Status": "Ready"
+      },
+      "expected_before": {
+        "Agent": "Claude Code",
+        "Status": "Inbox",
+        "Execution": "Agent"
+      },
+      "reason": "Approved L-D-1 Compose/health remainder; native #623/#626/#627 blockers are closed, prior partial implementation merged, and no overlapping open Compose/health PR remains.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 631,
+      "set": {
         "Status": "Ready",
         "Execution": "Agent"
       },
-      "reason": "Maintainer-authorized ChatGPT work on flaky E2E test #1007 now has the existing-flake-stress PR #1013 open, with test exact-ID and 20x acceptance; verified #740 plan and overlap with #1008/#1009 merged PRs; no native issue blockers.",
+      "expected_before": {
+        "Agent": "Claude Code",
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Approved L-W-2; native prerequisite #628 is closed, bulk/BibTeX/wiki/merge-foundation PRs already merged, and only focused acceptance/closure audit remains; avoid implementing deferred MERGE_WORKS execution or duplicating merged work.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 634,
+      "set": {
+        "Status": "Ready",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": "Claude Code",
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Approved L-R-1 PostgreSQL Research backend; both native prerequisites #628 and #627 are closed, #647 design follow-up merged, no open Research implementation PR, and this unblocks L-B-1/PG-C1.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
