@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "count": 18,
-  "generated_at": "2026-10-30T19:53:18Z",
+  "count": 17,
+  "generated_at": "2026-10-30T20:30:26Z",
   "issues": [
     {
       "agent": "Cursor Cloud",
@@ -97,12 +97,6 @@
       "agent": "ChatGPT/Codex",
       "execution": "Agent",
       "number": 1007,
-      "status": "Ready"
-    },
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 1008,
       "status": "In Progress"
     },
     {
@@ -120,6 +114,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41118869157,
-  "stale_after": "2026-10-31T07:53:18Z"
+  "source_run_id": 41123728803,
+  "stale_after": "2026-10-31T08:30:26Z"
 }
