@@ -414,6 +414,39 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(staged, ["back.pdf", "moved (recovered 0123abcd).pdf", "moved.pdf"])
         self.assertEqual([name for name in os.listdir(self.inbox) if name.startswith(inbox.CLAIM_PREFIX)], [])
 
+    def test_an_import_removes_a_leftover_claim_of_its_source(self) -> None:
+        path = self.put("twice.pdf")
+        file_id = self.staged("twice.pdf")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        os.link(claimed, path)  # put back, but the claim's unlink failed
+        out = self.library.import_processing_file(file_id)
+        self.assertIsNotNone(self.library.get_work(out["work_id"]))
+        self.assertEqual(os.listdir(self.inbox), [])
+        self.assertEqual(self.library.scan_processing_files(), [])  # never offered again
+
+    def test_a_leftover_claim_that_cannot_be_removed_keeps_the_imported_row(self) -> None:
+        path = self.put("stays.pdf")
+        file_id = self.staged("stays.pdf")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        os.link(claimed, path)
+        real = os.remove
+
+        def stuck(target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(target) == claimed:
+                raise PermissionError(target)
+            real(target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "remove", stuck):
+            self.library.import_processing_file(file_id)
+        row = self.row(file_id)
+        assert row is not None
+        self.assertEqual(row["status"], "imported")
+        self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(os.listdir(self.inbox), [])
+
     def test_a_long_named_pending_file_keeps_its_row_through_a_crash(self) -> None:
         name = "é" * 125 + ".pdf"  # 254 bytes: one byte short of the limit
         path = self.put(name, b"%PDF-1.4 long")

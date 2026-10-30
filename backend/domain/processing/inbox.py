@@ -205,6 +205,49 @@ def _claim(path: str) -> Optional[str]:
     return claim
 
 
+def _drop_stale_links(claim: str) -> bool:
+    """Remove other claims of the claimed file beside it; whether none is left.
+
+    A put-back whose final unlink failed leaves the file under both its
+    public name and an old claim. Once the file is claimed again, that old
+    claim is a second name for bytes this claim holds, so it goes: left
+    behind, the next scan would publish it again after this file's import.
+    """
+    try:
+        claimed = os.lstat(claim)
+    except OSError:
+        return False
+    if claimed.st_nlink < 2:
+        return True
+    own = os.path.dirname(claim)
+    parent = os.path.dirname(own)
+    try:
+        others = [os.path.join(parent, name) for name in os.listdir(parent)
+                  if _CLAIM.fullmatch(name) is not None and os.path.join(parent, name) != own]
+    except OSError:
+        return False
+    for directory in others:
+        try:
+            if not stat.S_ISDIR(os.lstat(directory).st_mode):
+                continue
+            names = os.listdir(directory)
+        except OSError:
+            return False
+        for name in names:
+            stale = os.path.join(directory, name)
+            try:
+                entry = os.lstat(stale)
+                if (entry.st_dev, entry.st_ino) == (claimed.st_dev, claimed.st_ino):
+                    os.remove(stale)
+                    _release(stale)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                LOGGER.warning("processing_stale_claim_kept error=%s", type(exc).__name__)
+                return False
+    return True
+
+
 def _recovered_name(path: str) -> str:
     """A new name beside ``path`` for a claimed file whose name was taken (``<stem> (recovered <id>)<ext>``)."""
     stem, ext = os.path.splitext(os.path.basename(path))
@@ -431,7 +474,7 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
         return False
     if digest != row["import_sha256"]:
         return _put_back(claim, path)
-    return _remove(inbox_dir, claim, path)
+    return _drop_stale_links(claim) and _remove(inbox_dir, claim, path)
 
 
 # -- import -----------------------------------------------------------------------
