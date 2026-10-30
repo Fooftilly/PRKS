@@ -24,7 +24,9 @@ admitted :class:`~backend.domain.identity.request_context.RequestContext`, so
 it is authorized, maintenance-checked and epoch-fenced in its own
 transaction. ``AccessRefused`` and mapped database errors propagate to
 ``server.py``, which answers them as every PostgreSQL route does. On the
-SQLite runtime no handler claims a path, and the server answers 404.
+SQLite runtime no handler claims a path, and the server answers 404. The
+domain modules (and so psycopg) are imported only after a handler has found
+a PostgreSQL library: the SQLite runtime never loads psycopg.
 """
 
 from __future__ import annotations
@@ -133,11 +135,11 @@ def _page_args(query: str) -> tuple[int, Optional[str]]:
 
 def handle_get(handler: Any, db: Any, path: str, query: str) -> bool:
     """The queue page, an item, or an item's PDF; False when the path is not this family's."""
-    from backend.domain.processing import commands
-
     library = _library(handler, db)
     if library is None or not handles(path):
         return False
+    from backend.domain.processing import commands
+
     ctx = handler._prks_request_context
     if path == COLLECTION:
         try:
@@ -214,15 +216,15 @@ def handle_upload(handler: Any, db: Any) -> None:
 
     Clears ``handler._prks_unread_body`` once the whole body has been read.
     """
+    library = _library(handler, db)
+    if library is None:
+        handler.send_error(404, "API endpoint not found")
+        return
     from email.message import Message
 
     from backend.domain.objects.lifecycle import ObjectMissing
     from backend.domain.processing import commands, items, uploads
 
-    library = _library(handler, db)
-    if library is None:
-        handler.send_error(404, "API endpoint not found")
-        return
     if handler.headers.get_all("Transfer-Encoding"):
         _error(handler, 411, "PROCESSING_LENGTH_REQUIRED", "Send the PDF with Content-Length.")
         return
@@ -275,12 +277,12 @@ def handle_upload(handler: Any, db: Any) -> None:
 
 
 def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
-    from backend.domain.processing import commands, items
-
     library = _library(handler, db)
     route = _route(path) if library is not None else None
     if route is None or route[1]:
         return False
+    from backend.domain.processing import commands, items
+
     if not isinstance(data, dict):
         _invalid(handler, "JSON object body required.")
         return True
@@ -299,12 +301,12 @@ def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
 
 
 def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    from backend.domain.processing import commands, items
-
     library = _library(handler, db)
     route = _route(path) if library is not None else None
     if route is None or route[1]:
         return False
+    from backend.domain.processing import commands, items
+
     try:
         marker = commands.delete(library.database, handler._prks_request_context, route[0])
     except items.Refused as exc:
