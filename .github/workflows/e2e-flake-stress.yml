@@ -113,7 +113,7 @@ jobs:
           echo "PASS: ${PRKS_E2E_TEST_ID}, ${PRKS_E2E_STRESS_ITERATIONS}/${PRKS_E2E_STRESS_ITERATIONS} consecutive targeted runs" | tee -a "$GITHUB_STEP_SUMMARY"
 
   negative-control:
-    name: Divider drag reload must fail the oracle
+    name: Divider, PDF and Person negative controls
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -226,3 +226,6 @@ jobs:
           printf 'Tested code: base %s, head %s, checkout %s\n' \
             "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo 'Both independent negative controls correctly rejected deliberate Work GETs'
+
+      - name: Verify PDF recovery and Person generation oracles reject regressions
+        run: python .github/scripts/e2e_flake_negative_controls.py
