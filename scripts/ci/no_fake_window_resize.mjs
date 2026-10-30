@@ -7,7 +7,6 @@ const message =
 const targets = [
   "CallExpression[callee.type='MemberExpression'][callee.object.name=/^(window|globalThis)$/][callee.property.name='dispatchEvent']",
   "CallExpression[callee.type='MemberExpression'][callee.object.name=/^(window|globalThis)$/][callee.property.value='dispatchEvent']",
-  "CallExpression[callee.name='dispatchEvent']",
 ];
 
 export const noFakeWindowResize = [
@@ -17,3 +16,41 @@ export const noFakeWindowResize = [
     message,
   })),
 ];
+
+// An unqualified dispatchEvent call usually means Window.dispatchEvent, but
+// a lexical helper of the same name can legitimately dispatch on an element.
+// AST selectors cannot distinguish them; check ESLint's actual lexical scope.
+export const noFakeWindowResizePlugin = {
+  rules: {
+    'no-bare-global-resize': {
+      meta: {
+        type: 'problem',
+        schema: [],
+        messages: { synthetic: message },
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            if (node.callee.type !== 'Identifier' || node.callee.name !== 'dispatchEvent') return;
+            const event = node.arguments[0];
+            if (!event || event.type !== 'NewExpression' ||
+                !event.arguments[0] || event.arguments[0].type !== 'Literal' ||
+                event.arguments[0].value !== 'resize') return;
+
+            // A declared local dispatchEvent shadows the browser global.
+            // If no local declaration owns the identifier, conservatively
+            // treat the bare call as an implicit Window call.
+            for (let scope = context.sourceCode.getScope(node); scope; scope = scope.upper) {
+              const binding = scope.set.get('dispatchEvent');
+              if (binding) {
+                if (binding.defs.length) return;
+                break;
+              }
+            }
+            context.report({ node, messageId: 'synthetic' });
+          },
+        };
+      },
+    },
+  },
+};
