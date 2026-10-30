@@ -57,12 +57,14 @@ _SAME_ITEMS_SQL: LiteralString = """
 SELECT id, original_filename FROM prks.processing_items
 WHERE library_id = %(library_id)s AND status = 'ready' AND sha256 = %(sha256)s AND id <> %(item_id)s
 ORDER BY created_at, id COLLATE "C"
+LIMIT %(limit)s
 """
 _SAME_WORKS_SQL: LiteralString = """
 SELECT DISTINCT w.id, w.title FROM prks.assets a
 JOIN prks.works w ON w.library_id = a.library_id AND w.id = a.work_id
 WHERE a.library_id = %(library_id)s AND (a.content_sha256 = %(sha256)s OR a.ingest_sha256 = %(sha256)s)
 ORDER BY w.id
+LIMIT %(limit)s
 """
 
 
@@ -74,7 +76,10 @@ class UploadRefused(Exception):
         self.code = code
 
 
-EMPTY: dict[str, list[dict[str, Any]]] = {"items": [], "works": []}
+# A duplicate warning names at most this many items and Works of each kind,
+# and says whether there are more: the bytes are allowed however often they repeat.
+DUPLICATE_SAMPLE = 10
+EMPTY: dict[str, Any] = {"items": [], "works": [], "more_items": False, "more_works": False}
 
 
 @dataclass(frozen=True)
@@ -83,7 +88,7 @@ class Registered:
 
     item: dict[str, Any]
     created: bool
-    duplicates: dict[str, list[dict[str, Any]]]
+    duplicates: dict[str, Any]
 
 
 def check_upload_key(upload_key: Any) -> str:
@@ -163,13 +168,22 @@ def existing(scope: LibraryScope, upload_key: str) -> Registered | None:
     return Registered(found, False, duplicates(scope, found) if found["status"] == items.READY else EMPTY)
 
 
-def duplicates(scope: LibraryScope, found: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Other ``ready`` items and Works of this Library with the same bytes; a warning only."""
-    params = {"sha256": found["sha256"], "item_id": found["id"]}
+def duplicates(scope: LibraryScope, found: dict[str, Any]) -> dict[str, Any]:
+    """Other ``ready`` items and Works of this Library with the same bytes; a warning only.
+
+    Each list is the first :data:`DUPLICATE_SAMPLE` (oldest item first,
+    Works by id), with ``more_items`` and ``more_works`` set when there are
+    more, so the read stays bounded however often the bytes repeat.
+    """
+    params = {"sha256": found["sha256"], "item_id": found["id"], "limit": DUPLICATE_SAMPLE + 1}
+    same_items = [{"id": row["id"], "original_filename": row["original_filename"]}
+                  for row in scope.execute(_SAME_ITEMS_SQL, params)]
+    same_works = [{"id": row["id"], "title": row["title"]} for row in scope.execute(_SAME_WORKS_SQL, params)]
     return {
-        "items": [{"id": row["id"], "original_filename": row["original_filename"]}
-                  for row in scope.execute(_SAME_ITEMS_SQL, params)],
-        "works": [{"id": row["id"], "title": row["title"]} for row in scope.execute(_SAME_WORKS_SQL, params)],
+        "items": same_items[:DUPLICATE_SAMPLE],
+        "works": same_works[:DUPLICATE_SAMPLE],
+        "more_items": len(same_items) > DUPLICATE_SAMPLE,
+        "more_works": len(same_works) > DUPLICATE_SAMPLE,
     }
 
 

@@ -175,7 +175,7 @@ class UploadTests(QueueTestCase):
         draft = item["draft"]
         self.assertEqual((draft["title"], draft["status_draft"], draft["doc_type"], draft["roles"], draft["tags"],
                           draft["target_folder_id"]), ("", "Not Started", "article", [], [], ""))
-        self.assertEqual(done.duplicates, {"items": [], "works": []})
+        self.assertEqual(done.duplicates, {"items": [], "works": [], "more_items": False, "more_works": False})
         self.assertEqual([found["id"] for found in commands.queue(self.db, self.actor.context)[0]], [item["id"]])
         self.assertEqual(commands.preview(self.db, self.actor.context, item["id"]),
                          (StorageKey(NAMESPACE_ASSET_OBJECTS, row["object_locator"]), len(data), item["sha256"]))
@@ -229,12 +229,32 @@ class UploadTests(QueueTestCase):
         second = self.upload(data, filename="paper.pdf")
         self.assertTrue(second.created)
         self.assertEqual(second.duplicates, {"items": [{"id": first.item["id"], "original_filename": "paper.pdf"}],
-                                             "works": []})
+                                             "works": [], "more_items": False, "more_works": False})
         imported = self.import_(first.item["id"])
         third = self.upload(data)
         self.assertEqual(third.duplicates["items"], [{"id": second.item["id"], "original_filename": "paper.pdf"}])
         self.assertEqual([work["id"] for work in third.duplicates["works"]], [imported.work_id])
         self.assertEqual(self.count("processing_items"), 3)
+
+    def test_a_duplicate_warning_names_a_bounded_sample(self) -> None:
+        data = pdf("many")
+        copies = [self.upload(data).item["id"] for _ in range(uploads.DUPLICATE_SAMPLE + 2)]
+        latest = self.upload(data, key="latest")
+        self.assertTrue(latest.created)
+        self.assertEqual([found["id"] for found in latest.duplicates["items"]],
+                         copies[:uploads.DUPLICATE_SAMPLE])
+        self.assertTrue(latest.duplicates["more_items"])
+        replay = self.upload(data, key="latest")
+        self.assertFalse(replay.created)
+        self.assertEqual((len(replay.duplicates["items"]), replay.duplicates["more_items"]),
+                         (uploads.DUPLICATE_SAMPLE, True))
+
+        with mock.patch.object(uploads, "DUPLICATE_SAMPLE", 2):
+            works = sorted(self.import_(item_id).work_id for item_id in copies[:3])
+            warned = self.upload(data).duplicates
+        self.assertEqual([found["id"] for found in warned["works"]], works[:2])
+        self.assertEqual((len(warned["items"]), warned["more_items"], warned["more_works"]), (2, True, True))
+        self.assertEqual(self.count("processing_items"), uploads.DUPLICATE_SAMPLE + 4)
 
 
 class QueuePageTests(QueueTestCase):
