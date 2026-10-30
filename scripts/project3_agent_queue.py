@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Publish and consume a bounded, public, read-only Project #3 agent ownership queue.
 
-The protected publisher consumes a freshly validated project3_readiness snapshot.
+The protected publisher reads the complete Project #3 item connection directly,
+while the legacy `publish` command still accepts validated readiness snapshots.
 Consumers never need the project-scoped PAT. This is an ownership inventory,
 NOT authorization to start work; verify live issue state, blockers and overlap.
 """
@@ -9,11 +10,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import project3_readiness as readiness
 
@@ -26,6 +28,28 @@ AGENTS = {"cursor cloud": "Cursor Cloud", "cursor": "Cursor Cloud",
           "codex": "ChatGPT/Codex"}
 ROW_KEYS = {"number", "agent", "status", "execution"}
 
+# A public Project can include zero readable PRKS items even when PRKS itself
+# has become private. Check repository visibility independently of item content
+# without fetching or paginating unrelated repository issues.
+REPOSITORY_SCOPE_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner isPrivate
+  }
+}
+"""
+
+
+def _check_public_repository(gql: readiness.ReadOnlyGraphQL) -> None:
+    owner, name = readiness.REPOSITORY.split("/")
+    data = gql.query(REPOSITORY_SCOPE_QUERY, {"owner": owner, "name": name})
+    repo = readiness._obj(data.get("repository"), "repository")
+    if repo.get("nameWithOwner") != readiness.REPOSITORY:
+        raise readiness.ReadinessError("PRKS repository identity check failed")
+    if readiness._bool(repo.get("isPrivate"), "repository isPrivate"):
+        raise readiness.Confidential("PRKS repository is private; refusing queue publication")
+
+
 
 def canonical_agent(name: str) -> str:
     if not isinstance(name, str):
@@ -36,17 +60,15 @@ def canonical_agent(name: str) -> str:
     return AGENTS[key]
 
 
-def build_queue(snapshot: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    # Includes exhaustive pagination, all counts, project identity and age.
-    readiness.check_snapshot(snapshot, now=now)
-    project = snapshot["project"]
+def _queue_from_rows(rows: Sequence[dict[str, Any]], *, project: dict[str, Any],
+                     generated_at: str, source_run_id: int | None,
+                     now: datetime) -> dict[str, Any]:
     if project.get("public") is not True:
         raise readiness.Confidential("Project #3 is not public; refusing publication")
     entries = []
-    for issue in snapshot["issues"]:
+    for issue in rows:
         if not issue["in_project"] or issue["archived"] or issue["state"] != "OPEN":
             continue
-        # These are valid Project Agent options, but not coding agents.
         if issue["agent"] in (None, "Manual", "Unassigned"):
             continue
         entries.append({
@@ -55,22 +77,56 @@ def build_queue(snapshot: dict[str, Any], *, now: datetime) -> dict[str, Any]:
             "status": issue["status"],
             "execution": issue["execution"],
         })
-    generated = readiness._parse_time(snapshot["generated_at"], "generated_at")
-    queue = {
+    entries.sort(key=lambda row: row["number"])
+    generated = readiness._parse_time(generated_at, "generated_at")
+    result = {
         "schema": SCHEMA,
         "complete": True,
         "repository": readiness.REPOSITORY,
-        "project": {"id": readiness.PROJECT_ID, "number": 3, "owner": readiness.OWNER,
-                    "public": True},
-        "generated_at": snapshot["generated_at"],
+        "project": {"id": readiness.PROJECT_ID, "number": 3,
+                    "owner": readiness.OWNER, "public": True},
+        "generated_at": generated_at,
         "stale_after": readiness._iso(generated + timedelta(hours=MAX_AGE_HOURS)),
-        "source_run_id": (snapshot.get("source") or {}).get("workflow_run_id"),
+        "source_run_id": source_run_id,
         "count": len(entries),
         "issues": entries,
     }
-    check_queue(queue, now=now)
-    return queue
+    check_queue(result, now=now)
+    return result
 
+
+def build_queue(snapshot: dict[str, Any], *, now: datetime) -> dict[str, Any]:
+    # The existing full-readiness-snapshot API remains unchanged.
+    readiness.check_snapshot(snapshot, now=now)
+    return _queue_from_rows(
+        snapshot["issues"], project=snapshot["project"],
+        generated_at=snapshot["generated_at"],
+        source_run_id=(snapshot.get("source") or {}).get("workflow_run_id"),
+        now=now,
+    )
+
+
+def build_queue_live(transport: readiness.Transport, *, now: datetime,
+                     source_run_id: int | None = None) -> dict[str, Any]:
+    """Read every Project item without scanning unrelated repository issues.
+
+    Reuse the readiness module's read-only GraphQL guard, complete pagination,
+    Project/field identity checks and per-item repository/privacy validation.
+    Independently verify the PRKS repository remains public before and after
+    reading all Project items, including when no issue content is readable.
+    """
+    gql = readiness.ReadOnlyGraphQL(transport)
+    identity = {"owner": readiness.OWNER, "number": readiness.PROJECT_NUMBER}
+    project = readiness.check_project(gql.query(readiness.PROJECT_QUERY, identity))
+    _check_public_repository(gql)
+    items, _skipped = readiness.read_items(gql, include_assignees=False)
+    if readiness.check_project(gql.query(readiness.PROJECT_QUERY, identity)) != project:
+        raise readiness.ReadinessError("Project #3 changed while it was read; rerun")
+    _check_public_repository(gql)
+    return _queue_from_rows(
+        list(items.values()), project=project,
+        generated_at=readiness._iso(now), source_run_id=source_run_id, now=now,
+    )
 
 def check_queue(queue: Any, *, now: datetime) -> datetime:
     if not isinstance(queue, dict) or set(queue) != {
@@ -141,26 +197,41 @@ def render(queue: dict[str, Any], agent: str, *, now: datetime) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv: Optional[Sequence[str]] = None, *, now: Optional[datetime] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None, *, now: Optional[datetime] = None,
+         env: Optional[Mapping[str, str]] = None,
+         transport_factory: Callable[[str], readiness.Transport] = readiness.http_transport) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
     publish = sub.add_parser("publish", help="build a public queue from a validated readiness snapshot")
     publish.add_argument("--snapshot", required=True)
     publish.add_argument("--out", required=True)
+    live = sub.add_parser("publish-live", help="publish directly from complete Project item pages")
+    live.add_argument("--out", required=True)
     show = sub.add_parser("render", help="verify a published queue and list one agent's issues")
     show.add_argument("--snapshot", required=True)
     show.add_argument("--agent", required=True)
     args = parser.parse_args(argv)
     now = now or datetime.now(timezone.utc)
+    env = os.environ if env is None else env
     try:
-        if args.command == "publish":
+        if args.command in ("publish", "publish-live"):
             out = readiness._confined(args.out, "--out", ".json")
-            source = readiness._confined(args.snapshot, "--snapshot")
-            if source == out:
-                raise readiness.ReadinessError("input and output paths must differ")
-            queue = build_queue(read_json(args.snapshot), now=now)
-            readiness._write_atomic(out, json.dumps(queue, indent=2, sort_keys=True) + "\n")
-            print(f"ok: published {queue['count']} open agent-owned Project #3 issues")
+            if args.command == "publish":
+                source = readiness._confined(args.snapshot, "--snapshot")
+                if source == out:
+                    raise readiness.ReadinessError("input and output paths must differ")
+                result = build_queue(read_json(args.snapshot), now=now)
+            else:
+                token = env.get("PROJECT3_READINESS_TOKEN", "")
+                if not token:
+                    raise readiness.NotConfigured("PROJECT3_READINESS_TOKEN is not set")
+                source = readiness._source(env)
+                result = build_queue_live(
+                    transport_factory(token), now=now,
+                    source_run_id=(source or {}).get("workflow_run_id"),
+                )
+            readiness._write_atomic(out, json.dumps(result, indent=2, sort_keys=True) + "\n")
+            print(f"ok: published {result['count']} open agent-owned Project #3 issues")
         else:
             queue = read_json(args.snapshot)
             output = render(queue, args.agent, now=now)

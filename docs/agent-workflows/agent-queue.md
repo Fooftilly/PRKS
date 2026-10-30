@@ -24,7 +24,7 @@ These are aliases **only in the queue command**: GitHub Project #3 keeps its exi
 
 **Concurrent view edits:** GitHub's `updateProjectV2View` mutation does not accept an expected revision. The reconciler checks the view's `updatedAt` before each write and verifies the resulting saved filter, but an overlapping human UI edit inside the mutation window cannot be atomically prevented. Avoid editing view #9's filter during the protected master-push reconciliation; any drift detected later by the scheduled read-only check fails visibly.
 
-The helper reads all Project #3 items once with `gh project item-list` and prints matching PRKS issues with their live Project Status and Execution fields. It rejects incomplete Project item lists, and never updates GitHub. It displays **all** assigned issues, including Inbox, Backlog, Blocked, In Progress and unaccepted candidates. Its output is **not** an actionable queue or authorization to start work.
+The protected queue publisher uses `scripts/project3_agent_queue.py publish-live`, which reads all pages of Project #3 items directly and rechecks the Project identity, field types and public visibility; it does not scan all unrelated repository open issues. The separate full readiness snapshot workflow is unchanged. The helper reads all Project #3 items once with `gh project item-list` and prints matching PRKS issues with their live Project Status and Execution fields. It rejects incomplete Project item lists, and never updates GitHub. It displays **all** assigned issues, including Inbox, Backlog, Blocked, In Progress and unaccepted candidates. Its output is **not** an actionable queue or authorization to start work.
 
 Before starting any issue:
 

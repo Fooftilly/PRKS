@@ -37,17 +37,14 @@ jobs:
           # project-scoped PAT. Needed for the data-branch push below.
           persist-credentials: true
 
-      - name: Read the entire public Project #3 (queries only)
+      # Only Project items are relevant to agent ownership. Preserve the
+      # readiness module's pagination/identity/privacy checks, without
+      # querying every unrelated open repository issue.
+      - name: Read and publish public Project 3 agent queue
         env:
           PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
         run: >-
-          python3 scripts/project3_readiness.py snapshot
-          --out "$RUNNER_TEMP/project3-readiness.json"
-
-      - name: Validate and build minimal agent queue
-        run: >-
-          python3 scripts/project3_agent_queue.py publish
-          --snapshot "$RUNNER_TEMP/project3-readiness.json"
+          python3 scripts/project3_agent_queue.py publish-live
           --out "$RUNNER_TEMP/agent-queue.json"
 
       - name: Publish to dedicated data branch only
