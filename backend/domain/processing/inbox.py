@@ -415,42 +415,69 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     for directory, dirs, _names in os.walk(root, onerror=_unlisted):
         claims = [name for name in dirs if _CLAIM.fullmatch(name) is not None]
         dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
-        held = _held_names(os.path.join(directory, name) for name in claims)
-        for name in claims:
-            _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled, held)
+        for name in _record_found_links(directory, claims):
+            _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled)
     return unsettled
 
 
-def _held_names(claim_dirs: Iterable[str]) -> dict[tuple[int, int], set[str]]:
-    """The names the claims in ``claim_dirs`` hold, by file identity.
+def _record_found_links(directory: str, claims: list[str]) -> list[str]:
+    """Record the links of claims in ``directory`` that their put-back made but did not record; their names now.
 
-    A claim directory or entry that cannot be read is left out; settling
-    it fails or keeps it (:func:`_settle`).
+    A put-back whose record failed (:func:`_record_linked`) leaves the claim
+    linked at its recovered name, which an import may then claim in turn.
+    The name was free when the intent was recorded (:func:`_put_back`), so a
+    claim of the same file under it holds that link: the publication is
+    recorded (``-p``) before any claim is settled, so it is never lost when
+    only some of them are. A record that fails raises ``OSError``, failing
+    the scan.
     """
-    held: dict[tuple[int, int], set[str]] = {}
-    for claim_dir in claim_dirs:
+    held = _held_names(os.path.join(directory, name) for name in claims)
+    names = []
+    for name in claims:
+        claim_dir = os.path.join(directory, name)
+        recovered_id = _recovered_id(claim_dir)
+        if recovered_id is not None and _recovered_id(claim_dir, linked=True) is None:
+            for entry_name, key in _entries(claim_dir):
+                if os.path.basename(_recovered_name(entry_name, recovered_id)) in held.get(key, ()):
+                    recorded = _record_linked(os.path.join(claim_dir, entry_name))
+                    if recorded is None:
+                        raise OSError("processing claim link unrecorded")
+                    name = os.path.basename(os.path.dirname(recorded))
+                    break
+        names.append(name)
+    return names
+
+
+def _entries(claim_dir: str) -> list[tuple[str, tuple[int, int]]]:
+    """Each regular file in a claim directory with its identity; what cannot be read is left out (:func:`_settle`)."""
+    try:
+        if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
+            return []
+        names = os.listdir(claim_dir)
+    except OSError:
+        return []
+    found = []
+    for name in names:
         try:
-            if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
-                continue
-            names = os.listdir(claim_dir)
+            entry = os.lstat(os.path.join(claim_dir, name))
         except OSError:
             continue
-        for name in names:
-            try:
-                entry = os.lstat(os.path.join(claim_dir, name))
-            except OSError:
-                continue
-            if stat.S_ISREG(entry.st_mode):
-                held.setdefault((entry.st_dev, entry.st_ino), set()).add(name)
+        if stat.S_ISREG(entry.st_mode):
+            found.append((name, (entry.st_dev, entry.st_ino)))
+    return found
+
+
+def _held_names(claim_dirs: Iterable[str]) -> dict[tuple[int, int], set[str]]:
+    """The names the claims in ``claim_dirs`` hold, by file identity."""
+    held: dict[tuple[int, int], set[str]] = {}
+    for claim_dir in claim_dirs:
+        for name, key in _entries(claim_dir):
+            held.setdefault(key, set()).add(name)
     return held
 
 
-def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str],
-            held: dict[tuple[int, int], set[str]]) -> None:
-    """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`).
-
-    ``held`` is :func:`_held_names` of the claim directories beside it.
-    """
+def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str]) -> None:
+    """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`)."""
     # A claim directory that cannot be read fails the scan: the files it may
     # hold are absent from the inbox, so reconciling would drop their rows.
     try:
@@ -465,20 +492,13 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
         claim, path = os.path.join(claim_dir, name), os.path.join(os.path.dirname(claim_dir), name)
         # Its own path and, once published under one, its recovered name: an
         # import of either may have ingested these bytes.
-        publics = list(_public_names(claim_dir, name, linked=True))
+        rel_paths = _rel_paths(root, claim_dir, _public_names(claim_dir, name, linked=True))
         try:
-            entry = os.lstat(claim)
+            regular = stat.S_ISREG(os.lstat(claim).st_mode)
         except OSError:
-            unsettled.update(_rel_paths(root, claim_dir, publics))
+            unsettled.update(rel_paths)
             continue
-        # A link whose record failed (:func:`_record_linked`) and that an
-        # import has since claimed under the recovered name is a publication
-        # too: the name was free when the intent was recorded (:func:`_put_back`),
-        # so another claim of this file under it holds that link.
-        publics += [public for public in _public_names(claim_dir, name)
-                    if public not in publics and public in held.get((entry.st_dev, entry.st_ino), ())]
-        rel_paths = _rel_paths(root, claim_dir, publics)
-        if not stat.S_ISREG(entry.st_mode):
+        if not regular:
             LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
             continue
         expected = {imported[rel_path] for rel_path in rel_paths if rel_path in imported}

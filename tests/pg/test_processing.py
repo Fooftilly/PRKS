@@ -561,6 +561,45 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(sorted(os.listdir(self.inbox)), public)
 
     def test_an_unrecorded_link_imported_before_a_crash_is_not_published_again(self) -> None:
+        path = self.import_an_unrecorded_link_and_crash()
+        staged_after = self.library.scan_processing_files()
+        self.assertEqual([row["rel_path"] for row in staged_after], ["busy.pdf"])  # the import's bytes stay gone
+        self.assertEqual(os.listdir(self.inbox), ["busy.pdf"])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+
+    def test_an_unrecorded_link_stays_recorded_while_its_claim_cannot_be_removed(self) -> None:
+        self.import_an_unrecorded_link_and_crash()
+        real = os.remove
+
+        def older_stuck(target: Any, *args: Any, **kwargs: Any) -> None:
+            if inbox.CLAIM_PREFIX in os.fspath(target) and os.path.basename(os.fspath(target)) == "busy.pdf":
+                raise PermissionError(target)
+            real(target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "remove", older_stuck):
+            self.library.scan_processing_files()  # the newer claim goes; the older one stays
+        staged_after = self.library.scan_processing_files()
+        self.assertEqual([row["rel_path"] for row in staged_after], ["busy.pdf"])  # never published again
+        self.assertEqual(os.listdir(self.inbox), ["busy.pdf"])
+
+    def test_an_unrecorded_link_that_cannot_be_recorded_fails_the_scan(self) -> None:
+        self.import_an_unrecorded_link_and_crash()
+        before = sorted(os.listdir(self.inbox))
+        real = os.rename
+
+        def unrecorded(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(target).endswith("-p"):
+                raise PermissionError(target)
+            real(source, target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "rename", unrecorded), self.assertRaises(OSError):
+            self.library.scan_processing_files()
+        self.assertEqual(sorted(os.listdir(self.inbox)), before)  # no claim was settled
+        self.assertEqual([row["rel_path"] for row in self.library.scan_processing_files()], ["busy.pdf"])
+
+    def import_an_unrecorded_link_and_crash(self) -> str:
+        """A put-back whose record failed, then an import of its recovered name that died after its claim."""
         path = self.put("busy.pdf", b"%PDF-1.4 old")
         self.assertIsNotNone(inbox._claim(path))  # the process dies here
         self.put("busy.pdf", b"%PDF-1.4 newer")
@@ -581,11 +620,7 @@ class CrashRecoveryTests(ProcessingTestCase):
 
         with mock.patch.object(inbox, "_finish_import", claim_then_crash):
             self.library.import_processing_file(staged[recovered])
-        staged_after = self.library.scan_processing_files()
-        self.assertEqual([row["rel_path"] for row in staged_after], ["busy.pdf"])  # the import's bytes stay gone
-        self.assertEqual(os.listdir(self.inbox), ["busy.pdf"])
-        with open(path, "rb") as handle:
-            self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+        return path
 
     def test_a_recovered_name_already_taken_is_never_recorded_as_the_intent(self) -> None:
         path = self.put("orig.pdf", b"%PDF-1.4 linked twice")
