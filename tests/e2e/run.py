@@ -107,6 +107,19 @@ _E2E_TEST_ID_LINE = re.compile(
     r"^tests\.e2e\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.test_[A-Za-z0-9_]+$"
 )
 _E2E_DIAG_LINE = re.compile(r"^\[e2e-diag\]\s+(\S+)(?:\s+(\S+))?\s*$")
+# Only static harness stages and exception classes may reach CI's early
+# failure markers, regardless of whether the source is a worker or log file.
+_SAFE_E2E_EARLY_STAGES = frozenset({
+    "START", "STOP", "CHROMIUM_CLOSE", "CHROMIUM_LAUNCH",
+    "SERVER_READY", "CONTEXT_READY", "APP_READY",
+})
+_SAFE_E2E_EARLY_EXCEPTIONS = frozenset({
+    "AssertionError", "RuntimeError", "TimeoutError", "Error",
+    "ValueError", "TypeError", "OSError", "KeyError",
+    "AttributeError", "ConnectionError", "PermissionError",
+    "FileNotFoundError", "NotImplementedError",
+})
+
 
 DEFAULT_E2E_MODULES = (
     "tests.e2e.test_app",
@@ -437,19 +450,11 @@ class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
         exception = getattr(exc_info[0], "__name__", "")
         # Do not trust an arbitrary dynamic class name just because it fits
         # the expected character pattern.
-        if exception not in {
-            "AssertionError", "RuntimeError", "TimeoutError", "Error",
-            "ValueError", "TypeError", "OSError", "KeyError",
-            "AttributeError", "ConnectionError", "PermissionError",
-            "FileNotFoundError", "NotImplementedError",
-        }:
+        if exception not in _SAFE_E2E_EARLY_EXCEPTIONS:
             exception = "unknown"
         stage = str((get_e2e_heartbeat() or {}).get("stage") or "")
         # Stages are fixed harness labels, not arbitrary supplied strings.
-        if stage not in {
-            "START", "STOP", "CHROMIUM_CLOSE", "CHROMIUM_LAUNCH",
-            "SERVER_READY", "CONTEXT_READY", "APP_READY",
-        }:
+        if stage not in _SAFE_E2E_EARLY_STAGES:
             stage = "unknown"
         print(
             "[e2e-early-failure] %s %s exception=%s stage=%s"
@@ -1139,14 +1144,20 @@ def _forward_early_failure_markers(worker) -> None:
                 kind, test_id, exc, stage = fields[1:]
                 if kind not in ("ERROR", "FAIL", "SUBTEST"):
                     continue
-                if test_id != "(unavailable)" and not _E2E_TEST_ID_LINE.fullmatch(test_id):
-                    continue
-                if not exc.startswith("exception=") or not re.fullmatch(
-                    r"[A-Za-z_][A-Za-z0-9_]{0,63}", exc[len("exception="):]
+                if test_id != "(unavailable)" and (
+                    not _E2E_TEST_ID_LINE.fullmatch(test_id)
+                    or test_id not in worker.get("shard", ())
                 ):
                     continue
-                if not stage.startswith("stage=") or not re.fullmatch(
-                    r"[A-Za-z0-9_.:-]{1,64}", stage[len("stage="):]
+                if (
+                    not exc.startswith("exception=")
+                    or exc[len("exception="):] not in (
+                        _SAFE_E2E_EARLY_EXCEPTIONS | {"unknown"}
+                    )
+                    or not stage.startswith("stage=")
+                    or stage[len("stage="):] not in (
+                        _SAFE_E2E_EARLY_STAGES | {"unknown"}
+                    )
                 ):
                     continue
                 worker["early_marker_count"] = worker.get("early_marker_count", 0) + 1
