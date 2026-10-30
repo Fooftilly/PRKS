@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 // Keep this fixture compatible with the browser-typed Vue project: no
 // @types/node dependency is required just to run ESLint on synthetic paths.
 const repoPath = (url: URL) =>
-  decodeURIComponent(url.pathname).replace(/^\\/([A-Za-z]:\\/)/, '$1').replace(/\\/$/, '')
+  decodeURIComponent(url.pathname).replace(/^\/(?=[A-Za-z]:\/)/, '').replace(/\/$/, '')
 const repoRoot = repoPath(new URL('../../', import.meta.url))
 const vueRoot = repoPath(new URL('../', import.meta.url))
 
