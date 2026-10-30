@@ -10,6 +10,7 @@ const api = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
 
 const {
     createPrksRequestCoordinator,
+    createPrksLibraryEpoch,
     prksIsAbortError,
     PRKS_REQUEST_BURST_FRESH_MS,
 } = api;
@@ -1344,6 +1345,65 @@ async function testApiWarningOwnership() {
     record('A warning consumed once', sandbox.prksConsumeApiError(ownerA) === null, '');
 }
 
+async function testLibraryEpoch() {
+    // No answer has carried an epoch yet: the session is read once, before the first mutation.
+    const calls = [];
+    let sessionReads = 0;
+    const epoch = createPrksLibraryEpoch({
+        fetchImpl: async function (url, init) {
+            calls.push({ url: url, init: init || {} });
+            if (url === '/api/session') {
+                sessionReads += 1;
+                return jsonResponse({ library: { id: 'LIB-1', epoch: 3 } }, 200);
+            }
+            return jsonResponse({ ok: true }, 200, url === '/api/later' ? { 'PRKS-Library-Epoch': '4' } : {});
+        },
+    });
+    await epoch.fetch('/api/works/W-1', { method: 'GET' });
+    record('a read sends no epoch and reads no session', sessionReads === 0
+        && !('PRKS-Library-Epoch' in (calls[0].init.headers || {})), JSON.stringify(calls));
+    await Promise.all([
+        epoch.fetch('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' } }),
+        epoch.fetch('/api/tags', { method: 'DELETE' }),
+    ]);
+    const mutations = calls.filter(function (c) { return c.url === '/api/tags'; });
+    record('concurrent first mutations share one session read', sessionReads === 1, String(sessionReads));
+    record('each mutation carries the session epoch', mutations.length === 2 && mutations.every(function (c) {
+        return c.init.headers['PRKS-Library-Epoch'] === '3';
+    }), JSON.stringify(mutations));
+    record('the caller headers are kept', mutations[0].init.headers['content-type'] === 'application/json',
+        JSON.stringify(mutations[0].init.headers));
+    await epoch.fetch('/api/later', { method: 'GET' });
+    await epoch.fetch('/api/tags', { method: 'POST' });
+    const last = calls[calls.length - 1];
+    record('an answer\'s header updates the epoch', last.init.headers['PRKS-Library-Epoch'] === '4' && sessionReads === 1,
+        JSON.stringify(last));
+    await epoch.fetch('/api/tags', { method: 'POST', headers: { 'PRKS-Library-Epoch': '2' } });
+    record('an explicit epoch is never replaced', calls[calls.length - 1].init.headers['PRKS-Library-Epoch'] === '2', '');
+    const headers = await epoch.headers();
+    record('headers() names the current epoch', headers['PRKS-Library-Epoch'] === '4', JSON.stringify(headers));
+
+    // Without a session (signed out, unreachable) nothing is invented: the server refuses.
+    for (const answer of [
+        function () { return jsonResponse({ error: 'not_authenticated' }, 401); },
+        function () { throw new TypeError('Failed to fetch'); },
+        function () { return jsonResponse({ library: { epoch: '01' } }, 200); },
+        function () { return jsonResponse({ error: 'API endpoint not found' }, 404); },
+    ]) {
+        const sent = [];
+        const none = createPrksLibraryEpoch({
+            fetchImpl: async function (url, init) {
+                if (url === '/api/session') return answer();
+                sent.push(init || {});
+                return jsonResponse({}, 200);
+            },
+        });
+        await none.fetch('/api/tags', { method: 'POST' });
+        record('no epoch is sent without a valid session answer (' + answer.toString().slice(30, 60) + ')',
+            sent.length === 1 && !('PRKS-Library-Epoch' in (sent[0].headers || {})), JSON.stringify(sent));
+    }
+}
+
 async function main() {
     record('exports createPrksRequestCoordinator', typeof createPrksRequestCoordinator === 'function', '');
     record('does not monkeypatch fetch', typeof fetch === 'function', '');
@@ -1361,6 +1421,7 @@ async function main() {
     await testWorkHintStalePublication();
     await testReachabilitySignalling();
     await testApiWarningOwnership();
+    await testLibraryEpoch();
     console.log(passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }

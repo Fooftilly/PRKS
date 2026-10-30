@@ -39,6 +39,7 @@ from tests.e2e.policy import (
     SEED_CACHE_ENV,
     env_flag_enabled,
 )
+from tests.e2e.postgres_identity import provision_library
 
 REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
@@ -1131,8 +1132,17 @@ class AppServer:
         # best-effort outbound call deterministically). Never used to change how the
         # app talks to its own storage/port.
         self._extra_env = dict(extra_env or {})
+        # The disposable PostgreSQL Library behind this server; kept across
+        # start retries, dropped by stop() (tests/e2e/postgres_identity.py).
+        self.library = None
 
     def start(self):
+        if self.library is None:
+            try:
+                self.library = provision_library(self.storage_root)
+            except Exception:
+                self._tmpdir.cleanup()
+                raise
         if self._seed_fn is not None:
             self.ids, self.seed_cache_hit = _materialize_seed(
                 self._seed_fn, self.storage_root
@@ -1144,6 +1154,8 @@ class AppServer:
         env["PRKS_LOG_FILE"] = os.path.join(self.storage_root, "prks-errors.log")
         env["PYTHONUNBUFFERED"] = "1"
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
+        env.pop("PRKS_TEST_DATABASE_URL", None)
+        env.update(self.library.server_env())
         env.update(self._extra_env)
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
@@ -1176,6 +1188,7 @@ class AppServer:
                     self.port = find_free_port()
                     self.origin = "http://%s:%s" % (HOST, self.port)
                     continue
+                self._drop_library()
                 self._tmpdir.cleanup()
                 raise RuntimeError(
                     "PRKS E2E server failed to start on %s\nstdout:\n%s\nstderr:\n%s"
@@ -1262,9 +1275,18 @@ class AppServer:
                     _LIVE_SERVERS.remove(self)
                 except ValueError:
                     pass
-                self._tmpdir.cleanup()
+                try:
+                    self._drop_library()
+                finally:
+                    self._tmpdir.cleanup()
             finally:
                 _profile_phase("server_stop", time.perf_counter() - started)
+
+
+    def _drop_library(self):
+        library, self.library = self.library, None
+        if library is not None:
+            library.drop()
 
 
 class FixtureServer:

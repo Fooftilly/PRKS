@@ -7,6 +7,13 @@
  * non-abort transport rejection after retries are exhausted means it did not.
  * Managed PDF GETs (/api/pdfs/...) are excluded: the service worker may
  * resolve those from Cache Storage without the PRKS server answering.
+ *
+ * Library epoch (docs/postgresql-architecture.md §10.4, §11.4): every Library
+ * mutation names the epoch it was made for in `PRKS-Library-Epoch`. The
+ * epoch is held in memory only: noted from the header the server puts on
+ * every admitted answer, or read once from `GET /api/session` before the
+ * first mutation when no answer has carried it yet. An unknown epoch sends
+ * no header, and the server refuses the mutation.
  */
 (function (root) {
     'use strict';
@@ -104,6 +111,111 @@
 
     function defaultFetch(url, init) {
         return fetch(url, init);
+    }
+
+    const PRKS_LIBRARY_EPOCH_HEADER = 'PRKS-Library-Epoch';
+    const PRKS_SESSION_PATH = '/api/session';
+    // The server's own grammar for the header: 1 to the largest bigint.
+    const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
+
+    function epochOf(value) {
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    function isLibraryMutation(url, init) {
+        const method = methodOf(init);
+        if (method === 'GET' || method === 'HEAD') return false;
+        const path = String(url || '').split(/[?#]/)[0];
+        return path.indexOf('/api/') === 0;
+    }
+
+    function hasHeader(headers, name) {
+        const lower = name.toLowerCase();
+        return Object.prototype.hasOwnProperty.call(headerMap(headers), lower);
+    }
+
+    function withHeader(headers, name, value) {
+        const out = {};
+        const map = headerMap(headers);
+        Object.keys(map).forEach(function (key) { out[key] = map[key]; });
+        out[name] = value;
+        return out;
+    }
+
+    /**
+     * The Library epoch this page acts under. Its `fetch` adds the header to
+     * a Library mutation and notes the header on every answer; `headers()`
+     * resolves to the header for a caller that sends its own request;
+     * `note(response)` records an answer's epoch.
+     */
+    function createPrksLibraryEpoch(deps) {
+        const options = deps && typeof deps === 'object' ? deps : {};
+        const fetchImpl = options.fetchImpl || defaultFetch;
+        let epoch = null;
+        let pendingRead = null;
+
+        function note(response) {
+            const headers = response && response.headers;
+            if (!headers || typeof headers.get !== 'function') return;
+            const seen = epochOf(headers.get(PRKS_LIBRARY_EPOCH_HEADER));
+            if (seen) epoch = seen;
+        }
+
+        function readSession() {
+            if (pendingRead) return pendingRead;
+            pendingRead = Promise.resolve()
+                .then(function () {
+                    return fetchImpl(PRKS_SESSION_PATH, {
+                        method: 'GET',
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        headers: { Accept: 'application/json' },
+                    });
+                })
+                .then(function (response) {
+                    note(response);
+                    if (epoch || !response.ok) return;
+                    return response.json().then(function (body) {
+                        const library = body && body.library;
+                        const read = epochOf(library && library.epoch);
+                        if (read && !epoch) epoch = read;
+                    });
+                })
+                .catch(function () { /* unknown: the mutation goes without it */ })
+                .then(function () { pendingRead = null; });
+            return pendingRead;
+        }
+
+        function headers() {
+            if (epoch) return Promise.resolve({ [PRKS_LIBRARY_EPOCH_HEADER]: epoch });
+            return readSession().then(function () {
+                return epoch ? { [PRKS_LIBRARY_EPOCH_HEADER]: epoch } : {};
+            });
+        }
+
+        async function epochFetch(url, init) {
+            let sent = init;
+            if (isLibraryMutation(url, init) && !hasHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER)) {
+                const extra = await headers();
+                if (extra[PRKS_LIBRARY_EPOCH_HEADER]) {
+                    sent = Object.assign({}, init, {
+                        headers: withHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER,
+                            extra[PRKS_LIBRARY_EPOCH_HEADER]),
+                    });
+                }
+            }
+            const response = await fetchImpl(url, sent);
+            note(response);
+            return response;
+        }
+
+        return {
+            fetch: epochFetch,
+            headers: headers,
+            note: note,
+            current: function () { return epoch; },
+        };
     }
 
     function defaultOrigin() {
@@ -839,8 +951,10 @@
         };
     }
 
+    const libraryEpoch = createPrksLibraryEpoch({ fetchImpl: defaultFetch });
+
     const production = createPrksRequestCoordinator({
-        fetchImpl: defaultFetch,
+        fetchImpl: libraryEpoch.fetch,
         now: defaultNow,
         sleep: defaultSleep,
         random: defaultRandom,
@@ -864,7 +978,11 @@
         prksRequestCoordinatorSnapshot: prksRequestCoordinatorSnapshot,
         prksResetRequestCoordinatorDiagnostics: prksResetRequestCoordinatorDiagnostics,
         prksIsAbortError: prksIsAbortError,
+        prksLibraryEpochHeaders: libraryEpoch.headers,
+        prksNoteLibraryEpoch: libraryEpoch.note,
         createPrksRequestCoordinator: createPrksRequestCoordinator,
+        createPrksLibraryEpoch: createPrksLibraryEpoch,
+        PRKS_LIBRARY_EPOCH_HEADER: PRKS_LIBRARY_EPOCH_HEADER,
         PRKS_REQUEST_MAX_READS: PRKS_REQUEST_MAX_READS,
         PRKS_REQUEST_BURST_FRESH_MS: PRKS_REQUEST_BURST_FRESH_MS,
     };

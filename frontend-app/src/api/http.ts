@@ -29,6 +29,24 @@ type PrksReachabilityRoot = typeof globalThis & {
   prksOfflineNoteRequestFailure?: unknown
 }
 
+/** The classic request coordinator's Library epoch (frontend/js/request-coordinator.js). */
+type PrksEpochRoot = typeof globalThis & {
+  prksLibraryEpochHeaders?: () => Promise<Record<string, string>>
+  prksNoteLibraryEpoch?: (response: Response) => void
+}
+
+/** The `PRKS-Library-Epoch` header a Library mutation carries (§10.4); none for a read. */
+async function libraryEpochHeaders(method: string): Promise<Record<string, string>> {
+  if (method === 'GET' || method === 'HEAD') return {}
+  const headers = (globalThis as PrksEpochRoot).prksLibraryEpochHeaders
+  return typeof headers === 'function' ? await headers() : {}
+}
+
+function noteLibraryEpoch(response: Response): void {
+  const note = (globalThis as PrksEpochRoot).prksNoteLibraryEpoch
+  if (typeof note === 'function') note(response)
+}
+
 /** Transport failures the query/mutation caches may report once retries stop. */
 const reportableTransportFailures = new WeakSet<object>()
 
@@ -88,9 +106,10 @@ export async function prksApiRequest(
 ): Promise<unknown> {
   const apiPath = resolvePrksApiPath(path)
   const search = init.query ? new URLSearchParams(init.query).toString() : ''
-  const method = init.method ?? 'GET'
+  const method = (init.method ?? 'GET').toUpperCase()
   let response: Response
   try {
+    const epoch = await libraryEpochHeaders(method)
     response = await fetch(search ? `${apiPath}?${search}` : apiPath, {
       method,
       body: init.body,
@@ -99,6 +118,7 @@ export async function prksApiRequest(
       headers: {
         Accept: 'application/json',
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...epoch,
       },
     })
   } catch (error) {
@@ -108,6 +128,7 @@ export async function prksApiRequest(
     throw transport
   }
   if (!isManagedPdfPath(apiPath)) callReachabilityHook('prksOfflineNoteRequestSuccess')
+  noteLibraryEpoch(response)
 
   const text = await response.text()
   let payload: unknown = null

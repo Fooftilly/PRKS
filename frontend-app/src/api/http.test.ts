@@ -145,4 +145,19 @@ describe('prksApiRequest', () => {
       '/api/diagnostics/performance',
     ])
   })
+
+  it('sends the Library epoch on a mutation and notes it from every answer', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    const note = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('prksLibraryEpochHeaders', vi.fn(async () => ({ 'PRKS-Library-Epoch': '7' })))
+    vi.stubGlobal('prksNoteLibraryEpoch', note)
+    await prksApiRequest('/api/saved-views', { method: 'post', body: '{}' })
+    await prksApiRequest('/api/saved-views')
+    const [[, mutation], [, read]] = fetchMock.mock.calls as unknown as [string, RequestInit][]
+    expect(mutation.method).toBe('POST')
+    expect((mutation.headers as Record<string, string>)['PRKS-Library-Epoch']).toBe('7')
+    expect((read.headers as Record<string, string>)['PRKS-Library-Epoch']).toBeUndefined()
+    expect(note).toHaveBeenCalledTimes(2)
+  })
 })

@@ -150,6 +150,22 @@ scripts/e2e feature graph --jobs 2
 scripts/e2e full --jobs 4
 ```
 
+### PostgreSQL server
+
+Every `AppServer` runs the authenticated PostgreSQL runtime
+(`PRKS_AUTH=loopback-owner`, #629) on its own disposable database: E2E needs
+`PRKS_TEST_DATABASE_URL` pointing at the `postgres` maintenance database of a
+disposable PostgreSQL 18 server, exactly as `scripts/test-postgres` uses it.
+There is no SQLite-only fallback; a missing server fails the test with a
+message naming the variable. `tests/e2e/postgres_identity.py` creates a clone
+of the run's migrated template, bootstraps one owner and pairs it with the
+empty storage root *before* the seed is copied in (bootstrap refuses a root
+that already holds objects), and `AppServer.stop()` drops the database.
+`server.library` names the instance, owner and Library ids for assertions.
+The embedded job worker stays off (`PRKS_EMBEDDED_WORKER=0`) while Library data
+still comes from the SQLite seed: its object sweep would delete the seeded
+PDFs, which PostgreSQL does not reference yet (PG-C1 #640).
+
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel. There is no Playwright retry loop in this runner;
 failed tests stay failed.
@@ -307,7 +323,8 @@ parallel with the matrix when required — never once per worker.
 
 Parallel execution relies on each E2E test keeping independent PRKS
 storage/database and browser-context state: a fresh `TemporaryDirectory`, a
-fresh database, a fresh port, and a fresh browser context. Do not introduce
+fresh SQLite seed copy and PostgreSQL database, a fresh port, and a fresh
+browser context. Do not introduce
 fixed ports, shared writable temp files, shared test databases, a shared browser
 context, or cross-worker mutable globals.
 

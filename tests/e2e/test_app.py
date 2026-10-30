@@ -4291,6 +4291,65 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _wait_local_save_warning_cleared(page)
 
 class RequestCoordinatorTests(_BrowserE2E):
+    def test_session_identity_and_library_epoch_on_mutations(self):
+        """The PostgreSQL session reaches the page and every mutation names its epoch.
+
+        The harness runs each server as ``PRKS_AUTH=loopback-owner`` on its own
+        disposable database (tests/e2e/postgres_identity.py). No Work has the
+        id the PATCH names, so the admitted request changes nothing.
+        """
+        server, page, collector = self._start_app()
+        library = server.library
+        sent = []
+
+        def on_request(req):
+            if req.method == "PATCH":
+                sent.append(req.headers.get("prks-library-epoch"))
+
+        page.on("request", on_request)
+        result = page.evaluate(
+            """async () => {
+                const session = await fetch('/api/session', { cache: 'no-store' });
+                const body = await session.json();
+                const patch = {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}',
+                };
+                const coordinated = await prksRequest('/api/works/W-E2E-MISSING', patch);
+                const bare = await fetch('/api/works/W-E2E-MISSING', patch);
+                const stale = await fetch('/api/works/W-E2E-MISSING', Object.assign({}, patch, {
+                    headers: { 'Content-Type': 'application/json', 'PRKS-Library-Epoch': '999' },
+                }));
+                return {
+                    status: session.status,
+                    header: session.headers.get('PRKS-Library-Epoch'),
+                    body: body,
+                    coordinated: coordinated.status,
+                    bare: [bare.status, (await bare.json()).code],
+                    stale: [stale.status, (await stale.json()).code],
+                };
+            }"""
+        )
+        self.assertEqual(result["status"], 200)
+        session = result["body"]
+        self.assertEqual(session["auth_mode"], "loopback-owner")
+        self.assertEqual(session["instance_id"], library.instance_id)
+        self.assertEqual(session["user"]["id"], library.user_id)
+        self.assertEqual(session["library"]["id"], library.library_id)
+        self.assertEqual(session["library"]["role"], "owner")
+        self.assertEqual(session["library"]["epoch"], 1)
+        self.assertEqual(result["header"], "1")
+        self.assertEqual(result["coordinated"], 200)
+        self.assertEqual(result["bare"], [400, "LIBRARY_EPOCH_REQUIRED"])
+        self.assertEqual(result["stale"], [409, "LIBRARY_EPOCH_CHANGED"])
+        self.assertEqual(sent, ["1", None, "999"])
+        # The two refusals were deliberate; exactly they are logged.
+        refused = [entry for entry in collector.console_errors if "/api/works/W-E2E-MISSING" in entry]
+        self.assertEqual(len(refused), 2, refused)
+        for entry in refused:
+            collector.console_errors.remove(entry)
+
     def test_identical_work_detail_gets_dedupe_to_one_network_request(self):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]
