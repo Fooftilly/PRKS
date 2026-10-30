@@ -6,11 +6,9 @@ Project V2 fields **directly** through authenticated GraphQL, then requests a
 queue publication. It never writes command or receipt comments to issue #982.
 
 This is an Actions-native writer for the maintainer and for agents with
-authenticated **GitHub Actions workflow-dispatch permission**. The current
-ChatGPT Codex Connector GitHub integration does **not** expose workflow-
-dispatch or direct Project V2 mutations; an alternative authenticated
-request-branch relay is described in `docs/agent-workflows/project3-assignment-request.md`. Do not retire
-#982 while that limitation remains and ChatGPT still needs it.
+authenticated **GitHub Actions workflow-dispatch permission**. The ChatGPT GitHub connector does not expose workflow-dispatch or direct Project
+V2 mutations; it uses the verified authenticated request-branch relay described
+in `docs/agent-workflows/project3-assignment-request.md`.
 
 ## One-time setup after merging
 
@@ -109,17 +107,14 @@ Successful apply runs with actual changes, and failed attempts that could have
 partially changed Project fields, dispatch the existing queue publisher. Its output is a snapshot; only a successful publisher run with a
 fresh complete file confirms the read-only cache is updated.
 
-## Retirement criteria for #982
+## Legacy bridge retirement
 
-The legacy `project3-assignment-bridge.yml` remains active during rollout;
-both writers serialize through the same Actions concurrency group. Retire
-the #982 listener **only after** (a) an authenticated *apply* on master is
-observed with verified Project fields and queue publication, (b) relevant
-hosted agents, including ChatGPT, have an actually callable direct writer
-(or the maintainer explicitly accepts manual dispatch for them), and
-(c) remaining automation and docs have been migrated. No new comment
-transport should be invented to replace it. The read-only data branch is not
-a write endpoint.
+The comment-based #982 listener was removed after the ChatGPT-originated
+request branch passed a check-only run and a guarded live apply on 2026-10-30.
+The protected processor verified one Project field change for #629 and the
+complete published queue recorded that field. Manual dispatch and the guarded
+request-branch relay remain independent writers sharing the same serialized
+concurrency group. The read-only queue is not a write endpoint.
 
 See `docs/agent-workflows/project3-triage.md` for local reviewed batches and
 `docs/agent-workflows/agent-queue.md` for read-only agent discovery.

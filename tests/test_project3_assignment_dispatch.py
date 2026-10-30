@@ -219,8 +219,8 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertNotIn("inputs.command }}", workflow)
         self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')", workflow)
         self.assertIn("group: project3-assignment-mutations", workflow)
-        legacy = (ROOT / ".github/workflows/project3-assignment-bridge.yml").read_text()
-        self.assertIn("group: project3-assignment-mutations", legacy)
+        relay = (ROOT / ".github/workflows/project3-assignment-request-processor.yml").read_text()
+        self.assertIn("group: project3-assignment-mutations", relay)
 
 
 if __name__ == "__main__":

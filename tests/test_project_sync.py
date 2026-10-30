@@ -1457,7 +1457,7 @@ class TokenEnvironmentTests(unittest.TestCase):
                 readers[path.name] = text
         self.assertEqual(sorted(readers), [
             "project-sync.yml", "project3-agent-queue.yml",
-            "project3-assignment-bridge.yml", "project3-assignment-dispatch.yml",
+            "project3-assignment-dispatch.yml",
             "project3-assignment-request-processor.yml",
             "project3-readiness.yml",
             "project3-view-sync.yml",
