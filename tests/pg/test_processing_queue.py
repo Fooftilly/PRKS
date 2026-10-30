@@ -274,7 +274,7 @@ class QueuePageTests(QueueTestCase):
         for limit in (0, items.MAX_PAGE_SIZE + 1, True):
             with self.subTest(limit=limit), self.assertRaises(ValueError):
                 self.page(limit)  # type: ignore[arg-type]
-        for cursor in ("", "x", "1~PI-1", "-1~PI-" + "0" * 32):
+        for cursor in ("", "x", "1~PI-1", "-1~PI-" + "0" * 32, "9" * 20 + "~PI-" + "0" * 32):
             with self.subTest(cursor=cursor), self.assertRaises(ValueError):
                 self.page(1, cursor)
 

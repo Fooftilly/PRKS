@@ -240,7 +240,10 @@ class Cursor:
         match = _CURSOR_RE.fullmatch(text or "")
         if match is None:
             raise ValueError("Invalid queue cursor.")
-        return cls(_EPOCH + timedelta(microseconds=int(match.group(1))), match.group(2))
+        try:
+            return cls(_EPOCH + timedelta(microseconds=int(match.group(1))), match.group(2))
+        except OverflowError as exc:  # past datetime's range: never a cursor PRKS issued
+            raise ValueError("Invalid queue cursor.") from exc
 
 
 @dataclass(frozen=True)
