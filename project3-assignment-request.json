@@ -1,52 +1,32 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
-    {
-      "number": 1007,
-      "set": {
-        "Agent": "ChatGPT/Codex",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "#740 P2 observed flaky E2E test confirmed in current master and screenshot; independent focused investigation, no overlapping PR or open blocker. Maintainer explicitly authorized assigning these three issues to ChatGPT.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
     {
       "number": 1008,
       "set": {
+        "Status": "In Progress"
+      },
+      "expected_before": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
         "Execution": "Agent"
       },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "#740 P2 observed flaky E2E test confirmed in current master and screenshot; independent focused investigation, no overlapping PR or open blocker. Maintainer explicitly authorized assigning these three issues to ChatGPT.",
+      "reason": "PR #1011 opened for live P2 E2E reliability issue #1008; issue #740 and overlapping PRs reviewed. Maintain Agent ChatGPT/Codex and Execution Agent; no dependencies.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
       "number": 1009,
       "set": {
+        "Status": "In Progress"
+      },
+      "expected_before": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
         "Execution": "Agent"
       },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "#740 P2 observed flaky E2E test confirmed in current master and screenshot; independent focused investigation, no overlapping PR or open blocker. Maintainer explicitly authorized assigning these three issues to ChatGPT.",
+      "reason": "PR #1010 opened for live P2 E2E reliability issue #1009; issue #740 and overlapping PRs reviewed. Maintain Agent ChatGPT/Codex and Execution Agent; no dependencies.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
