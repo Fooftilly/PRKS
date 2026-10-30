@@ -124,8 +124,8 @@ def load_command(event: Any, env: Mapping[str, str],
             or changed[0].get("status") != "modified"):
         raise RequestError("request commit must modify only the existing request file")
     source = read(API + "/contents/" + FILE + "?ref=" + sha)
-    if (source.get("type") != "file" or source.get("size", MAX_BYTES + 1) > MAX_BYTES
-            or type(source.get("size")) is not int or source["size"] < 1
+    if (source.get("type") != "file" or type(source.get("size")) is not int
+            or not 1 <= source["size"] <= MAX_BYTES
             or source.get("encoding") != "base64"
             or not isinstance(source.get("content"), str)):
         raise RequestError("missing or oversized assignment request file")
