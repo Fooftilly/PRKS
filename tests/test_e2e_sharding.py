@@ -1393,6 +1393,10 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                     "[e2e-diag] APP_READY tests.e2e.test_work_metadata_offline."
                     "OfflineWorkMetadataTests.test_acknowledgement_keeps_the_work_in_its_new_group\n"
                     "[e2e-diag] CHROMIUM_RECYCLE after_1_contexts\n"
+                    # A test-ID prefix with extra text is not startTest output.
+                    "tests.e2e.test_app.A.test_spoofed PRIVATE_CONTENT\n"
+                    "tests.e2e.test_app.A.test_spoofed(extra)\n"
+                    " tests.e2e.test_app.A.test_spoofed\n"
                     "ok\n"
                     "Ran 1 test in 3.7s\n",
                     encoding="utf-8",
@@ -1438,6 +1442,73 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 stage_only, tid_from_diag = runner._last_diag_stage(log)
                 self.assertEqual(stage_only, "CONTEXT_READY")
                 self.assertTrue(tid_from_diag.endswith("test_old"))
+
+    def test_hang_attribution_rejects_unassigned_and_malformed_ids(self):
+        """Stale heartbeat/log output must not identify a different shard test.
+
+        The heartbeat remains useful for a fixture stage without guessing that
+        the last logged (already completed) test is still running.
+        """
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hb-unassigned-") as raw:
+                root = Path(raw)
+                log = root / "worker.log"
+                hb = root / "heartbeat.json"
+                own = "tests.e2e.test_app.A.test_assigned"
+                foreign = "tests.e2e.test_app.B.test_other_shard"
+                worker = {
+                    "log_file": log,
+                    "heartbeat_file": hb,
+                    "shard": [own],
+                }
+                log.write_text(
+                    own + "\n"
+                    + foreign + "\n"
+                    + "[e2e-diag] APP_READY " + foreign + "\n",
+                    encoding="utf-8",
+                )
+                hb.write_text(
+                    json.dumps({"test_id": foreign, "stage": "CONTEXT_READY"}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._current_heartbeat_test_id(worker), "")
+                self.assertEqual(
+                    runner._hang_attribution(worker), ("", "CONTEXT_READY")
+                )
+
+                hb.write_text(
+                    json.dumps({
+                        "test_id": own + " PRIVATE_CONTENT",
+                        "stage": "SERVER_READY",
+                    }),
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._current_heartbeat_test_id(worker), "")
+                self.assertEqual(
+                    runner._hang_attribution(worker), ("", "SERVER_READY")
+                )
+
+                # With no in-flight heartbeat, prefer the last complete
+                # assigned ID, not a foreign log or diag marker.
+                hb.write_text("{}", encoding="utf-8")
+                self.assertEqual(
+                    runner._hang_attribution(worker), (own, "APP_READY")
+                )
+                log.write_text(
+                    foreign + "\n"
+                    + "[e2e-diag] APP_READY " + foreign + "\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    runner._hang_attribution(worker), ("", "APP_READY")
+                )
+
+                hb.write_text(
+                    json.dumps({"test_id": own, "stage": "START"}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._current_heartbeat_test_id(worker), own)
+                self.assertEqual(runner._hang_attribution(worker), (own, "START"))
 
     def test_worker_exceeded_watchdog_without_test_id(self):
         """Module-fixture heartbeats (no unittest id) still trip the parent poll."""
