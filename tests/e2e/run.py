@@ -640,9 +640,28 @@ def _install_shutdown_handlers(index: int) -> None:
     threading.Thread(target=_watch_parent, daemon=True).start()
 
 
+def _safe_watchdog_stage(stage) -> str:
+    """Only fixed harness stages may enter timeout logs or artifacts."""
+    if not isinstance(stage, str):
+        return "unknown"
+    if stage in _SAFE_E2E_EARLY_STAGES or stage == "BETWEEN_TESTS":
+        return stage
+    if re.fullmatch(r"CHROMIUM_RECYCLE after_[0-9]{1,5}_contexts", stage):
+        return stage
+    return "unknown"
+
+
+def _safe_watchdog_heartbeat(worker, hb: dict) -> dict:
+    """Validate a timeout identity against the worker's assigned test IDs."""
+    return {
+        "test_id": _safe_worker_test_id(hb.get("test_id"), worker.get("shard")),
+        "stage": _safe_watchdog_stage(hb.get("stage")),
+    }
+
+
 def _format_watchdog_detail(hb: dict, threshold_s: int, age_s: float) -> str:
-    tid = (hb or {}).get("test_id") or "(unknown)"
-    stage = (hb or {}).get("stage") or "(none)"
+    tid = _safe_worker_test_id((hb or {}).get("test_id")) or "(unknown)"
+    stage = _safe_watchdog_stage((hb or {}).get("stage"))
     return (
         "per-test watchdog: test=%s stage=%s age=%.0fs threshold=%ds "
         "(no automatic retry)"
@@ -756,8 +775,18 @@ def _persist_failure_diagnostics(payload: dict) -> None:
 def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
     """Retain only validated runner-authored details, never unittest traces."""
     detail = str((report or {}).get("detail") or "").strip()
-    if watchdog and detail.startswith("per-test watchdog:"):
-        return detail
+    if watchdog:
+        match = re.fullmatch(
+            r"per-test watchdog: test=(\\S+) stage=(.+?) "
+            r"age=(\\d+)s threshold=(\\d+)s \\(no automatic retry\\)",
+            detail,
+        )
+        if match:
+            tid, stage = match.group(1), match.group(2)
+            if (tid == "(unknown)" or _safe_worker_test_id(tid)) and (
+                _safe_watchdog_stage(stage) == stage
+            ):
+                return detail
     if (report or {}).get("kind") == "execution-count-mismatch":
         if re.fullmatch(r"E2E execution count mismatch: selected=\d+ completed=\d+", detail):
             return detail
@@ -876,14 +905,17 @@ def _install_test_watchdog(
         while True:
             time.sleep(poll_s)
             hb = get_e2e_heartbeat()
-            tid = hb.get("test_id") or ""
+            tid = _safe_worker_test_id(hb.get("test_id"))
+            stage = _safe_watchdog_stage(hb.get("stage"))
             started = float(hb.get("test_started_mono") or 0.0)
             if started <= 0:
                 continue
             age = time.monotonic() - started
             if age < threshold:
                 continue
-            detail = _format_watchdog_detail(hb, threshold, age)
+            detail = _format_watchdog_detail(
+                {"test_id": tid, "stage": stage}, threshold, age
+            )
             print(
                 "[worker %d] %s" % (index, detail),
                 file=sys.stderr,
@@ -897,7 +929,7 @@ def _install_test_watchdog(
                 report_file or "",
                 detail,
                 tid,
-                stage=str(hb.get("stage") or ""),
+                stage=stage,
             )
             if persist_last_failed:
                 try:
@@ -907,7 +939,7 @@ def _install_test_watchdog(
             try:
                 _persist_watchdog_diagnostics(
                     test_id=tid,
-                    stage=str(hb.get("stage") or ""),
+                    stage=stage,
                     detail=detail,
                     worker_index=index,
                 )
@@ -1267,10 +1299,11 @@ def _hang_attribution(worker) -> tuple[str, str]:
         # Do not promote an out-of-shard, malformed or stale heartbeat id.
         # Stage-only fixture heartbeats intentionally do not use log test ids:
         # those may belong to the previous *completed* test.
-        return _current_heartbeat_test_id(worker), str(hb.get("stage") or "")
+        return _current_heartbeat_test_id(worker), _safe_watchdog_stage(hb.get("stage"))
     last = _last_started_test(worker["log_file"], worker.get("shard"))
     stage, diag_tid = _last_diag_stage(worker["log_file"])
-    return last or _safe_worker_test_id(diag_tid, worker.get("shard")), stage
+    return (last or _safe_worker_test_id(diag_tid, worker.get("shard")),
+            _safe_watchdog_stage(stage))
 
 
 def _worker_exceeded_watchdog(worker, threshold_s: int) -> tuple[bool, dict | None, float]:
@@ -1370,8 +1403,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                         )
                         if not exceeded:
                             continue
+                        hb = _safe_watchdog_heartbeat(worker, hb or {})
                         detail = _format_watchdog_detail(
-                            hb or {}, watchdog_threshold, age
+                            hb, watchdog_threshold, age
                         )
                         print(
                             "[E2E %d/%d] %s"
@@ -1402,6 +1436,19 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     elapsed = time.perf_counter() - worker["started"]
                     rc = worker["proc"].returncode
                     report = _read_report(worker)
+                    if report is not None:
+                        # A watchdog may have written its own report before
+                        # the parent noticed the exit. Never let report IDs
+                        # bypass the same shard checks as live heartbeats.
+                        report["failed_ids"] = [
+                            tid for tid in (report.get("failed_ids") or [])
+                            if _safe_worker_test_id(tid, worker.get("shard"))
+                        ]
+                        if report.get("watchdog"):
+                            report["stage"] = _safe_watchdog_stage(report.get("stage"))
+                            report["detail"] = _privacy_safe_detail(
+                                report, watchdog=True
+                            )
                     entry = {
                         "index": worker["index"],
                         "returncode": rc,
