@@ -2,7 +2,8 @@
 
 **References.** One data root serves every Library (§6.2), so a key is
 referenced when any catalogue row names it, whatever its Library: an Asset's
-``storage_locator`` or ``source_locator`` (``asset-objects``), a Person's
+``storage_locator`` or ``source_locator`` or a ``ready`` Processing item's
+``object_locator`` (``asset-objects``, §11.5), a Person's
 ``portrait_locator`` (``portraits``), or a staged key of a restore run that
 is neither committed nor failed (``restore_run_objects``). The check is
 three-valued, as on SQLite (``backend/AGENTS.md``): ``None`` means "not
@@ -91,7 +92,8 @@ CLEANUP_KIND = "objects.cleanup"
 
 _ASSET_REFERENCES: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.assets WHERE storage_locator = %(name)s)
-    OR EXISTS (SELECT 1 FROM prks.assets WHERE source_locator = %(name)s) AS referenced
+    OR EXISTS (SELECT 1 FROM prks.assets WHERE source_locator = %(name)s)
+    OR EXISTS (SELECT 1 FROM prks.processing_items WHERE object_locator = %(name)s) AS referenced
 """
 _PORTRAIT_REFERENCES: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.persons WHERE portrait_locator = %(name)s) AS referenced
@@ -108,6 +110,8 @@ SELECT EXISTS (
 _NAMED_BY_ANOTHER_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.assets
 WHERE library_id <> %(library_id)s AND (storage_locator = %(name)s OR source_locator = %(name)s)
+UNION ALL
+SELECT 1 FROM prks.processing_items WHERE library_id <> %(library_id)s AND object_locator = %(name)s
 LIMIT 1
 """
 _PORTRAIT_NAMED_BY_ANOTHER_LIBRARY: LiteralString = """
@@ -121,6 +125,8 @@ WHERE namespace = %(namespace)s AND name = %(name)s AND library_id <> %(library_
 _NAMED_IN_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.assets
 WHERE library_id = %(library_id)s AND (storage_locator = %(name)s OR source_locator = %(name)s)
+UNION ALL
+SELECT 1 FROM prks.processing_items WHERE library_id = %(library_id)s AND object_locator = %(name)s
 LIMIT 1
 """
 _PORTRAIT_NAMED_IN_LIBRARY: LiteralString = """

@@ -56,6 +56,8 @@ from backend.db import register_constraint
 # link is SERIALIZABLE, which turns the same race into a ``40001`` retry.
 register_constraint("work_tags_tag_fkey", "TAG_HAS_LINKS")
 register_constraint("folder_tags_tag_fkey", "TAG_HAS_LINKS")
+# A Processing draft's tag (``160_processing.sql``); an edit adding one is SERIALIZABLE too.
+register_constraint("processing_item_tags_tag_fkey", "TAG_HAS_LINKS")
 # A Folder title is unique per parent; the index decides a race between two
 # writers of one title, and the loser decides again (``folders.TITLE_KEY``).
 register_constraint("folders_library_id_parent_id_title_key_key", "TITLE_TAKEN")

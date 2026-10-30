@@ -75,6 +75,17 @@ _SET_COLOR_SQL: LiteralString = """
 UPDATE prks.tags SET color = %(color)s WHERE library_id = %(library_id)s AND id = %(tag_id)s
 """
 _SAME_NAME_SQL: LiteralString = "SELECT prks.identity_key(%(a)s) = prks.identity_key(%(b)s) AS same"
+# A Processing draft's tags (``160_processing.sql``) have no revision scope:
+# a merge moves them and a delete removes them, as SQLite does its inbox's.
+_MOVE_PROCESSING_TAGS_SQL: LiteralString = """
+INSERT INTO prks.processing_item_tags (library_id, item_id, tag_id)
+SELECT library_id, item_id, %(target)s FROM prks.processing_item_tags
+WHERE library_id = %(library_id)s AND tag_id = %(source)s
+ON CONFLICT DO NOTHING
+"""
+_DELETE_PROCESSING_TAGS_SQL: LiteralString = """
+DELETE FROM prks.processing_item_tags WHERE library_id = %(library_id)s AND tag_id = %(tag_id)s
+"""
 _DELETE_TAG_ROW_SQL: LiteralString = """
 DELETE FROM prks.tags WHERE library_id = %(library_id)s AND id = %(tag_id)s
 """
@@ -130,7 +141,7 @@ SELECT tag_id FROM prks.tag_keys WHERE library_id = %(library_id)s AND key = prk
 _ATTEMPTS = 2
 
 # The keys from a link to its Tag (``backend/domain/organization/__init__.py``).
-LINK_KEYS = frozenset({"work_tags_tag_fkey", "folder_tags_tag_fkey"})
+LINK_KEYS = frozenset({"work_tags_tag_fkey", "folder_tags_tag_fkey", "processing_item_tags_tag_fkey"})
 
 EMPTY_AFFECTED: dict[str, list[str]] = {
     "affected_work_ids": [],
@@ -350,8 +361,9 @@ def _affected(scope: LibraryScope, tag_id: str, linked: dict[links.Link, list[st
 def delete_tag(scope: LibraryScope, tag_id: str) -> tuple[bool, dict[str, list[str]]]:
     """``delete_tag_on_conn``: remove the Tag, its links (advancing them), aliases and keys.
 
-    Returns ``(deleted, affected)``; ``deleted`` is False when this Library
-    has no such Tag. The lifecycle row stays, ``deleted``.
+    Processing drafts lose the Tag too. Returns ``(deleted, affected)``;
+    ``deleted`` is False when this Library has no such Tag. The lifecycle
+    row stays, ``deleted``.
     """
     if not lock_for_change(scope, [tag_id]):
         return False, {key: list(value) for key, value in EMPTY_AFFECTED.items()}
@@ -362,6 +374,7 @@ def delete_tag(scope: LibraryScope, tag_id: str) -> tuple[bool, dict[str, list[s
     for link, owners in linked.items():
         for owner in owners:
             links.set_state(scope, link, owner, tag_id, False)
+    scope.execute(_DELETE_PROCESSING_TAGS_SQL, {"tag_id": tag_id})
     lifecycle.mark_deleted(scope, tag_id)
     scope.execute(_DELETE_TAG_ROW_SQL, {"tag_id": tag_id})
     return True, affected
@@ -371,7 +384,8 @@ def merge(scope: LibraryScope, source: str, target: str, new_alias_id: str) -> d
     """``merge_tags_into_on_conn``: rewrite ``source`` into ``target``.
 
     The source's links move to the target (both scopes advance; a link the
-    target already has only loses the source), the source's lifecycle and
+    target already has only loses the source), so do Processing drafts'
+    tags (no scope), the source's lifecycle and
     every lifecycle merged into it point at the target, its aliases move,
     the source is deleted, and its name becomes an alias of the target. The
     shared namespace guarantees the moved aliases and the new one collide
@@ -401,6 +415,8 @@ def merge(scope: LibraryScope, source: str, target: str, new_alias_id: str) -> d
         for owner in owners:
             links.set_state(scope, link, owner, target, True)
             links.set_state(scope, link, owner, source, False)
+    scope.execute(_MOVE_PROCESSING_TAGS_SQL, {"source": source, "target": target})
+    scope.execute(_DELETE_PROCESSING_TAGS_SQL, {"tag_id": source})
     lifecycle.mark_merged(scope, source, target)
     scope.execute(_MOVE_ALIASES_SQL, {"source": source, "target": target})
     # The delete frees the source's name key for the alias below.
