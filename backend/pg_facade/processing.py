@@ -45,6 +45,11 @@ the same scan on a worker, and routing ``?rescan=1`` to it is the cutover's
 - An import removes its source only while it still has the ingested bytes'
   hash: a file another writer put at the path meanwhile stays, and the next
   scan lists it as new.
+- An import whose source exists but cannot be inspected records "Could
+  not read source PDF" on the row and keeps it (SQLite treats the file as
+  gone and deletes the row with its edits). A scan whose inbox folder
+  cannot be listed raises instead of dropping the rows of files it could
+  not see.
 - The inbox folder is one per instance while rows are per Library, so
   while the instance has more than one Library, ``scan_processing_files``
   and ``import_processing_file`` raise

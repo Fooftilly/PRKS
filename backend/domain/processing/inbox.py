@@ -574,7 +574,12 @@ def import_file(runner: Runner, inbox_dir: str, objects: StorageBackend, file_id
         if target and not runner.read(lambda scope: folders.exists(scope, target)):
             raise ValueError("Unknown folder.")
         source = resolve(inbox_dir, str(row["rel_path"] or ""))
-        present = bool(source) and os.path.isfile(str(source))
+        try:
+            present = bool(source) and stat.S_ISREG(os.stat(str(source)).st_mode)
+        except (FileNotFoundError, NotADirectoryError):
+            present = False
+        except OSError as exc:  # present but unreadable: the row and its edits are kept
+            raise _refuse(runner, file_id, f"Could not read source PDF: {exc}") from None
         if row["restore_hold"] and not (present and row["restore_sha256"]
                                         and file_sha256(str(source)) == row["restore_sha256"]):
             # A restore could not vouch for the file at this path (§11.4):
