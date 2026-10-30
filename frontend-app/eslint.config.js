@@ -1,4 +1,4 @@
-import { noFakeWindowResize, noFakeWindowResizePlugin } from '../scripts/ci/no_fake_window_resize.mjs'
+import { noFakeWindowResizePlugin } from '../scripts/ci/no_fake_window_resize.mjs'
 import pluginVue from 'eslint-plugin-vue'
 import tseslint from 'typescript-eslint'
 import vueParser from 'vue-eslint-parser'
@@ -53,8 +53,7 @@ export default tseslint.config(
       // on template-only refs and generated component types.
       '@typescript-eslint/no-explicit-any': 'off',
       // Only application code, not the browser itself, must own resize events.
-      'no-restricted-syntax': noFakeWindowResize,
-      'prks/no-bare-global-resize': 'error',
+      'prks/no-synthetic-window-resize': 'error',
     },
   },
   {
