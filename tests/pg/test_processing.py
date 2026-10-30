@@ -287,10 +287,11 @@ class CrashRecoveryTests(ProcessingTestCase):
         row = self.row(file_id)
         assert row is not None
         self.assertEqual(row["status"], "imported")
-        self.assertTrue(os.path.isfile(path))
+        self.assertFalse(os.path.exists(path))  # still claimed, never republished
+        self.assertEqual(len(os.listdir(self.inbox)), 1)
         self.library.scan_processing_files()
         self.assertIsNone(self.row(file_id))
-        self.assertFalse(os.path.exists(path))
+        self.assertEqual(os.listdir(self.inbox), [])
 
     def test_a_file_replaced_during_the_import_is_kept_and_listed_as_new(self) -> None:
         path = self.put("race.pdf")
@@ -515,6 +516,26 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(staged, ["stuck.pdf"])
         self.assertIsNone(self.row(file_id))
         self.assertEqual(os.listdir(self.inbox), ["stuck.pdf"])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+
+    def test_imported_bytes_that_cannot_be_hashed_stay_claimed(self) -> None:
+        path = self.put("dim.pdf")
+        file_id = self.staged("dim.pdf")
+        self.crash_after_commit(file_id)
+
+        def replace_then_fail(_claimed: str) -> Optional[str]:
+            self.put("dim.pdf", b"%PDF-1.4 newer")  # a new file at the public path
+            return None
+
+        with mock.patch.object(inbox, "file_sha256", replace_then_fail):
+            self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertIsNotNone(self.row(file_id))
+        self.assertEqual(sorted(os.listdir(self.inbox))[1:], ["dim.pdf"])  # no recovered name
+        staged = [row["rel_path"] for row in self.library.scan_processing_files()]
+        self.assertEqual(staged, ["dim.pdf"])
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(os.listdir(self.inbox), ["dim.pdf"])
         with open(path, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 newer")
 

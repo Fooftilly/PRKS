@@ -385,8 +385,8 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
 
     The source is removed only while the file at the path has the imported
     bytes' hash; a different file there is left alone (and listed as new).
-    A file that cannot be read or removed keeps the row, for the next scan
-    to retry. The file is claimed (:func:`_claim`) before it is hashed, so
+    A file that cannot be read or removed keeps the row and stays claimed,
+    for the next scan's recovery to retry. The file is claimed (:func:`_claim`) before it is hashed, so
     a replacement arriving meanwhile is never the one removed.
     """
     path = resolve(inbox_dir, str(row["rel_path"]))
@@ -400,10 +400,13 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
     if claim is None:
         return True
     digest = file_sha256(claim)
+    # Bytes that may be the imported ones stay claimed when they cannot be
+    # hashed or removed: the row is kept, and the next scan's recovery removes
+    # them, republishing only bytes a readable hash proves different.
+    if digest is None:
+        return False
     if digest != row["import_sha256"]:
-        return _put_back(claim, path) and digest is not None
-    # The imported bytes stay claimed when they cannot be removed: the row is
-    # kept, and the next scan's recovery removes them (never republishes them).
+        return _put_back(claim, path)
     return _remove(inbox_dir, claim, path)
 
 
