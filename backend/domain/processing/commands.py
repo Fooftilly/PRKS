@@ -59,7 +59,7 @@ class Uploaded:
 
     item: dict[str, Any]
     created: bool
-    duplicates: dict[str, list[dict[str, Any]]]
+    duplicates: dict[str, Any]
     body_read: bool
 
 

@@ -2423,8 +2423,9 @@ the wire contract is `backend/api_contract/processing_items.py` and
    The two never both appear.
 5. Respond `201` (or `200` for an existing item) with the item and any
    **duplicate warning**: other `ready` items or Assets of this Library with
-   the same `sha256`. A duplicate is never merged, refused or discarded, and
-   filenames may repeat freely.
+   the same `sha256`, at most ten of each with a flag when there are more,
+   so the warning stays bounded however often the bytes repeat. A duplicate
+   is never merged, refused or discarded, and filenames may repeat freely.
 
 A response sent before the whole body was read (an idempotent hit, an
 authentication, maintenance, size or type refusal) carries
