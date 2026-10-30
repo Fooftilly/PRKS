@@ -2811,7 +2811,7 @@
         "processing_items_library_id_upload_key_key": "CREATE UNIQUE INDEX processing_items_library_id_upload_key_key ON prks.processing_items USING btree (library_id, upload_key)",
         "processing_items_object_locator": "CREATE UNIQUE INDEX processing_items_object_locator ON prks.processing_items USING btree (object_locator) WHERE (object_locator IS NOT NULL)",
         "processing_items_pkey": "CREATE UNIQUE INDEX processing_items_pkey ON prks.processing_items USING btree (id)",
-        "processing_items_ready": "CREATE INDEX processing_items_ready ON prks.processing_items USING btree (library_id, created_at) WHERE (status = 'ready'::text)",
+        "processing_items_ready": "CREATE INDEX processing_items_ready ON prks.processing_items USING btree (library_id, created_at, id COLLATE \"C\") WHERE (status = 'ready'::text)",
         "processing_items_sha256": "CREATE INDEX processing_items_sha256 ON prks.processing_items USING btree (library_id, sha256) WHERE (status = 'ready'::text)"
       }
     },

@@ -10,9 +10,11 @@ field rule is ``ValueError``.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
@@ -37,6 +39,8 @@ TEXT_FIELDS: tuple[LiteralString, ...] = (
 DRAFT_FIELDS: tuple[LiteralString, ...] = (*TEXT_FIELDS, "status_draft", "doc_type", "thumb_page",
                                            "target_folder_id")
 DRAFT_STATUSES = ("Planned", "In Progress", "Completed", "Paused", "Not Started")
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 
 
 class Refused(Exception):
@@ -51,7 +55,7 @@ class Refused(Exception):
 _TIMESTAMP: LiteralString = "'YYYY-MM-DD HH24:MI:SS'"
 _ITEM_COLUMNS: LiteralString = (
     "i.id, i.original_filename, i.object_locator, i.sha256, i.byte_size, i.status, i.revision,"
-    " i.upload_key, i.imported_work_id,"
+    " i.upload_key, i.imported_work_id, i.created_at AS position_at,"
     " to_char(i.created_at AT TIME ZONE 'UTC', " + _TIMESTAMP + ") AS created_at,"
     " to_char(i.updated_at AT TIME ZONE 'UTC', " + _TIMESTAMP + ") AS updated_at,"
     " to_char(i.imported_at AT TIME ZONE 'UTC', " + _TIMESTAMP + ") AS imported_at,"
@@ -68,7 +72,14 @@ _SELECT: LiteralString = (
     " LEFT JOIN prks.processing_item_drafts d ON d.library_id = i.library_id AND d.item_id = i.id"
     " WHERE i.library_id = %(library_id)s"
 )
-_READY_SQL: LiteralString = _SELECT + " AND i.status = 'ready' ORDER BY i.created_at, i.id COLLATE \"C\""
+# One page of the queue: keyset on (created_at, id), so an upload or a removal
+# between pages neither repeats nor skips an item that stays.
+_PAGE_SQL: LiteralString = (
+    _SELECT + " AND i.status = 'ready'"
+    " AND (%(after_at)s::timestamptz IS NULL OR i.created_at > %(after_at)s"
+    "      OR (i.created_at = %(after_at)s AND i.id COLLATE \"C\" > %(after_id)s))"
+    " ORDER BY i.created_at, i.id COLLATE \"C\" LIMIT %(limit)s"
+)
 _ONE_SQL: LiteralString = _SELECT + " AND i.id = %(item_id)s"
 # Shared with an upload replay: import and delete take the item FOR UPDATE,
 # so a replay waits for them and then answers with what they committed.
@@ -210,9 +221,54 @@ def _publish(scope: LibraryScope, rows: list[Any]) -> list[dict[str, Any]]:
     return [_public(row, roles.get(str(row["id"]), []), tags.get(str(row["id"]), [])) for row in rows]
 
 
-def queue(scope: LibraryScope) -> list[dict[str, Any]]:
-    """The queue: every ``ready`` item, oldest upload first. Markers are not listed."""
-    return _publish(scope, scope.execute(_READY_SQL).fetchall())
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_CURSOR_RE = re.compile(r"^(\d{1,20})~(PI-[0-9A-F]{32})$")
+
+
+@dataclass(frozen=True)
+class Cursor:
+    """Where a queue page ended: the last item's upload time and id. Opaque to clients."""
+
+    created_at: datetime
+    item_id: str
+
+    def encode(self) -> str:
+        return f"{(self.created_at - _EPOCH) // timedelta(microseconds=1)}~{self.item_id}"
+
+    @classmethod
+    def decode(cls, text: str) -> Cursor:
+        match = _CURSOR_RE.fullmatch(text or "")
+        if match is None:
+            raise ValueError("Invalid queue cursor.")
+        return cls(_EPOCH + timedelta(microseconds=int(match.group(1))), match.group(2))
+
+
+@dataclass(frozen=True)
+class Page:
+    """At most ``limit`` ready items, and the cursor of the next page (None on the last)."""
+
+    items: list[dict[str, Any]]
+    next: Optional[Cursor]
+
+
+def queue(scope: LibraryScope, *, limit: int = DEFAULT_PAGE_SIZE, after: Optional[Cursor] = None) -> Page:
+    """One page of the queue: ``ready`` items, oldest upload first, after ``after``. Markers are not listed.
+
+    The read is bounded: at most ``limit`` (1 to :data:`MAX_PAGE_SIZE`) items
+    with their drafts.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_PAGE_SIZE:
+        raise ValueError(f"limit must be between 1 and {MAX_PAGE_SIZE}.")
+    rows = scope.execute(_PAGE_SQL, {
+        "after_at": after.created_at if after is not None else None,
+        "after_id": after.item_id if after is not None else None,
+        "limit": limit + 1,
+    }).fetchall()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    last = rows[-1] if more else None
+    return Page(_publish(scope, rows),
+                Cursor(last["position_at"], str(last["id"])) if last is not None else None)
 
 
 def item(scope: LibraryScope, item_id: str) -> Optional[dict[str, Any]]:
@@ -271,7 +327,7 @@ def parse_update(fields: Any) -> Update:
     Unknown keys are ignored. Raises ``ValueError`` for an invalid status or
     a NUL in a value (PostgreSQL text cannot hold it).
     """
-    from backend.db_manager import normalize_doc_type
+    from backend.work_metadata_sync import normalize_doc_type
 
     if not isinstance(fields, dict):
         raise ValueError("JSON object body required.")

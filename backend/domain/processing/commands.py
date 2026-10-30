@@ -33,8 +33,12 @@ def _command(db: Database, ctx: RequestContext, fn: Callable[[LibraryScope], T],
     return library_command(db, ctx, Capability.EDIT_LIBRARY, fn, isolation=isolation)
 
 
-def queue(db: Database, ctx: RequestContext) -> list[dict[str, Any]]:
-    return library_query(db, ctx, items.queue)
+def queue(db: Database, ctx: RequestContext, *, limit: int = items.DEFAULT_PAGE_SIZE,
+          after: Optional[str] = None) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """One page of the queue and the opaque cursor of the next (None on the last page)."""
+    cursor = items.Cursor.decode(after) if after is not None else None
+    page = library_query(db, ctx, lambda scope: items.queue(scope, limit=limit, after=cursor))
+    return page.items, page.next.encode() if page.next is not None else None
 
 
 def item(db: Database, ctx: RequestContext, item_id: str) -> Optional[dict[str, Any]]:

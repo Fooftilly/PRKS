@@ -176,7 +176,7 @@ class UploadTests(QueueTestCase):
         self.assertEqual((draft["title"], draft["status_draft"], draft["doc_type"], draft["roles"], draft["tags"],
                           draft["target_folder_id"]), ("", "Not Started", "article", [], [], ""))
         self.assertEqual(done.duplicates, {"items": [], "works": []})
-        self.assertEqual([found["id"] for found in commands.queue(self.db, self.actor.context)], [item["id"]])
+        self.assertEqual([found["id"] for found in commands.queue(self.db, self.actor.context)[0]], [item["id"]])
         self.assertEqual(commands.preview(self.db, self.actor.context, item["id"]),
                          (StorageKey(NAMESPACE_ASSET_OBJECTS, row["object_locator"]), len(data), item["sha256"]))
         self.assertEqual(self.claims(), set())
@@ -235,6 +235,48 @@ class UploadTests(QueueTestCase):
         self.assertEqual(third.duplicates["items"], [{"id": second.item["id"], "original_filename": "paper.pdf"}])
         self.assertEqual([work["id"] for work in third.duplicates["works"]], [imported.work_id])
         self.assertEqual(self.count("processing_items"), 3)
+
+
+class QueuePageTests(QueueTestCase):
+    def page(self, limit: int, after: Optional[str] = None) -> tuple[list[str], Optional[str]]:
+        found, cursor = commands.queue(self.db, self.actor.context, limit=limit, after=after)
+        return [entry["id"] for entry in found], cursor
+
+    def test_pages_follow_upload_order_and_end_without_a_cursor(self) -> None:
+        uploaded = [self.ready()["id"] for _ in range(5)]
+        first, cursor = self.page(2)
+        assert cursor is not None
+        second, cursor = self.page(2, cursor)
+        assert cursor is not None
+        third, cursor = self.page(2, cursor)
+        self.assertEqual((first + second + third, cursor), (uploaded, None))
+        self.assertEqual(self.page(5), (uploaded, None))
+
+    def test_ties_on_the_upload_time_break_on_the_id(self) -> None:
+        ids = sorted(self.ready()["id"] for _ in range(4))
+        self.sql("UPDATE prks.processing_items SET created_at = '2026-01-01T00:00:00Z'")
+        first, cursor = self.page(3)
+        rest, end = self.page(3, cursor)
+        self.assertEqual((first + rest, end), (ids, None))
+
+    def test_changes_between_pages_neither_repeat_nor_skip_an_item_that_stays(self) -> None:
+        a, b, c, d = (self.ready()["id"] for _ in range(4))
+        first, cursor = self.page(2)
+        self.assertEqual(first, [a, b])
+        self.delete(b)  # the page's last item: the cursor still holds its place
+        self.delete(c)
+        self.import_(a)
+        e = self.ready()["id"]
+        rest, end = self.page(10, cursor)
+        self.assertEqual((rest, end), ([d, e], None))
+
+    def test_a_page_is_bounded(self) -> None:
+        for limit in (0, items.MAX_PAGE_SIZE + 1, True):
+            with self.subTest(limit=limit), self.assertRaises(ValueError):
+                self.page(limit)  # type: ignore[arg-type]
+        for cursor in ("", "x", "1~PI-1", "-1~PI-" + "0" * 32):
+            with self.subTest(cursor=cursor), self.assertRaises(ValueError):
+                self.page(1, cursor)
 
 
 class UploadRaceTests(QueueTestCase):
@@ -414,7 +456,7 @@ class ImportTests(QueueTestCase):
         self.assertIsNotNone(row["imported_at"])
         self.assertEqual(self.count("processing_item_drafts") + self.count("processing_item_roles")
                          + self.count("processing_item_tags"), 0)
-        self.assertEqual(commands.queue(self.db, self.actor.context), [])
+        self.assertEqual(commands.queue(self.db, self.actor.context), ([], None))
         self.assertIsNone(commands.preview(self.db, self.actor.context, item["id"]))
         # The Asset holds the key now: nothing to clean, nothing for the sweep.
         self.assertEqual((self.claims(), self.sweep()), (set(), 0))
@@ -580,7 +622,7 @@ class DeleteTests(QueueTestCase):
         # Again: the same marker, nothing changed.
         self.assertEqual(self.delete(item["id"]), marker)
         self.assert_refused(items.ITEM_DELETED, lambda: self.upload(pdf(), key="k", body=Unreadable()))
-        self.assertEqual(commands.queue(self.db, self.actor.context), [])
+        self.assertEqual(commands.queue(self.db, self.actor.context), ([], None))
         self.assertEqual(self.get(item["id"]), marker)
 
     def test_a_ready_key_is_referenced_for_settle_and_sweep(self) -> None:
@@ -610,7 +652,7 @@ class IsolationTests(QueueTestCase):
         item = self.ready(key="k")
         other = self.other_actor().context
         self.assertIsNone(self.get(item["id"], ctx=other))
-        self.assertEqual(commands.queue(self.db, other), [])
+        self.assertEqual(commands.queue(self.db, other), ([], None))
         self.assertIsNone(commands.preview(self.db, other, item["id"]))
         self.assert_refused(items.NOT_FOUND, lambda: self.edit(item["id"], 0, {"title": "x"}, ctx=other))
         self.assert_refused(items.NOT_FOUND, lambda: self.delete(item["id"], ctx=other))

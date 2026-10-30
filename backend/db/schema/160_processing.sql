@@ -57,9 +57,10 @@ CREATE TABLE prks.processing_items (
 -- fresh key is named by one item at most.
 CREATE UNIQUE INDEX processing_items_object_locator ON prks.processing_items (object_locator)
   WHERE object_locator IS NOT NULL;
--- Duplicate warnings, and the queue's listing.
+-- Duplicate warnings, and the queue's pages (keyset on created_at, then id).
 CREATE INDEX processing_items_sha256 ON prks.processing_items (library_id, sha256) WHERE status = 'ready';
-CREATE INDEX processing_items_ready ON prks.processing_items (library_id, created_at) WHERE status = 'ready';
+CREATE INDEX processing_items_ready ON prks.processing_items (library_id, created_at, id COLLATE "C")
+  WHERE status = 'ready';
 CREATE INDEX processing_items_imported_work ON prks.processing_items (library_id, imported_work_id)
   WHERE imported_work_id IS NOT NULL;
 

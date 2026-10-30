@@ -81,14 +81,15 @@ class Imported:
 
 def _new_work(ids: NewIds, row: dict[str, Any], draft: dict[str, Any]) -> Any:
     """The Work the draft describes, with the item's object as its managed file."""
-    from backend.db_manager import _canonical_new_source, normalize_doc_type
     from backend.domain.works import commands
 
     filename = str(row["original_filename"] or "")
     title = str(draft["title"] or "").strip() or os.path.splitext(filename)[0].strip() or "Untitled"
-    _kind, url, _provider, _provider_id = _canonical_new_source("pdf", draft["source_url"] or "", "", "", filename)
+    # A PDF's source URL is provenance, kept as given, never a video identity
+    # (``_canonical_new_source`` for a "pdf" kind); the edit normalized the doc type.
+    url = str(draft["source_url"] or "").strip()
     bibliographic: dict[str, Optional[str]] = {name: draft[name] or "" for name in _BIBLIOGRAPHIC}
-    bibliographic["doc_type"] = normalize_doc_type(draft["doc_type"])
+    bibliographic["doc_type"] = str(draft["doc_type"])
     bibliographic["urldate"] = None
     managed = commands.ManagedFile(
         storage_locator=str(row["object_locator"]), sha256=str(row["sha256"]), byte_size=int(row["byte_size"]),
@@ -101,7 +102,7 @@ def _new_work(ids: NewIds, row: dict[str, Any], draft: dict[str, Any]) -> Any:
         abstract=draft["abstract"],
         author_text=draft["author_text"],
         bibliographic=bibliographic,
-        citation_url=(url or "").strip() or None,
+        citation_url=url or None,
         asset_id=ids.asset_id,
         asset=commands.NewAsset(source=managed, thumb_page=draft["thumb_page"]),
         private_note=(draft["private_notes"] or "").strip() or None,
