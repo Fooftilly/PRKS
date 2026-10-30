@@ -844,17 +844,18 @@ class CrashRecoveryTests(ProcessingTestCase):
                 os.makedirs(self.inbox)
 
     def test_a_claimed_directory_never_replaces_a_writers_directory(self) -> None:
-        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 8}{'5' * 24}")
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 32}")
         self.put(f"{os.path.basename(claim_dir)}/a.pdf/inner.pdf", b"%PDF-1.4 inner")
         os.mkdir(os.path.join(self.inbox, "a.pdf"))  # a writer's empty folder at the path
         real = os.rename
+        ids = iter(uuid.UUID(f"{digit * 8}{'0' * 24}") for digit in "3555")
 
         def writer_in_between(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
             if os.fspath(source).startswith(claim_dir) and "33333333" in os.fspath(target):
                 self.put(os.path.relpath(os.path.join(os.fspath(target), "late.pdf"), self.inbox))  # a writer, just then
             real(source, target, *args, **kwargs)
 
-        with mock.patch.object(inbox.os, "rename", writer_in_between):
+        with mock.patch.object(inbox.os, "rename", writer_in_between), mock.patch.object(inbox.uuid, "uuid4", lambda: next(ids)):
             self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
         found = sorted(rel for rel, _name in inbox.discover(self.inbox))
         self.assertEqual(os.listdir(os.path.join(self.inbox, "a.pdf")), [])  # the writer's folder, untouched
@@ -878,8 +879,21 @@ class CrashRecoveryTests(ProcessingTestCase):
             with mock.patch.object(inbox.os, "remove", stuck):
                 self.assertEqual(inbox.recover_claims(self.inbox, {}), {"a.pdf"})
         self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
-        self.assertEqual(sorted(os.listdir(self.inbox)), ["a (recovered 44444444).pdf", "a.pdf"])
-        self.assertTrue(os.path.islink(os.path.join(self.inbox, "a (recovered 44444444).pdf")))
+        recovered = [name for name in os.listdir(self.inbox) if name != "a.pdf"]
+        self.assertEqual(len(recovered), 1)
+        self.assertTrue(os.path.islink(os.path.join(self.inbox, recovered[0])))
+
+    def test_a_claimed_directory_finds_a_free_name_however_many_are_taken(self) -> None:
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'6' * 32}")
+        self.put(f"{os.path.basename(claim_dir)}/a.pdf/inner.pdf", b"%PDF-1.4 inner")
+        self.put("a.pdf", b"%PDF-1.4 newer")
+        self.put("a (recovered 77777777).pdf")  # a writer took the names this scan tries
+        ids = iter(uuid.UUID(f"{digit * 8}{'0' * 24}") for digit in "777999")
+        with mock.patch.object(inbox.uuid, "uuid4", lambda: next(ids)):
+            self.assertEqual(inbox.recover_claims(self.inbox, {}), {"a.pdf"})
+            self.assertEqual(inbox.recover_claims(self.inbox, {}), set())  # the next scan tries fresh ones
+        self.assertIn("a (recovered 99999999).pdf/inner.pdf", [rel for rel, _name in inbox.discover(self.inbox)])
+        self.assertFalse(os.path.lexists(claim_dir))
 
     def test_an_unsettled_claim_keeps_its_row_until_it_is_settled(self) -> None:
         imported_path = self.put("done.pdf")
