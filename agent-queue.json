@@ -1,31 +1,13 @@
 {
   "complete": true,
-  "count": 19,
-  "generated_at": "2026-10-30T07:08:38Z",
+  "count": 15,
+  "generated_at": "2026-10-30T08:38:00Z",
   "issues": [
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 193,
-      "status": "Ready"
-    },
     {
       "agent": "Cursor Cloud",
       "execution": null,
       "number": 509,
       "status": "Inbox"
-    },
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 557,
-      "status": "Ready"
-    },
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 562,
-      "status": "Ready"
     },
     {
       "agent": "Claude Code",
@@ -110,12 +92,6 @@
       "execution": null,
       "number": 969,
       "status": "Inbox"
-    },
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 993,
-      "status": "Ready"
     }
   ],
   "project": {
@@ -126,6 +102,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41018252744,
-  "stale_after": "2026-10-30T19:08:38Z"
+  "source_run_id": 41027740800,
+  "stale_after": "2026-10-30T20:38:00Z"
 }
