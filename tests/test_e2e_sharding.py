@@ -939,14 +939,14 @@ class EarlyFailureMarkersTests(unittest.TestCase):
                         raise AssertionError("PRIVATE_SUBTEST_%s" % index)
                     except AssertionError:
                         err = sys.exc_info()
-                    if index == 0:
-                        subtest = unittest.case._SubTest(
-                            case, "PRIVATE_SUBTEST_MESSAGE",
-                            {"private": "PRIVATE_SUBTEST_PARAMETER"},
-                        )
-                        result.addSubTest(case, subtest, err)
-                    else:
-                        result.addFailure(case, err)
+                        if index == 0:
+                            subtest = unittest.case._SubTest(
+                                case, "PRIVATE_SUBTEST_MESSAGE",
+                                {"private": "PRIVATE_SUBTEST_PARAMETER"},
+                            )
+                            result.addSubTest(case, subtest, err)
+                        else:
+                            result.addFailure(case, err)
             markers = [
                 line for line in out.getvalue().splitlines()
                 if line.startswith("[e2e-early-failure]")
