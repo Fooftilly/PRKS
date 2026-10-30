@@ -33,7 +33,7 @@ Before starting any issue:
 3. Compare the affected files and behavior against open PRs and the accepted target roadmaps, particularly #310/#614 PostgreSQL and backend cutover, #230/#303 completed frontend migration, and active replacement/design plans. Skip code that is being retired, SQLite-specific fixes during cutover, duplicate PR work, or findings the planned architecture will eliminate.
 4. Take one bounded task, implement with targeted tests, and open a PR for maintainer review. Do not merge without explicit approval. Return to the queue after that task is completed or deliberately parked.
 
-When the maintainer explicitly requests an agent assignment in ChatGPT, use the authenticated GitHub assignment bridge in `docs/agent-workflows/project3-assignment-bridge.md` (issue #982), then confirm the Actions result. Do not claim success from comment submission alone.
+For comment-free Project V2 writes from the maintainer or an agent with GitHub Actions dispatch permission, use `docs/agent-workflows/project3-assignment-dispatch.md` and verify the workflow result plus live Project fields. The current ChatGPT GitHub connector cannot dispatch GitHub workflows or write Project V2 fields directly; for explicitly requested ChatGPT assignments, retain the authenticated issue #982 bridge in `docs/agent-workflows/project3-assignment-bridge.md` until a direct connector path is available. Do not claim success from submitting a command alone.
 
 For a maintainer-reviewed batch update to an existing issue's Agent, Status or Execution, use the dry-run-first tool in `docs/agent-workflows/project3-triage.md` rather than repeated ad hoc field edits. The agent queue itself never changes fields.
 

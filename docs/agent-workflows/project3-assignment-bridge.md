@@ -1,4 +1,6 @@
-# Project #3 assignment command bridge
+# Project #3 assignment command bridge (legacy connector fallback)
+
+This is the **legacy compatibility fallback** while the current ChatGPT GitHub connector lacks workflow-dispatch and Project V2 field-write actions. For the new comment-free authenticated workflow writer, use `docs/agent-workflows/project3-assignment-dispatch.md`. Do not disable this bridge until the direct writer is verified for every relevant caller.
 
 The bridge lets the maintainer request Project #3 **Agent**, **Status**, and **Execution** changes from an ordinary ChatGPT conversation. ChatGPT posts an authenticated comment through the connected GitHub App to [assignment inbox #982](https://github.com/Fooftilly/PRKS/issues/982). The Action validates and applies only the requested, permitted field changes.
 
