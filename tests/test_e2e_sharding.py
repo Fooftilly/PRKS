@@ -953,6 +953,7 @@ class ParallelEarlyFailureMarkerTests(unittest.TestCase):
                 "index": 0,
                 "early_marker_offset": 0,
                 "early_marker_count": 0,
+                "shard": [test_id],
             }
             out = io.StringIO()
             log.write_text(marker[:55], encoding="utf-8")
@@ -974,13 +975,19 @@ class ParallelEarlyFailureMarkerTests(unittest.TestCase):
             % test_id
         )
         forged = good + " SECRET_USER_DOCUMENT"
+        private_stage = good.replace("APP_READY", "PRIVATE_USER_TOKEN")
+        private_class = good.replace("RuntimeError", "PrivateUserName")
+        other_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        private_test_id = good.replace(test_id, other_id)
         # A marker-like fragment in an oversized line is never a new marker.
         long_line = "private" * 100 + good
         with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
             log = Path(raw) / "worker.log"
-            worker = {"log_file": log, "index": 0}
+            worker = {"log_file": log, "index": 0, "shard": [test_id]}
             log.write_text(
-                forged + "\n" + long_line + "\n" + good + "\n",
+                forged + "\n" + private_stage + "\n"
+                + private_class + "\n" + private_test_id + "\n"
+                + long_line + "\n" + good + "\n",
                 encoding="utf-8",
             )
             out = io.StringIO()
