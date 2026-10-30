@@ -94,7 +94,7 @@ def build_queue_live(transport: readiness.Transport, *, now: datetime,
     gql = readiness.ReadOnlyGraphQL(transport)
     identity = {"owner": readiness.OWNER, "number": readiness.PROJECT_NUMBER}
     project = readiness.check_project(gql.query(readiness.PROJECT_QUERY, identity))
-    items, _skipped = readiness.read_items(gql)
+    items, _skipped = readiness.read_items(gql, include_assignees=False)
     if readiness.check_project(gql.query(readiness.PROJECT_QUERY, identity)) != project:
         raise readiness.ReadinessError("Project #3 changed while it was read; rerun")
     return _queue_from_rows(
