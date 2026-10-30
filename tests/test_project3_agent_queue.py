@@ -192,7 +192,7 @@ class LivePublisherTests(unittest.TestCase):
             check.side_effect = [snapshot()["project"], {**snapshot()["project"], "closed": True}]
             with self.assertRaises(readiness.ReadinessError):
                 queue.build_queue_live(lambda _q, _v: {}, now=NOW)
-        with mock.patch.object(readiness, "check_project", return_value=snapshot()["project"]), \\
+        with mock.patch.object(readiness, "check_project", return_value=snapshot()["project"]), \
              mock.patch.object(readiness, "read_items",
                                side_effect=readiness.Malformed("incomplete pagination")):
             with self.assertRaises(readiness.Malformed):
