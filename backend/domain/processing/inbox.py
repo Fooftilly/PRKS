@@ -46,6 +46,7 @@ The scan runs in the caller (``scan_processing_files``) or as the
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import logging
 import os
@@ -221,23 +222,29 @@ def _restore(claim: str, path: str) -> bool:
     """Return a claimed entry that is no regular file to the inbox, unread; whether it is.
 
     It goes back to ``path`` or, when that is taken, to a recovered name
-    beside it (:func:`_recovered_name`), never over an entry there: a
-    directory by a rename (which replaces at most an empty directory), any
-    other entry by a link to itself (``follow_symlinks=False``) before its
-    claim is removed. Left claimed, the next scan's recovery tries again.
+    beside it that its claim directory's id derives (:func:`_recovered_name`),
+    so a retry tries the same names. It never replaces an entry there:
+    another entry is published by a link to itself
+    (``follow_symlinks=False``), and one already linked at a name (a
+    retry) only loses its claim; a directory is renamed over an empty
+    directory made for it (:func:`_publish_directory`). Left claimed, the
+    next scan's recovery tries again.
     """
-    directory = stat.S_ISDIR(os.lstat(claim).st_mode)
-    for target in (path, _recovered_name(path, uuid.uuid4().hex[:8]), _recovered_name(path, uuid.uuid4().hex[:8])):
-        if os.path.lexists(target):
-            continue
+    claimed = os.lstat(claim)
+    claim_id = os.path.basename(os.path.dirname(claim))[len(CLAIM_PREFIX):len(CLAIM_PREFIX) + 32]
+    for target in (path, _recovered_name(path, claim_id[:8]), _recovered_name(path, claim_id[8:16])):
         try:
-            if directory:
-                os.rename(claim, target)
-            else:
+            if stat.S_ISDIR(claimed.st_mode):
+                if not _publish_directory(claim, target):
+                    continue
+                return True
+            try:
                 os.link(claim, target, follow_symlinks=False)
-                os.remove(claim)
-        except FileExistsError:
-            continue
+            except FileExistsError:
+                entry = os.lstat(target)
+                if (entry.st_dev, entry.st_ino) != (claimed.st_dev, claimed.st_ino):
+                    continue  # another entry: this one is not published there
+            os.remove(claim)
         except OSError as exc:
             LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
             return False
@@ -245,6 +252,32 @@ def _restore(claim: str, path: str) -> bool:
         return True
     LOGGER.warning("processing_claim_kept reason=names_taken")
     return False
+
+
+def _publish_directory(claim: str, target: str) -> bool:
+    """Rename a claimed directory to ``target``; False when ``target`` is another's.
+
+    The rename replaces only an empty directory, so it goes over one made
+    here for it (``mkdir`` fails on any entry there): a writer's entry is
+    never replaced. One that a writer puts in that directory meanwhile
+    keeps it, and the claim tries the next name. Any other failure raises.
+    """
+    try:
+        os.mkdir(target)
+    except FileExistsError:
+        return False
+    try:
+        os.rename(claim, target)
+    except OSError as exc:
+        if exc.errno in (errno.ENOTEMPTY, errno.EEXIST):
+            return False  # a writer's entry is in it now: it stays, listed as the writer's
+        try:
+            os.rmdir(target)
+        except OSError:
+            pass
+        raise
+    _release(claim)
+    return True
 
 
 def _drop_stale_links(claim: str) -> bool:

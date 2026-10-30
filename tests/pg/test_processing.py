@@ -843,6 +843,44 @@ class CrashRecoveryTests(ProcessingTestCase):
                 shutil.rmtree(self.inbox)
                 os.makedirs(self.inbox)
 
+    def test_a_claimed_directory_never_replaces_a_writers_directory(self) -> None:
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 8}{'5' * 24}")
+        self.put(f"{os.path.basename(claim_dir)}/a.pdf/inner.pdf", b"%PDF-1.4 inner")
+        os.mkdir(os.path.join(self.inbox, "a.pdf"))  # a writer's empty folder at the path
+        real = os.rename
+
+        def writer_in_between(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(source).startswith(claim_dir) and "33333333" in os.fspath(target):
+                self.put(os.path.relpath(os.path.join(os.fspath(target), "late.pdf"), self.inbox))  # a writer, just then
+            real(source, target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "rename", writer_in_between):
+            self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
+        found = sorted(rel for rel, _name in inbox.discover(self.inbox))
+        self.assertEqual(os.listdir(os.path.join(self.inbox, "a.pdf")), [])  # the writer's folder, untouched
+        # the writer's file went into the folder made for the claim, which then took the next name
+        self.assertEqual(found, ["a (recovered 33333333).pdf/late.pdf", "a (recovered 55555555).pdf/inner.pdf"])
+        self.assertFalse(os.path.lexists(claim_dir))
+
+    def test_a_restored_link_is_published_once_however_often_it_is_retried(self) -> None:
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'4' * 32}")
+        os.mkdir(claim_dir)
+        os.symlink("elsewhere.pdf", os.path.join(claim_dir, "a.pdf"))
+        self.put("a.pdf", b"%PDF-1.4 newer")
+        real = os.remove
+
+        def stuck(target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(target).startswith(claim_dir):
+                raise PermissionError(target)
+            real(target, *args, **kwargs)
+
+        for _attempt in range(2):
+            with mock.patch.object(inbox.os, "remove", stuck):
+                self.assertEqual(inbox.recover_claims(self.inbox, {}), {"a.pdf"})
+        self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
+        self.assertEqual(sorted(os.listdir(self.inbox)), ["a (recovered 44444444).pdf", "a.pdf"])
+        self.assertTrue(os.path.islink(os.path.join(self.inbox, "a (recovered 44444444).pdf")))
+
     def test_an_unsettled_claim_keeps_its_row_until_it_is_settled(self) -> None:
         imported_path = self.put("done.pdf")
         pending_path = self.put("open.pdf", b"%PDF-1.4 open")
