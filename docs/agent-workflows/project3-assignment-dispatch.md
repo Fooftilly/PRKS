@@ -7,8 +7,9 @@ queue publication. It never writes command or receipt comments to issue #982.
 
 This is an Actions-native writer for the maintainer and for agents with
 authenticated **GitHub Actions workflow-dispatch permission**. The current
-ChatGPT Codex Connector GitHub integration can post issue comments, but does
-**not** expose workflow-dispatch or direct Project V2 mutations. Do not retire
+ChatGPT Codex Connector GitHub integration does **not** expose workflow-
+dispatch or direct Project V2 mutations; an alternative authenticated
+request-branch relay is described in `docs/agent-workflows/project3-assignment-request.md`. Do not retire
 #982 while that limitation remains and ChatGPT still needs it.
 
 ## One-time setup after merging

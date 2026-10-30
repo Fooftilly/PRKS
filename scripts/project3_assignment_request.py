@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Trusted-master relay for Project #3 assignment requests written by ChatGPT.
+
+A minimal unprivileged push workflow is a signal, never an authorization.
+Only a verified owner-initiated, single-file commit at the CURRENT head of the
+dedicated request branch can supply a command. It is read as pinned data from
+GitHub REST; no branch code or artifacts are executed or checked out.
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import urllib.error
+import urllib.request
+from typing import Any, Callable, Mapping
+
+import project3_assignment_dispatch as dispatch
+import project3_migrate as pm
+import project3_triage as triage
+
+REPO = "Fooftilly/PRKS"
+API = "https://api.github.com/repos/" + REPO
+BRANCH = "project3-assignment-requests"
+FILE = "project3-assignment-request.json"
+SIGNAL = ".github/workflows/project3-assignment-request-signal.yml"
+MAX_BYTES = 12000
+SHA = re.compile(r"^[0-9a-f]{40}$")
+STATUS_CONTEXT = "prks/project3-assignment-request-claim"
+MAX_PAGES = 10
+REQUEST_REF = "refs/heads/" + BRANCH
+
+
+class RequestError(Exception):
+    """Refused untrusted command or invalid provenance."""
+
+
+def _refuse_if_untrusted_event(event: Any, env: Mapping[str, str]) -> dict:
+    if (env.get("GITHUB_EVENT_NAME") != "workflow_run"
+            or env.get("GITHUB_REPOSITORY") != REPO
+            or env.get("GITHUB_REF") != "refs/heads/master"
+            or env.get("GITHUB_RUN_ATTEMPT") != "1"):
+        raise RequestError("not a first-attempt protected master workflow_run")
+    if not isinstance(event, dict) or event.get("action") != "completed":
+        raise RequestError("not a completed workflow-run event")
+    if (event.get("repository") or {}).get("full_name") != REPO:
+        raise RequestError("repository mismatch")
+    run = event.get("workflow_run")
+    if not isinstance(run, dict) or type(run.get("id")) is not int:
+        raise RequestError("missing upstream workflow identity")
+    if (run.get("event") != "push" or run.get("status") != "completed"
+            or run.get("conclusion") != "success"
+            or run.get("head_branch") != BRANCH
+            or (run.get("head_repository") or {}).get("full_name") != REPO
+            or (run.get("actor") or {}).get("id") != dispatch.OWNER_ID
+            or (run.get("actor") or {}).get("login") != "Fooftilly"
+            or run.get("run_attempt") != 1):
+        raise RequestError("unauthorized or unsuccessful request signal")
+    path = run.get("path")
+    if not isinstance(path, str) or path.split("@", 1)[0] != SIGNAL:
+        raise RequestError("unexpected signal workflow path")
+    sha = run.get("head_sha")
+    if not isinstance(sha, str) or not SHA.fullmatch(sha):
+        raise RequestError("invalid upstream commit")
+    return run
+
+
+
+def provenance_client(token: str) -> Callable[[str], Any]:
+    """Read only the four fixed GitHub REST resource families used for proof."""
+    opener = pm._https_only_opener()
+    allowed = (
+        re.compile(re.escape(API + "/actions/runs/") + r"[1-9][0-9]*"),
+        re.compile(re.escape(API + "/branches/" + BRANCH)),
+        re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}"),
+        re.compile(re.escape(API + "/contents/" + FILE + "?ref=") + r"[0-9a-f]{40}"),
+        re.compile(re.escape(API + "/rulesets/") + r"[1-9][0-9]*"),
+        re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}/statuses\?per_page=100&page=[1-9][0-9]*"),
+    )
+
+    def read(url: str) -> Any:
+        if not isinstance(url, str) or not any(pattern.fullmatch(url) for pattern in allowed):
+            raise RequestError("refused request outside fixed provenance resources")
+        request = urllib.request.Request(url, headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "prks-project3-assignment-request",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        try:
+            with opener.open(request, timeout=30) as response:
+                value = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            raise RequestError("GitHub request provenance read failed: "
+                               + type(error).__name__) from None
+        if not isinstance(value, (dict, list)):
+            raise RequestError("malformed GitHub provenance response")
+        return value
+
+    return read
+
+
+def load_command(event: Any, env: Mapping[str, str],
+                 read: Callable[[str], Any]) -> tuple[str, str]:
+    run = _refuse_if_untrusted_event(event, env)
+    upstream = read(API + "/actions/runs/" + str(run["id"]))
+    for field in ("id", "event", "status", "conclusion", "head_branch",
+                  "head_sha", "path", "run_attempt"):
+        if upstream.get(field) != run[field]:
+            raise RequestError("upstream workflow REST record differs from event")
+    if ((upstream.get("actor") or {}).get("id") != dispatch.OWNER_ID
+            or (upstream.get("actor") or {}).get("login") != "Fooftilly"
+            or (upstream.get("head_repository") or {}).get("full_name") != REPO):
+        raise RequestError("upstream workflow owner/repository mismatch")
+
+    sha = run["head_sha"]
+    # Only process the live branch tip, not an old run after a newer request.
+    current = read(API + "/branches/" + BRANCH)
+    if (current.get("commit") or {}).get("sha") != sha:
+        raise RequestError("request is no longer the current branch tip")
+    commit = read(API + "/commits/" + sha)
+    if ((commit.get("author") or {}).get("id") != dispatch.OWNER_ID
+            or (commit.get("committer") or {}).get("id") != dispatch.OWNER_ID):
+        raise RequestError("request commit author/committer is not the authorized owner")
+    changed = commit.get("files")
+    if (commit.get("sha") != sha or not isinstance(commit.get("parents"), list)
+            or len(commit["parents"]) != 1 or not isinstance(changed, list)
+            or len(changed) != 1 or changed[0].get("filename") != FILE
+            or changed[0].get("status") != "modified"):
+        raise RequestError("request commit must modify only the existing request file")
+    source = read(API + "/contents/" + FILE + "?ref=" + sha)
+    if (source.get("type") != "file" or type(source.get("size")) is not int
+            or not 1 <= source["size"] <= MAX_BYTES
+            or source.get("encoding") != "base64"
+            or not isinstance(source.get("content"), str)):
+        raise RequestError("missing or oversized assignment request file")
+    try:
+        raw = base64.b64decode("".join(source["content"].split()), validate=True)
+        command = raw.decode("utf-8")
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        raise RequestError("invalid request file encoding") from None
+    if len(raw) != source["size"] or len(raw) > MAX_BYTES:
+        raise RequestError("request file size mismatch")
+    # Full content must parse under the same bounded, reviewed Project writer.
+    dispatch.parse(command)
+    return command, sha
+
+
+
+def require_branch_rules(read: Callable[[str], Any], ruleset_id: str,
+                         reviewed_at: str) -> None:
+    """Require active branch protections at the admin-approved exact revision.
+
+    GitHub's metadata-only ruleset reader may omit bypass_actors. An
+    administrator must confirm its empty value and pin the returned
+    ruleset ID/updated_at in protected environment variables. Any subsequent
+    ruleset edit changes updated_at and blocks assignment processing.
+    """
+    if (not isinstance(ruleset_id, str)
+            or not re.fullmatch(r"[1-9][0-9]*", ruleset_id)
+            or not isinstance(reviewed_at, str)
+            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})", reviewed_at)):
+        raise RequestError("reviewed request-branch ruleset configuration missing")
+    rule = read(API + "/rulesets/" + ruleset_id)
+    conditions = (rule.get("conditions") or {}).get("ref_name") or {}
+    bypass = rule.get("bypass_actors")
+    if bypass is not None and (not isinstance(bypass, list) or bypass):
+        raise RequestError("ruleset bypass actors are nonempty or malformed")
+    rules = rule.get("rules")
+    if (str(rule.get("id")) != ruleset_id
+            or rule.get("updated_at") != reviewed_at
+            or rule.get("target") != "branch"
+            or rule.get("enforcement") != "active"
+            or conditions.get("include") != [REQUEST_REF]
+            or conditions.get("exclude") != []
+            or not isinstance(rules, list)):
+        raise RequestError("request branch ruleset drifted from reviewed configuration")
+    types = {r.get("type") for r in rules if isinstance(r, dict)}
+    if not {"deletion", "non_fast_forward"} <= types:
+        raise RequestError("request branch must block deletion and non-fast-forward updates")
+
+
+def _status_history(read: Callable[[str], Any], sha: str) -> None:
+    """Fail closed if any prior claim exists, even if it was later superseded."""
+    for page in range(1, MAX_PAGES + 1):
+        history = read(API + "/commits/" + sha
+                       + "/statuses?per_page=100&page=" + str(page))
+        if not isinstance(history, list) or len(history) > 100:
+            raise RequestError("malformed commit status history")
+        for item in history:
+            if not isinstance(item, dict):
+                raise RequestError("malformed commit status")
+            if item.get("context") == STATUS_CONTEXT:
+                raise RequestError("request commit already claimed; no replay")
+        if len(history) < 100:
+            return
+    raise RequestError("commit status history too large to prove non-replay")
+
+
+def create_status(token: str, sha: str, state: str, run_id: str) -> None:
+    """Write append-only GitHub commit status as the protected execution audit."""
+    if state not in ("pending", "success", "failure"):
+        raise RequestError("unsupported claim state")
+    if not SHA.fullmatch(sha) or not run_id.isdecimal() or not run_id:
+        raise RequestError("invalid claim identity")
+    payload = json.dumps({
+        "state": state,
+        "context": STATUS_CONTEXT,
+        "description": "Project #3 request " + state + " (run " + run_id + ")",
+        "target_url": "https://github.com/" + REPO + "/actions/runs/" + run_id,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        API + "/statuses/" + sha, method="POST", data=payload,
+        headers={"Authorization": "Bearer " + token,
+                 "Content-Type": "application/json",
+                 "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "User-Agent": "prks-project3-assignment-request"})
+    try:
+        with pm._https_only_opener().open(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        raise RequestError("GitHub claim write failed: "
+                           + type(error).__name__) from None
+    if not isinstance(result, dict) or (result.get("context"), result.get("state")) != (STATUS_CONTEXT, state):
+        raise RequestError("GitHub claim write was not verified")
+
+
+def main() -> int:
+    claimed_sha: str | None = None
+    claim_token: str | None = None
+    claim_run_id: str | None = None
+    try:
+        path = os.environ.get("GITHUB_EVENT_PATH")
+        if not path:
+            raise RequestError("missing workflow event")
+        # Refuse untrusted event before making a token-backed REST request.
+        event = json.loads(Path(path).read_text("utf-8"))
+        _refuse_if_untrusted_event(event, os.environ)
+        actions_token = os.environ.get("GITHUB_TOKEN")
+        project_token = os.environ.get("PROJECT_SYNC_TOKEN")
+        if not actions_token or not project_token:
+            raise RequestError("scoped Actions/Project token missing")
+        provenance = provenance_client(actions_token)
+        command, sha = load_command(event, os.environ, provenance)
+        require_branch_rules(
+            provenance,
+            os.environ.get("PROJECT3_REQUEST_RULESET_ID", ""),
+            os.environ.get("PROJECT3_REQUEST_RULESET_UPDATED_AT", ""))
+        # Serialize processors in the existing assignment-mutations group.
+        # A commit status is append-only, so it survives branch rewinds, retries,
+        # and cases where the Project eventually returns to old field values.
+        _status_history(provenance, sha)
+        # Minimize the time between the last live tip check and the claim.
+        if (provenance(API + "/branches/" + BRANCH).get("commit") or {}).get("sha") != sha:
+            raise RequestError("request branch advanced before claim")
+        run_id = os.environ.get("GITHUB_RUN_ID", "")
+        create_status(actions_token, sha, "pending", run_id)
+        claimed_sha, claim_token, claim_run_id = sha, actions_token, run_id
+        issue_read = triage.rest_client(actions_token)
+        operation, _, _, _ = dispatch.parse(command)
+        mode = os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE", "")
+        gql = pm.GraphQL(pm.http_transport(project_token),
+                         allow_mutations=(operation == "apply" and mode == "apply"))
+        outcome, changed, issues = dispatch.execute(
+            command, project=pm.Project(gql), read=issue_read, mode=mode)
+        create_status(actions_token, sha, "success", run_id)
+        claimed_sha = None
+        print("Validated assignment request commit " + sha[:12], flush=True)
+        dispatch.report(outcome, changed, issues)
+        return 0
+    except (RequestError, dispatch.DispatchError, triage.TriageError,
+            pm.MigrationError, OSError, ValueError, KeyError, TypeError) as error:
+        # A failed triage apply might have written some Project fields.
+        # The workflow refreshes the read-only queue even on this failure.
+        # A consumed SHA remains claimed even when recording the outcome fails.
+        if claimed_sha and claim_token and claim_run_id:
+            try:
+                create_status(claim_token, claimed_sha, "failure", claim_run_id)
+            except RequestError:
+                print("assignment claim completion failed; pending claim is durable",
+                      file=sys.stderr)
+        print("assignment request refused or failed: "
+              + type(error).__name__ + ": " + str(error), file=sys.stderr)
+        dispatch.report("FAILED / POSSIBLY PARTIAL", 0, 0, failure=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
