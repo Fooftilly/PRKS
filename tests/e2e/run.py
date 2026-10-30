@@ -1202,7 +1202,7 @@ def _safe_worker_test_id(test_id, shard=None) -> str:
     return test_id
 
 
-def _last_started_test(log_file) -> str:
+def _last_started_test(log_file, shard=None) -> str:
     """Last test id a worker printed before hanging (see _TimingResult.startTest).
 
     ``startTest`` prints a bare ``test.id()`` line. Diagnostic / recycle /
@@ -1217,7 +1217,7 @@ def _last_started_test(log_file) -> str:
                 # "test_id <arbitrary worker chatter>" to the last test.
                 # startTest emits the bare id plus a newline, not a suffix.
                 s = ln.rstrip("\r\n")
-                if _safe_worker_test_id(s):
+                if _safe_worker_test_id(s, shard):
                     last = s
     except OSError:
         return ""
@@ -1268,9 +1268,7 @@ def _hang_attribution(worker) -> tuple[str, str]:
         # Stage-only fixture heartbeats intentionally do not use log test ids:
         # those may belong to the previous *completed* test.
         return _current_heartbeat_test_id(worker), str(hb.get("stage") or "")
-    last = _safe_worker_test_id(
-        _last_started_test(worker["log_file"]), worker.get("shard")
-    )
+    last = _last_started_test(worker["log_file"], worker.get("shard"))
     stage, diag_tid = _last_diag_stage(worker["log_file"])
     return last or _safe_worker_test_id(diag_tid, worker.get("shard")), stage
 
