@@ -919,6 +919,80 @@ class EarlyFailureMarkersTests(unittest.TestCase):
             self.assertEqual(len(result.failures), 5)
 
 
+class ParallelEarlyFailureMarkerTests(unittest.TestCase):
+    """Early markers must reach the parent without leaking arbitrary log data."""
+
+    def test_worker_markers_forward_incrementally_and_only_once(self):
+        test_id = _ids(_CASES, "FailingCases", "test_fails")[0]
+        marker = (
+            "[e2e-early-failure] FAIL %s exception=AssertionError stage=START"
+            % test_id
+        )
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "worker.log"
+            worker = {
+                "log_file": log,
+                "index": 0,
+                "early_marker_offset": 0,
+                "early_marker_count": 0,
+            }
+            out = io.StringIO()
+            log.write_text(marker[:55], encoding="utf-8")
+            with contextlib.redirect_stdout(out):
+                runner._forward_early_failure_markers(worker)
+                self.assertEqual(out.getvalue(), "")
+                # A partial flush is not duplicated or silently lost.
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write(marker[55:] + "\n")
+                runner._forward_early_failure_markers(worker)
+                runner._forward_early_failure_markers(worker)
+            self.assertEqual(out.getvalue().count(marker), 1)
+            self.assertEqual(worker["early_marker_count"], 1)
+
+    def test_worker_relay_rejects_forged_and_oversized_log_lines(self):
+        test_id = _ids(_CASES, "FailingCases", "test_fails")[0]
+        good = (
+            "[e2e-early-failure] ERROR %s exception=RuntimeError stage=APP_READY"
+            % test_id
+        )
+        forged = good + " SECRET_USER_DOCUMENT"
+        # A marker-like fragment in an oversized line is never a new marker.
+        long_line = "private" * 100 + good
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "worker.log"
+            worker = {"log_file": log, "index": 0}
+            log.write_text(
+                forged + "\n" + long_line + "\n" + good + "\n",
+                encoding="utf-8",
+            )
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                runner._forward_early_failure_markers(worker)
+            self.assertIn(good, out.getvalue())
+            self.assertEqual(out.getvalue().count(good), 1)
+            self.assertNotIn("SECRET_USER_DOCUMENT", out.getvalue())
+            self.assertNotIn("private", out.getvalue())
+
+    def test_parallel_failures_reach_parent_while_sibling_hangs(self):
+        failed_id = _ids(_CASES, "FailingCases", "test_fails")[0]
+        hung_id = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        out = io.StringIO()
+        with _import_runner() as runner, mock.patch.dict(
+            os.environ, {"PRKS_E2E_TEST_WATCHDOG": "2"}
+        ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            ok, _observed, failed, _phases = runner.run_parallel(
+                [failed_id, hung_id], 2, {}, False
+            )
+        self.assertFalse(ok)
+        self.assertIn(failed_id, failed)
+        self.assertIn(hung_id, failed)
+        output = out.getvalue()
+        marker = "[e2e-early-failure] FAIL %s" % failed_id
+        self.assertIn(marker, output)
+        self.assertIn("per-test watchdog", output)
+        self.assertLess(output.index(marker), output.index("per-test watchdog"))
+
+
 class ParallelRunnerProtocolTests(unittest.TestCase):
     """Real worker processes over deliberate pass/fail/crash cases. No browser."""
 
