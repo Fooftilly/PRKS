@@ -644,7 +644,13 @@ def _safe_watchdog_stage(stage) -> str:
     """Only fixed harness stages may enter timeout logs or artifacts."""
     if not isinstance(stage, str):
         return "unknown"
-    if stage in _SAFE_E2E_EARLY_STAGES or stage == "BETWEEN_TESTS":
+    # Explicit lifecycle phases emitted by OfflineWorkMetadataTests.start
+    # remain useful when a test hangs in its cleanup stack. Keep this
+    # watchdog-only: early failure markers have a narrower, fixed vocabulary.
+    if stage in _SAFE_E2E_EARLY_STAGES or stage in {
+        "BETWEEN_TESTS", "BODY_DONE", "CONTEXT_CLOSED", "SERVER_STOPPED",
+        "CHROMIUM_RECYCLE",
+    }:
         return stage
     if re.fullmatch(r"CHROMIUM_RECYCLE after_[0-9]{1,5}_contexts", stage):
         return stage
