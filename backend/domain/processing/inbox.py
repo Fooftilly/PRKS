@@ -406,8 +406,16 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
     a replacement arriving meanwhile is never the one removed.
     """
     path = resolve(inbox_dir, str(row["rel_path"]))
-    if path is None or not os.path.isfile(path):
+    if path is None:
         return True
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return True
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError as exc:  # present but unreadable: not proof the source is gone
+        LOGGER.warning("processing_source_stat_failed error=%s", type(exc).__name__)
+        return False
     try:
         claim = _claim(path)
     except OSError as exc:

@@ -293,6 +293,27 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNone(self.row(file_id))
         self.assertEqual(os.listdir(self.inbox), [])
 
+    def test_a_source_that_cannot_be_inspected_keeps_the_imported_row(self) -> None:
+        path = self.put("veiled.pdf")
+        file_id = self.staged("veiled.pdf")
+        self.crash_after_commit(file_id)
+        real = os.stat
+
+        def uninspectable(target: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            if os.fspath(target) == path:
+                raise PermissionError(target)
+            return real(target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "stat", uninspectable):
+            self.assertEqual(self.library.scan_processing_files(), [])  # never staged again
+        row = self.row(file_id)
+        assert row is not None
+        self.assertEqual(row["status"], "imported")
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertIsNone(self.row(file_id))
+        self.assertFalse(os.path.exists(path))
+
     def test_a_file_replaced_during_the_import_is_kept_and_listed_as_new(self) -> None:
         path = self.put("race.pdf")
         file_id = self.staged("race.pdf")
