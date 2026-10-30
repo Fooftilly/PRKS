@@ -443,9 +443,14 @@ class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
         # is not sufficient to allow it into CI logs.
         module = type(test).__module__
         if (
-            module not in E2E_MODULES
-            and module != "tests.e2e.runner_selfcheck_cases"
-        ) or test_id != unittest.TestCase.id(test) or not _E2E_TEST_ID_LINE.fullmatch(test_id):
+            not isinstance(test, unittest.TestCase)
+            or (
+                module not in E2E_MODULES
+                and module != "tests.e2e.runner_selfcheck_cases"
+            )
+            or test_id != unittest.TestCase.id(test)
+            or not _E2E_TEST_ID_LINE.fullmatch(test_id)
+        ):
             test_id = "(unavailable)"
         exception = getattr(exc_info[0], "__name__", "")
         # Do not trust an arbitrary dynamic class name just because it fits
