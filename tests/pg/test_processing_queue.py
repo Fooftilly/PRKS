@@ -476,6 +476,24 @@ class ImportTests(QueueTestCase):
         self.assertEqual(self.count("works"), 2)
         self.assertEqual(self.get(other["id"])["status"], "ready")
 
+    def test_a_database_error_fails_only_its_item(self) -> None:
+        from backend.db.errors import RetryTransactionError
+
+        first, failing, last = self.ready(), self.ready(), self.ready()
+        real = imports.import_item
+
+        def flaky(scope: LibraryScope, storage: Any, item_id: str, ids: imports.NewIds) -> imports.Imported:
+            if item_id == failing["id"]:
+                raise RetryTransactionError(sqlstate="40001")
+            return real(scope, storage, item_id, ids)
+
+        with mock.patch.object(imports, "import_item", flaky):
+            results = commands.import_many(self.db, self.actor.context, self.objects,
+                                           [first["id"], failing["id"], last["id"]])
+        self.assertEqual([result.code for result in results], [None, "RETRY", None])
+        self.assertEqual(self.get(failing["id"])["status"], "ready")
+        self.assertEqual(self.count("works"), 2)
+
     def test_a_work_merge_plan_lists_the_items_its_source_was_imported_from(self) -> None:
         source = self.import_(self.ready()["id"]).work_id
         target = self.import_(self.ready()["id"]).work_id

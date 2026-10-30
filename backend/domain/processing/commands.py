@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable, Optional, TypeVar
 
 from backend.db.database import Database, Isolation
+from backend.db.errors import DatabaseError
 from backend.domain.identity.authorization import AccessRefused, Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
@@ -134,8 +135,8 @@ def import_many(db: Database, ctx: RequestContext, storage: StorageBackend,
                 item_ids: Sequence[str]) -> list[ItemResult]:
     """Import each item in its own transaction, in the order given; a result per item.
 
-    One item's failure never affects another's: each refusal or error is
-    reported for its item and the batch goes on. An id given twice is
+    One item's failure never affects another's: each refusal or database
+    error is reported for its item and the batch goes on. An id given twice is
     imported once and answered twice (the second as a replay).
     """
     results: list[ItemResult] = []
@@ -150,6 +151,9 @@ def import_many(db: Database, ctx: RequestContext, storage: StorageBackend,
             results.append(ItemResult(item_id, code="PROCESSING_OBJECT_MISSING", message=str(exc)))
         except ValueError as exc:
             results.append(ItemResult(item_id, code="VALIDATION_ERROR", message=str(exc)))
+        except DatabaseError as exc:
+            # A refused write or an exhausted retry: the item's own failure.
+            results.append(ItemResult(item_id, code=exc.code, message=exc.message))
         else:
             results.append(ItemResult(item_id, work_id=done.work_id, created=done.created))
     return results
