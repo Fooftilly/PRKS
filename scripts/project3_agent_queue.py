@@ -28,6 +28,28 @@ AGENTS = {"cursor cloud": "Cursor Cloud", "cursor": "Cursor Cloud",
           "codex": "ChatGPT/Codex"}
 ROW_KEYS = {"number", "agent", "status", "execution"}
 
+# A public Project can include zero readable PRKS items even when PRKS itself
+# has become private. Check repository visibility independently of item content
+# without fetching or paginating unrelated repository issues.
+REPOSITORY_SCOPE_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner isPrivate
+  }
+}
+"""
+
+
+def _check_public_repository(gql: readiness.ReadOnlyGraphQL) -> None:
+    owner, name = readiness.REPOSITORY.split("/")
+    data = gql.query(REPOSITORY_SCOPE_QUERY, {"owner": owner, "name": name})
+    repo = readiness._obj(data.get("repository"), "repository")
+    if repo.get("nameWithOwner") != readiness.REPOSITORY:
+        raise readiness.ReadinessError("PRKS repository identity check failed")
+    if readiness._bool(repo.get("isPrivate"), "repository isPrivate"):
+        raise readiness.Confidential("PRKS repository is private; refusing queue publication")
+
+
 
 def canonical_agent(name: str) -> str:
     if not isinstance(name, str):
@@ -90,13 +112,17 @@ def build_queue_live(transport: readiness.Transport, *, now: datetime,
 
     Reuse the readiness module's read-only GraphQL guard, complete pagination,
     Project/field identity checks and per-item repository/privacy validation.
+    Independently verify the PRKS repository remains public before and after
+    reading all Project items, including when no issue content is readable.
     """
     gql = readiness.ReadOnlyGraphQL(transport)
     identity = {"owner": readiness.OWNER, "number": readiness.PROJECT_NUMBER}
     project = readiness.check_project(gql.query(readiness.PROJECT_QUERY, identity))
+    _check_public_repository(gql)
     items, _skipped = readiness.read_items(gql, include_assignees=False)
     if readiness.check_project(gql.query(readiness.PROJECT_QUERY, identity)) != project:
         raise readiness.ReadinessError("Project #3 changed while it was read; rerun")
+    _check_public_repository(gql)
     return _queue_from_rows(
         list(items.values()), project=project,
         generated_at=readiness._iso(now), source_run_id=source_run_id, now=now,
