@@ -51,6 +51,10 @@ def request_access_mode(method: str, path: str, query: str = "") -> str | None:
             return MODE_RESTORE
         if path == "/api/backups/stage":
             return MODE_READ
+        if path == "/api/processing-items":
+            # Streams a whole PDF before its one fenced PostgreSQL command;
+            # holding the mutation gate meanwhile would stall every other write.
+            return MODE_READ
         return MODE_MUTATION
     if method in _MUTATING_METHODS:
         return MODE_MUTATION

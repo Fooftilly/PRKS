@@ -36,6 +36,7 @@ from backend.db_manager import (
     prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
+from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.services import work_pdf_replace
 from backend.text_index import (
@@ -61,6 +62,7 @@ from backend.api_contract.openapi import (
     performance_diagnostics_openapi_document,
     positions_openapi_document,
     processing_files_openapi_document,
+    processing_items_openapi_document,
     publishers_openapi_document,
     saved_views_openapi_document,
 )
@@ -724,6 +726,18 @@ def _fetch_youtube_oembed(url: str) -> dict | None:
         return None
 
 
+def _skip_to(stream, offset: int) -> None:
+    """Position a read stream at ``offset``: seek when it can, else read and discard."""
+    if stream.seekable():
+        stream.seek(offset)
+        return
+    while offset > 0:
+        chunk = stream.read(min(65536, offset))
+        if not chunk:
+            return
+        offset -= len(chunk)
+
+
 class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     extensions_map = {
         **getattr(http.server.SimpleHTTPRequestHandler, "extensions_map", {}),
@@ -973,6 +987,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         return ok
 
     def handle_one_request(self):
+        # Set by a route that answers before reading its whole body (end_headers).
+        self._prks_unread_body = False
         try:
             super().handle_one_request()
         finally:
@@ -1037,6 +1053,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
         # class for JSON/API bodies that echo library content back to the page.
         self.send_header("X-Content-Type-Options", "nosniff")
+        if getattr(self, "_prks_unread_body", False):
+            # Unread body bytes must never be parsed as the next request:
+            # close the connection after this response (send_header sets
+            # close_connection for this header).
+            self.send_header("Connection", "close")
         super().end_headers()
 
     def _send_library_epoch_header(self):
@@ -1145,10 +1166,21 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed_path = urlparse(self.path)
         if parsed_path.path.startswith('/api/'):
+            upload = parsed_path.path == processing_api.COLLECTION
+            # The upload's body is read by its route, if at all: every answer
+            # before that (admission included) closes the connection.
+            self._prks_unread_body = upload
             if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
+                return
+            if upload:
+                with self._library_access(parsed_path), self._acting_for_request():
+                    try:
+                        processing_api.handle_upload(self, db)
+                    except Exception as exc:
+                        self._send_internal_error(exc)
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
@@ -1420,6 +1452,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
                 self.send_json(200, db.get_app_settings_response())
             elif saved_views_api.handle_patch(self, db, path, data):
+                return
+            elif processing_api.handle_patch(self, db, path, data):
                 return
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
@@ -1722,6 +1756,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             elif saved_views_api.handle_delete(self, db, path):
                 return
+            elif processing_api.handle_delete(self, db, path):
+                return
             elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
                 cid = unquote(path.split('/')[-1])
                 try:
@@ -1774,10 +1810,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """Serve PDF with Content-Length and Range support (required for HTTP/1.1 + WASM PDF engines)."""
         try:
             file_size = os.path.getsize(pdf_path)
+            f = open(pdf_path, "rb")
         except OSError:
             self.send_error(404, "PDF not found")
             return
+        with f:
+            self._send_pdf_stream(file_size, f, head_only=head_only)
 
+    def _send_pdf_stream(self, file_size: int, f, *, head_only: bool = False) -> None:
+        """Serve ``file_size`` PDF bytes read from ``f`` (positioned at 0), with Range support."""
         range_header = (self.headers.get("Range") or self.headers.get("range") or "").strip()
         start = 0
         end = file_size - 1
@@ -1831,15 +1872,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             if head_only:
                 return
-            with open(pdf_path, "rb") as f:
-                f.seek(start)
-                remaining = length
-                while remaining > 0:
-                    chunk = f.read(min(65536, remaining))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
+            _skip_to(f, start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(65536, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
             return
 
         ctx = self._request_context()
@@ -1860,12 +1900,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         if head_only:
             return
-        with open(pdf_path, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
+        remaining = file_size
+        while remaining > 0:
+            chunk = f.read(min(65536, remaining))
+            if not chunk:
+                break
+            self.wfile.write(chunk)
+            remaining -= len(chunk)
 
     def handle_api_head(self, parsed_path):
         path = parsed_path.path
@@ -1876,6 +1917,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_pdf_bytes(pdf_path, head_only=True)
                 else:
                     self.send_error(404, "PDF not found")
+            elif processing_api.handle_head(self, db, path):
+                return
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'pdf':
@@ -2434,6 +2477,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "Group not found")
             elif saved_views_api.handle_get(self, db, path):
                 return
+            elif processing_api.handle_get(self, db, path, parsed_path.query):
+                return
             elif path == '/api/research-graph':
                 raw_people = (query.get('people') or [''])[0].strip().lower()
                 include_people = raw_people in ('1', 'true', 'yes', 'on')
@@ -2478,6 +2523,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, saved_views_openapi_document())
             elif path == '/api/openapi/processing-files.json':
                 self.send_json(200, processing_files_openapi_document())
+            elif path == '/api/openapi/processing-items.json':
+                self.send_json(200, processing_items_openapi_document())
             elif path == '/api/positions':
                 rows = db.list_positions()
                 self.send_json(200, dump_response(PositionSummary, rows))
@@ -3280,6 +3327,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_json(200, {'id': g_id})
             elif saved_views_api.handle_post(self, db, path, data):
+                return
+            elif processing_api.handle_post(self, db, path, data):
                 return
             elif path == '/api/concepts':
                 if not isinstance(data, dict):
