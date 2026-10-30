@@ -170,8 +170,10 @@ class LivePublisherTests(unittest.TestCase):
         def transport(document, _variables):
             queries.append(document)
             return {}
-        with patches[0], patches[1], patches[2]:
+        with patches[0], patches[1] as project_items, patches[2]:
             actual = queue.build_queue_live(transport, now=NOW, source_run_id=1234)
+        project_items.assert_called_once()
+        self.assertEqual(project_items.call_args.kwargs, {"include_assignees": False})
         self.assertEqual(queries, [readiness.PROJECT_QUERY, readiness.PROJECT_QUERY])
         self.assertEqual([r["number"] for r in actual["issues"]], [201, 203])
         self.assertEqual(actual["source_run_id"], 1234)
