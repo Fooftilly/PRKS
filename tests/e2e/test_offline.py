@@ -1733,10 +1733,21 @@ class OfflineFoundationTests(unittest.TestCase):
         page.route("**/api/**", hold_reachability_gets)
         try:
             context.set_offline(False)
+            # An unrelated API GET may be the first held route. It is not
+            # proof that the actual connectivity probe is blocked, and
+            # releasing the routes before /api/settings arrives can make this
+            # reconnect race test fail or pass for the wrong reason.
+            def settings_probe_held():
+                return any(
+                    route.request.method == "GET"
+                    and urlparse(route.request.url).path == "/api/settings"
+                    for route in held_probe
+                )
+
             deadline = time.time() + 12
-            while time.time() < deadline and not held_probe:
+            while time.time() < deadline and not settings_probe_held():
                 page.wait_for_timeout(50)
-            self.assertTrue(held_probe, "reachability probe did not start")
+            self.assertTrue(settings_probe_held(), "held /api/settings reachability probe did not start")
 
             page.wait_for_timeout(200)
             self.assertNotEqual(_connectivity_state(page), "online")
