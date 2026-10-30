@@ -534,7 +534,7 @@ class CrashRecoveryTests(ProcessingTestCase):
         os.rename(os.path.dirname(claimed), intended)  # the link under the recovered name never happened
         copy = self.put("orig (recovered 0123abcd).pdf")  # a separate file with the same bytes
         imported = {"orig (recovered 0123abcd).pdf": inbox.file_sha256(copy) or ""}
-        self.assertEqual(inbox.recover_claims(self.inbox, imported), set())
+        self.assertEqual(inbox.recover_claims(self.inbox, imported).unsettled, set())
         with open(path, "rb") as handle:  # put back at its own name, not removed as that import's bytes
             self.assertEqual(handle.read(), PDF)
         self.assertEqual(sorted(os.listdir(self.inbox)), ["orig (recovered 0123abcd).pdf", "orig.pdf"])
@@ -558,6 +558,32 @@ class CrashRecoveryTests(ProcessingTestCase):
         staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
         self.assertEqual(staged, public)  # recovery recognises the link and lists the file once
         self.assertEqual(sorted(os.listdir(self.inbox)), public)
+
+    def test_a_row_follows_its_file_to_a_recovered_name(self) -> None:
+        for crash in (False, True):
+            with self.subTest(crash_before_the_record=crash):
+                path = self.put("a.pdf", b"%PDF-1.4 original")
+                file_id = self.staged("a.pdf")
+                self.library.update_processing_file(file_id, {"title": "Kept"})
+                claimed = inbox._claim(path)  # the process dies here
+                assert claimed is not None
+                self.put("a.pdf", b"%PDF-1.4 temporary")  # another writer takes the name
+                if crash:  # a later scan linked it under a recovered name, then died before the record
+                    intended = os.path.dirname(claimed) + "-0123abcd"
+                    os.rename(os.path.dirname(claimed), intended)
+                    os.link(os.path.join(intended, "a.pdf"), os.path.join(self.inbox, "a (recovered 0123abcd).pdf"))
+                staged = {row["rel_path"]: row for row in self.library.scan_processing_files()}
+                recovered = next(rel for rel in staged if rel != "a.pdf")
+                self.assertEqual((staged[recovered]["id"], staged[recovered]["title"]), (file_id, "Kept"))
+                self.assertNotEqual(staged["a.pdf"]["id"], file_id)  # the other writer's file is new
+                with open(os.path.join(self.inbox, recovered), "rb") as handle:
+                    self.assertEqual(handle.read(), b"%PDF-1.4 original")
+                os.remove(path)  # the other writer's file goes again
+                staged = self.library.scan_processing_files()
+                self.assertEqual([(row["id"], row["title"]) for row in staged], [(file_id, "Kept")])
+                for name in os.listdir(self.inbox):
+                    os.remove(os.path.join(self.inbox, name))
+                self.library.scan_processing_files()
 
     def test_a_failed_publication_under_a_recovered_name_keeps_the_row(self) -> None:
         path = self.put("a.pdf", b"%PDF-1.4 original")
@@ -677,7 +703,7 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNotNone(inbox._claim(imported_path))  # the process dies here
         self.assertIsNotNone(inbox._claim(pending_path))
         with mock.patch.object(inbox, "_remove", return_value=False), \
-                mock.patch.object(inbox, "_put_back", return_value=False):  # the inbox is not writable
+                mock.patch.object(inbox, "_put_back", return_value=None):  # the inbox is not writable
             self.assertEqual([row["id"] for row in self.library.scan_processing_files()], [pending_id])
         kept = self.row(imported_id)
         assert kept is not None
@@ -734,7 +760,7 @@ class CrashRecoveryTests(ProcessingTestCase):
             with self.subTest(walk=walk):
                 with mock.patch.object(inbox.os, "scandir", unreadable_box):
                     if walk == "discover":  # claims are settled first, so only the inbox walk fails
-                        with mock.patch.object(inbox, "recover_claims", return_value=set()), \
+                        with mock.patch.object(inbox, "recover_claims", return_value=inbox.Recovery(set(), {})), \
                                 self.assertRaises(PermissionError):
                             self.library.scan_processing_files()
                     else:

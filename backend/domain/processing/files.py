@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import posixpath
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
@@ -133,6 +133,10 @@ ON CONFLICT (library_id, rel_path) DO NOTHING
 """
 _REFRESH_SQL: LiteralString = """
 UPDATE prks.processing_files SET status = 'pending', filename = %(filename)s, updated_at = now()
+WHERE library_id = %(library_id)s AND id = %(file_id)s AND status <> 'imported'
+"""
+_MOVE_SQL: LiteralString = """
+UPDATE prks.processing_files SET rel_path = %(rel_path)s, updated_at = now()
 WHERE library_id = %(library_id)s AND id = %(file_id)s AND status <> 'imported'
 """
 _VANISHED_SQL: LiteralString = """
@@ -429,7 +433,8 @@ def scan_rows(scope: LibraryScope) -> list[dict[str, Any]]:
 
 
 def reconcile(scope: LibraryScope, discovered: Sequence[tuple[str, str]], finished: Sequence[str],
-              unheld: Sequence[str], new_ids: Sequence[str], claimed: Collection[str] = ()) -> None:
+              unheld: Sequence[str], new_ids: Sequence[str], claimed: Collection[str] = (),
+              moved: Optional[Mapping[str, str]] = None) -> None:
     """The scan's one transaction: the inbox as it was found, under the inbox lock.
 
     ``finished`` are ``imported`` rows whose import the scan completed (their
@@ -441,12 +446,21 @@ def reconcile(scope: LibraryScope, discovered: Sequence[tuple[str, str]], finish
     filename follows the file; a row whose file is gone is deleted unless it
     is ``imported``, held by a restore, or ``claimed`` (its file is still
     claimed, :func:`backend.domain.processing.inbox.recover_claims`).
+    ``moved`` maps a path to the recovered name its claimed file was put
+    back under (its own was taken): the row, with its edits, moves with the
+    file unless a row already names the new path, and the file now at the
+    old path is staged as new.
     """
     if finished:
         scope.execute(_FINISH_SQL, {"ids": list(finished)})
     if unheld:
         scope.execute(_CLEAR_HOLD_SQL, {"ids": list(unheld)})
     existing = {str(row["rel_path"]): row for row in scope.execute(_EXISTING_SQL)}
+    for old_path, new_path in (moved or {}).items():
+        row = existing.get(old_path)
+        if row is not None and row["status"] != IMPORTED and new_path not in existing:
+            scope.execute(_MOVE_SQL, {"file_id": row["id"], "rel_path": new_path})
+            existing[new_path] = existing.pop(old_path)
     found = {rel_path for rel_path, _filename in discovered}
     staged: list[tuple[str, str, str]] = []
     for (rel_path, filename), new_id in zip(discovered, new_ids):

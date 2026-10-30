@@ -54,7 +54,7 @@ import stat
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, BinaryIO, LiteralString, Optional, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, BinaryIO, LiteralString, NamedTuple, Optional, Protocol, TypeVar
 
 from backend.domain.organization import folders
 from backend.domain.processing import files
@@ -290,27 +290,28 @@ def _public_names(claim_dir: str, name: str, *, linked: bool = False) -> tuple[s
     return (name, os.path.basename(_recovered_name(name, recovered_id)))
 
 
-def _published(claim: str, path: str) -> bool:
-    """Whether the claimed file is already linked at ``path`` or at its recovered name (:func:`_put_back`)."""
+def _published(claim: str, path: str) -> Optional[str]:
+    """Where the claimed file is already linked: ``path``, its recovered name (:func:`_put_back`), or None."""
     try:
         claimed = os.lstat(claim)
     except OSError:
-        return False
+        return None
     if claimed.st_nlink < 2:
-        return False
+        return None
     directory = os.path.dirname(path)
     for name in _public_names(os.path.dirname(claim), os.path.basename(path)):
+        public = os.path.join(directory, name)
         try:
-            entry = os.lstat(os.path.join(directory, name))
+            entry = os.lstat(public)
         except OSError:
             continue
         if (entry.st_dev, entry.st_ino) == (claimed.st_dev, claimed.st_ino):
-            return True
-    return False
+            return public
+    return None
 
 
-def _put_back(claim: str, path: str) -> bool:
-    """Make a claimed file visible again; whether it is.
+def _put_back(claim: str, path: str) -> Optional[str]:
+    """Make a claimed file visible again; the path it is visible at, or None.
 
     It returns to ``path``, never over a file that has arrived there since;
     then it takes a recovered name beside it (:func:`_recovered_name`), so
@@ -322,14 +323,15 @@ def _put_back(claim: str, path: str) -> bool:
     already linked back by an earlier attempt only loses its private name,
     so the file is never listed twice.
     """
-    if _published(claim, path):
+    published = _published(claim, path)
+    if published is not None:
         try:
             os.remove(claim)
         except OSError as exc:
             LOGGER.warning("processing_claim_unlink_failed error=%s", type(exc).__name__)
-            return False
+            return None
         _release(claim)
-        return True
+        return published
     target = path
     for attempt in range(3):
         if attempt:
@@ -341,7 +343,7 @@ def _put_back(claim: str, path: str) -> bool:
                 os.rename(directory, renamed)
             except OSError as exc:
                 LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
-                return False
+                return None
             claim = os.path.join(renamed, os.path.basename(claim))
             target = _recovered_name(path, recovered_id)
         try:
@@ -350,11 +352,11 @@ def _put_back(claim: str, path: str) -> bool:
             continue
         except OSError as exc:
             LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
-            return False
+            return None
         if attempt:
             recorded = _record_linked(claim)
             if recorded is None:
-                return True  # published; the claim stays for the next scan's recovery
+                return target  # published; the claim stays for the next scan's recovery
             claim = recorded
         try:
             os.remove(claim)
@@ -362,9 +364,9 @@ def _put_back(claim: str, path: str) -> bool:
             LOGGER.warning("processing_claim_unlink_failed error=%s", type(exc).__name__)
         else:
             _release(claim)
-        return True
+        return target
     LOGGER.warning("processing_claim_kept reason=names_taken")
-    return False
+    return None
 
 
 def _record_linked(claim: str) -> Optional[str]:
@@ -384,7 +386,16 @@ def _record_linked(claim: str) -> Optional[str]:
     return os.path.join(marked, os.path.basename(claim))
 
 
-def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
+class Recovery(NamedTuple):
+    """What :func:`recover_claims` left for the scan's reconciliation."""
+
+    unsettled: set[str]
+    """The ``rel_path`` of each claimed file left unsettled, whose row is kept."""
+    moved: dict[str, str]
+    """``rel_path`` → recovered ``rel_path`` of each file put back under a recovered name."""
+
+
+def recover_claims(inbox_dir: str, imported: dict[str, str]) -> Recovery:
     """Settle every claimed file a crash left in the inbox (:func:`_claim`).
 
     Runs under the inbox lock, so no claim of a running import or scan is
@@ -394,27 +405,30 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     has taken the path); any other claim is put back (:func:`_put_back`).
     An empty claim directory (a crash before the rename) is removed.
     Returns the ``rel_path`` of each claimed file left unsettled (it could
-    be neither removed nor put back), whose row the scan keeps. A claim
-    directory that cannot be listed raises ``OSError``, failing the scan.
+    be neither removed nor put back), whose row the scan keeps, and where
+    each file put back under a recovered name went, so that its row (and
+    its edits) follows it. A claim directory that cannot be listed raises
+    ``OSError``, failing the scan.
 
     Only a real directory, and in it a regular file, is settled. Anything
     else with a claim's name (a link, a device) is not one the protocol
     made; it is left alone and never read, linked or published.
     """
     root = os.path.realpath(inbox_dir)
-    unsettled: set[str] = set()
+    recovery = Recovery(set(), {})
     if not os.path.isdir(root):
-        return unsettled
+        return recovery
     for directory, dirs, _names in os.walk(root, onerror=_unlisted):
         claims = [name for name in dirs if _CLAIM.fullmatch(name) is not None]
         dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
         for name in claims:
-            _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled)
-    return unsettled
+            _settle(inbox_dir, root, os.path.join(directory, name), imported, recovery)
+    return recovery
 
 
-def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str]) -> None:
-    """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`)."""
+def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], recovery: Recovery) -> None:
+    """Settle one claim directory a crash left, adding to ``recovery`` (:func:`recover_claims`)."""
+    unsettled = recovery.unsettled
     # A claim directory that cannot be read fails the scan: the files it may
     # hold are absent from the inbox, so reconciling would drop their rows.
     try:
@@ -448,8 +462,11 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
                 continue
             if digest in expected:
                 continue
-        if not _put_back(claim, path):
+        published = _put_back(claim, path)
+        if published is None:
             unsettled.update(rel_paths)
+        elif published != path:
+            recovery.moved[rel_paths[0]] = os.path.relpath(published, root).replace(os.sep, "/")
     try:
         os.rmdir(claim_dir)
     except OSError:
@@ -480,8 +497,8 @@ def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
     with inbox_lock(runner.database, runner.library_id):
         _refuse_shared(runner)
         rows = runner.read(files.scan_rows)
-        unsettled = recover_claims(inbox_dir, {str(row["rel_path"]): str(row["import_sha256"]) for row in rows
-                                               if row["status"] == files.IMPORTED})
+        unsettled, moved = recover_claims(inbox_dir, {str(row["rel_path"]): str(row["import_sha256"]) for row in rows
+                                                      if row["status"] == files.IMPORTED})
         finished: list[str] = []
         for row in rows:
             if row["status"] == files.IMPORTED and row["rel_path"] not in unsettled and _finish_import(inbox_dir, row):
@@ -492,7 +509,7 @@ def scan(runner: Runner, inbox_dir: str, new_id: Callable[[], str]) -> None:
                   if row["status"] != files.IMPORTED and row["restore_hold"] and row["restore_sha256"]
                   and row["rel_path"] in on_disk and _hash_at(inbox_dir, row["rel_path"]) == row["restore_sha256"]]
         new_ids = [new_id() for _found in discovered]
-        runner.command(lambda scope: files.reconcile(scope, discovered, finished, unheld, new_ids, unsettled))
+        runner.command(lambda scope: files.reconcile(scope, discovered, finished, unheld, new_ids, unsettled, moved))
 
 
 def _hash_at(inbox_dir: str, rel_path: str) -> Optional[str]:
@@ -534,7 +551,7 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
     if digest is None:
         return False
     if digest != row["import_sha256"]:
-        return _put_back(claim, path)
+        return _put_back(claim, path) is not None
     return _drop_stale_links(claim) and _remove(inbox_dir, claim, path)
 
 
