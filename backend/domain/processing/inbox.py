@@ -187,6 +187,9 @@ def _remove(inbox_dir: str, claim: str, path: str) -> bool:
 def _claim(path: str) -> Optional[str]:
     """Move the file at ``path`` into a private directory beside it; None when there is none.
 
+    An entry there that is no regular file is put back (:func:`_restore`)
+    and counts as none; ``OSError`` when it cannot be.
+
     Writers outside PRKS do not take the inbox lock, so a path can be
     replaced at any time. After the rename the claimed name holds exactly
     one file, which no outside writer names: what is hashed is what is
@@ -205,7 +208,43 @@ def _claim(path: str) -> Optional[str]:
     except OSError:
         _release(claim)
         raise
+    # A writer may have put a directory (or a link) at the path since it was
+    # checked: it is no file to claim, and goes back as it is.
+    if not stat.S_ISREG(os.lstat(claim).st_mode):
+        if not _restore(claim, path):
+            raise OSError("processing claim of a non-file kept")
+        return None
     return claim
+
+
+def _restore(claim: str, path: str) -> bool:
+    """Return a claimed entry that is no regular file to the inbox, unread; whether it is.
+
+    It goes back to ``path`` or, when that is taken, to a recovered name
+    beside it (:func:`_recovered_name`), never over an entry there: a
+    directory by a rename (which replaces at most an empty directory), any
+    other entry by a link to itself (``follow_symlinks=False``) before its
+    claim is removed. Left claimed, the next scan's recovery tries again.
+    """
+    directory = stat.S_ISDIR(os.lstat(claim).st_mode)
+    for target in (path, _recovered_name(path, uuid.uuid4().hex[:8]), _recovered_name(path, uuid.uuid4().hex[:8])):
+        if os.path.lexists(target):
+            continue
+        try:
+            if directory:
+                os.rename(claim, target)
+            else:
+                os.link(claim, target, follow_symlinks=False)
+                os.remove(claim)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
+            return False
+        _release(claim)
+        return True
+    LOGGER.warning("processing_claim_kept reason=names_taken")
+    return False
 
 
 def _drop_stale_links(claim: str) -> bool:
@@ -404,9 +443,10 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     their own. Put back under a recovered name, they are staged as new; a
     row at their old path names the file there now, and keeps its edits.
 
-    Only a real directory, and in it a regular file, is settled. Anything
-    else with a claim's name (a link, a device) is not one the protocol
-    made; it is left alone and never read, linked or published.
+    Only a real directory is settled; anything else with a claim's name (a
+    link, a device) is not one the protocol made, and is left alone. An
+    entry in it that is no regular file (a directory a writer put at the
+    path as it was claimed) is returned to the inbox unread (:func:`_restore`).
     """
     root = os.path.realpath(inbox_dir)
     unsettled: set[str] = set()
@@ -499,7 +539,9 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
             unsettled.update(rel_paths)
             continue
         if not regular:
-            LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
+            LOGGER.warning("processing_claim_restored reason=not_a_regular_file")
+            if not _restore(claim, path):
+                unsettled.update(rel_paths)
             continue
         expected = {imported[rel_path] for rel_path in rel_paths if rel_path in imported}
         if expected:

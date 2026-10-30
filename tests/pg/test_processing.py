@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -791,12 +792,56 @@ class CrashRecoveryTests(ProcessingTestCase):
         claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'1' * 32}")
         os.mkdir(claim_dir)
         os.symlink(secret, os.path.join(claim_dir, "other.pdf"))  # a claimed file that is a link
-        self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertEqual(self.library.scan_processing_files(), [])  # the returned link leads outside: not listed
         self.assertTrue(os.path.islink(linked_dir))
-        self.assertTrue(os.path.islink(os.path.join(claim_dir, "other.pdf")))
-        self.assertEqual(sorted(os.listdir(self.inbox)), sorted([os.path.basename(linked_dir), os.path.basename(claim_dir)]))
+        self.assertTrue(os.path.islink(os.path.join(self.inbox, "other.pdf")))  # returned as the link itself
+        self.assertEqual(sorted(os.listdir(self.inbox)), sorted([os.path.basename(linked_dir), "other.pdf"]))
         with open(secret, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 outside")
+
+    def test_a_directory_put_at_the_path_as_it_is_claimed_goes_back(self) -> None:
+        path = self.put("a.pdf")
+        file_id = self.staged("a.pdf")
+        self.crash_after_commit(file_id)
+        real = os.rename
+
+        def swapped(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(source) == path and inbox.CLAIM_PREFIX in os.fspath(target) and os.path.isfile(path):
+                os.remove(path)  # a writer replaces the file with a folder after the check
+                self.put("a.pdf/inner.pdf", b"%PDF-1.4 inner")
+            real(source, target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "rename", swapped):
+            staged = self.library.scan_processing_files()
+        self.assertIsNone(self.row(file_id))  # the imported file is gone from the path
+        self.assertEqual([row["rel_path"] for row in staged], ["a.pdf/inner.pdf"])
+        self.assertEqual(os.listdir(self.inbox), ["a.pdf"])
+
+    def test_a_claimed_directory_a_crash_left_goes_back(self) -> None:
+        claim_dir = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'2' * 32}")
+        real = os.rename
+
+        def stuck(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(source).startswith(claim_dir):
+                raise PermissionError(target)
+            real(source, target, *args, **kwargs)
+
+        for taken in (False, True):
+            with self.subTest(path_taken=taken):
+                self.put(f"{os.path.basename(claim_dir)}/a.pdf/inner.pdf", b"%PDF-1.4 inner")
+                if taken:
+                    self.put("a.pdf", b"%PDF-1.4 newer")
+                with mock.patch.object(inbox.os, "rename", stuck):
+                    self.assertEqual(inbox.recover_claims(self.inbox, {}), {"a.pdf"})  # kept, and its row with it
+                self.assertEqual(inbox.recover_claims(self.inbox, {}), set())
+                inner = [rel for rel, _name in inbox.discover(self.inbox) if rel.endswith("inner.pdf")]
+                self.assertEqual(len(inner), 1)
+                self.assertEqual(inner[0] == "a.pdf/inner.pdf", not taken)
+                with open(os.path.join(self.inbox, *inner[0].split("/")), "rb") as handle:
+                    self.assertEqual(handle.read(), b"%PDF-1.4 inner")
+                self.assertFalse(os.path.lexists(claim_dir))
+                shutil.rmtree(self.inbox)
+                os.makedirs(self.inbox)
 
     def test_an_unsettled_claim_keeps_its_row_until_it_is_settled(self) -> None:
         imported_path = self.put("done.pdf")
