@@ -158,6 +158,7 @@ jobs:
           set -euo pipefail
           target=tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests
           cp tests/e2e/test_app.py "$RUNNER_TEMP/prks-divider-original-test.py"
+          trap 'cp "$RUNNER_TEMP/prks-divider-original-test.py" tests/e2e/test_app.py' EXIT
           for mode in during-drag after-release; do
             # Each control runs INDEPENDENTLY so the first injected request
             # cannot conceal a false negative in the delayed-request case.
@@ -228,4 +229,51 @@ jobs:
           echo 'Both independent negative controls correctly rejected deliberate Work GETs'
 
       - name: Verify PDF recovery and Person generation oracles reject regressions
-        run: python .github/scripts/e2e_flake_negative_controls.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Each mutation changes only this CI job's checkout. Restore both
+          # original files even on assertion failure or runner interruption.
+          cp tests/e2e/test_app.py "$RUNNER_TEMP/prks-pdf-original-test.py"
+          cp tests/e2e/test_person_groups_offline.py "$RUNNER_TEMP/prks-person-original-test.py"
+          trap 'cp "$RUNNER_TEMP/prks-pdf-original-test.py" tests/e2e/test_app.py; cp "$RUNNER_TEMP/prks-person-original-test.py" tests/e2e/test_person_groups_offline.py' EXIT
+
+          for case in pdf person; do
+            case "$case" in
+              pdf)
+                target=tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
+                sentinel=PRKS_NC_PDF_RECOVERY_OMITTED
+                evidence="server never stored comment 'recovered highlight'"
+                ;;
+              person)
+                target=tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
+                sentinel=PRKS_NC_PERSON_GROUP_INVALIDATION_SUPPRESSED
+                evidence="not greater than"
+                ;;
+            esac
+
+            python .github/scripts/e2e_flake_negative_controls.py "$case"
+            log="$RUNNER_TEMP/prks-oracle-$case.log"
+            if timeout --kill-after=5s 180s python tests/e2e/run.py --jobs 1 --no-pointer-capture "$target" > "$log" 2>&1; then
+              cat "$log"
+              echo "::error::$case oracle accepted an injected data-safety defect"
+              exit 1
+            else
+              status=$?
+            fi
+            # GNU timeout reaps the command's process group on expiry. Never
+            # treat watchdog/timeout or unrelated failures as valid evidence.
+            if (( status == 124 || status == 137 )) ||
+               ! grep -Fq "$sentinel" "$log" ||
+               ! grep -Fq "$evidence" "$log" ||
+               ! grep -Fq 'FAILED (' "$log"; then
+              cat "$log"
+              echo "::error::$case did not fail for its injected oracle violation (exit $status)"
+              exit 1
+            fi
+
+            printf 'PASS (expected rejection): %s %s\n' "$case" "$target" | tee -a "$GITHUB_STEP_SUMMARY"
+            # Restore the original file before starting the next control.
+            cp "$RUNNER_TEMP/prks-pdf-original-test.py" tests/e2e/test_app.py
+            cp "$RUNNER_TEMP/prks-person-original-test.py" tests/e2e/test_person_groups_offline.py
+          done
