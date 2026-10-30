@@ -1,0 +1,21 @@
+name: Project 3 assignment request signal
+
+# Unprivileged push event on the dedicated ChatGPT-writable request branch.
+# NO secrets, checkout, command content, write token, or Project API calls.
+# The privileged processor on master independently validates GitHub REST data.
+on:
+  push:
+    branches: [project3-assignment-requests]
+    paths:
+      - project3-assignment-request.json
+
+permissions: {}
+
+jobs:
+  signal:
+    if: github.repository == 'Fooftilly/PRKS'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Notify trusted processor
+        run: echo "Assignment request branch advanced; trusted master must verify it."

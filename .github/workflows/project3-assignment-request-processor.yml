@@ -1,0 +1,57 @@
+name: Project 3 assignment request processor
+
+# Runs trusted master code after an unprivileged branch-push signal.
+# NEVER check out, execute or import code from the request branch. The command
+# is one pinned JSON file, validated against GitHub REST provenance.
+on:
+  workflow_run:
+    workflows: [Project 3 assignment request signal]
+    types: [completed]
+    branches: [project3-assignment-requests]
+
+permissions: {}
+
+concurrency:
+  group: project3-assignment-mutations
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  assignment:
+    if: >-
+      github.repository == 'Fooftilly/PRKS' &&
+      github.ref == 'refs/heads/master' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'project3-assignment-requests' &&
+      github.event.workflow_run.actor.id == 46610174
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: project-automation
+    permissions:
+      contents: read
+      issues: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate request and update Project #3
+        id: assignment
+        env:
+          PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
+        run: python3 scripts/project3_assignment_request.py
+
+      - name: Refresh read-only agent queue after writes or possible partial writes
+        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master
