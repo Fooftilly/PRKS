@@ -352,9 +352,9 @@ def _put_back(claim: str, path: str) -> bool:
             LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
             return False
         if attempt:
-            recorded = _record_linked(claim, target)
+            recorded = _record_linked(claim)
             if recorded is None:
-                return False
+                return True  # published; the claim stays for the next scan's recovery
             claim = recorded
         try:
             os.remove(claim)
@@ -367,22 +367,19 @@ def _put_back(claim: str, path: str) -> bool:
     return False
 
 
-def _record_linked(claim: str, target: str) -> Optional[str]:
-    """Record on its directory that ``claim`` is linked at its recovered name ``target``; the claim's new path.
+def _record_linked(claim: str) -> Optional[str]:
+    """Record on its directory that ``claim`` is linked at its recovered name; the claim's new path.
 
-    Without the record the link is taken back, so a recovered name never
-    stands for the claim unless the claim was published under it.
+    None when the record fails: the link is left alone (an outside writer
+    may have replaced it already) and so is the claim, which recovery
+    recognises by its inode while that link holds it (:func:`_published`).
     """
     directory = os.path.dirname(claim)
     marked = f"{directory}-p"
     try:
         os.rename(directory, marked)
     except OSError as exc:
-        LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
-        try:
-            os.remove(target)
-        except OSError:
-            pass  # the claim is still linked there: recovery recognises it (:func:`_published`)
+        LOGGER.warning("processing_claim_unrecorded error=%s", type(exc).__name__)
         return None
     return os.path.join(marked, os.path.basename(claim))
 

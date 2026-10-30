@@ -538,7 +538,7 @@ class CrashRecoveryTests(ProcessingTestCase):
             self.assertEqual(handle.read(), PDF)
         self.assertEqual(sorted(os.listdir(self.inbox)), ["orig (recovered 0123abcd).pdf", "orig.pdf"])
 
-    def test_a_link_that_cannot_be_recorded_is_taken_back(self) -> None:
+    def test_a_link_that_cannot_be_recorded_is_left_for_recovery(self) -> None:
         path = self.put("busy.pdf", b"%PDF-1.4 old")
         claimed = inbox._claim(path)
         assert claimed is not None
@@ -551,12 +551,12 @@ class CrashRecoveryTests(ProcessingTestCase):
             real(source, target, *args, **kwargs)
 
         with mock.patch.object(inbox.os, "rename", unrecorded):
-            self.assertFalse(inbox._put_back(claimed, path))
-        public = [name for name in os.listdir(self.inbox) if not name.startswith(inbox.CLAIM_PREFIX)]
-        self.assertEqual(public, ["busy.pdf"])  # the recovered link was taken back
+            self.assertTrue(inbox._put_back(claimed, path))
+        public = sorted(name for name in os.listdir(self.inbox) if not name.startswith(inbox.CLAIM_PREFIX))
+        self.assertEqual(len(public), 2)  # nothing is removed: the recovered name may be another writer's by now
         staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
-        self.assertEqual(len(staged), 2)  # the claim is put back by the next scan, listed once
-        self.assertIn("busy.pdf", staged)
+        self.assertEqual(staged, public)  # recovery recognises the link and lists the file once
+        self.assertEqual(sorted(os.listdir(self.inbox)), public)
 
     def test_a_failed_publication_under_a_recovered_name_keeps_the_row(self) -> None:
         path = self.put("a.pdf", b"%PDF-1.4 original")
