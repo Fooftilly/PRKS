@@ -1193,6 +1193,15 @@ def _read_heartbeat(path) -> dict | None:
     return data
 
 
+def _safe_worker_test_id(test_id, shard=None) -> str:
+    """Only attribute a genuine, complete E2E id from the worker's own shard."""
+    if not isinstance(test_id, str) or not _E2E_TEST_ID_LINE.fullmatch(test_id):
+        return ""
+    if shard is not None and test_id not in shard:
+        return ""
+    return test_id
+
+
 def _last_started_test(log_file) -> str:
     """Last test id a worker printed before hanging (see _TimingResult.startTest).
 
@@ -1204,8 +1213,11 @@ def _last_started_test(log_file) -> str:
     try:
         with open(log_file, encoding="utf-8", errors="replace") as handle:
             for ln in handle:
-                s = ln.strip()
-                if _E2E_TEST_ID_LINE.match(s):
+                # A prefix match misattributes lines such as
+                # "test_id <arbitrary worker chatter>" to the last test.
+                # startTest emits the bare id plus a newline, not a suffix.
+                s = ln.rstrip("\r\n")
+                if _safe_worker_test_id(s):
                     last = s
     except OSError:
         return ""
@@ -1239,7 +1251,9 @@ def _current_heartbeat_test_id(worker) -> str:
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if not hb:
         return ""
-    return str(hb.get("test_id") or "").strip()
+    return _safe_worker_test_id(
+        hb.get("test_id"), worker.get("shard")
+    )
 
 
 def _hang_attribution(worker) -> tuple[str, str]:
@@ -1250,10 +1264,15 @@ def _hang_attribution(worker) -> tuple[str, str]:
     """
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if hb and (hb.get("test_id") or hb.get("stage")):
-        return str(hb.get("test_id") or ""), str(hb.get("stage") or "")
-    last = _last_started_test(worker["log_file"])
+        # Do not promote an out-of-shard, malformed or stale heartbeat id.
+        # Stage-only fixture heartbeats intentionally do not use log test ids:
+        # those may belong to the previous *completed* test.
+        return _current_heartbeat_test_id(worker), str(hb.get("stage") or "")
+    last = _safe_worker_test_id(
+        _last_started_test(worker["log_file"]), worker.get("shard")
+    )
     stage, diag_tid = _last_diag_stage(worker["log_file"])
-    return last or diag_tid, stage
+    return last or _safe_worker_test_id(diag_tid, worker.get("shard")), stage
 
 
 def _worker_exceeded_watchdog(worker, threshold_s: int) -> tuple[bool, dict | None, float]:
