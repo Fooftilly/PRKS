@@ -13,6 +13,9 @@ const forbidden = [
   "globalThis.dispatchEvent(new UIEvent('resize'))",
   "window['dispatchEvent'](new CustomEvent('resize'))",
   "dispatchEvent(new Event('resize'))",
+  "self.dispatchEvent(new Event('resize'))",
+  "globalThis.window.dispatchEvent(new Event('resize'))",
+  "window.dispatchEvent(new Event(`resize`))",
 ]
 
 const allowed = [
@@ -22,12 +25,14 @@ const allowed = [
   "window.dispatchEvent(new Event('scroll'))",
   "window.dispatchEvent(new CustomEvent('layout-resized'))",
   "function dispatchEvent(event) { document.body.dispatchEvent(event) } dispatchEvent(new Event('resize'))",
+  "function mount(window) { window.dispatchEvent(new Event('resize')) }",
+  "function mount(globalThis) { globalThis.dispatchEvent(new Event('resize')) }",
 ]
 
 async function check(eslint: ESLint, filePath: string, code: string, expected: number) {
   const [result] = await eslint.lintText(code, { filePath })
   const violations = result.messages.filter((message) =>
-    message.ruleId === 'no-restricted-syntax' || message.ruleId === 'prks/no-bare-global-resize')
+    message.ruleId === 'prks/no-synthetic-window-resize')
   expect(violations, code).toHaveLength(expected)
   if (expected) {
     expect(violations[0]?.message).toContain('ResizeObserver')
