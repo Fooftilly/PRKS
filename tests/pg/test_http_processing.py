@@ -120,7 +120,7 @@ class UploadTests(ProcessingHttpTestCase):
         body = self.ok(res, 201)
         item = body["item"]
         self.assertTrue(body["created"])
-        self.assertEqual(body["duplicates"], {"items": [], "works": []})
+        self.assertEqual(body["duplicates"], {"items": [], "works": [], "more_items": False, "more_works": False})
         self.assertEqual((item["status"], item["original_filename"], item["byte_size"], item["revision"]),
                          ("ready", "Über paper.pdf", len(data), 0))
         self.assertEqual(item["draft"]["title"], "")

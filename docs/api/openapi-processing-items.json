@@ -915,12 +915,13 @@
       },
       "ProcessingDuplicates": {
         "additionalProperties": false,
-        "description": "Other ``ready`` items and Works of this Library with the same bytes: a warning only.",
+        "description": "Other ``ready`` items and Works of this Library with the same bytes: a warning only.\n\nEach list names at most ten (items oldest first, Works by id); ``more_*``\nsays whether there are more.",
         "properties": {
           "items": {
             "items": {
               "$ref": "#/components/schemas/DuplicateItem"
             },
+            "maxItems": 10,
             "title": "Items",
             "type": "array"
           },
@@ -928,13 +929,24 @@
             "items": {
               "$ref": "#/components/schemas/DuplicateWork"
             },
+            "maxItems": 10,
             "title": "Works",
             "type": "array"
+          },
+          "more_items": {
+            "title": "More Items",
+            "type": "boolean"
+          },
+          "more_works": {
+            "title": "More Works",
+            "type": "boolean"
           }
         },
         "required": [
           "items",
-          "works"
+          "works",
+          "more_items",
+          "more_works"
         ],
         "title": "ProcessingDuplicates",
         "type": "object"

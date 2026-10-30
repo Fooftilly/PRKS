@@ -104,12 +104,18 @@ class DuplicateWork(BaseModel):
 
 
 class ProcessingDuplicates(BaseModel):
-    """Other ``ready`` items and Works of this Library with the same bytes: a warning only."""
+    """Other ``ready`` items and Works of this Library with the same bytes: a warning only.
+
+    Each list names at most ten (items oldest first, Works by id); ``more_*``
+    says whether there are more.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    items: list[DuplicateItem]
-    works: list[DuplicateWork]
+    items: list[DuplicateItem] = Field(max_length=10)
+    works: list[DuplicateWork] = Field(max_length=10)
+    more_items: bool
+    more_works: bool
 
 
 class ProcessingItemUploaded(BaseModel):
