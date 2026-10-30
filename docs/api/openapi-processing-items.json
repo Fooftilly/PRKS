@@ -1,0 +1,1972 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Processing queue slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for the Processing queue (\u00a711.5), served by the PostgreSQL runtime. Schemas are generated from backend/api_contract."
+  },
+  "paths": {
+    "/api/processing-items": {
+      "get": {
+        "operationId": "listProcessingItems",
+        "summary": "One page of the queue: ready items, oldest upload first",
+        "tags": [
+          "processing-items"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's `next_cursor`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A limit out of range or a malformed cursor (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "uploadProcessingItem",
+        "summary": "Upload one PDF into the queue",
+        "description": "The body is the PDF. A used `Idempotency-Key` answers with its item without reading the body. Any answer sent before the whole body was read carries `Connection: close`. Duplicates by content are a warning only.",
+        "tags": [
+          "processing-items"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Minted by the client per file: 1-128 of `A-Z a-z 0-9 . _ : -`.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "PRKS-Filename",
+            "in": "header",
+            "required": false,
+            "description": "The original filename, percent-encoded UTF-8; display only.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Content-Length",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 5
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/pdf": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The key was used: its item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemUploaded"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The item was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemUploaded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The body stalled for 30 seconds, or did not arrive within 60 seconds plus its length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The key's item was deleted (PROCESSING_ITEM_DELETED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "No Content-Length (PROCESSING_LENGTH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not sent as application/pdf (unsupported_media_type), or the body does not start with %PDF- (PROCESSING_NOT_A_PDF).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processing-items/{item_id}": {
+      "parameters": [
+        {
+          "name": "item_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getProcessingItem",
+        "summary": "An item, or the marker an import or delete left",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateProcessingItem",
+        "summary": "Edit a ready item's draft at its revision",
+        "tags": [
+          "processing-items"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessingItemUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The item, one revision on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No or a bad revision, or a refused draft value, folder, person, tag or role type (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, PROCESSING_ITEM_DELETED); `item` is the item as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteProcessingItem",
+        "summary": "Remove a ready item; deleting it again changes nothing",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted marker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The item was imported (PROCESSING_ITEM_IMPORTED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processing-items/{item_id}/pdf": {
+      "parameters": [
+        {
+          "name": "item_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getProcessingItemPdf",
+        "summary": "A ready item's PDF as uploaded, with Range support (also HEAD)",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No ready item with that id (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range is outside the file."
+          }
+        }
+      }
+    },
+    "/api/processing-items/{item_id}/import": {
+      "parameters": [
+        {
+          "name": "item_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "importProcessingItem",
+        "summary": "Turn a ready item into a Work, in one transaction",
+        "description": "A retry of a finished import answers with the same Work and creates nothing.",
+        "tags": [
+          "processing-items"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Any JSON value, ignored. Send `{}`.",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Imported before: its Work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemImported"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Imported.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemImported"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused draft value (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was deleted (IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/processing-items/import": {
+      "post": {
+        "operationId": "importProcessingItems",
+        "summary": "Import several items, each in its own transaction",
+        "description": "One item's failure never affects another's: each has its own result.",
+        "tags": [
+          "processing-items"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessingImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A result per item, in order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingImportResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "item_ids missing, empty, not strings, or more than 500 (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ProcessingFileRole": {
+        "additionalProperties": false,
+        "description": "A staged person role, in inbox order.",
+        "properties": {
+          "person_id": {
+            "title": "Person Id",
+            "type": "string"
+          },
+          "person_name": {
+            "title": "Person Name",
+            "type": "string"
+          },
+          "role_type": {
+            "title": "Role Type",
+            "type": "string"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "person_id",
+          "person_name",
+          "role_type",
+          "order_index"
+        ],
+        "title": "ProcessingFileRole",
+        "type": "object"
+      },
+      "ProcessingFileTag": {
+        "additionalProperties": false,
+        "description": "A staged tag.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "created_at"
+        ],
+        "title": "ProcessingFileTag",
+        "type": "object"
+      },
+      "ProcessingItemDraft": {
+        "additionalProperties": false,
+        "description": "The Work a ``ready`` item will become, as the user drafts it.",
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status_draft": {
+            "enum": [
+              "Planned",
+              "In Progress",
+              "Completed",
+              "Paused",
+              "Not Started"
+            ],
+            "title": "Status Draft",
+            "type": "string"
+          },
+          "published_date": {
+            "title": "Published Date",
+            "type": "string"
+          },
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "author_text": {
+            "title": "Author Text",
+            "type": "string"
+          },
+          "year": {
+            "title": "Year",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "edition": {
+            "title": "Edition",
+            "type": "string"
+          },
+          "journal": {
+            "title": "Journal",
+            "type": "string"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "string"
+          },
+          "issue": {
+            "title": "Issue",
+            "type": "string"
+          },
+          "pages": {
+            "title": "Pages",
+            "type": "string"
+          },
+          "isbn": {
+            "title": "Isbn",
+            "type": "string"
+          },
+          "doi": {
+            "title": "Doi",
+            "type": "string"
+          },
+          "doc_type": {
+            "title": "Doc Type",
+            "type": "string"
+          },
+          "private_notes": {
+            "title": "Private Notes",
+            "type": "string"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "target_folder_id": {
+            "title": "Target Folder Id",
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingFileRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingFileTag"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "status_draft",
+          "published_date",
+          "abstract",
+          "source_url",
+          "author_text",
+          "year",
+          "publisher",
+          "location",
+          "edition",
+          "journal",
+          "volume",
+          "issue",
+          "pages",
+          "isbn",
+          "doi",
+          "doc_type",
+          "private_notes",
+          "thumb_page",
+          "target_folder_id",
+          "roles",
+          "tags"
+        ],
+        "title": "ProcessingItemDraft",
+        "type": "object"
+      },
+      "ProcessingItem": {
+        "additionalProperties": false,
+        "description": "One queue item: a ``ready`` item with its draft, or an ``imported`` or ``deleted`` marker.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "imported",
+              "deleted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "imported_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imported At"
+          },
+          "imported_work_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imported Work Id"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingItemDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "original_filename",
+          "sha256",
+          "byte_size",
+          "status",
+          "revision",
+          "created_at",
+          "updated_at",
+          "imported_at",
+          "imported_work_id",
+          "deleted_at",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemPage": {
+        "additionalProperties": false,
+        "description": "GET /api/processing-items: one page of ``ready`` items, oldest upload first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `cursor` for the next page; null on the last.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "DuplicateItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "original_filename"
+        ],
+        "title": "DuplicateItem",
+        "type": "object"
+      },
+      "DuplicateWork": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "DuplicateWork",
+        "type": "object"
+      },
+      "ProcessingDuplicates": {
+        "additionalProperties": false,
+        "description": "Other ``ready`` items and Works of this Library with the same bytes: a warning only.\n\nEach list names at most ten (items oldest first, Works by id); ``more_*``\nsays whether there are more.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateItem"
+            },
+            "maxItems": 10,
+            "title": "Items",
+            "type": "array"
+          },
+          "works": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateWork"
+            },
+            "maxItems": 10,
+            "title": "Works",
+            "type": "array"
+          },
+          "more_items": {
+            "title": "More Items",
+            "type": "boolean"
+          },
+          "more_works": {
+            "title": "More Works",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "works",
+          "more_items",
+          "more_works"
+        ],
+        "title": "ProcessingDuplicates",
+        "type": "object"
+      },
+      "ProcessingItemUploaded": {
+        "additionalProperties": false,
+        "description": "POST /api/processing-items: the item (201 created, 200 for a used Idempotency-Key).",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ProcessingItem"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "duplicates": {
+            "$ref": "#/components/schemas/ProcessingDuplicates"
+          }
+        },
+        "required": [
+          "item",
+          "created",
+          "duplicates"
+        ],
+        "type": "object"
+      },
+      "ProcessingFileRoleInput": {
+        "description": "A staged role as the endpoint accepts it.\n\nAn item without a person or role type is skipped. A duplicate\nperson/role pair keeps its first position.",
+        "properties": {
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Person Id"
+          },
+          "role_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A People role type (domain-checked).",
+            "title": "Role Type"
+          }
+        },
+        "title": "ProcessingFileRoleInput",
+        "type": "object"
+      },
+      "ProcessingFileTagInput": {
+        "description": "A staged tag as the endpoint accepts it. ``tag_id`` is read when ``id`` is empty.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "tag_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tag Id"
+          }
+        },
+        "title": "ProcessingFileTagInput",
+        "type": "object"
+      },
+      "ProcessingItemUpdateRequest": {
+        "description": "PATCH /api/processing-items/{id}. ``revision`` is required; omit a field to leave it unchanged.\n\nDraft values are stringified and trimmed. ``thumb_page`` keeps a whole\npage number of at least 1 and clears anything else. An empty\n``target_folder_id`` clears it. ``roles`` and ``tags`` replace the\ndrafted list; ``null`` leaves it unchanged.",
+        "properties": {
+          "revision": {
+            "description": "The item's revision the edit was made against.",
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "status_draft": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "One of the draft statuses (domain-checked).",
+            "title": "Status Draft"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Legacy alias of status_draft.",
+            "title": "Status"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published Date"
+          },
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Abstract"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Url"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Author Text"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Year"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Publisher"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "edition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Edition"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Journal"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Volume"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Issue"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages"
+          },
+          "isbn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Isbn"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Doi"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Doc Type"
+          },
+          "private_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Private Notes"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thumb Page"
+          },
+          "target_folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Folder Id"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingFileRoleInput"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Roles"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingFileTagInput"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tags"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemImported": {
+        "additionalProperties": false,
+        "description": "POST /api/processing-items/{id}/import: the Work (201 created, 200 for an import already done).",
+        "properties": {
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item_id",
+          "work_id",
+          "created"
+        ],
+        "type": "object"
+      },
+      "ProcessingImportRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/processing-items/import: the items to import, each in its own transaction, in order.",
+        "properties": {
+          "item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "item_ids"
+        ],
+        "type": "object"
+      },
+      "ProcessingImportResult": {
+        "additionalProperties": false,
+        "description": "One item's outcome: ``work_id`` when it imported, else ``code`` (and ``item`` when there is one).",
+        "properties": {
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "work_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Id"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "item_id",
+          "ok",
+          "work_id",
+          "created",
+          "code",
+          "message",
+          "item"
+        ],
+        "title": "ProcessingImportResult",
+        "type": "object"
+      },
+      "ProcessingImportResults": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingImportResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemRefusal": {
+        "additionalProperties": false,
+        "description": "Every refusal on these routes.\n\nThe queue's own refusals and admission's authorization refusals carry\n``code`` and ``message`` (and ``item``, as it now is, when there is\none). Refusals decided before admission or the route (Host, Origin, the\nJSON body reader, an unavailable database) carry ``error`` alone.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingItem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}

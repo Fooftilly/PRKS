@@ -2397,9 +2397,12 @@ its bytes are durable and adopted, and a failed import changes nothing, so
 
 **Upload** (`POST /api/processing-items`): the body is the raw PDF
 (`Content-Type: application/pdf`), with `Content-Length` required, the
-original filename in a header, and a client-minted `Idempotency-Key` per
-file. One request carries one file, so a picker selection and a drop share
-the same call, and each file has its own progress, failure and retry.
+original filename percent-encoded (UTF-8) in `PRKS-Filename`, and a
+client-minted `Idempotency-Key` per file. One request carries one file, so a
+picker selection and a drop share the same call, and each file has its own
+progress, failure and retry. The controller is `backend/api/processing.py`;
+the wire contract is `backend/api_contract/processing_items.py` and
+`docs/api/openapi-processing-items.json`.
 
 1. Authenticate, resolve the Library and check maintenance and the epoch,
    before reading the body.
@@ -2427,10 +2430,15 @@ the same call, and each file has its own progress, failure and retry.
 A response sent before the whole body was read (an idempotent hit, an
 authentication, maintenance, size or type refusal) carries
 `Connection: close` and the server closes the connection, so unread bytes
-can never be parsed as the next request on a persistent connection. A
-client that disconnects mid-upload, a short body or a crash before step 4
-leaves only an unreferenced object, which the orphan sweep collects; no
-item appears.
+can never be parsed as the next request on a persistent connection. The
+upload holds the Library's read gate while the body streams, and a restore
+waits for every read to finish, so the body must arrive within a bound:
+each read waits at most 30 seconds for data, and the whole body must arrive
+within 60 seconds plus its declared length at 256 KiB/s. A stalled or
+trickling upload is answered `408 PROCESSING_UPLOAD_TIMEOUT` with
+`Connection: close`, and nothing is published. A client that disconnects
+mid-upload, a short body or a crash before step 4 leaves only an
+unreferenced object, which the orphan sweep collects; no item appears.
 
 **Edit** (`PATCH /api/processing-items/{id}`): the request carries the
 `revision` it edited. The command locks the item `FOR NO KEY UPDATE`,
@@ -2485,6 +2493,12 @@ timestamps and, for an import, the Work reference. They make upload,
 import and delete retries idempotent without a time window and keep
 provenance. They are not listed in the queue, and nothing prunes them;
 retention can be revisited if database growth ever requires it.
+
+**Queue** (`GET /api/processing-items?limit=&cursor=`): `ready` items with
+their drafts, oldest upload first, one page (at most 500, default 100) per
+request with an opaque `next_cursor`. `GET /api/processing-items/{id}`
+answers any item, markers included, so a client can learn what became of an
+item it lost track of.
 
 **Preview** (`GET /api/processing-items/{id}/pdf`): streams a `ready`
 item's object with `HEAD` and `Range` support through the same object read
