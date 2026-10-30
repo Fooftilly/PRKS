@@ -80,8 +80,8 @@ class ProcessingTestCase(WorksFacadeTestCase):
             return bool(got[0])
 
     def crash_after_commit(self, file_id: str) -> dict[str, Any]:
-        """Import with the source removal failing, as a crash after COMMIT would leave it."""
-        with mock.patch.object(inbox, "_remove", return_value=False):
+        """Import with the source left in place, as a crash after COMMIT would leave it."""
+        with mock.patch.object(inbox, "_finish_import", return_value=False):
             return self.library.import_processing_file(file_id)
 
 
@@ -492,6 +492,29 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(staged, ["kept.pdf"])
         self.assertIsNone(self.row(file_id))
         self.assertEqual(os.listdir(self.inbox), ["kept.pdf"])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+
+    def test_imported_bytes_that_cannot_be_removed_stay_claimed(self) -> None:
+        path = self.put("stuck.pdf")
+        file_id = self.staged("stuck.pdf")
+        self.crash_after_commit(file_id)
+        real = inbox.file_sha256
+
+        def hash_then_replace(claimed: str) -> Optional[str]:
+            digest = real(claimed)
+            self.put("stuck.pdf", b"%PDF-1.4 newer")  # a new file at the public path
+            return digest
+
+        with mock.patch.object(inbox, "file_sha256", hash_then_replace), \
+                mock.patch.object(inbox, "_remove", return_value=False):
+            self.assertEqual(self.library.scan_processing_files(), [])
+        self.assertIsNotNone(self.row(file_id))
+        self.assertEqual(sorted(os.listdir(self.inbox))[1:], ["stuck.pdf"])  # no recovered name
+        staged = [row["rel_path"] for row in self.library.scan_processing_files()]
+        self.assertEqual(staged, ["stuck.pdf"])
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(os.listdir(self.inbox), ["stuck.pdf"])
         with open(path, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 newer")
 

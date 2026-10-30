@@ -402,10 +402,9 @@ def _finish_import(inbox_dir: str, row: dict[str, Any]) -> bool:
     digest = file_sha256(claim)
     if digest != row["import_sha256"]:
         return _put_back(claim, path) and digest is not None
-    if _remove(inbox_dir, claim, path):
-        return True
-    _put_back(claim, path)
-    return False
+    # The imported bytes stay claimed when they cannot be removed: the row is
+    # kept, and the next scan's recovery removes them (never republishes them).
+    return _remove(inbox_dir, claim, path)
 
 
 # -- import -----------------------------------------------------------------------
