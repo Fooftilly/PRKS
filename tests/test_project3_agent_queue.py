@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -147,6 +149,82 @@ class PublisherTests(unittest.TestCase):
                 queue.read_json(str(p))
 
 
+class LivePublisherTests(unittest.TestCase):
+    def _mock_project_read(self, rows=None, *, project=None):
+        checked = snapshot()["project"] if project is None else project
+        entries = [item(203, "Claude Code"), item(201, "Cursor Cloud", execution=None),
+                   item(202, None), item(204, "Manual"),
+                   item(205, "ChatGPT/Codex", state="CLOSED")]
+        entries = entries if rows is None else rows
+        return (
+            mock.patch.object(readiness, "check_project", side_effect=[checked, checked]),
+            mock.patch.object(readiness, "read_items",
+                              return_value=({r["number"]: r for r in entries}, Counter())),
+            mock.patch.object(readiness, "read_open_issues",
+                              side_effect=AssertionError("must not query unrelated open issues")),
+        )
+
+    def test_live_path_keeps_full_project_guard_and_matches_snapshot_output(self):
+        patches = self._mock_project_read()
+        queries = []
+        def transport(document, _variables):
+            queries.append(document)
+            return {}
+        with patches[0], patches[1], patches[2]:
+            actual = queue.build_queue_live(transport, now=NOW, source_run_id=1234)
+        self.assertEqual(queries, [readiness.PROJECT_QUERY, readiness.PROJECT_QUERY])
+        self.assertEqual([r["number"] for r in actual["issues"]], [201, 203])
+        self.assertEqual(actual["source_run_id"], 1234)
+        self.assertEqual(actual["count"], 2)
+        self.assertEqual(actual["stale_after"], "2026-10-30T08:00:00Z")
+        rows = [item(201, "Cursor Cloud", execution=None), item(202, None),
+                item(203, "Claude Code"), item(204, "Manual"),
+                item(205, "ChatGPT/Codex", state="CLOSED")]
+        self.assertEqual(actual, queue.build_queue(snapshot(rows), now=NOW))
+
+    def test_live_refuses_private_changed_or_partial_project(self):
+        with mock.patch.object(readiness, "check_project",
+                               side_effect=readiness.Confidential("private")):
+            with self.assertRaises(readiness.Confidential):
+                queue.build_queue_live(lambda _q, _v: {}, now=NOW)
+        patches = self._mock_project_read()
+        with patches[0] as check, patches[1], patches[2]:
+            check.side_effect = [snapshot()["project"], {**snapshot()["project"], "closed": True}]
+            with self.assertRaises(readiness.ReadinessError):
+                queue.build_queue_live(lambda _q, _v: {}, now=NOW)
+        with mock.patch.object(readiness, "check_project", return_value=snapshot()["project"]), \\
+             mock.patch.object(readiness, "read_items",
+                               side_effect=readiness.Malformed("incomplete pagination")):
+            with self.assertRaises(readiness.Malformed):
+                queue.build_queue_live(lambda _q, _v: {}, now=NOW)
+
+    def test_live_cli_requires_token_and_does_not_overwrite_on_failed_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "queue.json"
+            out.write_text("untouched", encoding="utf-8")
+            command = ["publish-live", "--out", str(out)]
+            self.assertEqual(queue.main(command, now=NOW, env={}), 1)
+            self.assertEqual(out.read_text(encoding="utf-8"), "untouched")
+            patches = self._mock_project_read()
+            with patches[0], patches[1], patches[2]:
+                rc = queue.main(command, now=NOW,
+                                env={"PROJECT3_READINESS_TOKEN": "test-token",
+                                     "GITHUB_REPOSITORY": "Fooftilly/PRKS",
+                                     "GITHUB_RUN_ID": "1234"},
+                                transport_factory=lambda token: (lambda _q, _v: {}))
+            self.assertEqual(rc, 0)
+            data = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(data["source_run_id"], 1234)
+            published = out.read_text(encoding="utf-8")
+            with mock.patch.object(readiness, "check_project",
+                                   side_effect=readiness.Confidential("private")):
+                rc = queue.main(command, now=NOW,
+                                env={"PROJECT3_READINESS_TOKEN": "test-token"},
+                                transport_factory=lambda _token: (lambda _q, _v: {}))
+            self.assertEqual(rc, 1)
+            self.assertEqual(out.read_text(encoding="utf-8"), published)
+
+
 class ShellTests(unittest.TestCase):
     def test_bash_syntax(self) -> None:
         subprocess.run(["bash", "-n", str(SHELL)], check=True)
@@ -217,8 +295,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("git push origin HEAD:refs/heads/project3-agent-queue", content)
         self.assertIn("git switch --orphan project3-agent-queue", content)
         self.assertNotIn("git rm -rfq -- .", content)
-        self.assertIn("scripts/project3_readiness.py snapshot", content)
-        self.assertIn("scripts/project3_agent_queue.py publish", content)
+        self.assertIn("scripts/project3_agent_queue.py publish-live", content)
+        self.assertNotIn("scripts/project3_readiness.py snapshot", content)
+        self.assertNotIn("--snapshot \"$RUNNER_TEMP/project3-readiness.json\"", content)
         for ref in re.findall(r"uses:\s*(\S+)", content):
             self.assertRegex(ref, r"@[0-9a-f]{40}$")
 
