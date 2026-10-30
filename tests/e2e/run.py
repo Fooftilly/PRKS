@@ -1056,6 +1056,7 @@ def _spawn_worker(index, jobs, shard, workdir, browsers_path, fail_fast=False):
         "log_file": log_file,
         "early_marker_offset": 0,
         "early_marker_count": 0,
+        "early_marker_skip_overlong": False,
         "heartbeat_file": heartbeat_file,
         "shard": shard,
         "started": time.perf_counter(),
@@ -1099,7 +1100,6 @@ def _forward_early_failure_markers(worker) -> None:
         with open(worker["log_file"], encoding="utf-8", errors="replace") as handle:
             handle.seek(worker.get("early_marker_offset", 0))
             while worker.get("early_marker_count", 0) < 3:
-                start = handle.tell()
                 line = handle.readline(512)
                 if not line:
                     break
@@ -1107,7 +1107,13 @@ def _forward_early_failure_markers(worker) -> None:
                     # Writer has not flushed a complete line yet.
                     break
                 worker["early_marker_offset"] = handle.tell()
-                if len(line) >= 512 or not line.endswith("\n"):
+                if worker.get("early_marker_skip_overlong"):
+                    if line.endswith("\n"):
+                        worker["early_marker_skip_overlong"] = False
+                    continue
+                if not line.endswith("\n"):
+                    # Ignore all subsequent fragments of this oversized line.
+                    worker["early_marker_skip_overlong"] = True
                     continue
                 fields = line.rstrip("\r\n").split(" ")
                 if len(fields) != 5 or fields[0] != "[e2e-early-failure]":
