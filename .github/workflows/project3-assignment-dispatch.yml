@@ -1,0 +1,56 @@
+name: Project 3 assignment dispatch
+
+# Comment-free, owner-authorized Project V2 field writer. Inputs are data read
+# from GITHUB_EVENT_PATH, never interpolated into shell or run as code.
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Versioned JSON assignment command with expected_before values'
+        type: string
+        required: true
+
+permissions: {}
+
+# Serialize writes with the legacy issue bridge during migration.
+concurrency:
+  group: project3-assignment-mutations
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  assignment:
+    if: >-
+      github.repository == 'Fooftilly/PRKS' &&
+      github.ref == 'refs/heads/master' &&
+      github.actor_id == '46610174'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: project-automation
+    permissions:
+      contents: read
+      issues: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate command and update Project V2
+        id: assignment
+        env:
+          PROJECT_SYNC_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
+        run: python3 scripts/project3_assignment_dispatch.py
+
+      - name: Refresh read-only queue after any successful writes
+        if: steps.assignment.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master

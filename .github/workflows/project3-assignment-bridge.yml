@@ -11,9 +11,9 @@ on:
 
 permissions: {}
 
-# Serialize assignment requests to keep single-use claim comments effective.
+# Serialize with comment-free dispatch requests; claim comments remain single-use.
 concurrency:
-  group: project3-assignment-bridge
+  group: project3-assignment-mutations
   cancel-in-progress: false
   queue: max
 
