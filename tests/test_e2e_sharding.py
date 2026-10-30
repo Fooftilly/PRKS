@@ -1488,8 +1488,9 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                     runner._hang_attribution(worker), ("", "SERVER_READY")
                 )
 
-                # With no in-flight heartbeat, prefer the last complete
-                # assigned ID, not a foreign log or diag marker.
+                # With no in-flight heartbeat, scan backward in effect:
+                # a foreign line after the assigned ID must not erase it.
+                self.assertEqual(runner._last_started_test(log, [own]), own)
                 hb.write_text("{}", encoding="utf-8")
                 self.assertEqual(
                     runner._hang_attribution(worker), (own, "APP_READY")
