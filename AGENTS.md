@@ -20,9 +20,8 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 - `docs/agent-workflows/github-discussions.md`: decision/proposal discussion lifecycle, maintainer approval boundary, duplicate investigation coordination, and issue handoff; load it when opening, assessing, or converting a GitHub Discussion, not for unrelated code tasks.
 - `docs/agent-workflows/issue-dependencies.md`: who may record native Blocked by issue relationships and how to run, audit and revoke the dependency writer workflow; load it only when recording or reviewing issue dependencies.
 - `docs/agent-workflows/project-3.md`: GitHub Project #3 contract (lifecycle Status, Execution, native workflows, view filters, archival, credentials); load it only when changing Project #3 configuration or its automation.
-- `docs/agent-workflows/project3-assignment-bridge.md`: verified GitHub App comment-based issue assignment command bridge (inbox #982); never submit an assignment without explicit maintainer intent and live roadmap/PR checks.
-- `docs/agent-workflows/project3-assignment-dispatch.md`: owner-authenticated workflow-dispatch Project V2 writer (comment-free, checked before snapshots, protected environment), with staged #982 retirement.
-- `docs/agent-workflows/project3-assignment-request.md`: authenticated ChatGPT-writable assignment request branch, privileged master relay and staged removal of the legacy comment inbox.
+- `docs/agent-workflows/project3-assignment-dispatch.md`: owner-authenticated workflow-dispatch Project V2 writer (comment-free, checked before snapshots, protected environment), with the legacy #982 retirement record.
+- `docs/agent-workflows/project3-assignment-request.md`: authenticated ChatGPT-writable assignment request branch, privileged master relay replacing the retired legacy comment inbox.
 - `docs/agent-workflows/project3-triage.md`: maintainer-approved, dry-run-first batch Agent/Status/Execution edits for existing Project #3 issues; never infer approval or roadmap safety from ownership.
 
 Nested `AGENTS.md` files refine these root rules for their directory scope.

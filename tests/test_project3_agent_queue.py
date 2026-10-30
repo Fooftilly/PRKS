@@ -223,16 +223,13 @@ class WorkflowTests(unittest.TestCase):
             self.assertRegex(ref, r"@[0-9a-f]{40}$")
 
 
-    def test_assignment_bridge_triggers_without_workflow_run(self) -> None:
-        bridge = (ROOT / ".github" / "workflows" / "project3-assignment-bridge.yml").read_text(encoding="utf-8")
-        self.assertIn("environment: project-automation", bridge)
-        self.assertIn("github.actor == 'Fooftilly'", bridge)
-        self.assertIn("github.event.issue.number == 982", bridge)
-        self.assertIn("actions: write", bridge)
-        self.assertIn("issues: write", bridge)
-        self.assertIn("gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master", bridge)
-        self.assertLess(bridge.index("run: python3 scripts/project3_command_bridge.py"),
-                        bridge.index("gh workflow run project3-agent-queue.yml"))
+    def test_legacy_comment_assignment_workflow_is_retired(self) -> None:
+        self.assertFalse(
+            (ROOT / ".github/workflows/project3-assignment-bridge.yml").exists()
+        )
+        self.assertTrue(
+            (ROOT / ".github/workflows/project3-assignment-request-processor.yml").is_file()
+        )
 
 
 if __name__ == "__main__":

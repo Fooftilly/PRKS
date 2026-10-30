@@ -174,20 +174,24 @@ and complete guarded command. It **cannot** restrict writes exclusively to
 the ChatGPT Connector app. Any authenticated access acting as the repository
 owner and permitted to push this branch would also be authorized, subject
 to the same command, ruleset and replay checks. If strictly verifying the
-ChatGPT App ID is a requirement, keep #982 or use a dedicated custom GitHub
-App integration with a verifiable caller identity; do not claim this relay
-has that property.
+ChatGPT App ID is a requirement, use a dedicated custom GitHub App
+integration with a verifiable caller identity; do not claim this relay
+has that property. The retired #982 listener had stronger App attribution.
 
-The three assignment writers (manual dispatch, legacy comment bridge, and
-request branch) share the same serialized concurrency group. A failed
-attempt could be partially applied; the processor still refreshes the
+The two assignment writers (manual dispatch and request branch) share the
+same serialized concurrency group. A failed attempt
+could be partially applied; the processor still refreshes the
 read-only queue, and logs a failed/possibly-partial audit in the Actions
 run summary. There is no atomic GitHub Projects transaction.
 
-## Issue #982 retirement
+## Legacy #982 retirement
 
-After a successful live ChatGPT-originated check **and** apply on this path,
-with verified Project fields, queue publication and maintained safety checks,
-the legacy comment bridge can be disabled in a **separate** cleanup PR. Retire
-#982 only after confirming no other caller still relies on it. Keep the
-local triage utility and manual dispatch path as independent fallbacks.
+On 2026-10-30, the connected ChatGPT GitHub plugin submitted a successful
+check-only request (processor run 41096256458) and a guarded apply request
+(processor run 41097094867). The apply verified one Project #3 update on #629;
+queue publisher run 41097256390 succeeded and a complete fresh snapshot
+confirmed `Execution: Agent` with unchanged `Agent: Claude Code` and
+`Status: Inbox`. The legacy issue-comment listener and its related code were
+removed in the separate retirement cleanup. Keep the request-branch ruleset,
+reviewed timestamp pin, one-time claims and live expected-before checks.
+Manual dispatch and reviewed local triage remain independent fallbacks.
