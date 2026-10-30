@@ -242,17 +242,21 @@ jobs:
             case "$case" in
               pdf)
                 target=tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
+                source_file=tests/e2e/test_app.py
                 sentinel=PRKS_NC_PDF_RECOVERY_OMITTED
                 evidence="server never stored comment 'recovered highlight'"
                 ;;
               person)
                 target=tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
+                source_file=tests/e2e/test_person_groups_offline.py
                 sentinel=PRKS_NC_PERSON_GROUP_INVALIDATION_SUPPRESSED
-                evidence="not greater than"
+                evidence="page.wait_for_function(delete_invalidated, arg=before, timeout=2500)"
                 ;;
             esac
 
-            python .github/scripts/e2e_flake_negative_controls.py "$case"
+            # The helper only emits source; this CI step alone applies it.
+            python .github/scripts/e2e_flake_negative_controls.py "$case" > "$RUNNER_TEMP/prks-mutated-$case.py"
+            cp "$RUNNER_TEMP/prks-mutated-$case.py" "$source_file"
             log="$RUNNER_TEMP/prks-oracle-$case.log"
             if timeout --kill-after=5s 180s python tests/e2e/run.py --jobs 1 --no-pointer-capture "$target" > "$log" 2>&1; then
               cat "$log"
@@ -269,6 +273,14 @@ jobs:
                ! grep -Fq 'FAILED (' "$log"; then
               cat "$log"
               echo "::error::$case did not fail for its injected oracle violation (exit $status)"
+              exit 1
+            fi
+
+            if [[ "$case" == person ]] &&
+               { ! grep -Fq 'PRKS_NC_PERSON_PEOPLE_ADVANCED' "$log" ||
+                 ! grep -Fq 'Timeout 2500ms exceeded' "$log"; }; then
+              cat "$log"
+              echo "::error::Person control failed to prove People advanced before Person Groups readiness timed out"
               exit 1
             fi
 
