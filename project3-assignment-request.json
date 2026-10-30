@@ -1,1 +1,20 @@
-{"version":1,"operation":"check","items":[]}
+{
+  "version": 1,
+  "operation": "check",
+  "items": [
+    {
+      "number": 630,
+      "set": {
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": "Claude Code",
+        "Status": "Inbox",
+        "Execution": "Agent"
+      },
+      "reason": "Read-only end-to-end acceptance of protected ChatGPT file-based Project #3 assignment relay; approved PostgreSQL L-D-1 roadmap and native blockers reviewed; no overlapping active PR found.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    }
+  ]
+}
