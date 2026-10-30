@@ -27,3 +27,13 @@ merge_protections:
       - base = master
     success_conditions:
       - '-title ~= (?i)(^|[^a-z])(wip|dnm|do[\s_-]+not[\s_-]+merge)([^a-z]|$)'
+
+  - name: PRKS / Never merge Project 3 data branches
+    description: >-
+      The assignment request transport and published agent queue are not
+      application code branches and must never be merged into master.
+    if:
+      - base = master
+    success_conditions:
+      - head != project3-assignment-requests
+      - head != project3-agent-queue

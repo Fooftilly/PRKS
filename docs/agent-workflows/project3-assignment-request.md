@@ -66,6 +66,25 @@ manual workflow run, issue command or receipt comment is needed per assignment.
    If the signal does not start or the processor rejects authorization, leave
    #982 working while investigating rather than disabling safeguards.
 
+## Dedicated data branch and merge isolation
+
+The live request branch is kept intentionally minimal. Its current tree has
+**only two tracked files**: `project3-assignment-request.json` (the command
+data) and `.github/workflows/project3-assignment-request-signal.yml`
+(the unprivileged push trigger). The signal workflow **must stay on this
+branch** for future file updates to emit GitHub Actions push signals. Do not
+copy application code into this branch, delete the signal workflow, or merge
+`master` into it. The branch originally descended from `master`, so older
+commits remain in Git history even though the current tree is data-only.
+
+`master` requires the `Mergify Merge Protections` check. The reviewed
+`.mergify.yml` rule **PRKS / Never merge Project 3 data branches** refuses
+pull requests whose source branch is `project3-assignment-requests` or
+`project3-agent-queue` and whose base is `master`. Do not exempt or
+disable this required check. This blocks normal GitHub PR merges and API
+merges subject to the active master ruleset; it is not a GitHub prohibition
+on opening PRs or a replacement for the existing master protections.
+
 ## Agent protocol for each assignment
 
 ChatGPT must first inspect the current open issue, its native **Blocked by**
