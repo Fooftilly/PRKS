@@ -1511,6 +1511,129 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(runner._current_heartbeat_test_id(worker), own)
                 self.assertEqual(runner._hang_attribution(worker), (own, "START"))
 
+    def test_watchdog_rejects_cross_shard_ids_and_private_stage(self):
+        """Forged heartbeats must not enter CI output or failure history."""
+        own = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        foreign = _ids(_CASES, "PassingCases", "test_first")[0]
+        with _import_runner() as runner:
+            worker = {"shard": [own]}
+            for invalid in (foreign, own + " PRIVATE_PERSON_NAME", None):
+                with self.subTest(invalid=invalid):
+                    clean = runner._safe_watchdog_heartbeat(
+                        worker, {
+                            "test_id": invalid,
+                            "stage": "PRIVATE_PDF_CONTENT\nSECOND_LINE",
+                        },
+                    )
+                    self.assertEqual(clean, {
+                        "test_id": "", "stage": "unknown",
+                    })
+                    detail = runner._format_watchdog_detail(clean, 2, 3.0)
+                    self.assertIn("test=(unknown) stage=unknown", detail)
+                    self.assertNotIn("PRIVATE_", detail)
+                    self.assertNotIn("test_first", detail)
+                    self.assertEqual(
+                        runner._privacy_safe_detail(
+                            {"detail": detail}, watchdog=True
+                        ),
+                        detail,
+                    )
+
+            clean = runner._safe_watchdog_heartbeat(
+                worker, {"test_id": own, "stage": "APP_READY"}
+            )
+            self.assertEqual(clean, {"test_id": own, "stage": "APP_READY"})
+            self.assertEqual(
+                runner._safe_watchdog_stage("CHROMIUM_RECYCLE after_12_contexts"),
+                "CHROMIUM_RECYCLE after_12_contexts",
+            )
+            self.assertEqual(
+                runner._safe_watchdog_stage("BETWEEN_TESTS"), "BETWEEN_TESTS"
+            )
+            # The offline Work metadata fixture emits these before each
+            # cleanup step; a hang there must keep its exact diagnostic stage.
+            for stage in (
+                "BODY_DONE", "CONTEXT_CLOSED", "SERVER_STOPPED",
+                "CHROMIUM_RECYCLE",
+            ):
+                with self.subTest(stage=stage):
+                    self.assertEqual(runner._safe_watchdog_stage(stage), stage)
+                    clean = runner._safe_watchdog_heartbeat(
+                        worker, {"test_id": own, "stage": stage}
+                    )
+                    self.assertEqual(clean["stage"], stage)
+                    detail = runner._format_watchdog_detail(clean, 2, 3.0)
+                    self.assertIn("stage=" + stage + " age=", detail)
+                    self.assertEqual(
+                        runner._privacy_safe_detail(
+                            {"detail": detail}, watchdog=True, shard=[own]
+                        ),
+                        detail,
+                    )
+                    self.assertEqual(
+                        runner._safe_watchdog_stage(stage + " PRIVATE_DATA"),
+                        "unknown",
+                    )
+            self.assertEqual(
+                runner._safe_watchdog_stage("CHROMIUM_RECYCLE after_12_contexts SECRET"),
+                "unknown",
+            )
+
+    def test_watchdog_worker_report_drops_unassigned_ids_and_raw_detail(self):
+        """Even a worker-produced report must not bypass shard validation."""
+        own = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        foreign = _ids(_CASES, "PassingCases", "test_first")[0]
+        with _import_runner() as runner:
+            report = runner._sanitize_worker_report(
+                {
+                    "watchdog": True,
+                    "failed_ids": [own, foreign, own + " PRIVATE_COMMENT"],
+                    "stage": "SECRET_DOCUMENT",
+                    "detail": "per-test watchdog: test=" + foreign
+                    + " stage=SECRET_DOCUMENT age=2s threshold=1s (no automatic retry)",
+                },
+                [own],
+            )
+            self.assertEqual(report["failed_ids"], [own])
+            self.assertEqual(report["stage"], "unknown")
+            self.assertEqual(report["detail"], "")
+
+            # A syntactically valid detail is still unsafe when it names an
+            # E2E case belonging to a different worker's assigned shard.
+            foreign_detail = runner._format_watchdog_detail(
+                {"test_id": foreign, "stage": "APP_READY"}, 2, 3.0
+            )
+            forged = runner._sanitize_worker_report(
+                {"watchdog": True, "failed_ids": [foreign],
+                 "stage": "APP_READY", "detail": foreign_detail},
+                [own],
+            )
+            self.assertEqual(forged["failed_ids"], [])
+            self.assertEqual(forged["detail"], "")
+
+            detail = runner._format_watchdog_detail(
+                {"test_id": own, "stage": "START"}, 2, 3.0
+            )
+            clean = runner._sanitize_worker_report(
+                {
+                    "watchdog": True,
+                    "failed_ids": [own],
+                    "stage": "START",
+                    "detail": detail,
+                },
+                [own],
+            )
+            self.assertEqual(clean["failed_ids"], [own])
+            self.assertEqual(clean["stage"], "START")
+            self.assertEqual(clean["detail"], detail)
+            self.assertIsNone(runner._sanitize_worker_report(None, [own]))
+            self.assertEqual(
+                runner._privacy_safe_detail(
+                    {"detail": "per-test watchdog: PRIVATE_DOCUMENT"},
+                    watchdog=True,
+                ), "",
+            )
+
     def test_worker_exceeded_watchdog_without_test_id(self):
         """Module-fixture heartbeats (no unittest id) still trip the parent poll."""
         with _import_runner() as runner:
