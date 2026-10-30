@@ -72,13 +72,15 @@ _SELECT: LiteralString = (
     " LEFT JOIN prks.processing_item_drafts d ON d.library_id = i.library_id AND d.item_id = i.id"
     " WHERE i.library_id = %(library_id)s"
 )
-# One page of the queue: keyset on (created_at, id), so an upload or a removal
-# between pages neither repeats nor skips an item that stays.
-_PAGE_SQL: LiteralString = (
+# The queue's pages: keyset on (created_at, id), so an upload or a removal
+# between pages neither repeats nor skips an item that stays. The row
+# comparison is an index bound on processing_items_ready, so a deep page
+# seeks rather than scanning the pages before it.
+_PAGE_ORDER: LiteralString = " ORDER BY i.created_at, i.id COLLATE \"C\" LIMIT %(limit)s"
+FIRST_PAGE_SQL: LiteralString = _SELECT + " AND i.status = 'ready'" + _PAGE_ORDER
+NEXT_PAGE_SQL: LiteralString = (
     _SELECT + " AND i.status = 'ready'"
-    " AND (%(after_at)s::timestamptz IS NULL OR i.created_at > %(after_at)s"
-    "      OR (i.created_at = %(after_at)s AND i.id COLLATE \"C\" > %(after_id)s))"
-    " ORDER BY i.created_at, i.id COLLATE \"C\" LIMIT %(limit)s"
+    " AND (i.created_at, i.id COLLATE \"C\") > (%(after_at)s::timestamptz, %(after_id)s::text)" + _PAGE_ORDER
 )
 _ONE_SQL: LiteralString = _SELECT + " AND i.id = %(item_id)s"
 # Shared with an upload replay: import and delete take the item FOR UPDATE,
@@ -262,11 +264,11 @@ def queue(scope: LibraryScope, *, limit: int = DEFAULT_PAGE_SIZE, after: Optiona
     """
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_PAGE_SIZE:
         raise ValueError(f"limit must be between 1 and {MAX_PAGE_SIZE}.")
-    rows = scope.execute(_PAGE_SQL, {
-        "after_at": after.created_at if after is not None else None,
-        "after_id": after.item_id if after is not None else None,
-        "limit": limit + 1,
-    }).fetchall()
+    if after is None:
+        rows = scope.execute(FIRST_PAGE_SQL, {"limit": limit + 1}).fetchall()
+    else:
+        rows = scope.execute(NEXT_PAGE_SQL, {"after_at": after.created_at, "after_id": after.item_id,
+                                             "limit": limit + 1}).fetchall()
     more = len(rows) > limit
     rows = rows[:limit]
     last = rows[-1] if more else None

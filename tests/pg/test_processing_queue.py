@@ -270,6 +270,25 @@ class QueuePageTests(QueueTestCase):
         rest, end = self.page(10, cursor)
         self.assertEqual((rest, end), ([d, e], None))
 
+    def test_a_later_page_seeks_the_index_on_the_cursor(self) -> None:
+        for _ in range(3):
+            self.ready()
+        _first, cursor = self.page(1)
+        assert cursor is not None
+        after = items.Cursor.decode(cursor)
+
+        def explain(scope: LibraryScope) -> str:
+            scope.execute_unscoped("SET LOCAL enable_seqscan = off")
+            rows = scope.execute("EXPLAIN " + items.NEXT_PAGE_SQL, {
+                "after_at": after.created_at, "after_id": after.item_id, "limit": 2}).fetchall()
+            return "\n".join(str(next(iter(row.values()))) for row in rows)
+
+        plan = library_command(self.db, self.actor.context, Capability.EDIT_LIBRARY, explain)
+        bound = [line for line in plan.splitlines() if "Index Cond" in line and "created_at" in line]
+        self.assertTrue(bound, plan)
+        self.assertIn("ROW(", bound[0], plan)
+        self.assertFalse([line for line in plan.splitlines() if "Filter" in line and "created_at" in line], plan)
+
     def test_a_page_is_bounded(self) -> None:
         for limit in (0, items.MAX_PAGE_SIZE + 1, True):
             with self.subTest(limit=limit), self.assertRaises(ValueError):
