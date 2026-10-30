@@ -66,6 +66,7 @@ Contents:
 | S11 | Relational store | The data root holds file-backed data. In the SQLite era the database is one canonical component inside it. With PostgreSQL, database placement is connection configuration, and choosing or moving the data root never moves the database. |
 | S12 | Backend interface | It is small and blob-shaped: exclusive create, atomic replace, open for read, stat, idempotent delete, verify, and list for maintenance only. It is not a repository framework. Absolute paths are available only through a local-only extension that filesystem-specific infrastructure uses. |
 | S13 | Multi-step invariants | The backend guarantees single-operation atomicity. A multi-step invariant, such as reference-check-then-delete or hash compare-and-set, is coordinated above the backend by the catalogue transaction and a **key-scoped lock**. That lock is process-local today and must become cross-process before PRKS runs more than one process. |
+| S14 | Files for Processing | Under PostgreSQL, Files for Processing is a managed upload queue, not a directory (§9.4). Queued PDFs are `asset-objects` keys like Asset bytes. The SQLite processing inbox, its `PRKS_FOR_PROCESSING_DIR` override and every inbox rule below are SQLite-era only and are removed at the cutover. |
 
 ---
 
@@ -168,13 +169,8 @@ holds a bare basename. #60 already made the right choice. #311 formalizes it.
 - `/data/for_processing` is preferred when `PRKS_STORAGE` is unset, and it
   silently falls back to the repository. That is a Docker-shaped special case
   inside a non-Docker default. Phase A **keeps** it, because Phase A promises
-  identical paths. Phase D retires it with a named migration note:
-  - the resolver keeps `/data/for_processing` for an installation whose
-    `processing_files` rows point there, or whose `/data/for_processing` holds
-    files, and it shows a one-time notice;
-  - every other installation uses `<root>/for_processing`;
-  - the release note tells operators who want the old inbox to set
-    `PRKS_FOR_PROCESSING_DIR=/data/for_processing`.
+  identical paths. It is not migrated later: the PostgreSQL cutover removes
+  the inbox altogether (S14, §9.4).
 - Nothing records which library a root belongs to, so nothing can detect a
   wrong pairing of database and file root (§7.1).
 
@@ -279,11 +275,11 @@ needs streaming hash computation at ingest, which `put_new` provides (§10.2).
 
 | Class | Contents (current and future) | Backed up | Relocated | May be deleted by PRKS |
 | --- | --- | --- | --- | --- |
-| **Canonical file-backed** | managed Asset objects (PDFs now; web snapshots and attachments later), preserved pristine originals (`source_locator`), portrait objects, and future user-uploaded portraits | yes | yes (copied and verified) | only through the Asset or claim lifecycle |
+| **Canonical file-backed** | managed Asset objects (PDFs now; web snapshots and attachments later), preserved pristine originals (`source_locator`), portrait objects, future user-uploaded portraits, and, under PostgreSQL, PDFs queued in Files for Processing (§9.4) | yes | yes (copied and verified) | only through the Asset or claim lifecycle |
 | **Canonical relational (SQLite era only)** | `prks_data.db`, including `pending_pdf_cleanup`, the sync ledger and `app_settings` | yes | yes | never (except restore) |
 | **Durable operational** | root marker `prks-root.json`; restore and relocation journals under `.prks-maintenance/`; bootstrap config (**outside** the root) | no (the marker is recreated for a restore target, §7.1) | the marker is rewritten, and journals are per-operation | journals are removed only when their operation has completed |
 | **Operational logs** | `prks-errors.log*` | no | no (a new log starts in the new root) | rotation |
-| **User inbox (conditional)** | `for_processing/`: files the user drops in for import, not yet managed | only when under the root (current rule) | only when under the root | never by storage code |
+| **User inbox (conditional; SQLite era only)** | `for_processing/`: files the user drops in for import, not yet managed. Removed at the PostgreSQL cutover (S14) | only when under the root (current rule) | only when under the root | never by storage code |
 | **Derived / rebuildable** | `thumbs/`, `prks_text_index.db*`, `prks_research_index.db*`, future caches and projections | no | no (rebuilt) | at any time |
 | **Temporary / staging** | `.prks-write-*.tmp`, `.linearized_*`, thumbnail temporaries, `.prks-maintenance/restore-staging`, `rollback`, `backup`, relocation staging | no | no | by the owning operation, or by the stale sweep |
 
@@ -295,11 +291,12 @@ which is the current inventory's choice. They use their own namespace,
 path-free. If #60 or a later issue turns a portrait into a user-uploaded
 Asset, it moves into `asset-objects`.
 
-**The processing inbox is not Asset storage.** A watched folder is inherently a
-local-filesystem feature. It stays filesystem-specific infrastructure in every
-deployment. An object-storage deployment keeps a local inbox or uses upload
-APIs. Import copies bytes out of the inbox through `put_new` and never adopts
-an inbox path as a key.
+**The SQLite processing inbox is not Asset storage.** A watched folder is a
+local-filesystem feature, and import copies bytes out of it through `put_new`
+without adopting an inbox path as a key. It is not carried into PostgreSQL:
+there, Files for Processing is an upload queue whose bytes are managed
+objects from the start (§9.4), so it works the same on a local root and on
+object storage.
 
 **Rule: a derived cache may never become impossible to rebuild because it
 shares a parent directory with canonical data.** Every derived component is
@@ -315,7 +312,7 @@ artifact inside a canonical namespace directory.
 ├── prks_data.db              canonical relational  SQLite era only
 ├── pdfs/                     canonical             namespace asset-objects
 ├── people/                   canonical             namespace portraits
-├── for_processing/           user inbox            conditional; may be outside via PRKS_FOR_PROCESSING_DIR
+├── for_processing/           user inbox            SQLite era only; conditional; may be outside via PRKS_FOR_PROCESSING_DIR
 ├── thumbs/                   derived
 ├── prks_text_index.db*       derived
 ├── prks_research_index.db*   derived
@@ -449,9 +446,9 @@ Rules:
   root read-only, with "Set by the environment" or "Set on the command line",
   and in-app relocation is unavailable (S10). The UI could otherwise persist a
   choice that is silently ignored at the next start.
-- **Component overrides stay second-class.** `PRKS_FOR_PROCESSING_DIR` and
-  `PRKS_LOG_FILE` keep working as deployment overrides for non-canonical
-  components. No override may place a **canonical** component outside the root.
+- **Component overrides stay second-class.** `PRKS_FOR_PROCESSING_DIR` (SQLite
+  era only, S14) and `PRKS_LOG_FILE` keep working as deployment overrides for
+  non-canonical components. No override may place a **canonical** component outside the root.
   The existing backup check `canonical_path_outside_root` already refuses that.
 - **Containers.** The image sets `PRKS_STORAGE=/data` and mounts the volume
   there. The container's config directory is ephemeral and is never consulted
@@ -830,6 +827,14 @@ revoked by the P2 fence. Crash tests cover each boundary in this sequence.
 | **P8 Rebuild** | Derived data is rebuilt at the new root by the existing mechanisms: the text-index and research-index reconcile, and thumbnails lazily. `retry_pending_pdf_cleanup` now runs against the **new** root only. | none |
 | **P9 Retain** | Write config `phase: "retained"`, and keep `from` for diagnostics. Like every config write it is a guarded compare-and-set (§5.1): it expects `(local_root = to, this relocation_id, committed or source_retired)`, and it is a no-op if anything else has since been recorded. It does not wait for a P7 that could not reach the old root. | config |
 | **P10 Cleanup** (explicit, later) | Offered only after the new root has completed at least one full start, and recommended after a verified backup. It deletes only PRKS-known components of the retired root (the names in §4.2), never unknown files and never through links, and then the marker. It takes the retired root's `root.lock` and removes it with the §12 **terminal teardown** procedure (the marker is already `retired`), which closes the lock handle before removing the marker and `root.lock`, as Windows requires. **Inbox files are deleted only if an identical copy exists in the destination** (same name and SHA-256). A file that reached the old inbox after P4, or differs from its destination copy, is kept, reported in diagnostics, and offered for import into the new library. **While any such kept file remains, P10 stops short of the teardown's final steps:** it keeps the `retired` marker, `root.lock` and the kept files, releases the lock normally, and writes config `phase: "retained_residuals"` (a guarded compare-and-set expecting `(local_root = to, this relocation_id, retained)`), so diagnostics and the import action can still find the old root and its files. `retained_residuals` is an **unresolved** state: root selection and a new move refuse while it stands (§5.1), so the record cannot be overwritten. For a CLI- or environment-selected root, whose bootstrap file may be ephemeral, P10 records the same state on the destination marker as `moved_from.residuals: true`, and diagnostics and the offline commands read it from there. Only when every kept file has been imported or explicitly discarded by the user does a P10 rerun complete the teardown and clear the record. Config: `relocation = null`, guarded like every config write (§5.1): it expects `(local_root = to, this relocation_id, retained or retained_residuals)`. | config |
+
+**Inbox steps are SQLite-era only.** The inbox handling in P2 (stopping
+processing scans), P3 and P4 (copying and the stable final pass), P10 (kept
+inbox files), the `retained_residuals` phase and the marker's
+`moved_from.residuals` exist because a SQLite-era root may hold a processing
+inbox that outside writers change. A PostgreSQL root holds no inbox (S14,
+§9.4): queued uploads are ordinary `asset-objects` keys copied and verified
+like any other object, so these steps and states are removed at the cutover.
 
 **Pre-commit guarantee: the old library's data is never written, and the
 destination is never bindable.** The only write to the old root before commit
@@ -1259,6 +1264,25 @@ record to the target root's `storage_root_id`. The UI says this plainly:
 exclude deployment configuration: the root path, the database locator and the
 bootstrap file.
 
+### 9.4 Files for Processing under PostgreSQL
+
+The processing inbox is not ported (S14). Files for Processing becomes a
+managed upload queue, specified in `docs/postgresql-architecture.md` §11.5:
+
+- The browser uploads each PDF as a streamed request. The bytes go through
+  `put_new` into a fresh `asset-objects` key, durable before the item is
+  created. Nothing is linearized at upload.
+- A `processing_items` row references the key. The object lifecycle counts
+  that reference exactly like an Asset locator: adoption, cleanup, the
+  orphan sweep, Library isolation and the backup inventory.
+- Import creates the Work and its Asset on the **same key** in one database
+  transaction, so no bytes are copied or moved and no path is involved.
+- Deleting a queued item releases its key to the cleanup job, and an
+  abandoned upload leaves an unreferenced key for the orphan sweep.
+
+So the data root has no inbox directory, no component override for one, and
+nothing a relocation, backup or restore must treat specially.
+
 ---
 
 ## 10. The StorageBackend boundary
@@ -1375,7 +1399,7 @@ dependency before then.
 | Materialization (`pdf_materialization`, annotations) | rewrite the working PDF in place | `replace`, with #60's pending-hash order | **Yes** (Phase B, then #60 Slice D) |
 | Backup (`backup_restore`) | walks directories, SQLite backup API, `files/pdfs/*` archive paths | canonical objects enumerated through `iter_keys` per canonical namespace; archive layout **unchanged** | **Yes**, for enumeration (Phase B/C); journal and staging stay filesystem-specific |
 | Restore | stages under `.prks-maintenance`, renames components, `bind_storage` rebind | unchanged for SQLite and the local backend; object-storage restore is a Phase F design item | Stays **filesystem-specific infrastructure** |
-| Processing and import (`db_manager` processing, `for_processing/`) | inbox paths; `processing_files.abs_path` stored | the inbox stays a local directory (filesystem-specific). `abs_path` is derived from `rel_path` at read time, so the column is ignored and later dropped by a migration. Import copies into `put_new`. | Import: **yes**. The inbox: **no** |
+| Processing and import (`db_manager` processing, `for_processing/`) | inbox paths; `processing_files.abs_path` stored | SQLite era: the inbox stays a local directory (filesystem-specific); `abs_path` is derived from `rel_path` at read time, and import copies into `put_new`. PostgreSQL: an upload queue on managed keys with no inbox (§9.4) | SQLite import: **yes**, the inbox: **no**. PostgreSQL queue: **yes** |
 | Thumbnails (`thumbs/`, `derived_cache_publish`, `prune_orphan_pdf_thumbnails`) | derived files keyed by Work ID, page and Asset | stays **derived, local** infrastructure. Rendering reads its input through `local_path(key)`. It moves to `cache/` only if a layout version changes. | Input only |
 | PDF text index (`text_index`) | SQLite WAL in the root; fingerprint = `file_path` hash + size + mtime | stays derived and local. The fingerprint should move to #60's `content_sha256` + `content_generation` when Slice D lands, which removes the mtime dependency. | Input only |
 | Research index | SQLite WAL in the root | derived, local | No |
@@ -1386,7 +1410,7 @@ dependency before then.
 
 **Modules that should remain filesystem-specific infrastructure:**
 `storage/paths.py`, `storage/config.py` and the resolver, `fs_durability`, the
-restore journal and staging, the processing inbox scanner, derived-cache
+restore journal and staging, the SQLite-era processing inbox scanner, derived-cache
 publishing, and the two derived SQLite indexes. **Modules that should depend on
 the abstraction:** managed-PDF services, work deletion and cleanup,
 materialization, portrait storage, import, backup enumeration, and every
@@ -1734,7 +1758,8 @@ parallel configuration system:
   once logging is set up; a refusal emits them immediately.
 - **Inbox for new sources.** A `config_file` or `platform_default` root uses
   `<root>/for_processing`. No existing deployment has those sources; the
-  development default keeps `/data/for_processing` exactly (§1.2).
+  development default keeps `/data/for_processing` exactly (§1.2). All of
+  this is SQLite-era only (S14).
 - **Relocation records.** A marker in `fenced`, `staging` or `retired` state,
   or an `active` marker with a relocation role, is refused with the relocation
   ID and peer. A bootstrap `relocation` record with a known phase is parsed and
