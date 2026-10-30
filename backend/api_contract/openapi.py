@@ -1031,7 +1031,7 @@ def processing_items_openapi_document() -> dict[str, Any]:
     def _json(name: str) -> dict[str, Any]:
         return {"application/json": {"schema": {"$ref": f"#/components/schemas/{name}"}}}
 
-    # Every refusal here, admission's included, is {error, code, message}.
+    # Every refusal here is ProcessingItemRefusal: {error[, code, message, item]}.
     def _error(description: str) -> dict[str, Any]:
         return {"description": description, "content": _json("ProcessingItemRefusal")}
 

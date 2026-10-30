@@ -204,11 +204,17 @@ class ProcessingImportResults(BaseModel):
 
 
 class ProcessingItemRefusal(BaseModel):
-    """Every refusal on these routes: the code, a message, and the item as it now is when there is one."""
+    """Every refusal on these routes.
+
+    The queue's own refusals and admission's authorization refusals carry
+    ``code`` and ``message`` (and ``item``, as it now is, when there is
+    one). Refusals decided before admission or the route (Host, Origin, the
+    JSON body reader, an unavailable database) carry ``error`` alone.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     error: str
-    code: str
-    message: str
+    code: str | None = None
+    message: str | None = None
     item: ProcessingItem | None = None

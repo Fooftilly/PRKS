@@ -105,7 +105,8 @@ class ProcessingHttpTestCase(HttpAuthTestCase):
     def refused(self, res: Response, status: int, code: str) -> dict[str, Any]:
         self.assertEqual(res.status, status, res.raw)
         self.assertEqual(res.body["code"], code, res.raw)
-        contract.ProcessingItemRefusal.model_validate(res.body)
+        refusal = contract.ProcessingItemRefusal.model_validate(res.body)
+        self.assertIsNotNone(refusal.message, res.raw)
         return res.body
 
     def assert_closes(self, res: Response) -> None:

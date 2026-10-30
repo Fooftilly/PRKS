@@ -1910,19 +1910,35 @@
       },
       "ProcessingItemRefusal": {
         "additionalProperties": false,
-        "description": "Every refusal on these routes: the code, a message, and the item as it now is when there is one.",
+        "description": "Every refusal on these routes.\n\nThe queue's own refusals and admission's authorization refusals carry\n``code`` and ``message`` (and ``item``, as it now is, when there is\none). Refusals decided before admission or the route (Host, Origin, the\nJSON body reader, an unavailable database) carry ``error`` alone.",
         "properties": {
           "error": {
             "title": "Error",
             "type": "string"
           },
           "code": {
-            "title": "Code",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
           },
           "message": {
-            "title": "Message",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
           },
           "item": {
             "anyOf": [
@@ -1937,9 +1953,7 @@
           }
         },
         "required": [
-          "error",
-          "code",
-          "message"
+          "error"
         ],
         "type": "object"
       }

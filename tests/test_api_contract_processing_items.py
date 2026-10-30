@@ -9,7 +9,7 @@ from openapi_core import OpenAPI
 from pydantic import ValidationError
 
 from backend.api_contract.openapi import processing_items_openapi_document
-from backend.api_contract.processing_items import ProcessingImportRequest, ProcessingItem
+from backend.api_contract.processing_items import ProcessingImportRequest, ProcessingItem, ProcessingItemRefusal
 from backend.concurrency import request_access_mode
 from backend.log_safety import safe_route
 
@@ -52,6 +52,13 @@ class ProcessingItemsContractTests(unittest.TestCase):
         for bad in ({"item_ids": []}, {"item_ids": [_ID] * 501}, {"item_ids": [_ID], "all": True}):
             with self.subTest(bad=str(bad)[:40]), self.assertRaises(ValidationError):
                 ProcessingImportRequest.model_validate(bad)
+
+    def test_a_refusal_before_admission_carries_error_alone(self):
+        ProcessingItemRefusal.model_validate({"error": "origin_not_allowed"})
+        ProcessingItemRefusal.model_validate({"error": "REVISION_CONFLICT", "code": "REVISION_CONFLICT",
+                                              "message": "m", "item": _item()})
+        with self.assertRaises(ValidationError):
+            ProcessingItemRefusal.model_validate({"code": "X", "message": "m"})
 
     def test_routes_are_logged_without_ids(self):
         for route, logged in (
