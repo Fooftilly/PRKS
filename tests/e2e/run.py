@@ -1109,13 +1109,37 @@ def _tail(path, limit=4000):
         return ""
 
 
-def _forward_early_failure_markers(worker) -> None:
-    """Relay only validated worker markers before a parallel-gate deadline.
+def _validated_early_failure_marker(line: str, shard) -> str:
+    """Return only a fixed-shape, allowlisted marker from a known shard."""
+    fields = line.rstrip("\r\n").split(" ")
+    if len(fields) != 5 or fields[0] != "[e2e-early-failure]":
+        return ""
+    _, kind, test_id, exc, stage = fields
+    if kind not in ("ERROR", "FAIL", "SUBTEST"):
+        return ""
+    if test_id != "(unavailable)" and (
+        not _E2E_TEST_ID_LINE.fullmatch(test_id) or test_id not in shard
+    ):
+        return ""
+    if not exc.startswith("exception=") or (
+        exc[len("exception="):] not in _SAFE_E2E_EARLY_EXCEPTIONS
+        and exc != "exception=unknown"
+    ):
+        return ""
+    if not stage.startswith("stage=") or (
+        stage[len("stage="):] not in _SAFE_E2E_EARLY_STAGES
+        and stage != "stage=unknown"
+    ):
+        return ""
+    return line.rstrip("\r\n")
 
-    Worker stdout and stderr are otherwise private per-worker logs. A hard
-    timeout deletes that temporary directory, so poll incrementally and emit
-    the already-sanitized failure metadata while the worker is still running.
-    Never echo arbitrary worker output or unbounded log lines.
+
+def _forward_early_failure_markers(worker) -> None:
+    """Stream up to three sanitized worker-log markers before gate timeout.
+
+    Track a seekable cursor instead of rereading accumulated log output. The
+    bounded reader rejects incomplete or oversized lines without echoing any
+    unverified content.
     """
     if worker.get("early_marker_count", 0) >= 3:
         return
@@ -1127,7 +1151,7 @@ def _forward_early_failure_markers(worker) -> None:
                 if not line:
                     break
                 if not line.endswith("\n") and len(line) < 512:
-                    # Writer has not flushed a complete line yet.
+                    # This is the writer's incomplete last line; read it later.
                     break
                 worker["early_marker_offset"] = handle.tell()
                 if worker.get("early_marker_skip_overlong"):
@@ -1135,38 +1159,19 @@ def _forward_early_failure_markers(worker) -> None:
                         worker["early_marker_skip_overlong"] = False
                     continue
                 if not line.endswith("\n"):
-                    # Ignore all subsequent fragments of this oversized line.
+                    # Ignore every fragment through the end of a long line.
                     worker["early_marker_skip_overlong"] = True
                     continue
-                fields = line.rstrip("\r\n").split(" ")
-                if len(fields) != 5 or fields[0] != "[e2e-early-failure]":
-                    continue
-                kind, test_id, exc, stage = fields[1:]
-                if kind not in ("ERROR", "FAIL", "SUBTEST"):
-                    continue
-                if test_id != "(unavailable)" and (
-                    not _E2E_TEST_ID_LINE.fullmatch(test_id)
-                    or test_id not in worker.get("shard", ())
-                ):
-                    continue
-                if (
-                    not exc.startswith("exception=")
-                    or exc[len("exception="):] not in (
-                        _SAFE_E2E_EARLY_EXCEPTIONS | {"unknown"}
-                    )
-                    or not stage.startswith("stage=")
-                    or stage[len("stage="):] not in (
-                        _SAFE_E2E_EARLY_STAGES | {"unknown"}
-                    )
-                ):
-                    continue
-                worker["early_marker_count"] = worker.get("early_marker_count", 0) + 1
-                print(
-                    "[E2E %d] %s" % (worker["index"] + 1, line.rstrip("\r\n")),
-                    flush=True,
+                marker = _validated_early_failure_marker(
+                    line, worker.get("shard", ())
                 )
+                if marker:
+                    worker["early_marker_count"] = (
+                        worker.get("early_marker_count", 0) + 1
+                    )
+                    print("[E2E %d] %s" % (worker["index"] + 1, marker), flush=True)
     except OSError:
-        # Best-effort observability must never alter E2E pass/fail semantics.
+        # Best-effort telemetry cannot alter E2E verdicts or test isolation.
         return
 
 
