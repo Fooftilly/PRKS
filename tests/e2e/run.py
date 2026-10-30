@@ -777,8 +777,8 @@ def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
     detail = str((report or {}).get("detail") or "").strip()
     if watchdog:
         match = re.fullmatch(
-            r"per-test watchdog: test=(\\S+) stage=(.+?) "
-            r"age=(\\d+)s threshold=(\\d+)s \\(no automatic retry\\)",
+            r"per-test watchdog: test=(\S+) stage=(.+?) "
+            r"age=(\d+)s threshold=(\d+)s \(no automatic retry\)",
             detail,
         )
         if match:
