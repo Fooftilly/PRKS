@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -171,15 +172,32 @@ def require_branch_rules(read: Callable[[str], Any], ruleset_id: str,
     if bypass is not None and (not isinstance(bypass, list) or bypass):
         raise RequestError("ruleset bypass actors are nonempty or malformed")
     rules = rule.get("rules")
-    if (str(rule.get("id")) != ruleset_id
-            or rule.get("updated_at") != reviewed_at
-            or rule.get("target") != "branch"
-            or rule.get("enforcement") != "active"
-            or conditions.get("include") != [REQUEST_REF]
-            or conditions.get("exclude") != []
-            or not isinstance(rules, list)):
-        raise RequestError("request branch ruleset drifted from reviewed configuration")
-    types = {r.get("type") for r in rules if isinstance(r, dict)}
+    # GitHub can serialize the same timestamp with a different timezone for
+    # differently authenticated clients. Keep the reviewed *instant* pinned,
+    # rather than treating semantically equal ISO-8601 forms as drift.
+    try:
+        actual_revision = datetime.fromisoformat(rule["updated_at"])
+        expected_revision = datetime.fromisoformat(reviewed_at)
+    except (KeyError, TypeError, ValueError):
+        raise RequestError("request branch ruleset revision missing or invalid") from None
+    revision_matches = (actual_revision.tzinfo is not None
+                        and expected_revision.tzinfo is not None
+                        and actual_revision == expected_revision)
+    failed = [
+        name for name, okay in (
+            ("id", str(rule.get("id")) == ruleset_id),
+            ("revision", revision_matches),
+            ("target", rule.get("target") == "branch"),
+            ("enforcement", rule.get("enforcement") == "active"),
+            ("include", conditions.get("include") == [REQUEST_REF]),
+            ("exclude", conditions.get("exclude") == []),
+            ("rules", isinstance(rules, list)),
+        ) if not okay
+    ]
+    if failed:
+        # Field names only: do not log raw metadata or any user JSON.
+        raise RequestError("request branch ruleset drift: " + ",".join(failed))
+    types = {item.get("type") for item in rules if isinstance(item, dict)}
     if not {"deletion", "non_fast_forward"} <= types:
         raise RequestError("request branch must block deletion and non-fast-forward updates")
 

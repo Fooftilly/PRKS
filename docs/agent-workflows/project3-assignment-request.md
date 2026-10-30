@@ -53,7 +53,8 @@ manual workflow run, issue command or receipt comment is needed per assignment.
    `bypass_actors` is absent rather than explicitly empty for the administrator,
    do **not** activate this relay. Environment variables default to missing,
    which blocks processing safely. The processor uses only metadata read,
-   verifies the exact ruleset ID and `updated_at` on every run, and fails
+   verifies the exact ruleset ID and **timestamp instant** on every run
+   (account-specific ISO-8601 timezone renderings may differ), and fails
    closed on any later ruleset edit. An administrator must review and repin
    a changed ruleset before processing resumes. No additional token is needed.
 4. Submit a **check-only** update using the authenticated GitHub plugin, then
