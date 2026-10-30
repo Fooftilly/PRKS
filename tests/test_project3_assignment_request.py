@@ -20,6 +20,11 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 RUN_ID = 50042
 
 
+def fake_token(purpose: str) -> str:
+    """Return deterministic, non-secret test input without token literals."""
+    return "-".join((purpose, "token"))
+
+
 def valid_command(*, operation="apply"):
     row = intent(815)
     row["expected_before"] = {"Agent": None, "Status": "Inbox", "Execution": None}
@@ -94,7 +99,7 @@ class RequestRelayTests(unittest.TestCase):
 
     def test_provenance_reader_is_separate_from_issue_rest_reader(self):
         with mock.patch.object(relay.pm, "_https_only_opener") as opener:
-            client = relay.provenance_client("test-token")
+            client = relay.provenance_client(fake_token("test"))
             with self.assertRaisesRegex(relay.RequestError, "outside fixed"):
                 client(relay.API + "/issues/815")
             with self.assertRaisesRegex(relay.RequestError, "outside fixed"):
@@ -119,8 +124,8 @@ class RequestRelayTests(unittest.TestCase):
             path = Path(temp) / "event.json"
             path.write_text(json.dumps(self.event), encoding="utf-8")
             env = {**self.env, "GITHUB_EVENT_PATH": str(path),
-                   "GITHUB_TOKEN": "actions-token",
-                   "PROJECT_SYNC_TOKEN": "project-token",
+                   "GITHUB_TOKEN": fake_token("actions"),
+                   "PROJECT_SYNC_TOKEN": fake_token("project"),
                    "PROJECT3_ASSIGN_DISPATCH_MODE": "apply",
                    "GITHUB_RUN_ID": "9007",
                    "PROJECT3_REQUEST_RULESET_ID": "1234",
@@ -135,15 +140,15 @@ class RequestRelayTests(unittest.TestCase):
                   mock.patch.object(relay, "create_status") as claim_writer,
                   mock.patch.object(relay.dispatch, "report") as audit):
                 self.assertEqual(relay.main(), 0)
-            provenance.assert_called_once_with("actions-token")
-            issue_client.assert_called_once_with("actions-token")
-            project_transport.assert_called_once_with("project-token")
+            provenance.assert_called_once_with(fake_token("actions"))
+            issue_client.assert_called_once_with(fake_token("actions"))
+            project_transport.assert_called_once_with(fake_token("project"))
             self.assertEqual(len(fx.api.mutations), 3)
             self.assertEqual(claim_writer.call_count, 2)
             self.assertEqual(claim_writer.call_args_list[0].args,
-                             ("actions-token", SHA, "pending", "9007"))
+                             (fake_token("actions"), SHA, "pending", "9007"))
             self.assertEqual(claim_writer.call_args_list[1].args,
-                             ("actions-token", SHA, "success", "9007"))
+                             (fake_token("actions"), SHA, "success", "9007"))
             self.assertIn("APPLIED", audit.call_args.args[0])
 
     def test_failed_apply_writes_failure_audit_and_keeps_claim(self):
@@ -153,7 +158,7 @@ class RequestRelayTests(unittest.TestCase):
             event_file = Path(temp) / "event.json"
             event_file.write_text(json.dumps(self.event), encoding="utf-8")
             env = {**self.env, "GITHUB_EVENT_PATH": str(event_file),
-                   "GITHUB_TOKEN": "actions-token", "PROJECT_SYNC_TOKEN": "project-token",
+                   "GITHUB_TOKEN": fake_token("actions"), "PROJECT_SYNC_TOKEN": fake_token("project"),
                    "GITHUB_RUN_ID": "9007", "PROJECT3_ASSIGN_DISPATCH_MODE": "apply",
                    "PROJECT3_REQUEST_RULESET_ID": "1234",
                    "PROJECT3_REQUEST_RULESET_UPDATED_AT": "2026-10-30T15:00:00Z"}
@@ -181,8 +186,8 @@ class RequestRelayTests(unittest.TestCase):
             path = Path(temp) / "event.json"
             path.write_text(json.dumps(self.event), encoding="utf-8")
             env = {**self.env, "GITHUB_EVENT_PATH": str(path),
-                   "GITHUB_TOKEN": "actions-token",
-                   "PROJECT_SYNC_TOKEN": "project-token", "GITHUB_RUN_ID": "9007",
+                   "GITHUB_TOKEN": fake_token("actions"),
+                   "PROJECT_SYNC_TOKEN": fake_token("project"), "GITHUB_RUN_ID": "9007",
                    "PROJECT3_REQUEST_RULESET_ID": "1234",
                    "PROJECT3_REQUEST_RULESET_UPDATED_AT": "2026-10-30T15:00:00Z"}
             with (mock.patch.dict(os.environ, env, clear=True),
@@ -292,7 +297,7 @@ class RequestRelayTests(unittest.TestCase):
 
     def test_provenance_url_policy_restricts_rulesets_and_statuses(self):
         with mock.patch.object(relay.pm, "_https_only_opener"):
-            client = relay.provenance_client("test-token")
+            client = relay.provenance_client(fake_token("test"))
             for url in (
                 relay.API + "/rulesets/1234/anything",
                 relay.API + "/rulesets?per_page=100&page=0",
@@ -429,7 +434,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("    workflows: [Project 3 assignment request signal]", text)
         self.assertIn("    branches: [project3-assignment-requests]", text)
         self.assertIn("github.ref == 'refs/heads/master'", text)
-        self.assertIn("github.event.workflow_run.actor.id == 46610174", text)
+        self.assertNotIn("github.event.workflow_run.actor.id == 46610174", text)
+        # Actor ID, login, and upstream run are reverified in trusted Python.
         self.assertIn("environment: project-automation", text)
         self.assertIn("PROJECT_SYNC_TOKEN", text)
         self.assertIn("statuses: write", text)

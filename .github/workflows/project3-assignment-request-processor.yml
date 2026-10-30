@@ -23,8 +23,7 @@ jobs:
       github.ref == 'refs/heads/master' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'project3-assignment-requests' &&
-      github.event.workflow_run.actor.id == 46610174
+      github.event.workflow_run.head_branch == 'project3-assignment-requests'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     environment: project-automation
