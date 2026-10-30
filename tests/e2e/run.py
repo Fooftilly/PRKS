@@ -1138,6 +1138,20 @@ def _read_report(worker):
         return None
 
 
+def _sanitize_worker_report(report, shard):
+    """Never promote unassigned worker-report IDs into last-failed data."""
+    if report is None:
+        return None
+    report["failed_ids"] = [
+        tid for tid in (report.get("failed_ids") or [])
+        if _safe_worker_test_id(tid, shard)
+    ]
+    if report.get("watchdog"):
+        report["stage"] = _safe_watchdog_stage(report.get("stage"))
+        report["detail"] = _privacy_safe_detail(report, watchdog=True)
+    return report
+
+
 def _tail(path, limit=4000):
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
@@ -1435,20 +1449,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     pending.remove(worker)
                     elapsed = time.perf_counter() - worker["started"]
                     rc = worker["proc"].returncode
-                    report = _read_report(worker)
-                    if report is not None:
-                        # A watchdog may have written its own report before
-                        # the parent noticed the exit. Never let report IDs
-                        # bypass the same shard checks as live heartbeats.
-                        report["failed_ids"] = [
-                            tid for tid in (report.get("failed_ids") or [])
-                            if _safe_worker_test_id(tid, worker.get("shard"))
-                        ]
-                        if report.get("watchdog"):
-                            report["stage"] = _safe_watchdog_stage(report.get("stage"))
-                            report["detail"] = _privacy_safe_detail(
-                                report, watchdog=True
-                            )
+                    report = _sanitize_worker_report(
+                        _read_report(worker), worker.get("shard", ())
+                    )
                     entry = {
                         "index": worker["index"],
                         "returncode": rc,
