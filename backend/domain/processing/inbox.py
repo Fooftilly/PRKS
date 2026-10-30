@@ -104,17 +104,28 @@ def inbox_lock(database: Database, library_id: str) -> Iterator[None]:
         yield
 
 
+def _unlisted(exc: OSError) -> None:
+    """Fail a walk of the inbox on a directory it cannot list.
+
+    ``os.walk`` would skip it, and the files (or claims) it holds would look
+    gone, so the scan would drop their rows.
+    """
+    LOGGER.warning("processing_inbox_unreadable error=%s", type(exc).__name__)
+    raise exc
+
+
 def discover(inbox_dir: str) -> list[tuple[str, str]]:
     """``_discover_processing_pdfs``: ``(rel_path, filename)`` per PDF under the inbox.
 
     Paths are resolved, so a link leading outside the inbox is skipped, and
     ``rel_path`` is ``/``-separated on every platform. A file the protocol
-    has claimed (:func:`_claim`) is not listed.
+    has claimed (:func:`_claim`) is not listed. A directory that cannot be
+    listed raises ``OSError``.
     """
     os.makedirs(inbox_dir, exist_ok=True)
     root = os.path.realpath(inbox_dir)
     found: list[tuple[str, str]] = []
-    for directory, dirs, names in os.walk(root):
+    for directory, dirs, names in os.walk(root, onerror=_unlisted):
         dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
         for name in sorted(names):
             if not name.lower().endswith(".pdf"):
@@ -293,7 +304,7 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     unsettled: set[str] = set()
     if not os.path.isdir(root):
         return unsettled
-    for directory, dirs, _names in os.walk(root):
+    for directory, dirs, _names in os.walk(root, onerror=_unlisted):
         claims = [name for name in dirs if _CLAIM.fullmatch(name) is not None]
         dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
         for name in claims:

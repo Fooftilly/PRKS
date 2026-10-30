@@ -504,6 +504,39 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNone(self.row(imported_id))
         self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
 
+    def test_an_unreadable_inbox_folder_fails_the_scan_and_keeps_its_rows(self) -> None:
+        self.put("box/open.pdf", b"%PDF-1.4 open")
+        moved = self.put("box/moved.pdf", b"%PDF-1.4 moved")
+        pending_id, moved_id = self.staged("box/open.pdf"), self.staged("box/moved.pdf")
+        self.library.update_processing_file(pending_id, {"title": "Kept"})
+        self.library.update_processing_file(moved_id, {"title": "Also kept"})
+        self.assertIsNotNone(inbox._claim(moved))  # the process dies here
+        box = os.path.join(os.path.realpath(self.inbox), "box")
+        real = os.scandir
+
+        def unreadable_box(path: Any = ".") -> Any:
+            if os.fspath(path) == box:
+                raise PermissionError(path)
+            return real(path)
+
+        for walk in ("discover", "recover_claims"):
+            with self.subTest(walk=walk):
+                with mock.patch.object(inbox.os, "scandir", unreadable_box):
+                    if walk == "discover":  # claims are settled first, so only the inbox walk fails
+                        with mock.patch.object(inbox, "recover_claims", return_value=set()), \
+                                self.assertRaises(PermissionError):
+                            self.library.scan_processing_files()
+                    else:
+                        with self.assertRaises(PermissionError):
+                            self.library.scan_processing_files()
+                self.assertTrue(self.lock_is_free())
+                self.assertEqual(self.library.get_processing_file(pending_id)["title"], "Kept")
+                self.assertEqual(self.library.get_processing_file(moved_id)["title"], "Also kept")
+        staged = self.library.scan_processing_files()
+        self.assertEqual(sorted((row["id"], row["title"]) for row in staged),
+                         sorted([(pending_id, "Kept"), (moved_id, "Also kept")]))
+        self.assertEqual(sorted(os.listdir(box)), ["moved.pdf", "open.pdf"])
+
     def test_a_claimed_file_that_cannot_be_inspected_keeps_its_row(self) -> None:
         pending_path = self.put("open.pdf", b"%PDF-1.4 open")
         pending_id = self.staged("open.pdf")
