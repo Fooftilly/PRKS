@@ -51,6 +51,8 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
+          PROJECT3_REQUEST_RULESET_ID: ${{ vars.PROJECT3_REQUEST_RULESET_ID }}
+          PROJECT3_REQUEST_RULESET_UPDATED_AT: ${{ vars.PROJECT3_REQUEST_RULESET_UPDATED_AT }}
         run: python3 scripts/project3_assignment_request.py
 
       - name: Refresh read-only agent queue after writes or possible partial writes

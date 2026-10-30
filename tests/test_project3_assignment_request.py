@@ -60,6 +60,7 @@ class RelayREST:
                        "content": base64.b64encode(payload).decode()}
         self.rulesets = [{"id": 1234}]
         self.ruleset = {"id": 1234, "target": "branch", "enforcement": "active",
+                        "updated_at": "2026-10-30T15:00:00Z",
                         "conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": []}},
                         "bypass_actors": [],
                         "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]}
@@ -121,7 +122,9 @@ class RequestRelayTests(unittest.TestCase):
                    "GITHUB_TOKEN": "actions-token",
                    "PROJECT_SYNC_TOKEN": "project-token",
                    "PROJECT3_ASSIGN_DISPATCH_MODE": "apply",
-                   "GITHUB_RUN_ID": "9007"}
+                   "GITHUB_RUN_ID": "9007",
+                   "PROJECT3_REQUEST_RULESET_ID": "1234",
+                   "PROJECT3_REQUEST_RULESET_UPDATED_AT": "2026-10-30T15:00:00Z"}
             with (mock.patch.dict(os.environ, env, clear=True),
                   mock.patch.object(relay, "provenance_client",
                                     return_value=self.rest) as provenance,
@@ -151,7 +154,9 @@ class RequestRelayTests(unittest.TestCase):
             event_file.write_text(json.dumps(self.event), encoding="utf-8")
             env = {**self.env, "GITHUB_EVENT_PATH": str(event_file),
                    "GITHUB_TOKEN": "actions-token", "PROJECT_SYNC_TOKEN": "project-token",
-                   "GITHUB_RUN_ID": "9007", "PROJECT3_ASSIGN_DISPATCH_MODE": "apply"}
+                   "GITHUB_RUN_ID": "9007", "PROJECT3_ASSIGN_DISPATCH_MODE": "apply",
+                   "PROJECT3_REQUEST_RULESET_ID": "1234",
+                   "PROJECT3_REQUEST_RULESET_UPDATED_AT": "2026-10-30T15:00:00Z"}
             with (mock.patch.dict(os.environ, env, clear=True),
                   mock.patch.object(relay, "provenance_client", return_value=self.rest),
                   mock.patch.object(relay.triage, "rest_client", return_value=fx.read),
@@ -177,7 +182,9 @@ class RequestRelayTests(unittest.TestCase):
             path.write_text(json.dumps(self.event), encoding="utf-8")
             env = {**self.env, "GITHUB_EVENT_PATH": str(path),
                    "GITHUB_TOKEN": "actions-token",
-                   "PROJECT_SYNC_TOKEN": "project-token", "GITHUB_RUN_ID": "9007"}
+                   "PROJECT_SYNC_TOKEN": "project-token", "GITHUB_RUN_ID": "9007",
+                   "PROJECT3_REQUEST_RULESET_ID": "1234",
+                   "PROJECT3_REQUEST_RULESET_UPDATED_AT": "2026-10-30T15:00:00Z"}
             with (mock.patch.dict(os.environ, env, clear=True),
                   mock.patch.object(relay, "provenance_client", return_value=changing_tip),
                   mock.patch.object(relay.triage, "rest_client", return_value=fx.read),
@@ -232,10 +239,12 @@ class RequestRelayTests(unittest.TestCase):
                 with self.assertRaisesRegex(relay.RequestError, "author/committer"):
                     relay.load_command(self.event, self.env, rest)
 
-    def test_protected_branch_rules_are_required(self):
-        relay.require_branch_rules(self.rest)
+    def test_protected_branch_rules_are_required_and_revision_pinned(self):
+        relay.require_branch_rules(self.rest, "1234", "2026-10-30T15:00:00Z")
         for changes in (
             {"enforcement": "disabled"},
+            {"id": 1235},
+            {"updated_at": "2026-10-30T15:00:01Z"},
             {"bypass_actors": [{"actor_id": 1, "actor_type": "RepositoryRole"}]},
             {"conditions": {"ref_name": {"include": ["refs/heads/master"], "exclude": []}}},
             {"conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": [relay.REQUEST_REF]}}},
@@ -245,8 +254,31 @@ class RequestRelayTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 rest = RelayREST()
                 rest.ruleset.update(changes)
-                with self.assertRaisesRegex(relay.RequestError, "request branch must have"):
-                    relay.require_branch_rules(rest)
+                with self.assertRaises(relay.RequestError):
+                    relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
+
+    def test_missing_ruleset_binding_refuses_before_rest_read(self):
+        for name, stamp in (
+            ("", "2026-10-30T15:00:00Z"),
+            ("1234", ""),
+            ("0", "2026-10-30T15:00:00Z"),
+            ("1234/admin", "2026-10-30T15:00:00Z"),
+        ):
+            with self.subTest(id=name, stamp=stamp):
+                rest = RelayREST()
+                with self.assertRaisesRegex(relay.RequestError, "configuration missing"):
+                    relay.require_branch_rules(rest, name, stamp)
+                self.assertEqual(rest.calls, [])
+
+    def test_metadata_limited_bypass_visibility_uses_pinned_revision(self):
+        # GitHub omits bypass_actors from metadata-only ruleset responses.
+        # Owner attests empty bypasses when recording the ruleset revision.
+        rest = RelayREST()
+        rest.ruleset.pop("bypass_actors")
+        relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
+        rest.ruleset["updated_at"] = "2026-10-30T15:01:00Z"
+        with self.assertRaisesRegex(relay.RequestError, "drifted"):
+            relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
 
     def test_provenance_url_policy_restricts_rulesets_and_statuses(self):
         with mock.patch.object(relay.pm, "_https_only_opener"):
@@ -392,6 +424,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("PROJECT_SYNC_TOKEN", text)
         self.assertIn("statuses: write", text)
         self.assertIn("GITHUB_RUN_ID", text)
+        self.assertIn("PROJECT3_REQUEST_RULESET_ID", text)
+        self.assertIn("PROJECT3_REQUEST_RULESET_UPDATED_AT", text)
         self.assertIn("PROJECT3_ASSIGN_DISPATCH_MODE", text)
         self.assertIn("persist-credentials: false", text)
         self.assertIn("ref: master", text)

@@ -78,7 +78,6 @@ def provenance_client(token: str) -> Callable[[str], Any]:
         re.compile(re.escape(API + "/branches/" + BRANCH)),
         re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}"),
         re.compile(re.escape(API + "/contents/" + FILE + "?ref=") + r"[0-9a-f]{40}"),
-        re.compile(re.escape(API + "/rulesets") + r"\?per_page=100&page=[1-9][0-9]*"),
         re.compile(re.escape(API + "/rulesets/") + r"[1-9][0-9]*"),
         re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}/statuses\?per_page=100&page=[1-9][0-9]*"),
     )
@@ -152,38 +151,39 @@ def load_command(event: Any, env: Mapping[str, str],
 
 
 
-def require_branch_rules(read: Callable[[str], Any]) -> None:
-    """Refuse activation without an exact, active, no-bypass request-branch ruleset.
+def require_branch_rules(read: Callable[[str], Any], ruleset_id: str,
+                         reviewed_at: str) -> None:
+    """Require active branch protections at the admin-approved exact revision.
 
-    Branch deletion and non-fast-forward rewrites must be prohibited. These
-    checks are run before claiming or writing the Project; changes to
-    repository rule configuration cannot silently weaken the transport.
+    GitHub's metadata-only ruleset reader may omit bypass_actors. An
+    administrator must confirm its empty value and pin the returned
+    ruleset ID/updated_at in protected environment variables. Any subsequent
+    ruleset edit changes updated_at and blocks assignment processing.
     """
-    for page in range(1, MAX_PAGES + 1):
-        rulesets = read(API + "/rulesets?per_page=100&page=" + str(page))
-        if not isinstance(rulesets, list) or len(rulesets) > 100:
-            raise RequestError("malformed branch rulesets response")
-        for summary in rulesets:
-            if (not isinstance(summary, dict)
-                    or type(summary.get("id")) is not int):
-                raise RequestError("malformed branch ruleset record")
-            rule = read(API + "/rulesets/" + str(summary["id"]))
-            conditions = (rule.get("conditions") or {}).get("ref_name") or {}
-            if (rule.get("target") != "branch"
-                    or rule.get("enforcement") != "active"
-                    or REQUEST_REF not in conditions.get("include", [])
-                    or REQUEST_REF in conditions.get("exclude", [])
-                    or rule.get("bypass_actors")):
-                continue
-            rules = rule.get("rules")
-            if not isinstance(rules, list):
-                raise RequestError("malformed branch rules")
-            types = {r.get("type") for r in rules if isinstance(r, dict)}
-            if {"deletion", "non_fast_forward"} <= types:
-                return
-        if len(rulesets) < 100:
-            break
-    raise RequestError("request branch must have active no-bypass deletion and force-push protections")
+    if (not isinstance(ruleset_id, str)
+            or not re.fullmatch(r"[1-9][0-9]*", ruleset_id)
+            or not isinstance(reviewed_at, str)
+            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+", reviewed_at)):
+        raise RequestError("reviewed request-branch ruleset configuration missing")
+    rule = read(API + "/rulesets/" + ruleset_id)
+    conditions = (rule.get("conditions") or {}).get("ref_name") or {}
+    bypass = rule.get("bypass_actors")
+    if bypass is not None and (not isinstance(bypass, list) or bypass):
+        raise RequestError("ruleset bypass actors are nonempty or malformed")
+    rules = rule.get("rules")
+    if (str(rule.get("id")) != ruleset_id
+            or rule.get("updated_at") != reviewed_at
+            or rule.get("target") != "branch"
+            or rule.get("enforcement") != "active"
+            or not isinstance(conditions.get("include"), list)
+            or REQUEST_REF not in conditions["include"]
+            or not isinstance(conditions.get("exclude"), list)
+            or REQUEST_REF in conditions["exclude"]
+            or not isinstance(rules, list)):
+        raise RequestError("request branch ruleset drifted from reviewed configuration")
+    types = {r.get("type") for r in rules if isinstance(r, dict)}
+    if not {"deletion", "non_fast_forward"} <= types:
+        raise RequestError("request branch must block deletion and non-fast-forward updates")
 
 
 def _status_history(read: Callable[[str], Any], sha: str) -> None:
@@ -249,7 +249,10 @@ def main() -> int:
             raise RequestError("scoped Actions/Project token missing")
         provenance = provenance_client(actions_token)
         command, sha = load_command(event, os.environ, provenance)
-        require_branch_rules(provenance)
+        require_branch_rules(
+            provenance,
+            os.environ.get("PROJECT3_REQUEST_RULESET_ID", ""),
+            os.environ.get("PROJECT3_REQUEST_RULESET_UPDATED_AT", ""))
         # Serialize processors in the existing assignment-mutations group.
         # A commit status is append-only, so it survives branch rewinds, retries,
         # and cases where the Project eventually returns to old field values.

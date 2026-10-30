@@ -31,11 +31,31 @@ manual workflow run, issue command or receipt comment is needed per assignment.
      authenticated GitHub plugin must remain possible.
    The privileged workflow checks the *live GitHub ruleset* on every request
    and refuses Project updates unless it finds both protections with active
-   enforcement, an exact matching ref and no bypass actors. It does not
-   install repository rules automatically: the current ChatGPT GitHub connector
-   lacks repository-administration permissions. This step must be performed
-   by a repository administrator. If other rules are added, verify they do
-   not block ChatGPT's single-file fast-forward updates.
+   enforcement, an exact matching ref, and the precise reviewed ruleset
+   revision. It does not install repository rules automatically: the current
+   ChatGPT GitHub connector lacks repository-administration permissions.
+   If other rules are added, verify they do not block ChatGPT's single-file
+   fast-forward updates.
+   **Important: GitHub's metadata-only ruleset API can omit bypass actors.**
+   Use an administrator's authenticated GitHub CLI to inspect the newly created
+   ruleset and explicitly verify `bypass_actors: []`. Copy its integer `id`
+   and verbatim `updated_at` value, then pin them as **Environment** variables
+   in the existing protected `project-automation` environment:
+   ```bash
+   gh api repos/Fooftilly/PRKS/rulesets/RULESET_ID \
+     --jq '{id,updated_at,bypass_actors,conditions,rules,enforcement}'
+   gh variable set PROJECT3_REQUEST_RULESET_ID \
+     --repo Fooftilly/PRKS --env project-automation --body 'RULESET_ID'
+   gh variable set PROJECT3_REQUEST_RULESET_UPDATED_AT \
+     --repo Fooftilly/PRKS --env project-automation --body 'EXACT_UPDATED_AT'
+   ```
+   Replace the two placeholders using the verified API output. If
+   `bypass_actors` is absent rather than explicitly empty for the administrator,
+   do **not** activate this relay. Environment variables default to missing,
+   which blocks processing safely. The processor uses only metadata read,
+   verifies the exact ruleset ID and `updated_at` on every run, and fails
+   closed on any later ruleset edit. An administrator must review and repin
+   a changed ruleset before processing resumes. No additional token is needed.
 4. Submit a **check-only** update using the authenticated GitHub plugin, then
    verify both Actions runs: **Project 3 assignment request signal** and
    **Project 3 assignment request processor**. The processor summary must
@@ -114,6 +134,13 @@ already-reviewed `project3_assignment_dispatch` validator and
 `project3_triage` field/issue guards. It never checks out or executes
 untrusted request-branch code, reads upstream artifacts, runs shell commands
 from the request, or exposes the Project token to branch workflows.
+
+The branch-ruleset check intentionally **does not** interpret an omitted
+`bypass_actors` field as evidence that bypass is disabled. An administrator
+must inspect that field and pin the ruleset's `updated_at` in the protected
+environment. The runtime detects a changed ruleset revision and stops
+without Project mutation. This provides a reviewed-configuration gate without
+granting repository Administration permissions to the workflow token.
 
 The processor's `workflow_run` trigger has a narrowly scoped
 `zizmor: ignore[dangerous-triggers]` annotation because the generic audit
