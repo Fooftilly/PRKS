@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
       "number": 629,
@@ -10,9 +10,9 @@
       "expected_before": {
         "Agent": "Claude Code",
         "Status": "Inbox",
-        "Execution": null
+        "Execution": "Agent"
       },
-      "reason": "Previously approved Claude Code ownership for PostgreSQL L-F-1. Issue remains open and Inbox, its native prerequisite #626 is closed, and open PostgreSQL/offline-store PR overlap was reviewed. Set execution mode only; do not promote status, reassign Agent or start implementation.",
+      "reason": "Check-only acceptance after pruning the request branch to assignment JSON and its unprivileged push signal. #629 stays open; its native prerequisite #626 is closed, roadmap and active PR overlap checked. Never change any Project fields in this probe.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
