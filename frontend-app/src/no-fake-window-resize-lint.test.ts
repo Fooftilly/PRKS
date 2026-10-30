@@ -1,12 +1,11 @@
 import { ESLint } from 'eslint'
 import { describe, expect, it } from 'vitest'
 
-// Keep this fixture compatible with the browser-typed Vue project: no
-// @types/node dependency is required just to run ESLint on synthetic paths.
-const repoPath = (url: URL) =>
-  decodeURIComponent(url.pathname).replace(/^\/(?=[A-Za-z]:\/)/, '').replace(/\/$/, '')
-const repoRoot = repoPath(new URL('../../', import.meta.url))
-const vueRoot = repoPath(new URL('../', import.meta.url))
+// Vitest rewrites import.meta.url to /@fs/ URLs. The real test process
+// working directory is frontend-app, so use it for ESLint fixture paths
+// without adding Node type declarations to the browser-typed Vue project.
+const vueRoot = (globalThis as unknown as { process: { cwd(): string } }).process.cwd()
+const repoRoot = `${vueRoot}/..`
 
 const forbidden = [
   "window.dispatchEvent(new Event('resize'))",
