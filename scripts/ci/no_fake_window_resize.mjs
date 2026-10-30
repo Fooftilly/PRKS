@@ -1,28 +1,45 @@
 // Shared by legacy JavaScript and Vue/TypeScript ESLint configurations.
-// Ban only synthetic resize events dispatched on the global Window. Ordinary
-// resize listeners, ResizeObserver callbacks, and element events are allowed.
+// A scope-aware rule is needed: 'window', 'globalThis', and 'dispatchEvent'
+// can all be lexically shadowed by element-local helpers.
 const message =
   'Do not dispatch a synthetic window resize event. Update the owned pane/layout lifecycle using ResizeObserver instead.';
 
-const targets = [
-  "CallExpression[callee.type='MemberExpression'][callee.object.name=/^(window|globalThis)$/][callee.property.name='dispatchEvent']",
-  "CallExpression[callee.type='MemberExpression'][callee.object.name=/^(window|globalThis)$/][callee.property.value='dispatchEvent']",
-];
+function memberKey(node) {
+  if (!node || node.type !== 'MemberExpression') return null;
+  if (!node.computed && node.property.type === 'Identifier') return node.property.name;
+  if (node.computed && node.property.type === 'Literal') return node.property.value;
+  return null;
+}
 
-export const noFakeWindowResize = [
-  'error',
-  ...targets.map((target) => ({
-    selector: `${target} > NewExpression[arguments.0.value='resize']`,
-    message,
-  })),
-];
+function resolvesToGlobal(name, scope) {
+  for (let current = scope; current; current = current.upper) {
+    const binding = current.set.get(name);
+    if (binding) return binding.defs.length === 0;
+  }
+  return true; // Browser globals may not be declared in this ESLint scope.
+}
 
-// An unqualified dispatchEvent call usually means Window.dispatchEvent, but
-// a lexical helper of the same name can legitimately dispatch on an element.
-// AST selectors cannot distinguish them; check ESLint's actual lexical scope.
+function globalWindowReceiver(node, scope) {
+  if (node.type === 'Identifier') {
+    return ['window', 'globalThis', 'self'].includes(node.name) &&
+      resolvesToGlobal(node.name, scope);
+  }
+  return node.type === 'MemberExpression' &&
+    (memberKey(node) === 'window' || memberKey(node) === 'self') &&
+    node.object.type === 'Identifier' &&
+    node.object.name === 'globalThis' &&
+    resolvesToGlobal('globalThis', scope);
+}
+
+function isResizeType(type) {
+  return (type?.type === 'Literal' && type.value === 'resize') ||
+    (type?.type === 'TemplateLiteral' && type.expressions.length === 0 &&
+      type.quasis.length === 1 && type.quasis[0].value.cooked === 'resize');
+}
+
 export const noFakeWindowResizePlugin = {
   rules: {
-    'no-bare-global-resize': {
+    'no-synthetic-window-resize': {
       meta: {
         type: 'problem',
         schema: [],
@@ -31,21 +48,19 @@ export const noFakeWindowResizePlugin = {
       create(context) {
         return {
           CallExpression(node) {
-            if (node.callee.type !== 'Identifier' || node.callee.name !== 'dispatchEvent') return;
             const event = node.arguments[0];
             if (!event || event.type !== 'NewExpression' ||
-                !event.arguments[0] || event.arguments[0].type !== 'Literal' ||
-                event.arguments[0].value !== 'resize') return;
-
-            // A declared local dispatchEvent shadows the browser global.
-            // If no local declaration owns the identifier, conservatively
-            // treat the bare call as an implicit Window call.
-            for (let scope = context.sourceCode.getScope(node); scope; scope = scope.upper) {
-              const binding = scope.set.get('dispatchEvent');
-              if (binding) {
-                if (binding.defs.length) return;
-                break;
-              }
+                !isResizeType(event.arguments[0])) return;
+            const scope = context.sourceCode.getScope(node);
+            const callee = node.callee;
+            if (callee.type === 'Identifier') {
+              if (callee.name !== 'dispatchEvent' ||
+                  !resolvesToGlobal('dispatchEvent', scope)) return;
+            } else if (callee.type === 'MemberExpression') {
+              if (memberKey(callee) !== 'dispatchEvent' ||
+                  !globalWindowReceiver(callee.object, scope)) return;
+            } else {
+              return;
             }
             context.report({ node, messageId: 'synthetic' });
           },
