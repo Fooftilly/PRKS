@@ -52,7 +52,7 @@ import os
 import re
 import stat
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, BinaryIO, LiteralString, Optional, Protocol, TypeVar
 
@@ -413,13 +413,42 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     for directory, dirs, _names in os.walk(root, onerror=_unlisted):
         claims = [name for name in dirs if _CLAIM.fullmatch(name) is not None]
         dirs[:] = [name for name in dirs if _CLAIM.fullmatch(name) is None]
+        held = _held_names(os.path.join(directory, name) for name in claims)
         for name in claims:
-            _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled)
+            _settle(inbox_dir, root, os.path.join(directory, name), imported, unsettled, held)
     return unsettled
 
 
-def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str]) -> None:
-    """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`)."""
+def _held_names(claim_dirs: Iterable[str]) -> dict[tuple[int, int], set[str]]:
+    """The names the claims in ``claim_dirs`` hold, by file identity.
+
+    A claim directory or entry that cannot be read is left out; settling
+    it fails or keeps it (:func:`_settle`).
+    """
+    held: dict[tuple[int, int], set[str]] = {}
+    for claim_dir in claim_dirs:
+        try:
+            if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
+                continue
+            names = os.listdir(claim_dir)
+        except OSError:
+            continue
+        for name in names:
+            try:
+                entry = os.lstat(os.path.join(claim_dir, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(entry.st_mode):
+                held.setdefault((entry.st_dev, entry.st_ino), set()).add(name)
+    return held
+
+
+def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str],
+            held: dict[tuple[int, int], set[str]]) -> None:
+    """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`).
+
+    ``held`` is :func:`_held_names` of the claim directories beside it.
+    """
     # A claim directory that cannot be read fails the scan: the files it may
     # hold are absent from the inbox, so reconciling would drop their rows.
     try:
@@ -434,14 +463,18 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
         claim, path = os.path.join(claim_dir, name), os.path.join(os.path.dirname(claim_dir), name)
         # Its own path and, once published under one, its recovered name: an
         # import of either may have ingested these bytes.
-        rel_paths = [os.path.relpath(os.path.join(os.path.dirname(claim_dir), public), root).replace(os.sep, "/")
-                     for public in _public_names(claim_dir, name, linked=True)]
+        publics = list(_public_names(claim_dir, name, linked=True))
         try:
-            regular = stat.S_ISREG(os.lstat(claim).st_mode)
+            entry = os.lstat(claim)
         except OSError:
-            unsettled.update(rel_paths)
+            unsettled.update(_rel_paths(root, claim_dir, publics))
             continue
-        if not regular:
+        # A link whose record failed (:func:`_record_linked`) and that an
+        # import has since claimed under the recovered name is a publication too.
+        publics += [public for public in _public_names(claim_dir, name)
+                    if public not in publics and public in held.get((entry.st_dev, entry.st_ino), ())]
+        rel_paths = _rel_paths(root, claim_dir, publics)
+        if not stat.S_ISREG(entry.st_mode):
             LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
             continue
         expected = {imported[rel_path] for rel_path in rel_paths if rel_path in imported}
@@ -459,6 +492,12 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
         os.rmdir(claim_dir)
     except OSError:
         pass
+
+
+def _rel_paths(root: str, claim_dir: str, names: Iterable[str]) -> list[str]:
+    """The ``rel_path`` of each name beside ``claim_dir``."""
+    parent = os.path.dirname(claim_dir)
+    return [os.path.relpath(os.path.join(parent, name), root).replace(os.sep, "/") for name in names]
 
 
 # -- scan -------------------------------------------------------------------------

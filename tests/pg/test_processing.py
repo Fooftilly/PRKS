@@ -559,6 +559,33 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(staged, public)  # recovery recognises the link and lists the file once
         self.assertEqual(sorted(os.listdir(self.inbox)), public)
 
+    def test_an_unrecorded_link_imported_before_a_crash_is_not_published_again(self) -> None:
+        path = self.put("busy.pdf", b"%PDF-1.4 old")
+        self.assertIsNotNone(inbox._claim(path))  # the process dies here
+        self.put("busy.pdf", b"%PDF-1.4 newer")
+        real = os.rename
+
+        def unrecorded(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(target).endswith("-p"):
+                raise PermissionError(target)
+            real(source, target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "rename", unrecorded):
+            staged = {row["rel_path"]: row["id"] for row in self.library.scan_processing_files()}
+        recovered = next(rel for rel in staged if rel != "busy.pdf")
+
+        def claim_then_crash(inbox_dir: str, row: dict[str, Any]) -> bool:
+            self.assertIsNotNone(inbox._claim(os.path.join(inbox_dir, str(row["rel_path"]))))
+            return False
+
+        with mock.patch.object(inbox, "_finish_import", claim_then_crash):
+            self.library.import_processing_file(staged[recovered])
+        staged_after = self.library.scan_processing_files()
+        self.assertEqual([row["rel_path"] for row in staged_after], ["busy.pdf"])  # the import's bytes stay gone
+        self.assertEqual(os.listdir(self.inbox), ["busy.pdf"])
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), b"%PDF-1.4 newer")
+
     def test_a_late_put_back_under_a_recovered_name_is_staged_as_new(self) -> None:
         path = self.put("a.pdf", b"%PDF-1.4 ingested")
         file_id = self.staged("a.pdf")
