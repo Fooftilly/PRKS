@@ -1054,6 +1054,8 @@ def _spawn_worker(index, jobs, shard, workdir, browsers_path, fail_fast=False):
         "handle": handle,
         "report_file": report_file,
         "log_file": log_file,
+        "early_marker_offset": 0,
+        "early_marker_count": 0,
         "heartbeat_file": heartbeat_file,
         "shard": shard,
         "started": time.perf_counter(),
@@ -1081,6 +1083,56 @@ def _tail(path, limit=4000):
             return handle.read()[-limit:]
     except OSError:
         return ""
+
+
+def _forward_early_failure_markers(worker) -> None:
+    """Relay only validated worker markers before a parallel-gate deadline.
+
+    Worker stdout and stderr are otherwise private per-worker logs. A hard
+    timeout deletes that temporary directory, so poll incrementally and emit
+    the already-sanitized failure metadata while the worker is still running.
+    Never echo arbitrary worker output or unbounded log lines.
+    """
+    if worker.get("early_marker_count", 0) >= 3:
+        return
+    try:
+        with open(worker["log_file"], encoding="utf-8", errors="replace") as handle:
+            handle.seek(worker.get("early_marker_offset", 0))
+            while worker.get("early_marker_count", 0) < 3:
+                start = handle.tell()
+                line = handle.readline(512)
+                if not line:
+                    break
+                if not line.endswith("\n") and len(line) < 512:
+                    # Writer has not flushed a complete line yet.
+                    break
+                worker["early_marker_offset"] = handle.tell()
+                if len(line) >= 512 or not line.endswith("\n"):
+                    continue
+                fields = line.rstrip("\r\n").split(" ")
+                if len(fields) != 5 or fields[0] != "[e2e-early-failure]":
+                    continue
+                kind, test_id, exc, stage = fields[1:]
+                if kind not in ("ERROR", "FAIL", "SUBTEST"):
+                    continue
+                if test_id != "(unavailable)" and not _E2E_TEST_ID_LINE.fullmatch(test_id):
+                    continue
+                if not exc.startswith("exception=") or not re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_]{0,63}", exc[len("exception="):]
+                ):
+                    continue
+                if not stage.startswith("stage=") or not re.fullmatch(
+                    r"[A-Za-z0-9_.:-]{1,64}", stage[len("stage="):]
+                ):
+                    continue
+                worker["early_marker_count"] = worker.get("early_marker_count", 0) + 1
+                print(
+                    "[E2E %d] %s" % (worker["index"] + 1, line.rstrip("\r\n")),
+                    flush=True,
+                )
+    except OSError:
+        # Best-effort observability must never alter E2E pass/fail semantics.
+        return
 
 
 def _read_heartbeat(path) -> dict | None:
@@ -1211,6 +1263,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
             # this with-block unwinds, and hard-timeout SIGTERM is the common
             # path for a single hung shard after its peer finished cleanly.
             for worker in workers:
+                _forward_early_failure_markers(worker)
                 if worker["proc"].poll() is None:
                     _print_hung_worker(worker, jobs)
                 _stop_worker(worker)
@@ -1244,6 +1297,8 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
             watchdog_threshold = per_test_watchdog_s()
             while pending:
                 time.sleep(WORKER_POLL_S)
+                for worker in pending:
+                    _forward_early_failure_markers(worker)
                 if watchdog_threshold > 0:
                     for worker in list(pending):
                         if worker["proc"].poll() is not None:
@@ -1426,6 +1481,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                 except (ValueError, OSError):
                     pass
             for worker in workers:
+                _forward_early_failure_markers(worker)
                 _stop_worker(worker)
                 try:
                     worker["handle"].close()
