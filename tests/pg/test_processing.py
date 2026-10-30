@@ -409,8 +409,8 @@ class CrashRecoveryTests(ProcessingTestCase):
         moved = inbox._claim(taken)
         assert moved is not None
         self.put("moved.pdf", b"%PDF-1.4 newer")
-        renamed = os.path.dirname(moved) + "-0123abcd"
-        os.rename(os.path.dirname(moved), renamed)  # its directory takes the recovered name's id,
+        renamed = os.path.dirname(moved) + "-0123abcd-p"
+        os.rename(os.path.dirname(moved), renamed)  # its directory records the recovered name's id,
         os.link(os.path.join(renamed, "moved.pdf"),
                 os.path.join(self.inbox, "moved (recovered 0123abcd).pdf"))  # then it is published under that name
         staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
@@ -443,7 +443,7 @@ class CrashRecoveryTests(ProcessingTestCase):
     def test_an_import_under_a_recovered_name_removes_its_leftover_claim(self) -> None:
         recovered = self.put("orig (recovered 0123abcd).pdf")
         file_id = self.staged("orig (recovered 0123abcd).pdf")
-        stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 32}-0123abcd")
+        stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 32}-0123abcd-p")
         os.mkdir(stale, 0o700)
         os.link(recovered, os.path.join(stale, "orig.pdf"))  # put back under its recovered name; the unlink failed
         self.library.import_processing_file(file_id)
@@ -496,7 +496,7 @@ class CrashRecoveryTests(ProcessingTestCase):
     def test_a_leftover_claim_of_a_crashed_recovered_name_import_is_removed(self) -> None:
         recovered = self.put("orig (recovered 0123abcd).pdf")
         file_id = self.staged("orig (recovered 0123abcd).pdf")
-        stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'4' * 32}-0123abcd")
+        stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'4' * 32}-0123abcd-p")
         os.mkdir(stale, 0o700)
         os.link(recovered, os.path.join(stale, "orig.pdf"))  # put back under its recovered name; the unlink failed
         self.crash_after_commit(file_id)
@@ -504,6 +504,39 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(self.library.scan_processing_files(), [])  # never offered again
         self.assertIsNone(self.row(file_id))
         self.assertEqual(os.listdir(self.inbox), [])
+
+    def test_an_unpublished_claim_is_never_matched_to_its_recovered_names_import(self) -> None:
+        path = self.put("orig.pdf")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        intended = os.path.dirname(claimed) + "-0123abcd"
+        os.rename(os.path.dirname(claimed), intended)  # the link under the recovered name never happened
+        copy = self.put("orig (recovered 0123abcd).pdf")  # a separate file with the same bytes
+        imported = {"orig (recovered 0123abcd).pdf": inbox.file_sha256(copy) or ""}
+        self.assertEqual(inbox.recover_claims(self.inbox, imported), set())
+        with open(path, "rb") as handle:  # put back at its own name, not removed as that import's bytes
+            self.assertEqual(handle.read(), PDF)
+        self.assertEqual(sorted(os.listdir(self.inbox)), ["orig (recovered 0123abcd).pdf", "orig.pdf"])
+
+    def test_a_link_that_cannot_be_recorded_is_taken_back(self) -> None:
+        path = self.put("busy.pdf", b"%PDF-1.4 old")
+        claimed = inbox._claim(path)
+        assert claimed is not None
+        self.put("busy.pdf", b"%PDF-1.4 newer")
+        real = os.rename
+
+        def unrecorded(source: Any, target: Any, *args: Any, **kwargs: Any) -> None:
+            if os.fspath(target).endswith("-p"):
+                raise PermissionError(target)
+            real(source, target, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "rename", unrecorded):
+            self.assertFalse(inbox._put_back(claimed, path))
+        public = [name for name in os.listdir(self.inbox) if not name.startswith(inbox.CLAIM_PREFIX)]
+        self.assertEqual(public, ["busy.pdf"])  # the recovered link was taken back
+        staged = sorted(row["rel_path"] for row in self.library.scan_processing_files())
+        self.assertEqual(len(staged), 2)  # the claim is put back by the next scan, listed once
+        self.assertIn("busy.pdf", staged)
 
     def test_a_failed_publication_under_a_recovered_name_keeps_the_row(self) -> None:
         path = self.put("a.pdf", b"%PDF-1.4 original")

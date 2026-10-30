@@ -74,10 +74,11 @@ INBOX_LOCK_KEY: LiteralString = "hashtextextended('prks.inbox:' || %s, 0)"
 _CHUNK = 1024 * 1024
 _HEADER = b"%PDF-"
 # A directory holding one file the inbox protocol has claimed for removal (``_claim``),
-# under the file's own name. ``-<id>`` names the recovered name it is published
-# under when its own was taken (``_put_back``).
+# under the file's own name. ``-<id>`` names the recovered name it is being
+# published under when its own was taken, and ``-<id>-p`` records that it was
+# linked there (``_put_back``).
 CLAIM_PREFIX = ".prks-claimed-"
-_CLAIM = re.compile(re.escape(CLAIM_PREFIX) + r"[0-9a-f]{32}(?:-([0-9a-f]{8}))?")
+_CLAIM = re.compile(re.escape(CLAIM_PREFIX) + r"[0-9a-f]{32}(?:-([0-9a-f]{8})(-p)?)?")
 # The longest file name, in bytes, on the file systems PRKS supports.
 _NAME_MAX = 255
 SHARED = ("The Files for Processing inbox is not available while this instance has more than one Library: "
@@ -265,18 +266,25 @@ def _recovered_name(path: str, recovered_id: str) -> str:
     return os.path.join(os.path.dirname(path), stem + suffix)
 
 
-def _recovered_id(claim_dir: str) -> Optional[str]:
-    """The recovered-name id a claim directory's name carries (:data:`_CLAIM`), if any."""
+def _recovered_id(claim_dir: str, *, linked: bool = False) -> Optional[str]:
+    """The recovered-name id a claim directory's name carries (:data:`_CLAIM`), if any.
+
+    With ``linked``, only once the directory records the claim was linked there.
+    """
     found = _CLAIM.fullmatch(os.path.basename(claim_dir))
-    return found.group(1) if found else None
+    if found is None or (linked and not found.group(2)):
+        return None
+    return found.group(1)
 
 
-def _public_names(claim_dir: str, name: str) -> tuple[str, ...]:
+def _public_names(claim_dir: str, name: str, *, linked: bool = False) -> tuple[str, ...]:
     """The names beside ``claim_dir`` that its claim ``name`` may be published under.
 
-    Its own name, and the recovered name the directory's id derives from it.
+    Its own name, and the recovered name the directory's id derives from it;
+    with ``linked``, that one only once the claim is recorded as linked
+    there (a link that failed, or a crash before it, is no publication).
     """
-    recovered_id = _recovered_id(claim_dir)
+    recovered_id = _recovered_id(claim_dir, linked=linked)
     if recovered_id is None:
         return (name,)
     return (name, os.path.basename(_recovered_name(name, recovered_id)))
@@ -343,6 +351,11 @@ def _put_back(claim: str, path: str) -> bool:
         except OSError as exc:
             LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
             return False
+        if attempt:
+            recorded = _record_linked(claim, target)
+            if recorded is None:
+                return False
+            claim = recorded
         try:
             os.remove(claim)
         except OSError as exc:  # both names hold it; the next scan's recovery finds the claim again
@@ -352,6 +365,26 @@ def _put_back(claim: str, path: str) -> bool:
         return True
     LOGGER.warning("processing_claim_kept reason=names_taken")
     return False
+
+
+def _record_linked(claim: str, target: str) -> Optional[str]:
+    """Record on its directory that ``claim`` is linked at its recovered name ``target``; the claim's new path.
+
+    Without the record the link is taken back, so a recovered name never
+    stands for the claim unless the claim was published under it.
+    """
+    directory = os.path.dirname(claim)
+    marked = f"{directory}-p"
+    try:
+        os.rename(directory, marked)
+    except OSError as exc:
+        LOGGER.warning("processing_claim_kept error=%s", type(exc).__name__)
+        try:
+            os.remove(target)
+        except OSError:
+            pass  # the claim is still linked there: recovery recognises it (:func:`_published`)
+        return None
+    return os.path.join(marked, os.path.basename(claim))
 
 
 def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
@@ -400,7 +433,7 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
         # Its own path and, once published under one, its recovered name: an
         # import of either may have ingested these bytes.
         rel_paths = [os.path.relpath(os.path.join(os.path.dirname(claim_dir), public), root).replace(os.sep, "/")
-                     for public in _public_names(claim_dir, name)]
+                     for public in _public_names(claim_dir, name, linked=True)]
         try:
             regular = stat.S_ISREG(os.lstat(claim).st_mode)
         except OSError:
