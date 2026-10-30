@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 1008,
+      "number": 1007,
       "set": {
         "Status": "In Progress"
       },
@@ -12,21 +12,7 @@
         "Status": "Ready",
         "Execution": "Agent"
       },
-      "reason": "PR #1011 opened for live P2 E2E reliability issue #1008; issue #740 and overlapping PRs reviewed. Maintain Agent ChatGPT/Codex and Execution Agent; no dependencies.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1009,
-      "set": {
-        "Status": "In Progress"
-      },
-      "expected_before": {
-        "Agent": "ChatGPT/Codex",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "reason": "PR #1010 opened for live P2 E2E reliability issue #1009; issue #740 and overlapping PRs reviewed. Maintain Agent ChatGPT/Codex and Execution Agent; no dependencies.",
+      "reason": "Maintainer-authorized ChatGPT work on flaky E2E test #1007 now has the existing-flake-stress PR #1013 open, with test exact-ID and 20x acceptance; verified #740 plan and overlap with #1008/#1009 merged PRs; no native issue blockers.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
