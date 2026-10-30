@@ -855,6 +855,66 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(run_exit_code(False, 0), 1)
 
 
+class EarlyFailureMarkersTests(unittest.TestCase):
+    """Failing unittest cases must log a safe, bounded signal immediately."""
+
+    def test_error_prints_before_suite_finishes_without_exception_details(self):
+        with _import_runner() as runner:
+            case = unittest.TestCase("runTest")
+            case.id = lambda: (
+                "tests.e2e.test_app.PdfAnnotationCommentEditTests.test_failed_recovery"
+            )
+            stream, out = io.StringIO(), io.StringIO()
+            result = runner._TimingResult(stream, True, 2)
+            with mock.patch.object(
+                runner, "get_e2e_heartbeat", return_value={"stage": "PDF_READY"}
+            ), contextlib.redirect_stdout(out):
+                try:
+                    raise RuntimeError("PRIVATE_BOOK_TITLE_IN_EXCEPTION")
+                except RuntimeError:
+                    result.addError(case, sys.exc_info())
+                self.assertEqual(len(result.errors), 1)
+                self.assertIn("[e2e-early-failure] ERROR", out.getvalue())
+            printed = out.getvalue()
+            self.assertIn("exception=RuntimeError stage=PDF_READY", printed)
+            self.assertIn(case.id(), printed)
+            self.assertNotIn("PRIVATE_BOOK_TITLE_IN_EXCEPTION", printed)
+
+    def test_failure_and_subtest_markers_are_bounded_and_sanitized(self):
+        with _import_runner() as runner:
+            case = unittest.TestCase("runTest")
+            # Never print an unexpected test identifier or dynamic subtest data.
+            case.id = lambda: "untrusted private title"
+            out = io.StringIO()
+            result = runner._TimingResult(io.StringIO(), True, 2)
+            with mock.patch.object(
+                runner, "get_e2e_heartbeat",
+                return_value={"stage": "private title with spaces"},
+            ), contextlib.redirect_stdout(out):
+                for index in range(5):
+                    try:
+                        raise AssertionError("PRIVATE_SUBTEST_%s" % index)
+                    except AssertionError:
+                        err = sys.exc_info()
+                    if index == 0:
+                        result.addSubTest(case, case, err)
+                    else:
+                        result.addFailure(case, err)
+            markers = [
+                line for line in out.getvalue().splitlines()
+                if line.startswith("[e2e-early-failure]")
+            ]
+            self.assertEqual(len(markers), 3)
+            self.assertTrue(markers[0].startswith("[e2e-early-failure] SUBTEST "))
+            self.assertTrue(markers[1].startswith("[e2e-early-failure] FAIL "))
+            for marker in markers:
+                self.assertIn("(unavailable)", marker)
+                self.assertIn("stage=unknown", marker)
+                self.assertNotIn("private title", marker.lower())
+                self.assertNotIn("PRIVATE_SUBTEST", marker)
+            self.assertEqual(len(result.failures), 5)
+
+
 class ParallelRunnerProtocolTests(unittest.TestCase):
     """Real worker processes over deliberate pass/fail/crash cases. No browser."""
 
