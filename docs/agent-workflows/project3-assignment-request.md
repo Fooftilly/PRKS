@@ -179,8 +179,8 @@ integration with a verifiable caller identity; do not claim this relay
 has that property. The retired #982 listener had stronger App attribution.
 
 The two assignment writers (manual dispatch and request branch) share the
-same serialized concurrency group. A failed
-attempt could be partially applied; the processor still refreshes the
+same serialized concurrency group. A failed attempt
+could be partially applied; the processor still refreshes the
 read-only queue, and logs a failed/possibly-partial audit in the Actions
 run summary. There is no atomic GitHub Projects transaction.
 
