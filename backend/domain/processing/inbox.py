@@ -359,8 +359,8 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
 
     Runs under the inbox lock, so no claim of a running import or scan is
     among them. ``imported`` maps the ``rel_path`` of each ``imported`` row
-    to its ``import_sha256``: a claim with the bytes its path's import
-    ingested is removed, never published again (even when another file
+    to its ``import_sha256``: a claim with the bytes an import of its path
+    (or of the recovered name it was published under) ingested is removed, never published again (even when another file
     has taken the path); any other claim is put back (:func:`_put_back`).
     An empty claim directory (a crash before the rename) is removed.
     Returns the ``rel_path`` of each claimed file left unsettled (it could
@@ -397,26 +397,29 @@ def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str],
         raise
     for name in names:
         claim, path = os.path.join(claim_dir, name), os.path.join(os.path.dirname(claim_dir), name)
-        rel_path = os.path.relpath(path, root).replace(os.sep, "/")
+        # Its own path and, once published under one, its recovered name: an
+        # import of either may have ingested these bytes.
+        rel_paths = [os.path.relpath(os.path.join(os.path.dirname(claim_dir), public), root).replace(os.sep, "/")
+                     for public in _public_names(claim_dir, name)]
         try:
             regular = stat.S_ISREG(os.lstat(claim).st_mode)
         except OSError:
-            unsettled.add(rel_path)
+            unsettled.update(rel_paths)
             continue
         if not regular:
             LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
             continue
-        expected = imported.get(rel_path)
-        if expected is not None:
+        expected = {imported[rel_path] for rel_path in rel_paths if rel_path in imported}
+        if expected:
             # Published again only once a hash proves it is not the import's bytes.
             digest = file_sha256(claim)
-            if digest is None or (digest == expected and not _remove(inbox_dir, claim, path)):
-                unsettled.add(rel_path)
+            if digest is None or (digest in expected and not _remove(inbox_dir, claim, path)):
+                unsettled.update(rel_paths)
                 continue
-            if digest == expected:
+            if digest in expected:
                 continue
         if not _put_back(claim, path):
-            unsettled.add(rel_path)
+            unsettled.update(rel_paths)
     try:
         os.rmdir(claim_dir)
     except OSError:

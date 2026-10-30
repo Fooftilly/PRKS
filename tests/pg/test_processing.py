@@ -493,6 +493,18 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(staged, published)  # the leftover is recognised, never listed twice
         self.assertEqual(sorted(os.listdir(self.inbox)), published)
 
+    def test_a_leftover_claim_of_a_crashed_recovered_name_import_is_removed(self) -> None:
+        recovered = self.put("orig (recovered 0123abcd).pdf")
+        file_id = self.staged("orig (recovered 0123abcd).pdf")
+        stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'4' * 32}-0123abcd")
+        os.mkdir(stale, 0o700)
+        os.link(recovered, os.path.join(stale, "orig.pdf"))  # put back under its recovered name; the unlink failed
+        self.crash_after_commit(file_id)
+        self.assertIsNotNone(inbox._claim(recovered))  # the process dies here
+        self.assertEqual(self.library.scan_processing_files(), [])  # never offered again
+        self.assertIsNone(self.row(file_id))
+        self.assertEqual(os.listdir(self.inbox), [])
+
     def test_a_failed_publication_under_a_recovered_name_keeps_the_row(self) -> None:
         path = self.put("a.pdf", b"%PDF-1.4 original")
         file_id = self.staged("a.pdf")
