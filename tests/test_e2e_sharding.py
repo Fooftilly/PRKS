@@ -1550,6 +1550,30 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
             self.assertEqual(
                 runner._safe_watchdog_stage("BETWEEN_TESTS"), "BETWEEN_TESTS"
             )
+            # The offline Work metadata fixture emits these before each
+            # cleanup step; a hang there must keep its exact diagnostic stage.
+            for stage in (
+                "BODY_DONE", "CONTEXT_CLOSED", "SERVER_STOPPED",
+                "CHROMIUM_RECYCLE",
+            ):
+                with self.subTest(stage=stage):
+                    self.assertEqual(runner._safe_watchdog_stage(stage), stage)
+                    clean = runner._safe_watchdog_heartbeat(
+                        worker, {"test_id": own, "stage": stage}
+                    )
+                    self.assertEqual(clean["stage"], stage)
+                    detail = runner._format_watchdog_detail(clean, 2, 3.0)
+                    self.assertIn("stage=" + stage + " age=", detail)
+                    self.assertEqual(
+                        runner._privacy_safe_detail(
+                            {"detail": detail}, watchdog=True, shard=[own]
+                        ),
+                        detail,
+                    )
+                    self.assertEqual(
+                        runner._safe_watchdog_stage(stage + " PRIVATE_DATA"),
+                        "unknown",
+                    )
             self.assertEqual(
                 runner._safe_watchdog_stage("CHROMIUM_RECYCLE after_12_contexts SECRET"),
                 "unknown",
