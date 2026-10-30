@@ -310,7 +310,7 @@ class RequestRelayTests(unittest.TestCase):
         rest.ruleset.pop("bypass_actors")
         relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
         rest.ruleset["updated_at"] = "2026-10-30T15:01:00Z"
-        with self.assertRaisesRegex(relay.RequestError, "drifted"):
+        with self.assertRaisesRegex(relay.RequestError, "drift: revision"):
             relay.require_branch_rules(rest, "1234", "2026-10-30T15:00:00Z")
 
     def test_provenance_url_policy_restricts_rulesets_and_statuses(self):
