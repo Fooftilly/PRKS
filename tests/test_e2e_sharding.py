@@ -859,17 +859,25 @@ class EarlyFailureMarkersTests(unittest.TestCase):
     """Failing unittest cases must log a safe, bounded signal immediately."""
 
     def test_error_prints_before_suite_finishes_without_exception_details(self):
+        from tests.e2e.runner_selfcheck_cases import FailingCases
+
+        class FlushTrackingStream(io.StringIO):
+            def __init__(self):
+                super().__init__()
+                self.flush_calls = 0
+
+            def flush(self):
+                self.flush_calls += 1
+                super().flush()
+
         with _import_runner() as runner:
-            case = unittest.TestCase("runTest")
-            case.id = lambda: (
-                "tests.e2e.test_app.PdfAnnotationCommentEditTests.test_failed_recovery"
-            )
-            stream, out = io.StringIO(), io.StringIO()
+            case = FailingCases("test_fails")
+            stream, out = io.StringIO(), FlushTrackingStream()
             result = unittest.TextTestRunner(
                 stream=stream, verbosity=2, resultclass=runner._TimingResult
             )._makeResult()
             with mock.patch.object(
-                runner, "get_e2e_heartbeat", return_value={"stage": "PDF_READY"}
+                runner, "get_e2e_heartbeat", return_value={"stage": "APP_READY"}
             ), contextlib.redirect_stdout(out):
                 try:
                     raise RuntimeError("PRIVATE_BOOK_TITLE_IN_EXCEPTION")
@@ -878,22 +886,25 @@ class EarlyFailureMarkersTests(unittest.TestCase):
                 self.assertEqual(len(result.errors), 1)
                 self.assertIn("[e2e-early-failure] ERROR", out.getvalue())
             printed = out.getvalue()
-            self.assertIn("exception=RuntimeError stage=PDF_READY", printed)
+            self.assertIn("exception=RuntimeError stage=APP_READY", printed)
+            self.assertGreater(out.flush_calls, 0)
             self.assertIn(case.id(), printed)
             self.assertNotIn("PRIVATE_BOOK_TITLE_IN_EXCEPTION", printed)
 
     def test_failure_and_subtest_markers_are_bounded_and_sanitized(self):
+        from tests.e2e.runner_selfcheck_cases import FailingCases
+
         with _import_runner() as runner:
-            case = unittest.TestCase("runTest")
-            # Never print an unexpected test identifier or dynamic subtest data.
-            case.id = lambda: "untrusted private title"
+            case = FailingCases("test_fails")
+            # A forged ID looks canonical but must never replace the real test.
+            case.id = lambda: "tests.e2e.test_app.SecretPerson.test_private_blob"
             out = io.StringIO()
             result = unittest.TextTestRunner(
                 stream=io.StringIO(), verbosity=2, resultclass=runner._TimingResult
             )._makeResult()
             with mock.patch.object(
                 runner, "get_e2e_heartbeat",
-                return_value={"stage": "private title with spaces"},
+                return_value={"stage": "PRIVATE_USER_TOKEN"},
             ), contextlib.redirect_stdout(out):
                 for index in range(5):
                     try:
@@ -901,7 +912,11 @@ class EarlyFailureMarkersTests(unittest.TestCase):
                     except AssertionError:
                         err = sys.exc_info()
                     if index == 0:
-                        result.addSubTest(case, case, err)
+                        subtest = unittest.case._SubTest(
+                            case, "PRIVATE_SUBTEST_MESSAGE",
+                            {"private": "PRIVATE_SUBTEST_PARAMETER"},
+                        )
+                        result.addSubTest(case, subtest, err)
                     else:
                         result.addFailure(case, err)
             markers = [
@@ -914,7 +929,10 @@ class EarlyFailureMarkersTests(unittest.TestCase):
             for marker in markers:
                 self.assertIn("(unavailable)", marker)
                 self.assertIn("stage=unknown", marker)
-                self.assertNotIn("private title", marker.lower())
+                self.assertNotIn("SecretPerson", marker)
+                self.assertNotIn("PRIVATE_USER_TOKEN", marker)
+                self.assertNotIn("PRIVATE_SUBTEST_PARAMETER", marker)
+                self.assertNotIn("PRIVATE_SUBTEST_MESSAGE", marker)
                 self.assertNotIn("PRIVATE_SUBTEST", marker)
             self.assertEqual(len(result.failures), 5)
 
