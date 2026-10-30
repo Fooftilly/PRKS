@@ -865,7 +865,9 @@ class EarlyFailureMarkersTests(unittest.TestCase):
                 "tests.e2e.test_app.PdfAnnotationCommentEditTests.test_failed_recovery"
             )
             stream, out = io.StringIO(), io.StringIO()
-            result = runner._TimingResult(stream, True, 2)
+            result = unittest.TextTestRunner(
+                stream=stream, verbosity=2, resultclass=runner._TimingResult
+            )._makeResult()
             with mock.patch.object(
                 runner, "get_e2e_heartbeat", return_value={"stage": "PDF_READY"}
             ), contextlib.redirect_stdout(out):
@@ -886,7 +888,9 @@ class EarlyFailureMarkersTests(unittest.TestCase):
             # Never print an unexpected test identifier or dynamic subtest data.
             case.id = lambda: "untrusted private title"
             out = io.StringIO()
-            result = runner._TimingResult(io.StringIO(), True, 2)
+            result = unittest.TextTestRunner(
+                stream=io.StringIO(), verbosity=2, resultclass=runner._TimingResult
+            )._makeResult()
             with mock.patch.object(
                 runner, "get_e2e_heartbeat",
                 return_value={"stage": "private title with spaces"},
