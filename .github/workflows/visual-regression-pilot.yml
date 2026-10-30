@@ -48,7 +48,7 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
         ports:
-          - 5432:5432
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 2s
