@@ -472,6 +472,16 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("group: project3-assignment-mutations", text)
         self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')", text)
 
+    def test_mergify_required_protection_rejects_project3_data_branches(self):
+        config = (ROOT / ".mergify.yml").read_text()
+        marker = "  - name: PRKS / Never merge Project 3 data branches\n"
+        self.assertEqual(config.count(marker), 1)
+        section = config.split(marker, 1)[1].split("\n  - name: ", 1)[0]
+        self.assertIn("    if:\n      - base = master", section)
+        self.assertIn("      - head != project3-assignment-requests", section)
+        self.assertIn("      - head != project3-agent-queue", section)
+        self.assertIn("reporting_method: check-runs", config)
+
 
 if __name__ == "__main__":
     unittest.main()
