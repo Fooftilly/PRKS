@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare isolated E2E oracle mutations for the acceptance workflow.
+"""Generate one E2E test-oracle mutation to stdout for isolated acceptance CI.
 
-This script temporarily changes a tracked test source file on disk in the
-dedicated CI checkout. The invoking shell restores the original file via an
-EXIT trap after each control, including failures. No production files change.
+This helper never edits the checkout. The caller redirects the mutated module
+into RUNNER_TEMP, installs it only in that job, and restores source in an EXIT
+trap. Direct invocation merely emits source text; it does not run E2E tests.
 """
 import sys
 from pathlib import Path
@@ -19,14 +19,14 @@ PDF_MUTATION = """        _wait_pdf_annotation_durable(page)
         print("PRKS_NC_PDF_RECOVERY_OMITTED", flush=True)
         _wait_server_comment(page, work_id, ann_id, "recovered highlight", timeout=1200)
 """
-PERSON_ANCHOR = """        o._wait_list_uncached(page, 'person-groups:index')
-        self.changed(page, before, {'people','person-groups'})
-
-    def test_work_role_changes_and_metadata_exclusion(self):
+PERSON_ANCHOR = """        self.assertFalse(page.evaluate(delete_invalidated, before))
+        page.evaluate('() => { void deletePerson(); }')
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function(delete_invalidated, arg=before)
 """
-PERSON_MUTATION = """        o._wait_list_uncached(page, 'person-groups:index')
-        # The real delete and cache eviction already completed. Simulate
-        # the lost Person Group generation notification at the test boundary.
+PERSON_MUTATION = """        self.assertFalse(page.evaluate(delete_invalidated, before))
+        # Freeze only the observer for Person Groups before the real delete.
+        # The original deletion and People invalidation must still complete.
         page.evaluate(\"\"\"(baseline) => {
             const realGeneration = window.prksOfflineDomainGeneration;
             window.prksOfflineDomainGeneration = (domain) =>
@@ -35,11 +35,16 @@ PERSON_MUTATION = """        o._wait_list_uncached(page, 'person-groups:index')
                     : realGeneration(domain);
         }\"\"\", before)
         print("PRKS_NC_PERSON_GROUP_INVALIDATION_SUPPRESSED", flush=True)
-        self.changed(page, before, {'people','person-groups'})
-
-    def test_work_role_changes_and_metadata_exclusion(self):
+        page.evaluate('() => { void deletePerson(); }')
+        page.locator('#prks-modal-confirm-ok').click()
+        page.wait_for_function(
+            "baseline => prksOfflineDomainGeneration('people') > baseline.people",
+            arg=before, timeout=15000)
+        print("PRKS_NC_PERSON_PEOPLE_ADVANCED", flush=True)
+        # The actual original readiness predicate must reject a missing
+        # Person Group generation, not a later assertion of a stubbed value.
+        page.wait_for_function(delete_invalidated, arg=before, timeout=2500)
 """
-
 
 CONTROLS = {
     "pdf": ("tests/e2e/test_app.py", PDF_ANCHOR, PDF_MUTATION),
@@ -52,12 +57,10 @@ def main():
         raise SystemExit("usage: e2e_flake_negative_controls.py pdf|person")
     case = sys.argv[1]
     relative_file, anchor, mutation = CONTROLS[case]
-    path = ROOT / relative_file
-    original = path.read_text(encoding="utf-8")
+    original = (ROOT / relative_file).read_text(encoding="utf-8")
     if original.count(anchor) != 1:
         raise SystemExit(f"{case}: source anchor changed; refusing an unverified control")
-    path.write_text(original.replace(anchor, mutation, 1), encoding="utf-8")
-    print(f"Applied isolated {case} E2E negative control", flush=True)
+    sys.stdout.write(original.replace(anchor, mutation, 1))
 
 
 if __name__ == "__main__":
