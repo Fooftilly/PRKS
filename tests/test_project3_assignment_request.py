@@ -248,6 +248,9 @@ class RequestRelayTests(unittest.TestCase):
             {"bypass_actors": [{"actor_id": 1, "actor_type": "RepositoryRole"}]},
             {"conditions": {"ref_name": {"include": ["refs/heads/master"], "exclude": []}}},
             {"conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": [relay.REQUEST_REF]}}},
+            {"conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": ["refs/heads/project3-*"]}}},
+            {"conditions": {"ref_name": {"include": [relay.REQUEST_REF], "exclude": ["refs/heads/unrelated"]}}},
+            {"conditions": {"ref_name": {"include": [relay.REQUEST_REF, "refs/heads/master"], "exclude": []}}},
             {"rules": [{"type": "deletion"}]},
             {"rules": [{"type": "non_fast_forward"}]},
         ):

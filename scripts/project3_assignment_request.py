@@ -175,10 +175,8 @@ def require_branch_rules(read: Callable[[str], Any], ruleset_id: str,
             or rule.get("updated_at") != reviewed_at
             or rule.get("target") != "branch"
             or rule.get("enforcement") != "active"
-            or not isinstance(conditions.get("include"), list)
-            or REQUEST_REF not in conditions["include"]
-            or not isinstance(conditions.get("exclude"), list)
-            or REQUEST_REF in conditions["exclude"]
+            or conditions.get("include") != [REQUEST_REF]
+            or conditions.get("exclude") != []
             or not isinstance(rules, list)):
         raise RequestError("request branch ruleset drifted from reviewed configuration")
     types = {r.get("type") for r in rules if isinstance(r, dict)}
