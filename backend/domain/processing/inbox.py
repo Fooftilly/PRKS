@@ -576,7 +576,8 @@ def import_file(runner: Runner, inbox_dir: str, objects: StorageBackend, file_id
         except (FileNotFoundError, NotADirectoryError):
             present = False
         except OSError as exc:  # present but unreadable: the row and its edits are kept
-            raise _refuse(runner, file_id, f"Could not read source PDF: {exc}") from None
+            # The reason only: the error's text would carry the inbox's absolute path.
+            raise _refuse(runner, file_id, f"Could not read source PDF: {exc.strerror or type(exc).__name__}") from None
         if row["restore_hold"] and not (present and row["restore_sha256"]
                                         and file_sha256(str(source)) == row["restore_sha256"]):
             # A restore could not vouch for the file at this path (§11.4):

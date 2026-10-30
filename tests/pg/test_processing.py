@@ -330,6 +330,7 @@ class CrashRecoveryTests(ProcessingTestCase):
             self.library.import_processing_file(file_id)
         row = self.library.get_processing_file(file_id)
         self.assertEqual((row["title"], row["status"]), ("Kept", "error"))
+        self.assertNotIn(self.inbox, str(row["last_error"]))  # no absolute path is shown
         self.assertTrue(os.path.isfile(path))
         out = self.library.import_processing_file(file_id)
         self.assertEqual(self.library.get_work(out["work_id"])["title"], "Kept")
