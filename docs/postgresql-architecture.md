@@ -2367,13 +2367,15 @@ item into a Work in one transaction.
 - `processing_items`: `id` (`PI-` prefix), `library_id`,
   `original_filename` (display only: never a path, never unique),
   `object_locator` (the `asset-objects` key of the uploaded bytes),
-  `sha256` and `byte_size` of those bytes, `status` (`ready` or
-  `imported`), `revision`, `upload_key`, `uploaded_by`, `created_at`,
-  `updated_at`, `imported_at` and `imported_work_id`.
+  `sha256` and `byte_size` of those bytes, `status` (`ready`,
+  `imported` or `deleted`), `revision`, `upload_key`, `uploaded_by`,
+  `created_at`, `updated_at`, `imported_at`, `imported_work_id` and
+  `deleted_at`.
   `UNIQUE (library_id, upload_key)` makes uploads idempotent, and an index
   on `(library_id, sha256)` serves duplicate warnings. A `ready` item has
-  `object_locator` and no `imported_at`; an `imported` item has
-  `imported_at` and no `object_locator` (a `CHECK`).
+  `object_locator` and neither `imported_at` nor `deleted_at`; an
+  `imported` item has `imported_at` and no `object_locator`; a `deleted`
+  item has `deleted_at` and no `object_locator` (a `CHECK`).
   `imported_work_id` references the Work `ON DELETE SET NULL`, and Work
   merge re-points it (§7.1).
 - `processing_item_drafts`: one row per `ready` item, with every Work field
@@ -2390,7 +2392,8 @@ item into a Work in one transaction.
 
 There is no `uploading`, `pending` or `error` state. A row exists only once
 its bytes are durable and adopted, and a failed import changes nothing, so
-`ready` and `imported` are the only states.
+`ready` is the only live state. `imported` and `deleted` are terminal
+**markers** (below): the row keeps its `upload_key` reserved forever.
 
 **Upload** (`POST /api/processing-items`): the body is the raw PDF
 (`Content-Type: application/pdf`), with `Content-Length` required, the
@@ -2400,8 +2403,10 @@ the same call, and each file has its own progress, failure and retry.
 
 1. Authenticate, resolve the Library and check maintenance and the epoch,
    before reading the body.
-2. Look up `(library_id, upload_key)`. A hit returns the existing item
-   (an imported marker included) without reading the body.
+2. Look up `(library_id, upload_key)`. A hit returns that item without
+   reading the body: a `ready` item or an imported marker as it is, and a
+   deleted marker as `PROCESSING_ITEM_DELETED`. A replay never recreates
+   an item the user removed or imported.
 3. Otherwise stream the body into a fresh key through `put_new` with a
    bounded buffer: the first bytes must be `%PDF-`, the body must match
    `Content-Length` and stay under the upload cap, and the backend hashes
@@ -2439,7 +2444,8 @@ failure never affects another's and a batch answers with a result per item.
 
 1. Lock the item. If it is `imported`, create nothing: answer with its
    `imported_work_id`, or with `IMPORTED_WORK_DELETED` when that Work was
-   deleted. A retry, however late, never creates a second Work.
+   deleted. A retry, however late, never creates a second Work. If it is
+   `deleted`, refuse with `PROCESSING_ITEM_DELETED`.
 2. Resolve the target folder (key share) or "Uncategorized".
 3. Create the Work, Manifestation and Asset through `create_work` (§6.4) with
    the item's key as the Asset's `storage_locator` and its `sha256` as
@@ -2459,16 +2465,22 @@ No bytes are written or moved, so a serialization retry repeats nothing
 outside the database. A failure rolls back: the item, its object and its
 draft stay as they were, and the error is returned, not stored.
 
-**Imported markers** are kept indefinitely: the item ID, `imported` state,
-`upload_key`, `sha256`, `byte_size`, original filename, Work reference and
-timestamps. They make upload and import retries idempotent without a time
-window and keep provenance. They are not listed in the queue, and nothing
-prunes them; retention can be revisited if database growth ever requires it.
+**Delete** (`DELETE /api/processing-items/{id}`): locks a `ready` item,
+deletes its draft (with its roles and tags), sets `status = 'deleted'` and
+`deleted_at`, clears `object_locator` and releases the key
+(`lifecycle.release`), all in one transaction; `objects.cleanup` deletes the
+bytes. Deleting a `deleted` item succeeds again with no change, and an
+`imported` item cannot be deleted. Delete, import and an upload replay
+of the same key serialize on the item row, so a replay racing a delete
+returns either the `ready` item (which the delete then removes) or the
+deleted marker, never a new item.
 
-**Delete** (`DELETE /api/processing-items/{id}`): removes a `ready` item
-and its draft, and releases its key (`lifecycle.release`) in the same
-transaction; `objects.cleanup` deletes the bytes. Imported markers are not
-deleted through the API.
+**Markers** (`imported` and `deleted` items) are kept indefinitely: the
+item ID, state, `upload_key`, `sha256`, `byte_size`, original filename,
+timestamps and, for an import, the Work reference. They make upload,
+import and delete retries idempotent without a time window and keep
+provenance. They are not listed in the queue, and nothing prunes them;
+retention can be revisited if database growth ever requires it.
 
 **Preview** (`GET /api/processing-items/{id}/pdf`): streams a `ready`
 item's object with `HEAD` and `Range` support through the same object read
@@ -2844,7 +2856,9 @@ the lane that ports the relevant module.
   and an early refusal close the connection without reading the body, and
   the next request on a new connection is unaffected; a client disconnect,
   a short body and a kill before the insert leave no visible item and an
-  object the sweep collects; two imports of one item, an import racing a
+  object the sweep collects; upload, delete, then a retry with the same
+  key (also racing the delete) returns the deleted marker and creates
+  nothing; two imports of one item, an import racing a
   delete, an edit or a Tag merge, and a Work merge or delete after import
   each leave exactly one outcome, and a retry against a deleted Work reports
   it; cleanup and sweep running through upload, import and delete never
@@ -3097,7 +3111,7 @@ merged; several run at the same time).
 | **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity, with tests that two root folders of the same title key are refused (`NULLS NOT DISTINCT`), the same title under two different parents is allowed, and two concurrent creates of one root folder leave one row; one-playlist-per-Work |
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution; `research.reindex_work` takes the per-Work reindex lock and holds the note `FOR SHARE` while it writes mentions, tested by a note edit committed while a reindex of the old note is paused (the final mentions match the new note) and by a first note created for a Work while a reindex that found no note is paused (the final mentions match the new note); a Work deleted while a reindex of it (a job's or a rebuild's) is paused, and one deleted before a stale reindex runs, leave no research rows for that Work |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
-| **L-PR-1** Processing queue | L-A-1, L-P-1, L-O-1 | §11.5: `processing_items`, drafts, roles and tags; Processing references in the object lifecycle (§11.2); streamed upload with idempotency keys, revisioned edit, single and batch import that hands the key to the Asset, delete with release, `Range` preview; the HTTP API and OpenAPI; `processing_items` replaces the `processing_files` entry in the Work merge registry (`DEFERRED` in `backend/domain/works/merge.py` becomes a moved peer relationship on `imported_work_id`). The queue frontend (#40) lands with PG-C1 | The §13.3 Processing queue tests; no stored path and no filesystem scan; an imported marker survives indefinitely and a retry never creates a second Work; a failed import keeps its item, draft and object; duplicates warn and never merge |
+| **L-PR-1** Processing queue | L-A-1, L-P-1, L-O-1 | §11.5: `processing_items`, drafts, roles and tags; Processing references in the object lifecycle (§11.2); streamed upload with idempotency keys, revisioned edit, single and batch import that hands the key to the Asset, delete with release, `Range` preview; the HTTP API and OpenAPI; `processing_items` replaces the `processing_files` entry in the Work merge registry (`DEFERRED` in `backend/domain/works/merge.py` becomes a moved peer relationship on `imported_work_id`). The queue frontend (#40) lands with PG-C1 | The §13.3 Processing queue tests; no stored path and no filesystem scan; imported and deleted markers survive indefinitely and reserve their upload key, so a retry never creates a second Work or recreates a deleted item; a failed import keeps its item, draft and object; duplicates warn and never merge |
 | **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding, at start or seen on a worker's idle tick after the database restarts on a new release, enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again; rebuild concurrency (§8.6), with deterministic pause points: a metadata or note command committed while a rebuild batch holds its locks, and one committed after the batch read began, both leave the command's projection; a Work created during a rebuild keeps its row; a rebuild killed mid-run and run again leaves every row equal to a fresh recompute; running it twice changes nothing; a person rename committed while a role add linking that person to another Work is paused (and the reverse order) leaves both Works' rows with the new name; a Work deleted while a refresh naming it is paused, and a refresh naming a Work after its delete and after a rebuild's final delete, leave no `work_search` row for that Work; an Asset deleted or replaced while a `text.extract` of it is paused, and a rebuild with an `asset_text` row whose Asset is gone or replaced, leave no such row; a text rebuild over a Library with one corrupt PDF completes, records that Asset with a failed `status` and indexes the Assets after it; `--only research` completes only after every Work is reindexed, and a Work whose reindex fails fails the rebuild, which resumes from its stored `work_id` |
 | **L-S-2** Ranking (v0.9.0) | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
 | **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; queued and imported Processing items round-trip with their objects, and an import that commits during a backup leaves the archive with either the queued item and its object or the imported marker and the Asset referencing that object; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members stay contained (§13.3 archive containment); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
@@ -3204,8 +3218,9 @@ Decision 11 and the last two sentences of decision 10 were added on
     database transaction that hands the key to the new Asset. Uploads are
     not linearized, because the bundled viewer loads whole files; any later
     optimization is an Asset rewrite after verifying a need. Imported
-    markers are kept indefinitely with no pruning, so a retry never creates
-    a duplicate Work and reports a deleted one. The queue frontend targets
+    and deleted items stay as markers indefinitely with no pruning, so a
+    retry never creates a duplicate Work, reports a deleted one, and never
+    recreates a deleted item. The queue frontend targets
     PostgreSQL server mode with no SQLite implementation, and the legacy
     inbox is removed at cutover with no parallel implementation (§11.5).
 
