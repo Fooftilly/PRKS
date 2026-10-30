@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "operation": "check",
+  "operation": "apply",
   "items": [
     {
       "number": 1007,
