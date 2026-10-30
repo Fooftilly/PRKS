@@ -425,13 +425,31 @@ class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
         if self._early_failure_count > 3:
             return
         test_id = str(test.id())
-        if not _E2E_TEST_ID_LINE.fullmatch(test_id):
+        # The test name must be the actual unittest identity from a known
+        # static E2E module; merely matching a filename-shaped private value
+        # is not sufficient to allow it into CI logs.
+        module = type(test).__module__
+        if (
+            module not in E2E_MODULES
+            and module != "tests.e2e.runner_selfcheck_cases"
+        ) or test_id != unittest.TestCase.id(test) or not _E2E_TEST_ID_LINE.fullmatch(test_id):
             test_id = "(unavailable)"
         exception = getattr(exc_info[0], "__name__", "")
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", exception):
+        # Do not trust an arbitrary dynamic class name just because it fits
+        # the expected character pattern.
+        if exception not in {
+            "AssertionError", "RuntimeError", "TimeoutError", "Error",
+            "ValueError", "TypeError", "OSError", "KeyError",
+            "AttributeError", "ConnectionError", "PermissionError",
+            "FileNotFoundError", "NotImplementedError",
+        }:
             exception = "unknown"
         stage = str((get_e2e_heartbeat() or {}).get("stage") or "")
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", stage):
+        # Stages are fixed harness labels, not arbitrary supplied strings.
+        if stage not in {
+            "START", "STOP", "CHROMIUM_CLOSE", "CHROMIUM_LAUNCH",
+            "SERVER_READY", "CONTEXT_READY", "APP_READY",
+        }:
             stage = "unknown"
         print(
             "[e2e-early-failure] %s %s exception=%s stage=%s"
