@@ -97,6 +97,15 @@ already-reviewed `project3_assignment_dispatch` validator and
 untrusted request-branch code, reads upstream artifacts, runs shell commands
 from the request, or exposes the Project token to branch workflows.
 
+The processor's `workflow_run` trigger has a narrowly scoped
+`zizmor: ignore[dangerous-triggers]` annotation because the generic audit
+cannot establish this specific trust boundary. This exception requires:
+a trusted `master` checkout, the protected environment, fixed owner-ID
+authorization, independent REST verification of the upstream run and exact
+one-file pinned JSON commit, no upstream artifacts, no untrusted script or
+PR checkout, and no interpolation of request data into a shell command.
+If any requirement changes, remove the suppression and reassess security.
+
 The three assignment writers (manual dispatch, legacy comment bridge, and
 request branch) share the same serialized concurrency group. A failed
 attempt could be partially applied; the processor still refreshes the

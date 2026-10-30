@@ -70,15 +70,15 @@ def _refuse_if_untrusted_event(event: Any, env: Mapping[str, str]) -> dict:
 def provenance_client(token: str) -> Callable[[str], Any]:
     """Read only the four fixed GitHub REST resource families used for proof."""
     opener = pm._https_only_opener()
-    prefixes = (
-        API + "/actions/runs/",
-        API + "/branches/" + BRANCH,
-        API + "/commits/",
-        API + "/contents/" + FILE + "?ref=",
+    allowed = (
+        re.compile(re.escape(API + "/actions/runs/") + r"[1-9][0-9]*"),
+        re.compile(re.escape(API + "/branches/" + BRANCH)),
+        re.compile(re.escape(API + "/commits/") + r"[0-9a-f]{40}"),
+        re.compile(re.escape(API + "/contents/" + FILE + "?ref=") + r"[0-9a-f]{40}"),
     )
 
     def read(url: str) -> Any:
-        if not any(url.startswith(prefix) for prefix in prefixes):
+        if not isinstance(url, str) or not any(pattern.fullmatch(url) for pattern in allowed):
             raise RequestError("refused request outside fixed provenance resources")
         request = urllib.request.Request(url, headers={
             "Authorization": "Bearer " + token,
@@ -108,6 +108,7 @@ def load_command(event: Any, env: Mapping[str, str],
         if upstream.get(field) != run[field]:
             raise RequestError("upstream workflow REST record differs from event")
     if ((upstream.get("actor") or {}).get("id") != dispatch.OWNER_ID
+            or (upstream.get("actor") or {}).get("login") != "Fooftilly"
             or (upstream.get("head_repository") or {}).get("full_name") != REPO):
         raise RequestError("upstream workflow owner/repository mismatch")
 

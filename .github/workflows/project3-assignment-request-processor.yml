@@ -4,7 +4,7 @@ name: Project 3 assignment request processor
 # NEVER check out, execute or import code from the request branch. The command
 # is one pinned JSON file, validated against GitHub REST provenance.
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] Authenticated owner-only signal; trusted master checkout, no upstream artifacts or code, verified pinned JSON data only.
     workflows: [Project 3 assignment request signal]
     types: [completed]
     branches: [project3-assignment-requests]
@@ -35,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: master
           persist-credentials: false
 
       - name: Authenticate request and update Project #3

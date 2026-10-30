@@ -87,6 +87,18 @@ class RequestRelayTests(unittest.TestCase):
                 client(relay.API + "/issues/815")
             with self.assertRaisesRegex(relay.RequestError, "outside fixed"):
                 client("https://evil.example/anything")
+            for url in (
+                relay.API + "/actions/runs/1/logs",
+                relay.API + "/actions/runs/01",
+                relay.API + "/branches/" + relay.BRANCH + "-shadow",
+                relay.API + "/commits/" + "a" * 40 + "/status",
+                relay.API + "/commits/" + "not-a-sha",
+                relay.API + "/contents/" + relay.FILE + "?ref=" + "a" * 40 + "&x=1",
+                relay.API + "/contents/" + relay.FILE + "?ref=master",
+            ):
+                with self.subTest(url=url), self.assertRaisesRegex(
+                        relay.RequestError, "outside fixed"):
+                    client(url)
             opener.assert_called_once()
 
     def test_main_uses_provenance_and_issue_clients_with_distinct_scopes(self):
@@ -237,6 +249,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("PROJECT_SYNC_TOKEN", text)
         self.assertIn("PROJECT3_ASSIGN_DISPATCH_MODE", text)
         self.assertIn("persist-credentials: false", text)
+        self.assertIn("ref: master", text)
+        self.assertIn("zizmor: ignore[dangerous-triggers]", text)
+        # The trigger exception is allowed only with a fixed protected master
+        # checkout and no untrusted-ref execution or upstream artifact downloads.
+        for forbidden in ("run: ${{", "download-artifact", "github.event.workflow_run.head_sha }}"):
+            self.assertNotIn(forbidden, text)
         self.assertNotIn("github.event.workflow_run.head_sha }}", text)
         self.assertIn("group: project3-assignment-mutations", text)
         self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')", text)
