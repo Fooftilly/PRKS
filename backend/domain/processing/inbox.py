@@ -209,7 +209,7 @@ def _drop_stale_links(claim: str) -> bool:
     """Remove other claims of the claimed file beside it; whether none is left.
 
     A put-back whose final unlink failed leaves the file under both its
-    public name and an old claim. Once the file is claimed again, that old
+    public name and an old claim of that name. Once the file is claimed again, that old
     claim is a second name for bytes this claim holds, so it goes: left
     behind, the next scan would publish it again after this file's import.
     """
@@ -234,6 +234,8 @@ def _drop_stale_links(claim: str) -> bool:
         except OSError:
             return False
         for name in names:
+            if not _same_name(os.path.basename(claim), name):
+                continue  # another path's claim, even of a hard link of this file: recovery settles it
             stale = os.path.join(directory, name)
             try:
                 entry = os.lstat(stale)
@@ -246,6 +248,15 @@ def _drop_stale_links(claim: str) -> bool:
                 LOGGER.warning("processing_stale_claim_kept error=%s", type(exc).__name__)
                 return False
     return True
+
+
+def _same_name(name: str, claimed: str) -> bool:
+    """Whether ``name`` is ``claimed`` or one of its recovered names (:func:`_recovered_name`)."""
+    if name == claimed:
+        return True
+    found = _RECOVERED.fullmatch(name)
+    stem, ext = os.path.splitext(claimed)
+    return found is not None and found.group(2) == (ext or ".pdf") and stem.startswith(found.group(1))
 
 
 def _recovered_name(path: str) -> str:

@@ -425,6 +425,28 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertEqual(os.listdir(self.inbox), [])
         self.assertEqual(self.library.scan_processing_files(), [])  # never offered again
 
+    def test_an_import_leaves_the_claim_of_a_hard_linked_path(self) -> None:
+        path = self.put("a.pdf")
+        os.link(path, os.path.join(self.inbox, "b.pdf"))
+        a_id = self.staged("a.pdf")
+        b_id = self.staged("b.pdf")
+        self.library.update_processing_file(b_id, {"title": "Kept"})
+        self.assertIsNotNone(inbox._claim(os.path.join(self.inbox, "b.pdf")))  # the process dies here
+        self.library.import_processing_file(a_id)
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["id"], row["rel_path"], row["title"]) for row in staged], [(b_id, "b.pdf", "Kept")])
+        self.assertEqual(os.listdir(self.inbox), ["b.pdf"])
+
+    def test_an_import_under_a_recovered_name_removes_its_leftover_claim(self) -> None:
+        recovered = self.put("orig (recovered 0123abcd).pdf")
+        file_id = self.staged("orig (recovered 0123abcd).pdf")
+        stale = os.path.join(self.inbox, f"{inbox.CLAIM_PREFIX}{'3' * 32}")
+        os.mkdir(stale, 0o700)
+        os.link(recovered, os.path.join(stale, "orig.pdf"))  # put back under a new name; the unlink failed
+        self.library.import_processing_file(file_id)
+        self.assertEqual(os.listdir(self.inbox), [])
+        self.assertEqual(self.library.scan_processing_files(), [])
+
     def test_a_leftover_claim_that_cannot_be_removed_keeps_the_imported_row(self) -> None:
         path = self.put("stays.pdf")
         file_id = self.staged("stays.pdf")
