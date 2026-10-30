@@ -476,6 +476,51 @@ class CrashRecoveryTests(ProcessingTestCase):
         self.assertIsNone(self.row(imported_id))
         self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
 
+    def test_an_unreadable_claim_directory_fails_the_scan_and_keeps_every_row(self) -> None:
+        imported_path = self.put("done.pdf")
+        pending_path = self.put("open.pdf", b"%PDF-1.4 open")
+        imported_id, pending_id = self.staged("done.pdf"), self.staged("open.pdf")
+        self.library.update_processing_file(pending_id, {"title": "Kept"})
+        self.crash_after_commit(imported_id)
+        self.assertIsNotNone(inbox._claim(imported_path))  # the process dies here
+        self.assertIsNotNone(inbox._claim(pending_path))
+        real = os.listdir
+
+        def unreadable_claims(path: str) -> list[str]:
+            if inbox._CLAIM.fullmatch(os.path.basename(path)):
+                raise PermissionError(path)
+            return real(path)
+
+        with mock.patch.object(inbox.os, "listdir", unreadable_claims), self.assertRaises(PermissionError):
+            self.library.scan_processing_files()
+        self.assertTrue(self.lock_is_free())
+        kept = self.row(imported_id)
+        assert kept is not None
+        self.assertEqual(kept["status"], "imported")
+        self.assertEqual(self.library.get_processing_file(pending_id)["title"], "Kept")
+        staged = self.library.scan_processing_files()
+        self.assertEqual([(row["id"], row["rel_path"], row["title"]) for row in staged],
+                         [(pending_id, "open.pdf", "Kept")])
+        self.assertIsNone(self.row(imported_id))
+        self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
+
+    def test_a_claimed_file_that_cannot_be_inspected_keeps_its_row(self) -> None:
+        pending_path = self.put("open.pdf", b"%PDF-1.4 open")
+        pending_id = self.staged("open.pdf")
+        claim = inbox._claim(pending_path)  # the process dies here
+        assert claim is not None
+        real = os.lstat
+
+        def uninspectable(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            if os.fspath(path) == claim:
+                raise PermissionError(path)
+            return real(path, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "lstat", uninspectable):
+            self.assertEqual([row["id"] for row in self.library.scan_processing_files()], [pending_id])
+        self.assertEqual([row["id"] for row in self.library.scan_processing_files()], [pending_id])
+        self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
+
     def test_an_imported_claim_stays_private_until_its_hash_is_known(self) -> None:
         path = self.put("kept.pdf")
         file_id = self.staged("kept.pdf")

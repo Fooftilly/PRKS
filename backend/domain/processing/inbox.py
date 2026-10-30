@@ -282,7 +282,8 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
     has taken the path); any other claim is put back (:func:`_put_back`).
     An empty claim directory (a crash before the rename) is removed.
     Returns the ``rel_path`` of each claimed file left unsettled (it could
-    be neither removed nor put back), whose row the scan keeps.
+    be neither removed nor put back), whose row the scan keeps. A claim
+    directory that cannot be listed raises ``OSError``, failing the scan.
 
     Only a real directory, and in it a regular file, is settled. Anything
     else with a claim's name (a link, a device) is not one the protocol
@@ -302,23 +303,27 @@ def recover_claims(inbox_dir: str, imported: dict[str, str]) -> set[str]:
 
 def _settle(inbox_dir: str, root: str, claim_dir: str, imported: dict[str, str], unsettled: set[str]) -> None:
     """Settle one claim directory a crash left, adding to ``unsettled`` (:func:`recover_claims`)."""
+    # A claim directory that cannot be read fails the scan: the files it may
+    # hold are absent from the inbox, so reconciling would drop their rows.
     try:
         if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
             LOGGER.warning("processing_claim_skipped reason=not_a_directory")
             return
         names = os.listdir(claim_dir)
-    except OSError:
-        return
+    except OSError as exc:
+        LOGGER.warning("processing_claim_unreadable error=%s", type(exc).__name__)
+        raise
     for name in names:
         claim, path = os.path.join(claim_dir, name), os.path.join(os.path.dirname(claim_dir), name)
+        rel_path = os.path.relpath(path, root).replace(os.sep, "/")
         try:
             regular = stat.S_ISREG(os.lstat(claim).st_mode)
         except OSError:
+            unsettled.add(rel_path)
             continue
         if not regular:
             LOGGER.warning("processing_claim_skipped reason=not_a_regular_file")
             continue
-        rel_path = os.path.relpath(path, root).replace(os.sep, "/")
         expected = imported.get(rel_path)
         if expected is not None:
             # Published again only once a hash proves it is not the import's bytes.
