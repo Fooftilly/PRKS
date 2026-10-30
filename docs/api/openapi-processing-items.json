@@ -51,7 +51,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -132,7 +132,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -152,7 +152,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -162,7 +162,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -172,7 +172,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -252,7 +252,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -428,7 +428,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -490,7 +490,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
                 }
               }
             }
@@ -501,35 +501,6 @@
   },
   "components": {
     "schemas": {
-      "ApiErrorEnvelope": {
-        "additionalProperties": false,
-        "description": "Standard JSON error body at the HTTP adapter boundary.",
-        "properties": {
-          "error": {
-            "description": "Human-readable error message.",
-            "minLength": 1,
-            "title": "Error",
-            "type": "string"
-          },
-          "code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Stable machine-readable code when the domain provides one.",
-            "title": "Code"
-          }
-        },
-        "required": [
-          "error"
-        ],
-        "type": "object"
-      },
       "ProcessingFileRole": {
         "additionalProperties": false,
         "description": "A staged person role, in inbox order.",
@@ -1939,7 +1910,7 @@
       },
       "ProcessingItemRefusal": {
         "additionalProperties": false,
-        "description": "A refused item command: the code, and the item as it now is when there is one.",
+        "description": "Every refusal on these routes: the code, a message, and the item as it now is when there is one.",
         "properties": {
           "error": {
             "title": "Error",

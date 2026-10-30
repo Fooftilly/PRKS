@@ -3878,7 +3878,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if use_gzip:
             self.send_header("Content-Encoding", "gzip")
         self.end_headers()
-        self.wfile.write(body)
+        # A HEAD answer has the GET answer's headers and no body.
+        if (getattr(self, "command", "") or "").upper() != "HEAD":
+            self.wfile.write(body)
 
 class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True

@@ -165,8 +165,14 @@ def handle_get(handler: Any, db: Any, path: str, query: str) -> bool:
 
 
 def handle_head(handler: Any, db: Any, path: str) -> bool:
+    """HEAD of an item's PDF; on the SQLite runtime every queue path is a 404, as for GET."""
+    if not handles(path):
+        return False
     library = _library(handler, db)
-    route = _route(path) if library is not None else None
+    if library is None:
+        handler.send_error(404, "API endpoint not found")
+        return True
+    route = _route(path)
     if route is None or route[1] != "pdf":
         return False
     return _send_pdf(handler, library, route[0], head_only=True)

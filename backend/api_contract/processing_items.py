@@ -204,7 +204,7 @@ class ProcessingImportResults(BaseModel):
 
 
 class ProcessingItemRefusal(BaseModel):
-    """A refused item command: the code, and the item as it now is when there is one."""
+    """Every refusal on these routes: the code, a message, and the item as it now is when there is one."""
 
     model_config = ConfigDict(extra="forbid")
 

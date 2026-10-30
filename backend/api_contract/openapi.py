@@ -1017,7 +1017,6 @@ def processing_items_openapi_document() -> dict[str, Any]:
     """
     schemas: dict[str, Any] = {}
     for model in (
-        ApiErrorEnvelope,
         ProcessingItem,
         ProcessingItemPage,
         ProcessingItemUploaded,
@@ -1032,8 +1031,9 @@ def processing_items_openapi_document() -> dict[str, Any]:
     def _json(name: str) -> dict[str, Any]:
         return {"application/json": {"schema": {"$ref": f"#/components/schemas/{name}"}}}
 
+    # Every refusal here, admission's included, is {error, code, message}.
     def _error(description: str) -> dict[str, Any]:
-        return {"description": description, "content": _json("ApiErrorEnvelope")}
+        return {"description": description, "content": _json("ProcessingItemRefusal")}
 
     def _refusal(description: str) -> dict[str, Any]:
         return {"description": description, "content": _json("ProcessingItemRefusal")}

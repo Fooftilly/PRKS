@@ -260,6 +260,17 @@ class QueueTests(ProcessingHttpTestCase):
         self.ok(self.send("DELETE", f"/api/processing-items/{item['id']}"))
         self.refused(self.get(path), 404, "ENTITY_NOT_FOUND")
         self.assertEqual(self.call("HEAD", path, cookies=self.cookies).status, 404)
+        # Read off the socket: a HEAD refusal has headers only.
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+            sock.sendall((f"HEAD {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+                          f"Cookie: prks_session={self.cookies['prks_session']}\r\n\r\n").encode())
+            raw = b""
+            while chunk := sock.recv(65536):
+                raw += chunk
+        head, _, body = raw.partition(b"\r\n\r\n")
+        self.assertIn(b" 404 ", head.split(b"\r\n", 1)[0])
+        self.assertNotIn(b"Content-Length: 0\r\n", head + b"\r\n")
+        self.assertEqual(body, b"")
 
 
 class ImportAndDeleteTests(ProcessingHttpTestCase):
@@ -340,3 +351,4 @@ class SqliteRuntimeTests(HttpAuthTestCase):
         self.assertEqual(self.call("GET", "/api/processing-items").status, 404)
         res = self.call("POST", "/api/processing-items", headers=[("Content-Type", "application/pdf")])
         self.assertEqual(res.status, 404)
+        self.assertEqual(self.call("HEAD", f"/api/processing-items/{_MISSING}/pdf").status, 404)
