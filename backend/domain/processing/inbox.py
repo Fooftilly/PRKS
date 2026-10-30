@@ -510,18 +510,23 @@ def _record_found_links(directory: str, claims: list[str]) -> list[str]:
 
 
 def _entries(claim_dir: str) -> list[tuple[str, tuple[int, int]]]:
-    """Each regular file in a claim directory with its identity; what cannot be read is left out (:func:`_settle`)."""
+    """Each regular file in a claim directory with its identity (:func:`_record_found_links`).
+
+    A claim directory or entry that cannot be inspected raises ``OSError``,
+    failing the scan before any claim is settled: a link it holds, left out,
+    would be missed. One that is gone, or is no directory, holds nothing.
+    """
     try:
         if not stat.S_ISDIR(os.lstat(claim_dir).st_mode):
             return []
         names = os.listdir(claim_dir)
-    except OSError:
+    except FileNotFoundError:
         return []
     found = []
     for name in names:
         try:
             entry = os.lstat(os.path.join(claim_dir, name))
-        except OSError:
+        except FileNotFoundError:
             continue
         if stat.S_ISREG(entry.st_mode):
             found.append((name, (entry.st_dev, entry.st_ino)))

@@ -997,10 +997,27 @@ class CrashRecoveryTests(ProcessingTestCase):
                 raise PermissionError(path)
             return real(path, *args, **kwargs)
 
-        with mock.patch.object(inbox.os, "lstat", uninspectable):
-            self.assertEqual([row["id"] for row in self.library.scan_processing_files()], [pending_id])
+        with mock.patch.object(inbox.os, "lstat", uninspectable), self.assertRaises(OSError):
+            self.library.scan_processing_files()  # nothing is settled or reconciled
+        self.assertIsNotNone(self.row(pending_id))
         self.assertEqual([row["id"] for row in self.library.scan_processing_files()], [pending_id])
         self.assertEqual(os.listdir(self.inbox), ["open.pdf"])
+
+    def test_an_uninspectable_claim_fails_recovery_before_any_claim_is_settled(self) -> None:
+        self.import_an_unrecorded_link_and_crash()
+        before = sorted(os.listdir(self.inbox))
+        real = os.lstat
+
+        def newer_uninspectable(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            if inbox.CLAIM_PREFIX in os.fspath(path) and "(recovered " in os.path.basename(os.fspath(path)):
+                raise PermissionError(path)
+            return real(path, *args, **kwargs)
+
+        with mock.patch.object(inbox.os, "lstat", newer_uninspectable), self.assertRaises(OSError):
+            self.library.scan_processing_files()
+        self.assertEqual(sorted(os.listdir(self.inbox)), before)
+        self.assertEqual([row["rel_path"] for row in self.library.scan_processing_files()], ["busy.pdf"])
+        self.assertEqual(os.listdir(self.inbox), ["busy.pdf"])
 
     def test_an_imported_claim_stays_private_until_its_hash_is_known(self) -> None:
         path = self.put("kept.pdf")
