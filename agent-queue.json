@@ -1,7 +1,7 @@
 {
   "complete": true,
   "count": 15,
-  "generated_at": "2026-10-30T16:57:23Z",
+  "generated_at": "2026-10-30T17:16:01Z",
   "issues": [
     {
       "agent": "Cursor Cloud",
@@ -11,7 +11,7 @@
     },
     {
       "agent": "Claude Code",
-      "execution": null,
+      "execution": "Agent",
       "number": 629,
       "status": "Inbox"
     },
@@ -102,6 +102,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41094496094,
-  "stale_after": "2026-10-31T04:57:23Z"
+  "source_run_id": 41097256390,
+  "stale_after": "2026-10-31T05:16:01Z"
 }
