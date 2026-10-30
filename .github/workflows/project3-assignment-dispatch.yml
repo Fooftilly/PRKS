@@ -49,8 +49,9 @@ jobs:
           PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
         run: python3 scripts/project3_assignment_dispatch.py
 
-      - name: Refresh read-only queue after any successful writes
-        if: steps.assignment.outputs.changed == 'true'
+      # Even a failed attempt may have applied some fields before drift stopped it.
+      - name: Refresh read-only queue after writes or possible partial writes
+        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master

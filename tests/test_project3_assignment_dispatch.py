@@ -217,6 +217,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("PROJECT3_ASSIGN_DISPATCH_MODE", workflow)
         self.assertIn("GITHUB_EVENT_PATH", workflow)
         self.assertNotIn("inputs.command }}", workflow)
+        self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')", workflow)
         self.assertIn("group: project3-assignment-mutations", workflow)
         legacy = (ROOT / ".github/workflows/project3-assignment-bridge.yml").read_text()
         self.assertIn("group: project3-assignment-mutations", legacy)

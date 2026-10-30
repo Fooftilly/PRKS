@@ -104,8 +104,8 @@ means **POSSIBLY PARTIAL**; stop, inspect Project #3 live state and native
 blockers, and submit a newly reviewed command. There is no atomic multi-field
 transaction in GitHub Projects.
 
-Successful apply runs with actual changes dispatch the existing queue
-publisher. Its output is a snapshot; only a successful publisher run with a
+Successful apply runs with actual changes, and failed attempts that could have
+partially changed Project fields, dispatch the existing queue publisher. Its output is a snapshot; only a successful publisher run with a
 fresh complete file confirms the read-only cache is updated.
 
 ## Retirement criteria for #982
