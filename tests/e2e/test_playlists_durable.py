@@ -208,6 +208,8 @@ class DurablePlaylistTests(unittest.TestCase):
         self.assertIn('Renamed Offline', self.playlists_in_db(server))
 
 
+    # ---- membership ---------------------------------------------------------
+
     def test_adding_a_video_offline_shows_on_both_the_video_and_the_playlist(self):
         server, page, context = self.start()
         destination = page.evaluate("() => createPlaylist('Destination', '')")
