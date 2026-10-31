@@ -516,7 +516,12 @@ runScript('frontend/js/command-palette.js');
 
 const root = sandbox;
 root.prksNavigate = function (hash, opts) {
-    navCalls.push({ hash: String(hash || ''), replace: !!(opts && opts.replace) });
+    navCalls.push({
+        hash: String(hash || ''),
+        replace: !!(opts && opts.replace),
+        tabId: opts && opts.tabId ? String(opts.tabId) : '',
+        target: opts && opts.target ? String(opts.target) : '',
+    });
     location.hash = String(hash || '');
 };
 root.__prksPaletteDebounceMs = 0;
@@ -645,9 +650,34 @@ assert('enter navigates', navCalls.length === 1 && navCalls[0].hash === '#/folde
 assert('enter closes', !root.prksCommandPaletteIsOpen());
 assert('navigate not replace', navCalls[0].replace !== true);
 
+root.prksGetFocusedTabContext = function () {
+    return { tabId: 'pane-secondary' };
+};
+root.prksOpenCommandPalette();
+navCalls.length = 0;
+root.prksCommandPaletteExecuteActive();
+assertEq('palette navigates the focused pane', navCalls[0] && navCalls[0].tabId, 'pane-secondary');
+assertEq('focused pane stays current', navCalls[0] && navCalls[0].target, 'current');
+root.prksGetFocusedTabContext = function () {
+    return { tabId: 'pane-main' };
+};
+root.prksOpenCommandPalette();
+navCalls.length = 0;
+root.prksCommandPaletteExecuteActive();
+assertEq('palette does not reuse the other pane', navCalls[0] && navCalls[0].tabId, 'pane-main');
+delete root.prksGetFocusedTabContext;
+
 root.prksOpenCommandPalette();
 root.prksCommandPaletteHandleKey(keyEvent('Escape'));
 assert('escape closes', !root.prksCommandPaletteIsOpen());
+
+root.prksOpenCommandPalette();
+root.prksIsModalConfirmOpen = function () { return true; };
+root.prksCommandPaletteHandleDocumentKey(keyEvent('Escape'));
+assert('confirm layer keeps the palette open', root.prksCommandPaletteIsOpen());
+delete root.prksIsModalConfirmOpen;
+root.prksCommandPaletteHandleDocumentKey(keyEvent('Escape'));
+assert('escape closes once confirm is gone', !root.prksCommandPaletteIsOpen());
 
 document.activeElement = textarea;
 const ignored = keyEvent('k', { ctrl: true, target: textarea });
@@ -1134,7 +1164,7 @@ Promise.resolve()
                     return null;
                 };
                 root.prksOpenCommandPalette({ navigationTarget: 'tile' });
-                assertEq('split palette title', document.getElementById('prks-command-palette-title').textContent, 'Open in split view');
+                assertEq('split palette title', root.prksCommandPaletteView().title, 'Open in split view');
                 const splitRows = root.prksCommandPaletteGetResults();
                 assert('open tabs heading first', splitRows[0] && splitRows[0].section === 'open-tabs');
                 assert('open tab is B', splitRows.some(function (r) { return r.workspaceTabId === 'tab-2'; }));
@@ -1218,22 +1248,16 @@ Promise.resolve()
                 root.fetchPositions = function () { return Promise.resolve([]); };
                 root.fetchArguments = function () { return Promise.resolve([]); };
                 root.prksOpenCommandPalette({ navigationTarget: 'tile' });
-                const resultsEl = document.getElementById('prks-command-palette-results');
-                const statusEl = document.getElementById('prks-command-palette-status');
                 function guidanceText() {
-                    return String((statusEl && statusEl.textContent) || '');
+                    const view = root.prksCommandPaletteView();
+                    return String((view && view.status) || '');
                 }
-                function listHtml() {
-                    return String((resultsEl && resultsEl.innerHTML) || '');
+                function paintedRows() {
+                    const view = root.prksCommandPaletteView();
+                    return view && view.rows ? view.rows.length : -1;
                 }
                 assert('split initial status present', !!guidanceText());
-                assertEq('split initial status role', statusEl.getAttribute('role'), 'status');
-                assertEq('split status stays exposed (no hidden)', !!statusEl.hidden, false);
-                assertEq(
-                    'split status has no hidden attribute',
-                    statusEl.getAttribute('hidden'),
-                    null
-                );
+                assertEq('split status is the published view', typeof root.prksCommandPaletteView().status, 'string');
                 assert(
                     'split initial empty mentions detail pages',
                     /detail page that supports split/i.test(guidanceText())
@@ -1247,7 +1271,7 @@ Promise.resolve()
                     root.prksPaletteSplitEmptyMessage(),
                     'Search for a detail page that supports split — Work, Person, Playlist, Concept, Position, Argument, or Folder.'
                 );
-                assertEq('listbox empty while guiding', listHtml().indexOf('role="option"'), -1);
+                assertEq('listbox empty while guiding', paintedRows(), 0);
                 assertEq('split initial empty not a result row', root.prksCommandPaletteGetResults().length, 0);
                 root.prksCommandPaletteHandleKey(keyEvent('ArrowDown'));
                 assertEq('guidance not selectable via ArrowDown', root.prksCommandPaletteGetActiveIndex(), 0);
@@ -1271,7 +1295,7 @@ Promise.resolve()
                             text.indexOf('Search for a page that can open in split view.') === -1
                         );
                         assertEq('no tile results for ' + query, root.prksCommandPaletteGetResults().length, 0);
-                        assertEq('listbox has no options for ' + query, listHtml().indexOf('role="option"'), -1);
+                        assertEq('listbox has no options for ' + query, paintedRows(), 0);
                         const match = root.prksPaletteFindNonTileableMatch(query);
                         assert('helper finds non-tileable for ' + query, !!(match && match.label === labelNeedle));
                     });
@@ -1306,7 +1330,7 @@ Promise.resolve()
                                     label + ' does not name a blocked destination',
                                     guidanceText().indexOf("can’t open in split view") === -1
                                 );
-                                assertEq(label + ' listbox empty', listHtml().indexOf('role="option"'), -1);
+                                assertEq(label + ' listbox empty', paintedRows(), 0);
                                 assertEq(label + ' no selectable rows', root.prksCommandPaletteGetResults().length, 0);
                             });
                         }
@@ -1342,7 +1366,7 @@ Promise.resolve()
                 assert('tile-capable work appears', workRows.length >= 1);
                 assertEq(
                     'no status guidance while work matches',
-                    String((document.getElementById('prks-command-palette-status') || {}).textContent || ''),
+                    root.prksCommandPaletteView().status,
                     ''
                 );
 
@@ -1396,6 +1420,8 @@ Promise.resolve()
                 assert('no dynamic window call', src.indexOf('window[') < 0);
                 assert('uses prksRouteSupportsTile for eligibility', src.indexOf('prksRouteSupportsTile') >= 0);
                 assert('no second TILE_ROUTE allowlist in palette', src.indexOf('PRKS_TILE_ROUTE_NAMES') < 0);
+                assert('no result innerHTML painter', src.indexOf('innerHTML') < 0);
+                assert('dialog ids live in Vue', src.indexOf('prks-command-palette-results') < 0);
 
                 console.log(passed + ' passed, ' + failed + ' failed');
                 if (failed) process.exit(1);

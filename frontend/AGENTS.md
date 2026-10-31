@@ -74,7 +74,7 @@ existing modals and route handlers.
 Global command shortcuts must not steal keyboard shortcuts while the user is
 typing/editing or while another modal owns focus.
 
-Palette queries are ephemeral UI state and must not be persisted or logged.
+Palette queries are ephemeral UI state and must not be persisted or logged. `CommandPalette.vue` paints the dialog from `prksCommandPaletteView`; this module does not build result HTML.
 
 Any command that depends on transient command-palette operation state (e.g.
 `state.splitPlacement`, set by a pane menu's explicit Split right/down request)
