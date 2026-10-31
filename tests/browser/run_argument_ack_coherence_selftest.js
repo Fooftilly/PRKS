@@ -152,7 +152,7 @@ async function targetsInvalidateArgumentsAndPositionsOnly() {
  * validated server acknowledgement -> cache reconciliation. The existing
  * cache-only test above did not exercise dispatch, queue retirement, or
  * refusal of malformed server responses. */
-async function integratedSourceAck(reply) {
+async function integratedSourceAck(reply, shouldAcknowledge) {
     await seed();
     const local = createPrksLocalStore({
         indexedDB: createFakeIndexedDBFactory(), uuid,
@@ -204,6 +204,20 @@ async function integratedSourceAck(reply) {
             "enqueue cannot invalidate the Argument before ACK");
         online = true;
         await coordinator.wake();
+        // A local durable write also requests a wake; if that first wake is
+        // still recovering, a second wake is intentionally a no-op. Wait for
+        // committed retirement or a recorded retryable refusal, never a sleep.
+        let settled = false;
+        for (let i = 0; i < 200; i++) {
+            const rows = await local.listOperations();
+            settled = sent.length === 1 && (shouldAcknowledge
+                ? acknowledged.length === 1 && rows.length === 0
+                : rows.length === 1 && rows[0].attempt_count === 1 &&
+                    !!rows[0].last_error);
+            if (settled) break;
+            await new Promise(resolve => setTimeout(resolve, 2));
+        }
+        assert(settled, "coordinator must settle ACK or retryable refusal");
         await flush();
         assert.equal(sent.length, 1, "production coordinator sends once");
         assert.equal(sent[0].op_id, queued[0].op_id);
@@ -247,7 +261,7 @@ async function productionSourceAckDispatchesAndRejectsBadResponses() {
     const success = await integratedSourceAck(envelope => ({
         code: "ACKNOWLEDGED", argument_id: envelope.entity_id,
         changed: true, server_revision: 2,
-    }));
+    }), true);
     assert.equal(success.acknowledged.length, 1, "ACK emits once");
     assert.equal(success.acknowledged[0].op.op_id, success.sent[0].op_id);
     assert.equal(success.reconciled, 1, "production handler reconciles exactly once");
@@ -270,7 +284,7 @@ async function productionSourceAckDispatchesAndRejectsBadResponses() {
         envelope => ({code: "ACKNOWLEDGED", argument_id: envelope.entity_id,
             changed: true, server_revision: "2"}),
     ]) {
-        const refused = await integratedSourceAck(badReply);
+        const refused = await integratedSourceAck(badReply, false);
         const rows = await refused.local.listOperations();
         assert.equal(rows.length, 1, "invalid ACK cannot retire durable intent");
         assert.equal(rows[0].status, "pending");
