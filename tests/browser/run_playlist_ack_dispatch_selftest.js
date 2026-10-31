@@ -5,10 +5,16 @@
  * but inspected only disposable IndexedDB cache footprints. */
 const strict = require("node:assert/strict");
 let checks = 0;
-const assert = new Proxy(function (...a) { checks++; return strict(...a); },
-    {get: (_target, key) => (...a) => { checks++; return strict[key](...a); }});
+const assert = Object.assign(
+    (...args) => { checks++; return strict(...args); },
+    {
+        equal(...args) { checks++; return strict.equal(...args); },
+        notEqual(...args) { checks++; return strict.notEqual(...args); },
+        deepEqual(...args) { checks++; return strict.deepEqual(...args); },
+        fail(...args) { checks++; return strict.fail(...args); },
+    });
+const {Script} = require("node:vm");
 const fs = require("node:fs");
-const path = require("node:path");
 const {createFakeIndexedDBFactory} = require("./lib/fake_indexeddb.js");
 const {createPrksLocalStore} = require("../../frontend/js/local-store.js");
 
@@ -55,15 +61,16 @@ function loadTopLevelFunction(source, name) {
     for (let i = brace; i < source.length; i++) {
         if (source[i] === "{") depth++;
         if (source[i] === "}" && --depth === 0) {
-            (0, eval)(source.slice(at, i + 1));
+            new Script(source.slice(at, i + 1),
+                {filename: "playlist-production-wrapper.js"}).runInThisContext({timeout: 1000});
             return;
         }
     }
     throw new Error("unclosed production wrapper: " + name);
 }
-const app = fs.readFileSync(path.join(__dirname, "../../frontend/js/app.js"), "utf8");
+const app = fs.readFileSync(require.resolve("../../frontend/js/app.js"), "utf8");
 const playlistUI = fs.readFileSync(
-    path.join(__dirname, "../../frontend/js/components/playlists.js"), "utf8");
+    require.resolve("../../frontend/js/components/playlists.js"), "utf8");
 loadTopLevelFunction(app, "prksDurableOperationsOrNone");
 for (const name of ["prksPlaylistSaveMessage", "prksPlaylistBaseUnavailable",
     "updatePlaylist", "reorderPlaylist"]) loadTopLevelFunction(playlistUI, name);
@@ -85,22 +92,22 @@ function readValidators() {
         assert.notEqual(end, -1);
         return app.slice(at, end + 2);
     });
-    return new Function(declarations.join("\n") +
-        "\nreturn {" + names.join(",") + "};")();
+    return new Script(declarations.join("\n") +
+        "\n({" + names.join(",") + "});",
+        {filename: "playlist-production-validators.js"}).runInThisContext({timeout: 1000});
 }
 const validation = readValidators();
-const syncSource = fs.readFileSync(path.join(__dirname, "../../frontend/js/sync-runtime.js"), "utf8");
+const syncSource = fs.readFileSync(require.resolve("../../frontend/js/sync-runtime.js"), "utf8");
 const registryStart = syncSource.indexOf("runtime = createRuntime({ store, online,");
 const registryEnd = syncSource.indexOf("\n        lock:", registryStart);
 assert(registryStart >= 0 && registryEnd > registryStart, "production sync registry");
 const registry = syncSource.slice(registryStart, registryEnd);
-for (const [operation, handler] of [
-    ["SET_PLAYLIST_FIELD", "prksPlaylistFieldSyncHandler"],
-    ["REORDER_PLAYLIST_ITEMS", "prksPlaylistOrderSyncHandler"],
+for (const mapping of [
+    "SET_PLAYLIST_FIELD: root.prksPlaylistFieldSyncHandler,",
+    "REORDER_PLAYLIST_ITEMS: root.prksPlaylistOrderSyncHandler,",
 ]) {
-    const entries = registry.match(new RegExp("\\b" + operation +
-        ":\\s*root\\." + handler + "\\s*,", "g")) || [];
-    assert.equal(entries.length, 1, "production registry must dispatch " + operation);
+    assert.equal(registry.split(mapping).length - 1, 1,
+        "production registry must dispatch " + mapping);
 }
 const ID = "PL-SAVED", W1 = "W-1", W2 = "W-2", OTHER = "W-OTHER";
 let nextId = 0;
@@ -210,8 +217,6 @@ async function scenario(name, write, expectedOperations = 1) {
 async function main() {
     await scenario("description", async () => {
         await globalThis.updatePlaylist(ID, {description: "New description"});
-        const list = await cache.getList("playlists:index");
-        // The enqueue is async; only assert post-ACK in the outer case.
     }).then(async ({before, state, detail, envelope}) => {
         assert.equal(envelope.operation, "SET_PLAYLIST_FIELD");
         assert.deepEqual(envelope.payload, {field: "description", value: "New description"});
