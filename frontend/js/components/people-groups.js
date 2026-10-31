@@ -243,6 +243,10 @@ function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) 
 
 /** New group modal: load cache, clear fields, bind parent search. */
 async function prksInitNewGroupModal() {
+    if (window.prksCreateForms && typeof window.prksCreateForms.prepareGroup === 'function') {
+        await window.prksCreateForms.prepareGroup();
+        return;
+    }
     document.getElementById('group-parent-search') &&
         (document.getElementById('group-parent-search').value = '');
     const hid = document.getElementById('group-parent-id');

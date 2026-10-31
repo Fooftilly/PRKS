@@ -73,11 +73,22 @@ class WorkMembershipEditorContractTests(unittest.TestCase):
         self.assertIn("workId: wid", playlist)
         self.assertIn("tabId:", playlist)
         self.assertIn("generation: generation", playlist)
-        folder_save = _APP[_APP.index("const pending = window.__prksPendingWorkFolderAttach"):_APP.index("const playlistBtn")]
-        self.assertLess(folder_save.index("prksCapturedWorkPanelStill"), folder_save.index("patchWorkFolder(attachWid, data.id, still)"))
-        self.assertLess(folder_save.index("if (!still()) return;"), folder_save.index("patchWorkFolder(attachWid, data.id, still)"))
-        playlist_save = _APP[_APP.index("const pending = window.__prksPendingPlaylistAttach"):_APP.index("const personFname")]
-        self.assertLess(playlist_save.index("prksCapturedWorkPanelStill"), playlist_save.index("addWorkToPlaylist(newId, pending.workId, still)"))
+        forms = _PROJECT / "frontend-app" / "src" / "features" / "create-forms"
+        folder_save = (forms / "folder-effects.ts").read_text(encoding="utf-8")
+        self.assertLess(
+            folder_save.index("prksCapturedWorkPanelStill"),
+            folder_save.index("patchWorkFolder(attachWid, newFolderId, still)"),
+        )
+        self.assertLess(
+            folder_save.index("if (!still()) return"),
+            folder_save.index("patchWorkFolder(attachWid, newFolderId, still)"),
+        )
+        playlist_save = (forms / "submit.ts").read_text(encoding="utf-8")
+        playlist_save = playlist_save[playlist_save.index("const pending = w.__prksPendingPlaylistAttach"):]
+        self.assertLess(
+            playlist_save.index("prksCapturedWorkPanelStill"),
+            playlist_save.index("addWorkToPlaylist?.(newId, String(pending.workId), still)"),
+        )
         self.assertIn("if (pending && pending.workId && still())", playlist_save)
 
     def test_runtime_stale_membership_does_not_write(self):

@@ -125,11 +125,14 @@ class PlaylistsVueContracts(unittest.TestCase):
         )
 
     def test_new_playlist_navigates_the_originating_owner(self):
-        app = (FRONTEND / "app.js").read_text()
-        pending = app.index("const pending = window.__prksPendingPlaylistAttach")
-        save = app[pending:app.index("} catch (e)", pending)]
+        save = (
+            ROOT / "frontend-app" / "src" / "features" / "create-forms" / "submit.ts"
+        ).read_text(encoding="utf-8")
+        pending = save.index("const pending = w.__prksPendingPlaylistAttach")
+        save = save[pending:]
         self.assertIn("prksTakePlaylistIndexCreateTabId", save)
-        self.assertIn("prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId })", save)
+        self.assertIn("tabId: createTabId", save)
+        self.assertIn("#/playlists/", save)
         self.assertNotIn("location.hash", save)
         stub = (FRONTEND / "components" / "playlists.js").read_text()
         take = stub[

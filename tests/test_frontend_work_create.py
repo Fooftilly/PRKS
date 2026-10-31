@@ -325,7 +325,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         app = _read(_APP)
         ui = _read(_UI)
         work_chunk = app.split("document.getElementById('save-work-btn')", 1)[1].split(
-            "const folderTitleInput", 1
+            "const saveRoleBtn", 1
         )[0]
         self.assertIn("__prksWorkCreateInFlight", work_chunk)
         self.assertIn("prksSetWorkModalCreateBusy", work_chunk)
