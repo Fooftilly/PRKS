@@ -27,6 +27,7 @@ from collections import defaultdict
 from typing import Any, LiteralString, Optional
 
 from backend import tag_sync as rules
+from backend.tag_color import normalized_tag_color
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import lifecycle, links
 from backend.domain.works import revisions
@@ -165,12 +166,7 @@ def _clean(value: Optional[str], what: str) -> str:
 
 
 def _color(value: Optional[str]) -> str:
-    # The column refuses a blank colour; SQLite's construction stores the
-    # default for an empty one (``insert_tag_on_conn``).
-    text = value or ""
-    if "\x00" in text:
-        raise ValueError("tag color cannot contain NUL")
-    return text if text.strip() else DEFAULT_COLOR
+    return normalized_tag_color(value, blank_defaults=True)
 
 
 def _owner(scope: LibraryScope, name: str) -> Optional[dict[str, Any]]:
@@ -229,6 +225,7 @@ def apply_create(scope: LibraryScope, tag_id: str, name: str, color: str) -> tup
     another Library.
     """
     clean = rules.canonical_name(name)
+    color = normalized_tag_color(color)
     for _ in range(_ATTEMPTS):
         if share(scope, tag_id):
             return 200, {"code": "ACKNOWLEDGED", "tag_id": tag_id, "changed": False, "tag": row(scope, tag_id)}
