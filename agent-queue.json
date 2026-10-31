@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "count": 11,
-  "generated_at": "2026-10-31T11:54:16Z",
+  "count": 19,
+  "generated_at": "2026-10-31T12:48:46Z",
   "issues": [
     {
       "agent": "Cursor Cloud",
@@ -68,6 +68,54 @@
       "execution": "Agent",
       "number": 1007,
       "status": "In Progress"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1033,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1034,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1035,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1036,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1037,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1038,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1039,
+      "status": "Inbox"
+    },
+    {
+      "agent": "Cursor Cloud",
+      "execution": "Agent",
+      "number": 1040,
+      "status": "Inbox"
     }
   ],
   "project": {
@@ -78,6 +126,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41198760241,
-  "stale_after": "2026-10-31T23:54:16Z"
+  "source_run_id": 41202744743,
+  "stale_after": "2026-11-01T00:48:46Z"
 }
