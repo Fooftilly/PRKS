@@ -215,9 +215,10 @@ defineExpose({ refreshValidation, releaseSave })
       ></textarea>
     </PrksField>
     <!--
-      Native button, not PrksButton. PrksButton drops a click while its last
-      rendered disabled prop is still set, which swallows a same-turn
-      reopen-and-save. The opening guard needs that click.
+      Native button on purpose. PrksButton ignores a click while its last
+      rendered busy or disabled prop is still set, so a same-turn
+      reopen-and-save (the folder opening guard) would be swallowed.
+      Person, Group, and Playlist use PrksButton; they do not have that guard.
     -->
     <button
       id="save-folder-btn"

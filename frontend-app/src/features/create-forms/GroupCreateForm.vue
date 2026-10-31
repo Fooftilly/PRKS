@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
@@ -164,13 +165,12 @@ defineExpose({ prepare })
         :aria-describedby="describedBy"
       ></textarea>
     </PrksField>
-    <button
+    <PrksButton
       id="save-group-btn"
-      type="button"
-      class="prks-btn prks-btn--primary"
-      :disabled="groupBusy"
-      :aria-busy="groupBusy ? 'true' : undefined"
+      variant="primary"
+      :busy="groupBusy"
+      busy-label="Creating…"
       @click="onSave"
-    >{{ groupBusy ? 'Creating…' : 'Create group' }}</button>
+    >Create group</PrksButton>
   </div>
 </template>

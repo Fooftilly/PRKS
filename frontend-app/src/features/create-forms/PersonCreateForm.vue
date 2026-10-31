@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import { fieldValue } from './dom'
 import { submitPersonCreate } from './submit'
@@ -187,13 +188,12 @@ defineExpose({ afterReset })
         :aria-describedby="describedBy"
       ></textarea>
     </PrksField>
-    <button
+    <PrksButton
       id="save-person-btn"
-      type="button"
-      class="prks-btn prks-btn--primary"
-      :disabled="personBusy"
-      :aria-busy="personBusy ? 'true' : undefined"
+      variant="primary"
+      :busy="personBusy"
+      busy-label="Saving…"
       @click="onSave"
-    >{{ personBusy ? 'Saving…' : 'Save Person' }}</button>
+    >Save Person</PrksButton>
   </div>
 </template>

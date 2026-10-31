@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import { fieldValue, setFieldValue } from './dom'
 import { playlistFailureMessage, submitPlaylistCreate } from './submit'
@@ -69,14 +70,13 @@ defineExpose({ resetFields })
         :aria-describedby="describedBy"
       ></textarea>
     </PrksField>
-    <button
+    <PrksButton
       id="save-playlist-btn"
-      type="button"
-      class="prks-btn prks-btn--primary"
-      :disabled="playlistBusy"
-      :aria-busy="playlistBusy ? 'true' : undefined"
+      variant="primary"
+      :busy="playlistBusy"
+      busy-label="Creating…"
       @click="onSave"
-    >{{ playlistBusy ? 'Creating…' : 'Create playlist' }}</button>
+    >Create playlist</PrksButton>
     <p
       id="playlist-error"
       class="folder-field-error"
