@@ -168,7 +168,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         # ast.walk visits nested calls breadth-first, not in source order.
         # Sort the stage calls by their locations before asserting the real
         # interaction sequence; the separate check below asserts that the
-        # two child timers remain nested inside the inclusive recent phase.
+        # click/card timers and the opt-in trial stay inside inclusive recent.
         helper_stages = [
             call.args[0].value
             for call in sorted(
@@ -185,7 +185,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         ]
         self.assertEqual(
             helper_stages,
-            ["folders", "recent", "recent_click", "recent_card", "card_click", "work_ready"],
+            ["folders", "recent", "recent_trial", "recent_click", "recent_card", "card_click", "work_ready"],
         )
         recent_scopes = [
             node for node in ast.walk(nav_helpers[0])
@@ -212,6 +212,29 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 and item.context_expr.func.id == "stage"
             ],
             ["recent_click", "recent_card"],
+        )
+        # Only the manual probe enters this conditional; ordinary navigation
+        # still runs the original click and card assertion unmodified.
+        trial_scopes = [
+            node for stmt in recent_scopes[0].body
+            if isinstance(stmt, ast.If)
+            for node in ast.walk(stmt)
+            if isinstance(node, ast.With)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+                and len(item.context_expr.args) == 1
+                and isinstance(item.context_expr.args[0], ast.Constant)
+                and item.context_expr.args[0].value == "recent_trial"
+                for item in node.items
+            )
+        ]
+        self.assertEqual(len(trial_scopes), 1)
+        self.assertLess(
+            trial_scopes[0].lineno,
+            next(node.lineno for node in recent_scopes[0].body
+                 if isinstance(node, ast.With)),
         )
         for mode, target in targets:
             module, class_name, method_name = target.rsplit(".", 2)
@@ -288,7 +311,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 nav_names,
                 {
                     f"person_{mode}_link_nav_{stage}"
-                    for stage in ("folders", "recent", "recent_click", "recent_card", "card_click", "work_ready")
+                    for stage in ("folders", "recent", "recent_trial", "recent_click", "recent_card", "card_click", "work_ready")
                 },
                 target,
             )
