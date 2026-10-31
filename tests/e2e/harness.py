@@ -1286,9 +1286,10 @@ class AppServer:
 
 
     def _drop_library(self):
-        library, self.library = self.library, None
-        if library is not None:
-            library.drop()
+        # Cleared only once dropped, so a failed drop can be retried by stop().
+        if self.library is not None:
+            self.library.drop()
+            self.library = None
 
 
 class FixtureServer:

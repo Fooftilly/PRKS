@@ -117,6 +117,7 @@
     const PRKS_SESSION_PATH = '/api/session';
     // The server's own grammar for the header: 1 to the largest bigint.
     const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
+    const PRKS_SESSION_TIMEOUT_MS = 10000;
 
     function epochOf(value) {
         if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
@@ -152,6 +153,9 @@
     function createPrksLibraryEpoch(deps) {
         const options = deps && typeof deps === 'object' ? deps : {};
         const fetchImpl = options.fetchImpl || defaultFetch;
+        // The first mutation waits on this read while it holds the mutation
+        // slot, so the read is bounded: past it the mutation goes without.
+        const sessionTimeoutMs = options.sessionTimeoutMs > 0 ? options.sessionTimeoutMs : PRKS_SESSION_TIMEOUT_MS;
         let epoch = null;
         let pendingRead = null;
 
@@ -164,13 +168,16 @@
 
         function readSession() {
             if (pendingRead) return pendingRead;
-            pendingRead = Promise.resolve()
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            const timer = setTimeout(function () { if (controller) controller.abort(); }, sessionTimeoutMs);
+            const read = Promise.resolve()
                 .then(function () {
                     return fetchImpl(PRKS_SESSION_PATH, {
                         method: 'GET',
                         credentials: 'same-origin',
                         cache: 'no-store',
                         headers: { Accept: 'application/json' },
+                        signal: controller ? controller.signal : undefined,
                     });
                 })
                 .then(function (response) {
@@ -182,9 +189,24 @@
                         if (read && !epoch) epoch = read;
                     });
                 })
-                .catch(function () { /* unknown: the mutation goes without it */ })
-                .then(function () { pendingRead = null; });
+                .catch(function () { /* unknown: the mutation goes without it */ });
+            // A fetch that ignores its signal still cannot hold the caller past the deadline.
+            let deadlineTimer = null;
+            const deadline = new Promise(function (resolve) { deadlineTimer = setTimeout(resolve, sessionTimeoutMs); });
+            pendingRead = Promise.race([read, deadline]).then(function () {
+                clearTimeout(timer);
+                clearTimeout(deadlineTimer);
+                pendingRead = null;
+            });
             return pendingRead;
+        }
+
+        function untilAborted(signal) {
+            if (!signal || typeof signal.addEventListener !== 'function') return null;
+            return new Promise(function (_resolve, reject) {
+                if (signal.aborted) { reject(makeAbortError()); return; }
+                signal.addEventListener('abort', function () { reject(makeAbortError()); }, { once: true });
+            });
         }
 
         function headers() {
@@ -197,7 +219,9 @@
         async function epochFetch(url, init) {
             let sent = init;
             if (isLibraryMutation(url, init) && !hasHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER)) {
-                const extra = await headers();
+                // A caller that gives up while the session is read is answered at once.
+                const aborted = untilAborted(init && init.signal);
+                const extra = await (aborted ? Promise.race([headers(), aborted]) : headers());
                 if (extra[PRKS_LIBRARY_EPOCH_HEADER]) {
                     sent = Object.assign({}, init, {
                         headers: withHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER,

@@ -159,5 +159,8 @@ describe('prksApiRequest', () => {
     expect((mutation.headers as Record<string, string>)['PRKS-Library-Epoch']).toBe('7')
     expect((read.headers as Record<string, string>)['PRKS-Library-Epoch']).toBeUndefined()
     expect(note).toHaveBeenCalledTimes(2)
+    const answers = await Promise.all(fetchMock.mock.results.map((result) => result.value))
+    expect(note.mock.calls.map(([response]) => response)).toEqual(answers)
+    expect(note.mock.calls[0][0]).not.toBe(note.mock.calls[1][0])
   })
 })

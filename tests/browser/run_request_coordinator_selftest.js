@@ -1402,6 +1402,44 @@ async function testLibraryEpoch() {
         record('no epoch is sent without a valid session answer (' + answer.toString().slice(30, 60) + ')',
             sent.length === 1 && !('PRKS-Library-Epoch' in (sent[0].headers || {})), JSON.stringify(sent));
     }
+
+    // A session read that never answers is bounded: the mutation goes without an epoch.
+    const hung = [];
+    let sessionSignal = null;
+    const slow = createPrksLibraryEpoch({
+        sessionTimeoutMs: 30,
+        fetchImpl: function (url, init) {
+            if (url === '/api/session') {
+                sessionSignal = init.signal;
+                return new Promise(function () {});
+            }
+            hung.push(init || {});
+            return Promise.resolve(jsonResponse({}, 200));
+        },
+    });
+    const started = Date.now();
+    await slow.fetch('/api/tags', { method: 'POST' });
+    record('a session read that never answers is bounded', hung.length === 1
+        && !('PRKS-Library-Epoch' in (hung[0].headers || {})) && Date.now() - started < 1000
+        && !!sessionSignal && sessionSignal.aborted, String(Date.now() - started));
+
+    // A caller that aborts while the session is read is answered at once and sends nothing.
+    const kept = [];
+    const waiting = createPrksLibraryEpoch({
+        sessionTimeoutMs: 60000,
+        fetchImpl: function (url, init) {
+            if (url === '/api/session') return new Promise(function () {});
+            kept.push(init || {});
+            return Promise.resolve(jsonResponse({}, 200));
+        },
+    });
+    const controller = new AbortController();
+    const pending = waiting.fetch('/api/tags', { method: 'POST', signal: controller.signal });
+    controller.abort();
+    let abortName = '';
+    try { await pending; } catch (err) { abortName = err && err.name; }
+    record('an aborted caller is answered without waiting for the session', abortName === 'AbortError'
+        && kept.length === 0, abortName);
 }
 
 async function main() {
