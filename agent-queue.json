@@ -1,7 +1,7 @@
 {
   "complete": true,
   "count": 15,
-  "generated_at": "2026-10-31T00:46:54Z",
+  "generated_at": "2026-10-31T06:59:11Z",
   "issues": [
     {
       "agent": "Cursor Cloud",
@@ -102,6 +102,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41152005294,
-  "stale_after": "2026-10-31T12:46:54Z"
+  "source_run_id": 41178752488,
+  "stale_after": "2026-10-31T18:59:11Z"
 }
