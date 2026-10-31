@@ -6903,112 +6903,21 @@ function prksIsValidYoutubeUrl(rawUrl) {
 }
 
 function prksIsComboboxPanelOpen(results) {
+    // Same predicate as prksComboboxPanelIsOpen. The fallback covers harnesses
+    // that evaluate this file without combobox-keys.js.
+    if (typeof prksComboboxPanelIsOpen === 'function') return prksComboboxPanelIsOpen(results);
     if (!results || results.classList.contains('hidden')) return false;
     return prksIsInlineComboboxPanel(results) ? results.classList.contains('is-open') : true;
 }
 
 /**
- * Keyboard model for the New File comboboxes: ArrowUp/ArrowDown move the
- * highlighted result, Enter picks it (or the first real match for a typed
- * query), Escape is the modal lifecycle's inner layer. Picking reuses the
- * row's own mousedown handler, so keyboard and pointer share one commit path.
+ * New File comboboxes use the shared keyboard model in combobox-keys.js.
+ * Escape for an open list stays the modal lifecycle's inner layer
+ * (prksDismissModalInnerEscapeLayer), which runs before the input handler.
  */
 function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
-    const input = document.getElementById(inputId);
-    const results = document.getElementById(resultsId);
-    if (!input || !results || input.dataset.prksKeysBound === '1') return;
-    input.dataset.prksKeysBound = '1';
-    const enterCreates = !!(options && options.enterCreates);
-    input.setAttribute('role', 'combobox');
-    input.setAttribute('aria-autocomplete', 'list');
-    input.setAttribute('aria-controls', resultsId);
-    input.setAttribute('aria-expanded', 'false');
-    results.setAttribute('role', 'listbox');
-    let active = -1;
-    // Set when ArrowDown reopens a closed list: highlight once rows exist
-    // (some lists render asynchronously), so one press still lands on a match.
-    let highlightOnRender = false;
-    // Typing invalidates the open rows until the list re-renders (the tag and
-    // playlist lists render after a fetch): Enter must not pick a stale row.
-    let stale = false;
-    const items = () => Array.from(results.querySelectorAll('.result-item:not(.no-results)'));
-    const firstRealIndex = (list) => {
-        const i = list.findIndex((el) => !el.classList.contains('result-item--create'));
-        return i >= 0 ? i : 0;
-    };
-    const paint = () => {
-        items().forEach((el, i) => {
-            if (!el.id) el.id = `${resultsId}-opt-${i}`;
-            el.setAttribute('role', 'option');
-            const on = i === active;
-            el.classList.toggle('result-item--active', on);
-            el.setAttribute('aria-selected', on ? 'true' : 'false');
-            if (on) {
-                input.setAttribute('aria-activedescendant', el.id);
-                if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
-            }
-        });
-        if (active < 0) input.removeAttribute('aria-activedescendant');
-    };
-    new MutationObserver(() => {
-        input.setAttribute('aria-expanded', prksIsComboboxPanelOpen(results) ? 'true' : 'false');
-    }).observe(results, { attributes: true, attributeFilter: ['class'] });
-    new MutationObserver(() => {
-        stale = false;
-        const list = items();
-        active = highlightOnRender && list.length ? firstRealIndex(list) : -1;
-        if (list.length) highlightOnRender = false;
-        paint();
-    }).observe(results, { childList: true });
-    // Capture phase: runs before the list's own input handler, whose render
-    // (synchronous or not) is what marks the rows fresh again.
-    input.addEventListener(
-        'input',
-        () => {
-            highlightOnRender = false;
-            stale = true;
-        },
-        true
-    );
-    input.addEventListener('keydown', (e) => {
-        if (e.isComposing) return;
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (!prksIsComboboxPanelOpen(results)) {
-                highlightOnRender = e.key === 'ArrowDown';
-                if (typeof input.onfocus === 'function') input.onfocus();
-                return;
-            }
-            const list = items();
-            if (!list.length) return;
-            if (e.key === 'ArrowDown' && active < 0) {
-                // A "Quick-create …" row is listed first; land on a real match.
-                active = firstRealIndex(list);
-            } else if (e.key === 'ArrowDown') active = (active + 1) % list.length;
-            else active = active <= 0 ? list.length - 1 : active - 1;
-            paint();
-            return;
-        }
-        if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-        if (!prksIsComboboxPanelOpen(results)) return;
-        if (stale) {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-        }
-        const list = items();
-        let pick = active >= 0 ? list[active] : null;
-        if (!pick && String(input.value || '').trim()) {
-            pick =
-                list.find((el) => !el.classList.contains('result-item--create')) ||
-                (enterCreates ? list.find((el) => el.classList.contains('result-item--create')) : null) ||
-                null;
-        }
-        if (!pick) return;
-        e.preventDefault();
-        e.stopPropagation();
-        pick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    });
+    if (typeof prksBindComboboxKeys !== 'function') return;
+    prksBindComboboxKeys(document.getElementById(inputId), document.getElementById(resultsId), options);
 }
 
 /** Collapsed disclosures say how much they hold, so nothing entered is silently out of sight. */

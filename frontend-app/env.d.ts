@@ -163,6 +163,15 @@ interface Window {
   prksIsoToDdMmYyyy?: (iso: string) => string
   prksShowInlineComboboxResults?: (input: HTMLElement, results: HTMLElement) => void
   prksHideInlineComboboxResults?: (results: HTMLElement) => void
+  prksBindComboboxKeys?: (
+    input: HTMLInputElement,
+    results: HTMLElement,
+    options?: {
+      enterCreates?: boolean
+      onOpen?: () => void
+      onEscape?: () => void
+    },
+  ) => void
   prksTagMatchesQuery?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
   prksTagExactMatch?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
   prksTagComboboxLabel?: (tag: { name?: string; aliases?: string[] }, query: string) => string

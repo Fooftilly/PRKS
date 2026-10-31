@@ -415,8 +415,37 @@ async function importFile(): Promise<void> {
   }
 }
 
+function bindCombobox(
+  input: HTMLInputElement | null,
+  results: HTMLElement | null,
+  options: {
+    enterCreates?: boolean
+    onOpen: () => void
+    onEscape: () => void
+  },
+): void {
+  if (!input || !results) return
+  window.prksBindComboboxKeys?.(input, results, options)
+}
+
 onMounted(() => {
   mountWidgets()
+  bindCombobox(personInput.value, personResults.value, {
+    enterCreates: true,
+    onOpen: openPersonResults,
+    onEscape: () => hideResults(personResults.value, personOpen),
+  })
+  bindCombobox(tagInput.value, tagResults.value, {
+    enterCreates: true,
+    onOpen: () => {
+      void refreshTags()
+    },
+    onEscape: () => hideResults(tagResults.value, tagOpen),
+  })
+  bindCombobox(folderInput.value, folderResults.value, {
+    onOpen: openFolderResults,
+    onEscape: () => hideResults(folderResults.value, folderOpen),
+  })
 })
 
 onBeforeUnmount(() => {
@@ -473,7 +502,7 @@ onBeforeUnmount(() => {
                 <div
                   ref="personResults"
                   class="combobox-results combobox-results--tag-panel"
-                  :class="{ hidden: !personOpen }"
+                  :class="{ hidden: !personOpen, 'is-open': personOpen }"
                 >
                   <div
                     v-if="personQuery.trim()"
@@ -535,7 +564,7 @@ onBeforeUnmount(() => {
           <div
             ref="tagResults"
             class="combobox-results combobox-results--tag-panel"
-            :class="{ hidden: !tagOpen }"
+            :class="{ hidden: !tagOpen, 'is-open': tagOpen }"
           >
             <div
               v-if="tagFilter.canCreate"
@@ -605,7 +634,7 @@ onBeforeUnmount(() => {
             <div
               ref="folderResults"
               class="combobox-results combobox-results--tag-panel"
-              :class="{ hidden: !folderOpen }"
+              :class="{ hidden: !folderOpen, 'is-open': folderOpen }"
             >
               <div v-if="!folderChoices.length" class="result-item no-results">No folders found</div>
               <div

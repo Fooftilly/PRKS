@@ -24,6 +24,10 @@ afterEach(() => {
   delete window.prksProcessingRecords
   delete window.prksAlertMessage
   delete window.__prksProcessingPeople
+  delete window.prksBindComboboxKeys
+  delete window.prksShowInlineComboboxResults
+  delete window.prksHideInlineComboboxResults
+  delete window.prksProcessingSearchTags
 })
 
 async function flush(): Promise<void> {
@@ -462,6 +466,129 @@ describe('Processing Files route bridge', () => {
     await nextTick()
     const names = [...el.querySelectorAll('.result-item--person-pick .result-item__primary')].map((node) => node.textContent)
     expect(names).toEqual(['Ada Lovelace'])
+  })
+
+  async function installComboboxKeys(): Promise<void> {
+    const nodeModule = 'node:module'
+    const { createRequire } = (await import(/* @vite-ignore */ nodeModule)) as {
+      createRequire: (url: string) => (id: string) => unknown
+    }
+    const require = createRequire(import.meta.url)
+    const keys = require('../../../../frontend/js/combobox-keys.js') as {
+      prksBindComboboxKeys: NonNullable<Window['prksBindComboboxKeys']>
+    }
+    window.prksBindComboboxKeys = keys.prksBindComboboxKeys
+    window.prksShowInlineComboboxResults = (_input, results) => {
+      results.classList.remove('hidden')
+      results.classList.add('is-open')
+    }
+    window.prksHideInlineComboboxResults = (results) => {
+      results.classList.remove('is-open')
+      results.classList.add('hidden')
+    }
+  }
+
+  function press(input: HTMLInputElement, name: string): void {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }))
+  }
+
+  it('creates a processing tag from Enter and selects an existing tag with ArrowDown', async () => {
+    await installComboboxKeys()
+    let created = ''
+    window.prksProcessingSearchTags = async () => []
+    window.prksProcessingCreateTag = async (name: string) => {
+      created = name
+      return { id: 'created', name }
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [],
+      folders: [],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('[aria-label="Add tag for processing file"]')!
+    expect(input.getAttribute('role')).toBe('combobox')
+    input.value = 'inbox-1023'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    press(input, 'Enter')
+    await flush()
+    expect(created).toBe('inbox-1023')
+    expect(el.querySelector('.work-tags-list')?.textContent).toContain('inbox-1023')
+
+    window.prksProcessingSearchTags = async () => [{ id: 'inbox', name: 'Inbox' }]
+    input.value = 'In'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    press(input, 'ArrowDown')
+    expect(input.closest('.tag-add-shell')?.querySelector('.result-item--active')?.textContent).toContain('Inbox')
+    press(input, 'Enter')
+    await flush()
+    expect(el.querySelector('.work-tags-list')?.textContent).toContain('Inbox')
+  })
+
+  it('picks a processing person and folder from the keyboard and Escape closes the folder list', async () => {
+    await installComboboxKeys()
+    let personName = ''
+    window.prksProcessingQuickCreatePerson = async (name: string) => {
+      personName = name
+      return { ok: true, id: 'new', name }
+    }
+    const el = host()
+    presentProcessing({
+      owner: owner(2),
+      host: el,
+      files: [file],
+      people: [{ id: 'ada', first_name: 'Ada', last_name: 'Lovelace' }],
+      folders: [
+        { id: 'lib', title: 'Library' },
+        { id: 'arc', title: 'Archive' },
+      ],
+      roleTypes: ['Author'],
+      domPrefix: 'prks-pf-main',
+      generation: 2,
+    })
+    await nextTick()
+    const person = el.querySelector<HTMLInputElement>('[aria-label="Search person"]')!
+    person.value = 'Ada'
+    person.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    press(person, 'ArrowDown')
+    expect(person.closest('.tag-add-shell')?.querySelector('.result-item--active')?.textContent).toContain('Ada Lovelace')
+    expect(person.closest('.tag-add-shell')?.querySelector('.result-item--active')?.classList.contains('result-item--create')).toBe(false)
+    press(person, 'Enter')
+    await flush()
+    expect(person.value).toBe('Ada Lovelace')
+
+    person.value = 'New Person'
+    person.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    press(person, 'Enter')
+    await flush()
+    expect(personName).toBe('New Person')
+
+    const folder = el.querySelector<HTMLInputElement>('[aria-label="Search folder"]')!
+    folder.value = 'arc'
+    folder.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    press(folder, 'Enter')
+    await flush()
+    expect(folder.value).toBe('Archive')
+
+    folder.value = 'lib'
+    folder.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    press(folder, 'Escape')
+    expect(folder.getAttribute('aria-expanded')).toBe('false')
+    press(folder, 'Enter')
+    await flush()
+    expect(folder.value).toBe('lib')
   })
 
   it('registers the early presenter', () => {
