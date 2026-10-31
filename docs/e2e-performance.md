@@ -1554,6 +1554,41 @@ Historical calibrated timing weights: 2.451 + 3.575 =
 12.052s across two inventories; this is *not* measured CI wall-time
 or billed-minute savings. No runtime or CI selection change.
 
+### Folder ACK cache-footprint rationalization (three MOVE contracts, #740)
+
+Three `FoldersOfflineTests` E2Es launched Chromium and a seeded
+PostgreSQL server, called canonical Folder functions using `page.evaluate`,
+and inspected only cached entities/lists and domain generations (no UI
+interaction, disconnect, or IndexedDB lifecycle):
+
+| Removed E2E | Fast production-owned assertion |
+| --- | --- |
+| `test_folder_create_invalidates_only_folders` | `reconcileCreatedFolder` inserts the canonical row into the existing cached Folder index and increments only the Folder generation; existing cached Works and six other read-model domains survive |
+| `test_description_only_update_keeps_member_work_snapshots` | `reconcileFolderField` patches description into Folder index and detail while keeping both member and unrelated Work snapshots, preserving other domains |
+| `test_reparent_invalidates_folders_but_no_work_snapshots` | `reconcileFolderField` updates the parent pointer in the Folder index, invalidates the now-stale Folder detail containing a parent object, and keeps existing Work snapshots and unrelated domains |
+
+The existing `tests/browser/run_offline_runtime_selftest.js` now runs
+`verifyFolderAckCacheFootprint`, **directly invoking the shipped
+`createPrksOfflineRuntime` reconcilers with a disposable store**.
+Its 101 exact assertions include each domain-generation change, cached list
+retention, Work snapshot preservation, and a rename-ACK negative comparator
+that evicts *only* the server-listed member Work. This extends the
+existing fast Node test already exercised by
+`tests/test_frontend_offline_runtime.py`; no new production test hooks.
+
+**KEEP in Chromium:** `test_folder_rename_invalidates_exactly_its_member_work_snapshots`
+still proves actual end-to-end server ACK and selective Work eviction;
+Folder creation dialogs, hierarchy rendering, offline page reload,
+Folder/Work route changes, cache corruption and refetch, and Tag coherence
+remain under browser coverage. The pure ACK replacement is not offered as
+proof of any of those browser-specific boundaries.
+
+The pre-existing 2026-10-28 E2E baseline weights for these three tests
+sum to **14.384 historical test-execution seconds per full inventory**,
+28.768s over source and packaged inventories. This is not an observed
+critical-path wall-clock improvement. No production, retry, E2E selection,
+shard, or packaged-test policy changes.
+
 ## Benchmark protocol
 
 For any optimization:
