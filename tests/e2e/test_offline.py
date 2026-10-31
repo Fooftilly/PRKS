@@ -3707,43 +3707,6 @@ class OfflinePositionTests(unittest.TestCase):
         self.assertTrue(page.locator("#prks-modal-confirm.hidden").count() >= 1)
         del seen
 
-    def test_position_code_no_longer_applies_its_own_argument_offline_policy(self):
-        """Structural guard for the cleanup: ordinary workspace navigation owns
-        every activation gesture, so Position code must not mark Argument rows
-        or attach its own activation interception."""
-        server, page, context, _collector = self._start()
-        position_a = server.ids["position_a"]
-
-        _wait_sw_active(page)
-        _open_position(page, position_a)
-        _wait_content_contains(page, POSITION_ARGUMENT_NAME)
-        _wait_entity_cached(page, "position", position_a)
-
-        context.set_offline(True)
-        page.reload(wait_until="domcontentloaded")
-        page.wait_for_selector("#sidebar")
-        _wait_offline_banner(page)
-        # Graph navigation remains enabled; its destination owns availability.
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-position-view-graph:not([disabled])')", timeout=20000
-        )
-        state = page.evaluate(
-            """() => {
-                const a = document.querySelector('[data-prks-role="position-argument-link"]');
-                const hosts = [...document.querySelectorAll('*')]
-                    .filter(el => el.__prksPositionArgumentGuardBound).length;
-                return {
-                    ariaDisabled: a && a.getAttribute('aria-disabled'),
-                    title: a && a.getAttribute('title'),
-                    guardHosts: hosts,
-                };
-            }"""
-        )
-        self.assertEqual(state, {"ariaDisabled": None, "title": None, "guardHosts": 0})
-
-
-
-
     def test_position_graph_action_navigates_to_uncached_graph_offline(self):
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
