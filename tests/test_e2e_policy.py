@@ -228,6 +228,45 @@ class FeatureSelectionTests(unittest.TestCase):
             policy.select_features(FAKE_IDS, ["not-a-real-group"])
         self.assertIn("unknown E2E feature", str(ctx.exception))
 
+    def test_exact_feature_selectors_point_to_existing_e2e_methods(self):
+        """A retired E2E method must not silently remain in a feature group.
+
+        Check the declared source methods without importing Playwright, running
+        test fixtures, or relying on the timing baseline (which can also be
+        stale). Class/module prefix selectors remain intentionally supported.
+        """
+        parsed_modules = {}
+        checked = 0
+        for feature, config in policy.FEATURES.items():
+            for selector in config["selectors"]:
+                parts = selector.split(".")
+                if not parts[-1].startswith("test_"):
+                    continue
+                with self.subTest(feature=feature, selector=selector):
+                    self.assertGreaterEqual(len(parts), 5)
+                    self.assertEqual(parts[:2], ["tests", "e2e"])
+                    path = Path(_PROJECT_DIR).joinpath(*parts[:-2]).with_suffix(".py")
+                    self.assertTrue(path.is_file(), f"missing E2E module for {selector}")
+                    if path not in parsed_modules:
+                        parsed_modules[path] = ast.parse(
+                            path.read_text(encoding="utf-8"), filename=str(path)
+                        )
+                    classes = [
+                        node for node in parsed_modules[path].body
+                        if isinstance(node, ast.ClassDef) and node.name == parts[-2]
+                    ]
+                    self.assertTrue(classes, f"missing E2E class for {selector}")
+                    self.assertTrue(
+                        any(
+                            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and node.name == parts[-1]
+                            for cls in classes for node in cls.body
+                        ),
+                        f"stale exact E2E feature selector: {selector}",
+                    )
+                    checked += 1
+        self.assertGreater(checked, 0, "feature catalog contains no exact method selectors")
+
     def test_catalog_lists_every_feature(self):
         text = policy.format_feature_catalog()
         for name in policy.FEATURES:
