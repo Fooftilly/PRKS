@@ -35,6 +35,35 @@ change **does not itself reduce E2E run time**; measure a bounded manual
 profile before attributing CI slowdown to PostgreSQL or changing fixture
 isolation, retry policy or shard count.
 
+## Bounded embedded-server shutdown polling (next measured slice, #740)
+
+[Manual E2E profile #41251873500](https://github.com/Fooftilly/PRKS/actions/runs/41251873500)
+on `master@5648b807` passed all **819** source Chromium tests in six shards.
+The profile attributed `server_stop=450.34s` (inclusive) and
+`server_stop_process=428.95s` across the six runners. The code inspection
+found that the PostgreSQL-authenticated web runtime's `WebJobs.serve`
+uses `socketserver.BaseServer.serve_forever()` at Python's **0.5 second
+default poll interval** while its signal watcher already checks every
+0.1 second. The wait for the base server's poll loop to exit can explain
+a significant share of the recurring roughly 0.5-second per-test process
+stop cost. This is a **source-supported hypothesis**, not a benchmarked
+speedup.
+
+The next proposed slice sets the embedded web server's
+`serve_forever(poll_interval=0.1)`, retaining the existing signal
+watcher, graceful job draining/lease release, listening-socket close,
+PostgreSQL drop and per-test isolation. SQLite-only server behavior is
+unchanged. The trade-off is more frequent inexpensive selector wakeups
+while idle. Existing PostgreSQL signal-and-worker lifecycle tests plus
+a targeted poll-interval contract cover shutdown semantics.
+
+**Validation:** after merging, compare a fresh fixed-configuration manual
+six-shard `profile: true` run against #41251873500. Compare
+`server_stop_process` and total job wall time; report runner noise and
+do not claim per-test or end-to-end savings without a controlled
+same-runner A/B. Do not lower stop timeouts or skip worker grace to meet
+a performance target.
+
 ## Cold E2E process startup and shutdown attribution (#740)
 
 [Manual full E2E profile #41248967692](https://github.com/Fooftilly/PRKS/actions/runs/41248967692)
