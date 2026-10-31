@@ -673,30 +673,7 @@ class FoldersOfflineTests(unittest.TestCase):
 
     # ---- coherence ----------------------------------------------------------
 
-    def test_folder_create_invalidates_only_folders(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        before = self.generations(page)
-        page.evaluate("async () => { await createFolder('Coherence New', ''); }")
-        self.settled(page)
-        self.patched(page, before, {'folders'})
-        self.assertIn('Coherence New', [row['title'] for row in
-                                        o._cached_list(page, 'folders:index')['value']])
 
-    def test_description_only_update_keeps_member_work_snapshots(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        o._open_work_from_home(page, WORK_A_TITLE)
-        o._wait_entity_cached(page, 'work', ids['work_a'])
-        before = self.generations(page)
-        page.evaluate("async (id) => { await patchFolder(id, { description: 'Edited.' }); }",
-                      ids['folder_parent'])
-        self.settled(page)
-        self.patched(page, before, {'folders'})
-        # Only the title is embedded in a cached Work detail.
-        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
 
     def test_folder_rename_invalidates_exactly_its_member_work_snapshots(self):
         server, page, context, _c = self.start()
@@ -715,18 +692,6 @@ class FoldersOfflineTests(unittest.TestCase):
         o._wait_entity_uncached(page, 'work', ids['work_a'])
         self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_b']))
 
-    def test_reparent_invalidates_folders_but_no_work_snapshots(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        o._open_work_from_home(page, WORK_A_TITLE)
-        o._wait_entity_cached(page, 'work', ids['work_a'])
-        before = self.generations(page)
-        page.evaluate("async ([child, parent]) => { await patchFolder(child, { parent_id: null }); }",
-                      [ids['folder_child'], ids['folder_parent']])
-        self.settled(page)
-        self.patched(page, before, {'folders'})
-        self.assertIsNotNone(o._cached_entity(page, 'work', ids['work_a']))
 
     def test_moving_a_work_invalidates_folders_and_that_work(self):
         server, page, context, _c = self.start()

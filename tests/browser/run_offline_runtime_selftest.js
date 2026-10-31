@@ -189,8 +189,355 @@ async function verifyCanonicalFolderFieldAcknowledgements() {
     assertEq('parent-id ACK invalidates stale detail', await store.getEntity('folder', id), null);
 }
 
+
+/* Extract the shipped Folder read validators, not a test-authored parallel
+ * acceptance policy: a patched cache that cannot render is not coherent. */
+function folderReadValidators() {
+    const fs = require('fs');
+    const source = fs.readFileSync(path.join(rootDir, 'frontend/js/app.js'), 'utf8');
+    const names = [
+        'prksHasUsableRowId', 'prksIsOptionalString',
+        'prksIsFolderCount', 'prksIsFolderParentId',
+        'prksIsFolderSummaryShape', 'prksIsFoldersIndexShape',
+        'prksIsWorkCardRowShape', 'prksIsFolderTagRowShape', 'prksIsFolderShape',
+    ];
+    const declarations = names.map(function (name) {
+        const marker = 'function ' + name + '(';
+        const at = source.indexOf(marker);
+        if (at < 0 || source.indexOf(marker, at + marker.length) !== -1) {
+            throw new Error('missing or ambiguous production Folder validator: ' + name);
+        }
+        const end = source.indexOf('\n}', at);
+        if (end < 0) throw new Error('unclosed production Folder validator: ' + name);
+        return source.slice(at, end + 2);
+    });
+    return new Function(declarations.join('\n') +
+        '\nreturn {' + names.join(', ') + '};')();
+}
+
+/* Folder ACK read-model coherence. These deterministic cases previously each
+ * started Chromium and a seeded server only to call a canonical Folder
+ * wrapper and inspect cache generations/contents. Use the same production
+ * reconciler and domain gate as the shipped runtime, not a test-side policy.
+ * Retain browser tests for real UI, offline reload and selective title ACK. */
+async function verifyFolderAckCacheFootprint() {
+    const store = makeFakeStore({isAvailable: async () => true});
+    const runtime = mod.createPrksOfflineRuntime({
+        store, prksRequest: () => Promise.reject(Error('unexpected transport')),
+        setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+        window: null, caches: null, navigator: null,
+    });
+    const validators = folderReadValidators();
+    const parent = {id: 'F-PARENT', title: 'Reading', description: 'Original',
+        parent_id: null, work_count: 1, child_count: 1};
+    const child = {id: 'F-CHILD', title: 'Child', description: '',
+        parent_id: 'F-PARENT', work_count: 1, child_count: 0};
+    const detail = (row, owner) => ({...row, private_notes: '',
+        parent: owner || null, children: [], works: [], tags: []});
+    const untouchedWork = {id: 'W-CHILD', folder_id: child.id, folder_title: child.title};
+    const memberWork = {id: 'W-PARENT', folder_id: parent.id, folder_title: parent.title};
+    const control = {id: 'CONTROL', title: 'Do not evict'};
+    const others = [
+        ['concepts', 'concept', 'concepts:index'],
+        ['positions', 'position', 'positions:index'],
+        ['arguments', 'argument', 'arguments:index'],
+        ['people', 'person', 'people:index'],
+        ['person-groups', 'person-group', 'person-groups:index'],
+        ['playlists', 'playlist', 'playlists:index'],
+    ];
+    await store.putList('folders:index', [{...parent}, {...child}], '');
+    await store.putEntity('folder', parent.id, detail(parent), '');
+    await store.putEntity('folder', child.id, detail(child, {id: parent.id, title: parent.title}), '');
+    await store.putEntity('work', memberWork.id, {...memberWork}, '');
+    await store.putEntity('work', untouchedWork.id, {...untouchedWork}, '');
+    for (const [, kind, listKey] of others) {
+        await store.putEntity(kind, control.id, {...control}, '');
+        await store.putList(listKey, [{...control}], '');
+    }
+    const list = async () => (await store.getList('folders:index')).value;
+    const row = async id => (await list()).find(folder => folder.id === id);
+    const validSnapshots = async label => {
+        assertEq(label + ' Folder index passes the real cache validator',
+            validators.prksIsFoldersIndexShape(await list()), true);
+        for (const id of [parent.id, child.id]) {
+            const cached = await store.getEntity('folder', id);
+            if (cached) {
+                assertEq(label + ' Folder detail ' + id + ' is render-safe',
+                    validators.prksIsFolderShape(cached.value, id), true);
+            }
+        }
+    };
+    assertEq('malformed Folder index is rejected by production validator',
+        validators.prksIsFoldersIndexShape([{id: 'F-MISSING', parent_id: null}]), false);
+    assertEq('malformed Folder detail is rejected by production validator',
+        validators.prksIsFolderShape({...parent, private_notes: ''}, parent.id), false);
+    await validSnapshots('seeded');
+
+    const baseline = Object.fromEntries(
+        others.map(([domain]) => [domain, runtime.currentDomainGeneration(domain)]));
+    const preserved = async label => {
+        for (const [domain, kind, listKey] of others) {
+            assertEq(label + ' ' + domain + ' generation isolated',
+                runtime.currentDomainGeneration(domain), baseline[domain]);
+            assertEq(label + ' ' + domain + ' entity cached',
+                (await store.getEntity(kind, control.id)).value, control);
+            assertEq(label + ' ' + domain + ' index cached',
+                (await store.getList(listKey)).value, [control]);
+        }
+        assertEq(label + ' unrelated member Work kept',
+            (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
+        assertEq(label + ' hierarchy index never discarded', Array.isArray(await list()), true);
+        await validSnapshots(label);
+    };
+    let foldersGeneration = runtime.currentDomainGeneration('folders');
+
+    // A server-accepted new Folder is inserted into the *existing* cached
+    // hierarchy; only this domain advances, no unrelated Work is evicted.
+    const added = {id: 'F-NEW', title: 'Coherence New', description: '',
+        parent_id: null, work_count: 0, child_count: 0};
+    assertEq('create ACK applied', await runtime.reconcileCreatedFolder({
+        changed: true, folder_id: added.id, folder: added,
+    }), true);
+    assertEq('create ACK changes Folder generation exactly once',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('create ACK patches new row into hierarchy', await row(added.id), added);
+    assertEq('create ACK keeps old Folder row', await row(parent.id), parent);
+    assertEq('create ACK retains parent Work',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('create ACK');
+
+    // Description is not embedded in any Work. The reconciler patches both
+    // Folder projections and changes only Folder's domain generation.
+    assertEq('description ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: parent.id, field: 'description',
+        server_revision: 2, member_work_ids: [memberWork.id],
+    }, {payload: {value: 'Edited.'}}), true);
+    assertEq('description ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('description ACK patches index', (await row(parent.id)).description, 'Edited.');
+    assertEq('description ACK patches detail',
+        (await store.getEntity('folder', parent.id)).value.description, 'Edited.');
+    assertEq('description ACK leaves member Work intact',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('description ACK');
+
+    // Reparenting means the cached parent *object* is no longer authoritative;
+    // the index has the canonical pointer, but cached member Work cards
+    // depend on Folder title, not the hierarchy.
+    assertEq('reparent ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: child.id, field: 'parent_id',
+        server_revision: 3, member_work_ids: [],
+    }, {payload: {value: ''}}), true);
+    assertEq('reparent ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('reparent ACK updates index pointer', (await row(child.id)).parent_id, null);
+    assertEq('reparent ACK drops stale Folder detail',
+        await store.getEntity('folder', child.id), null);
+    assertEq('reparent ACK preserves Work in changed Folder',
+        (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
+    assertEq('reparent ACK preserves Work in other Folder',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('reparent ACK');
+
+    // Keep the stronger browser rename test, but assert the exact selective
+    // Work eviction policy here too so the negative Work-cache contract
+    // remains sensitive to a wrong ACK implementation.
+    assertEq('rename ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: parent.id, field: 'title',
+        server_revision: 4, member_work_ids: [memberWork.id],
+    }, {payload: {value: 'Renamed Parent'}}), true);
+    assertEq('rename ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('rename ACK patches list', (await row(parent.id)).title, 'Renamed Parent');
+    assertEq('rename ACK patches detail',
+        (await store.getEntity('folder', parent.id)).value.title, 'Renamed Parent');
+    assertEq('rename ACK evicts exactly affected member Work',
+        await store.getEntity('work', memberWork.id), null);
+    await preserved('rename ACK');
+}
+
+
+/* End-to-end in the *fast layer*: real patchFolder -> durable local queue ->
+ * actual sync coordinator/Folder field isResult handler -> ACK reconciliation.
+ * Replacing fieldHandler.reconcile with a no-op makes this check fail. Browser
+ * tests remain responsible for actual server, page, and IndexedDB persistence. */
+async function verifyFolderFieldAckDispatch() {
+    const { createFakeIndexedDBFactory } = require('./lib/fake_indexeddb.js');
+    const { createPrksLocalStore } = require(path.join(rootDir, 'frontend/js/local-store.js'));
+    require(path.join(rootDir, 'frontend/js/sync-runtime.js'));
+    const fs = require('fs');
+    const api = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
+    // The browser bootstraps the production coordinator registry after its
+    // document gate. This Node runner instantiates the same coordinator with
+    // the real exported handler, so also pin the shipped registry wiring:
+    // otherwise removing that registration would silently bypass this test.
+    const syncSource = fs.readFileSync(path.join(rootDir, 'frontend/js/sync-runtime.js'), 'utf8');
+    const registryStart = syncSource.indexOf('runtime = createRuntime({ store, online,');
+    const registryEnd = syncSource.indexOf('\n        lock:', registryStart);
+    if (registryStart < 0 || registryEnd < registryStart) {
+        throw new Error('production sync coordinator registry not found');
+    }
+    const registry = syncSource.slice(registryStart, registryEnd);
+    const entries = registry.match(/\bSET_FOLDER_FIELD:\s*root\.prksFolderFieldSyncHandler\s*,/g) || [];
+    assertEq('production sync registry maps SET_FOLDER_FIELD to Folder field handler',
+        entries.length, 1);
+    const marker = 'async function patchFolder(folderId, updates) {';
+    const start = api.indexOf(marker);
+    if (start < 0 || api.indexOf(marker, start + marker.length) !== -1) {
+        throw new Error('production patchFolder wrapper absent or ambiguous');
+    }
+    const end = api.indexOf('\n}', start);
+    if (end < 0) throw new Error('unclosed production patchFolder wrapper');
+    const patchFolder = new Function('return (' + api.slice(start, end + 2) + ');')();
+    const validators = folderReadValidators();
+    const names = [
+        'prksSync', 'prksOfflineReadEntity', 'prksOfflineReconcileFolderField',
+        'prksDurableOperationsOrNone',
+    ];
+    const originals = names.map(name => ({
+        name, has: Object.prototype.hasOwnProperty.call(globalThis, name),
+        value: globalThis[name],
+    }));
+    let sequence = 0;
+    const uuid = () => '00000000-0000-4000-8000-' +
+        (++sequence).toString(16).padStart(12, '0');
+    try {
+        for (const spec of [
+            {field: 'description', input: '  Edited.  ', stored: 'Edited.', parent: 'F-OLD'},
+            {field: 'parent_id', input: null, stored: null, parent: 'F-OLD'},
+        ]) {
+            const folderId = 'F-SYNC';
+            const folderRow = {id: folderId, title: 'Reading', description: 'Original',
+                private_notes: '', parent_id: spec.parent, work_count: 1, child_count: 0};
+            const oldDetail = {...folderRow, parent: {id: spec.parent, title: 'Old'},
+                children: [], works: [], tags: []};
+            const unrelatedWork = {id: 'W-UNCHANGED', folder_id: folderId,
+                folder_title: folderRow.title};
+            const cache = makeFakeStore({isAvailable: async () => true});
+            await cache.putList('folders:index', [{...folderRow}], '');
+            await cache.putEntity('folder', folderId, {...oldDetail}, '');
+            await cache.putEntity('folder-state', folderId,
+                globalThis.prksNewFolderState(folderId), '');
+            await cache.putEntity('work', unrelatedWork.id, {...unrelatedWork}, '');
+            const offline = mod.createPrksOfflineRuntime({
+                store: cache, prksRequest: () => Promise.reject(Error('unexpected request')),
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            const local = createPrksLocalStore({
+                indexedDB: createFakeIndexedDBFactory(), uuid,
+            });
+            const envelope = [];
+            let dispatched = 0;
+            globalThis.prksOfflineReadEntity = async (kind, id) => {
+                const cached = await cache.getEntity(kind, id);
+                return {value: cached ? cached.value : null,
+                    source: cached ? 'cache' : 'unavailable'};
+            };
+            globalThis.prksDurableOperationsOrNone = () => local.listOperations();
+            globalThis.prksOfflineReconcileFolderField = async (ack, op) => {
+                dispatched++;
+                return offline.reconcileFolderField(ack, op);
+            };
+            let acknowledgement;
+            const acked = new Promise(resolve => { acknowledgement = resolve; });
+            const sync = globalThis.createPrksSyncRuntime({
+                store: local, online: () => true,
+                handlers: {SET_FOLDER_FIELD: globalThis.prksFolderFieldSyncHandler},
+                request: async (_url, opts) => {
+                    const op = JSON.parse(opts.body);
+                    envelope.push(op);
+                    return {ok: true, status: 200, json: async () => ({
+                        code: 'ACKNOWLEDGED', changed: true,
+                        folder_id: op.entity_id, field: op.payload.field,
+                        value_omitted: true, server_revision: 1,
+                        member_work_ids: [],
+                    })};
+                },
+            });
+            globalThis.prksSync = sync;
+            const unsubscribe = sync.subscribe(event => {
+                if (event.acknowledged) acknowledgement(event);
+            });
+            try {
+                assertEq(spec.field + ' seed index is render-safe',
+                    validators.prksIsFoldersIndexShape(
+                        (await cache.getList('folders:index')).value), true);
+                assertEq(spec.field + ' seed detail is render-safe',
+                    validators.prksIsFolderShape(oldDetail, folderId), true);
+                assertEq(spec.field + ' rejects malformed field ACK',
+                    globalThis.prksFolderFieldSyncHandler.isResult({
+                        code: 'ACKNOWLEDGED', folder_id: folderId,
+                        field: spec.field, changed: true,
+                        server_revision: 1, value_omitted: false,
+                    }, {entity_id: folderId, payload: {field: spec.field}}), false);
+                await patchFolder(folderId, {[spec.field]: spec.input});
+                // The production writer calls runtime.changed(), starting the
+                // real drain. Observe its ACK event, not just an enqueued row.
+                let timeoutId;
+                const timeout = new Promise((_resolve, reject) => {
+                    timeoutId = setTimeout(() =>
+                        reject(Error(spec.field + ' ACK did not reach the sync coordinator')), 3000);
+                });
+                try {
+                    await Promise.race([acked, timeout]);
+                } finally {
+                    clearTimeout(timeoutId);
+                }
+                assertEq(spec.field + ' one canonical sync envelope', envelope.length, 1);
+                assertEq(spec.field + ' actual operation family',
+                    envelope[0] && envelope[0].operation, 'SET_FOLDER_FIELD');
+                assertEq(spec.field + ' actual payload field',
+                    envelope[0] && envelope[0].payload.field, spec.field);
+                assertEq(spec.field + ' actual payload value',
+                    envelope[0] && envelope[0].payload.value,
+                    spec.input == null ? '' : spec.input);
+                assertEq(spec.field + ' field handler dispatch called', dispatched, 1);
+                assertEq(spec.field + ' ACK event carries the real operation',
+                    envelope[0].op_id, (await acked).op.op_id);
+                assertEq(spec.field + ' canonical index is patched',
+                    (await cache.getList('folders:index')).value[0][spec.field], spec.stored);
+                const cachedDetail = await cache.getEntity('folder', folderId);
+                if (spec.field === 'parent_id') {
+                    assertEq('parent ACK discards stale Folder detail', cachedDetail, null);
+                } else {
+                    assertEq('description ACK patches Folder detail',
+                        cachedDetail && cachedDetail.value.description, spec.stored);
+                    assertEq('description ACK detail remains render-safe',
+                        validators.prksIsFolderShape(cachedDetail.value, folderId), true);
+                }
+                assertEq(spec.field + ' patched index remains render-safe',
+                    validators.prksIsFoldersIndexShape(
+                        (await cache.getList('folders:index')).value), true);
+                assertEq(spec.field + ' Work snapshot untouched',
+                    (await cache.getEntity('work', unrelatedWork.id)).value, unrelatedWork);
+                assertEq(spec.field + ' Folder generation advanced once',
+                    offline.currentDomainGeneration('folders'), 1);
+                assertEq(spec.field + ' sync base revision advanced',
+                    (await cache.getEntity('folder-state', folderId)).value
+                        .fields[spec.field].revision, 1);
+                for (let i = 0; i < 30 && (await local.listOperations()).length; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 1));
+                }
+                assertEq(spec.field + ' acknowledged operation retired',
+                    (await local.listOperations()).length, 0);
+            } finally {
+                unsubscribe();
+                sync.stop();
+            }
+        }
+    } finally {
+        for (const entry of originals) {
+            if (entry.has) globalThis[entry.name] = entry.value;
+            else delete globalThis[entry.name];
+        }
+    }
+}
+
 async function run() {
     await verifyCanonicalFolderFieldAcknowledgements();
+    await verifyFolderAckCacheFootprint();
+    await verifyFolderFieldAckDispatch();
     /* Fifth-domain cleanup is audited: no sweep may touch another domain. */
     {
         const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups'];
