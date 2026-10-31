@@ -381,7 +381,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     harness.start_test_profile("server-profile")
                     try:
                         with mock.patch.object(
-                            harness.time, "perf_counter", side_effect=[100, 102, 107]
+                            harness.time, "perf_counter", side_effect=[90, 91, 100, 102, 107]
                         ):
                             self.assertIs(server.start(), server)
                         phases = harness.finish_test_profile("server-profile")
@@ -391,6 +391,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     wait_http.assert_called_once_with(
                         "http://127.0.0.1:42002/api/works"
                     )
+                    self.assertEqual(phases["postgres_provision"], 1.0)
                     self.assertEqual(phases["server_spawn"], 2.0)
                     self.assertEqual(phases["server_http_ready"], 5.0)
                     self.assertEqual(phases["server_start"], 7.0)
@@ -423,7 +424,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                         with mock.patch.object(
                             harness.time,
                             "perf_counter",
-                            side_effect=[100, 102, 105, 110, 112, 117],
+                            side_effect=[90, 91, 100, 102, 105, 110, 112, 117],
                         ):
                             self.assertIs(server.start(), server)
                         phases = harness.finish_test_profile("server-retry")
@@ -432,6 +433,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     self.assertEqual(spawn.call_count, 2)
                     self.assertEqual(wait_http.call_count, 2)
                     self.assertEqual(server.port, 42004)
+                    self.assertEqual(phases["postgres_provision"], 1.0)
                     self.assertEqual(phases["server_spawn"], 2.0)
                     self.assertEqual(phases["server_http_ready"], 5.0)
                     self.assertEqual(phases["server_start"], 7.0)
