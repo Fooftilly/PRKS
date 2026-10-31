@@ -1423,6 +1423,23 @@ async function testLibraryEpoch() {
         && !('PRKS-Library-Epoch' in (hung[0].headers || {})) && Date.now() - started < 1000
         && !!sessionSignal && sessionSignal.aborted, String(Date.now() - started));
 
+    // A read that answers after its deadline cannot replace an epoch a newer answer gave.
+    let lateAnswer = null;
+    const late = createPrksLibraryEpoch({
+        sessionTimeoutMs: 30,
+        fetchImpl: function (url) {
+            if (url === '/api/session') {
+                return new Promise(function (resolve) { lateAnswer = resolve; });
+            }
+            return Promise.resolve(jsonResponse({}, 200, { 'PRKS-Library-Epoch': '2' }));
+        },
+    });
+    await late.fetch('/api/tags', { method: 'POST' });
+    await late.fetch('/api/tags', { method: 'GET' });
+    lateAnswer(jsonResponse({ library: { epoch: '1' } }, 200, { 'PRKS-Library-Epoch': '1' }));
+    await new Promise(function (resolve) { setTimeout(resolve, 10); });
+    record('a session read past its deadline writes no epoch', late.current() === '2', String(late.current()));
+
     // A caller that aborts while the session is read is answered at once and sends nothing.
     const kept = [];
     const waiting = createPrksLibraryEpoch({

@@ -170,6 +170,8 @@
             if (pendingRead) return pendingRead;
             const controller = typeof AbortController === 'function' ? new AbortController() : null;
             const timer = setTimeout(function () { if (controller) controller.abort(); }, sessionTimeoutMs);
+            // A read that loses to its deadline may answer after a newer one: it writes nothing.
+            let expired = false;
             const read = Promise.resolve()
                 .then(function () {
                     return fetchImpl(PRKS_SESSION_PATH, {
@@ -181,18 +183,21 @@
                     });
                 })
                 .then(function (response) {
+                    if (expired) return;
                     note(response);
                     if (epoch || !response.ok) return;
                     return response.json().then(function (body) {
                         const library = body && body.library;
                         const read = epochOf(library && library.epoch);
-                        if (read && !epoch) epoch = read;
+                        if (read && !epoch && !expired) epoch = read;
                     });
                 })
                 .catch(function () { /* unknown: the mutation goes without it */ });
             // A fetch that ignores its signal still cannot hold the caller past the deadline.
             let deadlineTimer = null;
-            const deadline = new Promise(function (resolve) { deadlineTimer = setTimeout(resolve, sessionTimeoutMs); });
+            const deadline = new Promise(function (resolve) {
+                deadlineTimer = setTimeout(function () { expired = true; resolve(); }, sessionTimeoutMs);
+            });
             pendingRead = Promise.race([read, deadline]).then(function () {
                 clearTimeout(timer);
                 clearTimeout(deadlineTimer);
