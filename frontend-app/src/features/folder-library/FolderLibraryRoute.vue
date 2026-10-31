@@ -26,8 +26,21 @@ const props = defineProps<{
 const intents = inject(folderLibraryIntentsKey)
 const initialChrome = intents?.readTreeChrome?.() ?? { expandedIds: [], libraryQuery: null }
 
+/**
+ * A restored session query has to land on this pane's chrome. Otherwise the
+ * one-time claim is spent on a local ref, and the next mount of the same pane
+ * starts empty.
+ */
+function initialLibraryQuery(): string {
+  if (initialChrome.libraryQuery != null) return initialChrome.libraryQuery
+  const claimed = claimInitialLibraryQuery()
+  if (claimed == null) return ''
+  intents?.writeLibraryQuery?.(claimed)
+  return claimed
+}
+
 const activeTab = ref<FolderLibraryTab>(readFolderLibraryTabFromStorage())
-const folderFilter = ref(initialChrome.libraryQuery ?? claimInitialLibraryQuery() ?? '')
+const folderFilter = ref(initialLibraryQuery())
 const expandedIds = ref(new Set(initialChrome.expandedIds))
 const filesFilter = ref(readRecentlyAddedFilterFromStorage())
 /** Debounced queries drive expensive tree / card paints (#233 useDebounceFn). */

@@ -109,8 +109,9 @@ export function readFolderFilterFromStorage(): string {
 
 /**
  * Session storage is one browser-tab value. The first Folder Library mount in
- * this page may restore it. Every later pane starts from its own TabContext
- * chrome, not from a query another pane already wrote.
+ * this page may restore it, and that mount must copy the value onto its
+ * TabContext. Every later pane starts from its own chrome, not from a query
+ * another pane already wrote.
  */
 let sessionFolderFilterClaimed = false
 

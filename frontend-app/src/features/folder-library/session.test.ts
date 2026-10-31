@@ -236,6 +236,32 @@ describe('Folder Library route bridge', () => {
     expect(mainHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('physics')
     expect(sideHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('')
     expect(sideHost.textContent).toContain('Physics notes')
+    expect(main.ui.folderTree?.libraryQuery).toBe('physics')
+  })
+
+  it('keeps a restored session filter after the library unmounts', () => {
+    stubFolderLibraryWindow()
+    sessionStorage.setItem(FOLDER_LIBRARY_FILTER_KEY, 'physics')
+    const pane = {
+      tabId: 'main',
+      isCurrent: () => true,
+      ui: {} as { folderTree?: { libraryQuery?: string } },
+    }
+    const folders = [{ id: 'F1', title: 'Physics notes', parent_id: null, work_count: 0, child_count: 0 }]
+    const firstHost = host()
+    presentFolderLibrary({ owner: pane, host: firstHost, folders, generation: 1 })
+    expect(firstHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('physics')
+    expect(pane.ui.folderTree?.libraryQuery).toBe('physics')
+    dismissRouteSurface(pane)
+    sessionStorage.setItem(FOLDER_LIBRARY_FILTER_KEY, 'ethics')
+    const returnHost = host()
+    presentFolderLibrary({ owner: pane, host: returnHost, folders, generation: 2 })
+    expect(returnHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('physics')
+    const side = { tabId: 'side', isCurrent: () => true, ui: {} as { folderTree?: { libraryQuery?: string } } }
+    const sideHost = host()
+    presentFolderLibrary({ owner: side, host: sideHost, folders, generation: 1, shell: false })
+    expect(sideHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('')
+    expect(side.ui.folderTree?.libraryQuery).toBeUndefined()
   })
 
   it('unmounts on dismiss without affecting another owner', () => {
