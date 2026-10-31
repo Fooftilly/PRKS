@@ -279,10 +279,30 @@ jobs:
             echo "::error::unexpected E2E mode for matrix runner: $mode"
             exit 1
           fi
+          # The profile report is aggregate-only and stays in runner.temp.
+          # Never enable it for ordinary PR/push gates or upload fixture paths.
+          if [[ "${PRKS_E2E_PROFILE}" == "1" ]]; then
+            export PRKS_E2E_BENCHMARK_RESULT="$RUNNER_TEMP/prks-e2e-manual-profile.json"
+          fi
           printf 'Running:';
           printf ' %q' "${args[@]}"
           printf '\n'
           "${args[@]}"
+
+      - name: Summarize manual E2E infrastructure profile
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.profile &&
+          steps.tests.outcome == 'success'
+        env:
+          PROFILE_SHARD: ${{ matrix.shard }}
+          PROFILE_TOTAL: ${{ matrix.total }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/e2e_profile_summary.py \
+            "$RUNNER_TEMP/prks-e2e-manual-profile.json" \
+            --shard "${PROFILE_SHARD}/${PROFILE_TOTAL}" >> "$GITHUB_STEP_SUMMARY"
 
       # E2E runs Python unittest cases through Playwright, not Playwright Test.
       # Upload privacy-limited JUnit suites from each worker; never traces/logs.
