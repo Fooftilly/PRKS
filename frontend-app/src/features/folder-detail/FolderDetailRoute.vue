@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
@@ -120,6 +120,7 @@ function mergeExpanded(ids: readonly string[]): void {
 }
 
 function applyTreeSnapshot(value: unknown): void {
+  if (!treeApplyAlive) return
   const snapshot = readFolderDetailTreeSnapshot(value)
   if (!snapshot) return
   if (snapshot.status === 'error') {
@@ -134,10 +135,23 @@ function applyTreeSnapshot(value: unknown): void {
   mergeExpanded(folderDetailExpandIds(selected, displayed))
 }
 
+type FolderTreeHost = HTMLElement & { __prksApplyFolderDetailTree?: (value: unknown) => void }
+
+let boundTreeHost: FolderTreeHost | null = null
+let treeApplyAlive = true
+
+function clearTreeApply(host: FolderTreeHost | null): void {
+  if (!host) return
+  delete host.__prksApplyFolderDetailTree
+  if (boundTreeHost === host) boundTreeHost = null
+}
+
 function bindTreeApply(): void {
-  const host = treeHost.value as (HTMLElement & { __prksApplyFolderDetailTree?: (value: unknown) => void }) | null
+  const host = treeHost.value as FolderTreeHost | null
+  if (boundTreeHost && boundTreeHost !== host) clearTreeApply(boundTreeHost)
   if (!host) return
   host.__prksApplyFolderDetailTree = applyTreeSnapshot
+  boundTreeHost = host
 }
 
 function rebindHierarchyNav(): void {
@@ -180,6 +194,11 @@ function onToggleFolder(folderId: string): void {
 onMounted(() => {
   paintMode()
   commitSurface()
+})
+
+onUnmounted(() => {
+  treeApplyAlive = false
+  clearTreeApply(boundTreeHost)
 })
 
 watch(

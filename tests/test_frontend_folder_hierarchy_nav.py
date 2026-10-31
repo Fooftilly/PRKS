@@ -43,7 +43,8 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("prks-folder-detail__header", detail)
         self.assertIn("data-prks-role=\"folder-hierarchy-nav\"", nav)
         self.assertIn("prksFolderNavTriggerHtml", nav)
-        self.assertIn("tabId: ctx && ctx.tabId", folders)
+        self.assertIn("tabId: props.tabId", nav)
+        self.assertNotIn("tabId: ctx && ctx.tabId", nav)
         # Desktop IA: persistent hierarchy tree | contents; compact band is fallback.
         self.assertIn("data-prks-folder-detail-tree-host", folders)
         self.assertIn("prksBindFolderDetailLayout", folders)

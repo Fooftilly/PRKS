@@ -1,6 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
+import { FOLDER_LIBRARY_FILTER_KEY } from './types'
 import {
   FOLDER_LIBRARY_RETAIN_SURFACE_KEY,
   presentFolderLibrary,
@@ -10,6 +11,7 @@ import {
 
 afterEach(() => {
   resetFolderLibrarySessionForTests()
+  sessionStorage.clear()
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
@@ -219,6 +221,21 @@ describe('Folder Library route bridge', () => {
     expect(side.ui.folderTree?.expandedIds ?? []).toEqual([])
     expect(mainHost.querySelector('.prks-folder-tree__branch')?.classList.contains('is-collapsed')).toBe(false)
     expect(sideHost.querySelector('.prks-folder-tree__branch')?.classList.contains('is-collapsed')).toBe(true)
+  })
+
+  it('does not give a new pane another panes session filter', () => {
+    stubFolderLibraryWindow()
+    sessionStorage.setItem(FOLDER_LIBRARY_FILTER_KEY, 'physics')
+    const main = { tabId: 'main', isCurrent: () => true, ui: {} }
+    const side = { tabId: 'side', isCurrent: () => true, ui: {} }
+    const folders = [{ id: 'F1', title: 'Physics notes', parent_id: null, work_count: 0, child_count: 0 }]
+    const mainHost = host()
+    const sideHost = host()
+    presentFolderLibrary({ owner: main, host: mainHost, folders, generation: 1, shell: true })
+    presentFolderLibrary({ owner: side, host: sideHost, folders, generation: 1, shell: false })
+    expect(mainHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('physics')
+    expect(sideHost.querySelector<HTMLInputElement>('#prks-folder-library-search')?.value).toBe('')
+    expect(sideHost.textContent).toContain('Physics notes')
   })
 
   it('unmounts on dismiss without affecting another owner', () => {

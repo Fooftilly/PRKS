@@ -1,8 +1,13 @@
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import FolderTree from './FolderTree.vue'
 import type { FolderRow } from './types'
+
+afterEach(() => {
+  delete window.prksIcon
+  delete window.prksRefreshIcons
+})
 
 const folders: FolderRow[] = [
   { id: 'parent', title: 'Parent', parent_id: null, child_count: 1, work_count: 0 },
@@ -45,5 +50,25 @@ describe('FolderTree presentation', () => {
     expect(created).toEqual([''])
     await wrapper.setProps({ folders, filterQuery: 'zzz' })
     expect(wrapper.text()).toContain('Create folder "zzz"')
+  })
+
+  it('refreshes lucide placeholders on the owning tree host', async () => {
+    const refreshed: ParentNode[] = []
+    window.prksIcon = () => '<i data-lucide="folder"></i>'
+    window.prksRefreshIcons = (root) => {
+      if (root) refreshed.push(root)
+    }
+    const host = document.createElement('div')
+    host.setAttribute('data-prks-folder-tree-host', '')
+    document.body.appendChild(host)
+    const wrapper = mount(FolderTree, {
+      props: { folders, expandedIds: new Set<string>() },
+      attachTo: host,
+    })
+    await nextTick()
+    expect(refreshed.some((root) => root === host)).toBe(true)
+    expect(refreshed.every((root) => root === host || host.contains(root))).toBe(true)
+    wrapper.unmount()
+    host.remove()
   })
 })

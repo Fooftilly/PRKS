@@ -323,6 +323,27 @@ describe('Folder detail route bridge', () => {
     expect(preview.__prksWorkThumbPreviewSource).toBe(thumb)
   })
 
+  it('drops the hierarchy host callback when the route unmounts', async () => {
+    const pane = owner()
+    const el = host()
+    presentFolderDetail({
+      owner: pane,
+      host: el,
+      folder: { id: 'f1', title: 'First', works: [], children: [] },
+      generation: 1,
+    })
+    const tree = el.querySelector('[data-prks-folder-detail-tree-host]') as HTMLElement & {
+      __prksApplyFolderDetailTree?: (value: unknown) => void
+    }
+    expect(typeof tree.__prksApplyFolderDetailTree).toBe('function')
+    const stale = tree.__prksApplyFolderDetailTree
+    dismissRouteSurface(pane)
+    await nextTick()
+    expect(tree.__prksApplyFolderDetailTree).toBeUndefined()
+    expect(() => stale?.({ status: 'ready', rows: [], selectedId: 'gone', selectionOnly: false })).not.toThrow()
+    expect(el.querySelector('[data-prks-role="folder-detail"]')).toBeNull()
+  })
+
   it('sends delete and new-folder through the canonical wrappers', async () => {
     const deleted: string[] = []
     const opened: unknown[] = []

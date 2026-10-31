@@ -6,14 +6,15 @@ import FolderTree from './FolderTree.vue'
 import RecentlyAddedPane from './RecentlyAddedPane.vue'
 import {
   folderLibraryIntentsKey,
+  claimInitialLibraryQuery,
   persistFolderFilter,
   persistRecentlyAddedFilter,
-  readFolderFilterFromStorage,
   readFolderLibraryTabFromStorage,
   readRecentlyAddedFilterFromStorage,
 } from './intents'
 import type { FolderLibraryProjection } from './projection'
 import { buildFolderTree, normalizeGlanceParts, type GlancePart } from './tree'
+import { refreshFolderIcons } from './tree-icons'
 import type { FolderLibraryTab, RecentlyAddedWork } from './types'
 import { initLazyWorkThumbs, releaseWorkThumbResources } from './work-thumb-lifecycle'
 
@@ -26,7 +27,7 @@ const intents = inject(folderLibraryIntentsKey)
 const initialChrome = intents?.readTreeChrome?.() ?? { expandedIds: [], libraryQuery: null }
 
 const activeTab = ref<FolderLibraryTab>(readFolderLibraryTabFromStorage())
-const folderFilter = ref(initialChrome.libraryQuery ?? readFolderFilterFromStorage())
+const folderFilter = ref(initialChrome.libraryQuery ?? claimInitialLibraryQuery() ?? '')
 const expandedIds = ref(new Set(initialChrome.expandedIds))
 const filesFilter = ref(readRecentlyAddedFilterFromStorage())
 /** Debounced queries drive expensive tree / card paints (#233 useDebounceFn). */
@@ -36,6 +37,7 @@ const rootEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
 const folderSearchIcon = ref<HTMLElement | null>(null)
 const filesSearchIcon = ref<HTMLElement | null>(null)
+const expandToggleBtn = ref<HTMLElement | null>(null)
 const recentlyAddedPane = ref<InstanceType<typeof RecentlyAddedPane> | null>(null)
 const glanceParts = ref<GlancePart[]>([])
 /** Bumped when pending work-metadata overlay changes while Recently Added is mounted. */
@@ -158,6 +160,10 @@ const applyFilesFilter = useDebounceFn((query: string, epoch: number) => {
   persistRecentlyAddedFilter(query)
   syncLegacyDashboardState()
 }, 150)
+
+watch(hasCollapsible, () => {
+  paintExpandIcon()
+}, { flush: 'post' })
 
 watch(folderFilter, (q) => {
   const epoch = ++folderFilterEpoch
@@ -315,11 +321,16 @@ function syncFiltersFromBrandHomeReset(): void {
   rememberLibraryQuery('')
 }
 
+function paintExpandIcon(): void {
+  refreshFolderIcons(expandToggleBtn.value)
+}
+
 onMounted(() => {
   surfaceAlive = true
   syncLegacyDashboardState()
   paintCatalogGlance()
   paintSearchIcons()
+  paintExpandIcon()
   scheduleOwnerGlance()
   offlineDispose = intents?.bindFolderOfflineState(props.contentRoot ?? null) ?? null
   overlayDispose =
@@ -463,6 +474,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="hasCollapsible" class="prks-folder-library__toolbar-actions">
           <button
+            ref="expandToggleBtn"
             type="button"
             id="prks-folder-library-expand-toggle"
             class="prks-btn prks-btn--secondary prks-folder-library__toolbar-btn"

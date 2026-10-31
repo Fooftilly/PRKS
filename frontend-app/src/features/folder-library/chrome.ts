@@ -2,8 +2,8 @@
  * Per-pane Folder tree chrome. The owning TabContext (`ctx.ui.folderTree`) is
  * the expand/collapse and Folder Library filter owner. Main and Secondary do
  * not share it. It survives navigation inside the pane and dies with the tab.
- * Session storage remains the brand-home clear channel and the fallback when
- * a pane has not written chrome yet.
+ * Session storage is the brand-home clear channel and the restore value for the
+ * first Folder Library mount in the page. A later pane does not read it.
  */
 
 export interface FolderTreeChrome {

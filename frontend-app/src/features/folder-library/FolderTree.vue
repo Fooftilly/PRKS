@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUpdated, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import FolderTreeNode from './FolderTreeNode.vue'
 import { buildFolderTree } from './tree'
+import { folderTreeIconHost, refreshFolderIcons } from './tree-icons'
 import type { FolderRow } from './types'
 
 const props = withDefaults(
@@ -28,6 +29,15 @@ const emit = defineEmits<{
   create: [query: string]
 }>()
 
+const iconRoot = ref<HTMLElement | null>(null)
+
+function paintIcons(): void {
+  refreshFolderIcons(folderTreeIconHost(iconRoot.value))
+}
+
+onMounted(paintIcons)
+onUpdated(paintIcons)
+
 const tree = computed(() =>
   buildFolderTree(props.folders, props.filterQuery, props.expandedIds, {
     selectedId: props.selectedId,
@@ -43,6 +53,7 @@ function onCreate(): void {
 </script>
 
 <template>
+  <div ref="iconRoot" style="display: contents">
   <div
     v-if="tree.empty && variant === 'library'"
     class="prks-folder-tree__empty-state"
@@ -91,5 +102,6 @@ function onCreate(): void {
       :filtering="filtering"
       @toggle="emit('toggle', $event)"
     />
+  </div>
   </div>
 </template>

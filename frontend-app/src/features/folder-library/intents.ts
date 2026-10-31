@@ -107,6 +107,23 @@ export function readFolderFilterFromStorage(): string {
   }
 }
 
+/**
+ * Session storage is one browser-tab value. The first Folder Library mount in
+ * this page may restore it. Every later pane starts from its own TabContext
+ * chrome, not from a query another pane already wrote.
+ */
+let sessionFolderFilterClaimed = false
+
+export function claimInitialLibraryQuery(): string | null {
+  if (sessionFolderFilterClaimed) return null
+  sessionFolderFilterClaimed = true
+  return readFolderFilterFromStorage()
+}
+
+export function resetSessionFolderFilterClaimForTests(): void {
+  sessionFolderFilterClaimed = false
+}
+
 export function persistFolderFilter(query: string): void {
   try {
     sessionStorage.setItem(FOLDER_LIBRARY_FILTER_KEY, query)
