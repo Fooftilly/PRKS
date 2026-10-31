@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.e2e import harness, run
+from tests.e2e import harness
 from tests.e2e.policy import PROFILE_ENV
 
 
@@ -67,6 +67,11 @@ class E2EPostgresProfileTests(unittest.TestCase):
         self.assertNotIn("postgres_provision", phases)
 
     def test_profile_ranking_does_not_double_count_postgres_drop(self):
+        # run.py configures PRKS_E2E at module import; isolate the import's
+        # environment mutation from unrelated unit tests in the same process.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            from tests.e2e import run
+
         phases = {
             "postgres_provision": 2.0,
             "server_start": 3.0,
