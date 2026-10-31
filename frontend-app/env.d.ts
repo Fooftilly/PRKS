@@ -172,6 +172,8 @@ interface Window {
       onEscape?: () => void
     },
   ) => void
+  prksComboboxRenderEpoch?: (input: HTMLInputElement) => number
+  prksComboboxRendered?: (input: HTMLInputElement, epoch: number) => void
   prksTagMatchesQuery?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
   prksTagExactMatch?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
   prksTagComboboxLabel?: (tag: { name?: string; aliases?: string[] }, query: string) => string

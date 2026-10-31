@@ -9,6 +9,8 @@ type ComboboxOptions = {
 type ComboboxKeys = {
   prksBindComboboxKeys: (input: HTMLInputElement, results: HTMLElement, options?: ComboboxOptions) => void
   prksComboboxPanelIsOpen: (results: HTMLElement) => boolean
+  prksComboboxRenderEpoch: (input: HTMLInputElement) => number
+  prksComboboxRendered: (input: HTMLInputElement, epoch: number) => void
 }
 
 async function loadKeys(): Promise<ComboboxKeys> {
@@ -181,5 +183,48 @@ describe('shared combobox keys', () => {
     await flush()
     expect(opened).toBe(1)
     expect(box.results.querySelector('.result-item--active')?.textContent).toBe('Ada Lovelace')
+  })
+
+  it('gives existing rows option semantics before a key is pressed', async () => {
+    const keys = await loadKeys()
+    const box = harness()
+    const match = document.createElement('div')
+    match.className = 'result-item'
+    match.textContent = 'Ada Lovelace'
+    box.results.append(match)
+    keys.prksBindComboboxKeys(box.input, box.results)
+    expect(match.getAttribute('role')).toBe('option')
+    expect(match.getAttribute('aria-selected')).toBe('false')
+    expect(box.input.hasAttribute('aria-activedescendant')).toBe(false)
+
+    box.results.classList.remove('hidden')
+    box.results.classList.add('is-open')
+    await flush()
+    expect(match.getAttribute('role')).toBe('option')
+    expect(match.getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('accepts Enter after a render that reuses the same row', async () => {
+    const keys = await loadKeys()
+    const box = harness({ enterCreates: true })
+    keys.prksBindComboboxKeys(box.input, box.results, box.options)
+    box.render([{ text: 'Archive' }])
+    await flush()
+    box.input.value = 'a'
+    box.input.dispatchEvent(new Event('input', { bubbles: true }))
+    const blocked = key(box.input, 'Enter')
+    expect(blocked.defaultPrevented).toBe(true)
+    expect(box.picked).toEqual([])
+
+    const staleEpoch = keys.prksComboboxRenderEpoch(box.input)
+    box.input.value = 'ar'
+    box.input.dispatchEvent(new Event('input', { bubbles: true }))
+    keys.prksComboboxRendered(box.input, staleEpoch)
+    expect(key(box.input, 'Enter').defaultPrevented).toBe(true)
+    expect(box.picked).toEqual([])
+
+    keys.prksComboboxRendered(box.input, keys.prksComboboxRenderEpoch(box.input))
+    key(box.input, 'Enter')
+    expect(box.picked).toEqual(['Archive'])
   })
 })

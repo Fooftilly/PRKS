@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
@@ -133,6 +133,16 @@ function scheduleHide(results: HTMLElement | null, open: { value: boolean }): vo
   hideTimer = window.setTimeout(() => hideResults(results, open), 200)
 }
 
+function comboboxEpoch(input: HTMLInputElement | null): number {
+  if (!input || typeof window.prksComboboxRenderEpoch !== 'function') return 0
+  return window.prksComboboxRenderEpoch(input)
+}
+
+function noteComboboxRendered(input: HTMLInputElement | null, epoch: number): void {
+  if (!input) return
+  window.prksComboboxRendered?.(input, epoch)
+}
+
 function openPersonResults(): void {
   showResults(personInput.value, personResults.value, personOpen)
 }
@@ -140,6 +150,8 @@ function openPersonResults(): void {
 function onPersonInput(): void {
   personId.value = ''
   openPersonResults()
+  const epoch = comboboxEpoch(personInput.value)
+  void nextTick(() => noteComboboxRendered(personInput.value, epoch))
 }
 
 function blurPerson(): void {
@@ -157,6 +169,8 @@ function openFolderResults(): void {
 function onFolderInput(): void {
   draft.target_folder_id = ''
   openFolderResults()
+  const epoch = comboboxEpoch(folderInput.value)
+  void nextTick(() => noteComboboxRendered(folderInput.value, epoch))
 }
 
 function blurFolder(): void {
@@ -333,10 +347,14 @@ async function createFolder(): Promise<void> {
 
 async function refreshTags(): Promise<void> {
   const token = ++tagSearchToken
+  const epoch = comboboxEpoch(tagInput.value)
   const rows = await props.intents.searchTags()
   if (rows == null || token !== tagSearchToken) return
   tagOptions.value = rows
   showResults(tagInput.value, tagResults.value, tagOpen)
+  await nextTick()
+  if (token !== tagSearchToken) return
+  noteComboboxRendered(tagInput.value, epoch)
 }
 
 function chooseTag(tag: ProcessingTagOption): void {

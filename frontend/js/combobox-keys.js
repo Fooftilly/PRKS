@@ -6,7 +6,8 @@
  * create row when enterCreates is set), and Escape closes the list. Picking
  * dispatches the row's mousedown, so pointer and keyboard share one commit.
  * Typing marks the open rows stale until the list re-renders, so Enter cannot
- * pick a row from the previous query.
+ * pick a row from the previous query. A render that reuses the same row
+ * elements reports itself with prksComboboxRendered(input, epoch).
  *
  * An open New File list is still closed by the modal Escape stack, which runs
  * before this handler. Other pickers pass onEscape.
@@ -15,6 +16,18 @@
     'use strict';
 
     let comboboxSeq = 0;
+    const sessions = new WeakMap();
+
+    function prksComboboxRenderEpoch(input) {
+        const session = input && sessions.get(input);
+        return session ? session.epoch : 0;
+    }
+
+    function prksComboboxRendered(input, seen) {
+        const session = input && sessions.get(input);
+        if (!session || session.epoch !== seen) return;
+        session.clearStale();
+    }
 
     function prksComboboxPanelIsOpen(results) {
         if (!results || results.classList.contains('hidden')) return false;
@@ -50,6 +63,11 @@
         // Typing invalidates the open rows until the list re-renders (the tag and
         // playlist lists render after a fetch): Enter must not pick a stale row.
         let stale = false;
+        const session = {
+            epoch: 0,
+            clearStale: function () { stale = false; },
+        };
+        sessions.set(input, session);
         const optionRows = () => Array.from(results.querySelectorAll('.result-item:not(.no-results)'));
         const items = () => optionRows().filter((el) => el.getAttribute('aria-disabled') !== 'true');
         const firstRealIndex = (list) => {
@@ -107,12 +125,16 @@
                 }
                 return;
             }
-            if (!highlightOnRender) return;
-            const list = items();
-            if (!list.length) return;
-            active = firstRealIndex(list);
-            highlightOnRender = false;
-            stale = false;
+            if (highlightOnRender) {
+                const list = items();
+                if (list.length) {
+                    active = firstRealIndex(list);
+                    highlightOnRender = false;
+                    stale = false;
+                }
+            }
+            // Rows can already be in the list when it opens. Give them option
+            // semantics without selecting one until a key or pointer moves.
             paint();
         }).observe(results, { attributes: true, attributeFilter: ['class'] });
         // Capture phase: runs before the list's own input handler, whose render
@@ -122,6 +144,7 @@
             () => {
                 highlightOnRender = false;
                 stale = true;
+                session.epoch += 1;
             },
             true
         );
@@ -183,15 +206,20 @@
             e.stopPropagation();
             pick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         });
+        paint();
     }
 
     root.prksBindComboboxKeys = prksBindComboboxKeys;
     root.prksComboboxPanelIsOpen = prksComboboxPanelIsOpen;
+    root.prksComboboxRenderEpoch = prksComboboxRenderEpoch;
+    root.prksComboboxRendered = prksComboboxRendered;
 })(typeof window !== 'undefined' ? window : globalThis);
 
 if (typeof module === 'object' && module != null && module.exports) {
     module.exports = {
         prksBindComboboxKeys: globalThis.prksBindComboboxKeys,
         prksComboboxPanelIsOpen: globalThis.prksComboboxPanelIsOpen,
+        prksComboboxRenderEpoch: globalThis.prksComboboxRenderEpoch,
+        prksComboboxRendered: globalThis.prksComboboxRendered,
     };
 }

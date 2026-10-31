@@ -547,7 +547,7 @@ describe('Processing Files route bridge', () => {
       files: [file],
       people: [{ id: 'ada', first_name: 'Ada', last_name: 'Lovelace' }],
       folders: [
-        { id: 'lib', title: 'Library' },
+        { id: 'notes', title: 'Notes' },
         { id: 'arc', title: 'Archive' },
       ],
       roleTypes: ['Author'],
@@ -556,6 +556,9 @@ describe('Processing Files route bridge', () => {
     })
     await nextTick()
     const person = el.querySelector<HTMLInputElement>('[aria-label="Search person"]')!
+    const personRow = person.closest('.tag-add-shell')?.querySelector('.result-item--person-pick')
+    expect(personRow?.getAttribute('role')).toBe('option')
+    expect(personRow?.getAttribute('aria-selected')).toBe('false')
     person.value = 'Ada'
     person.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
@@ -574,21 +577,24 @@ describe('Processing Files route bridge', () => {
     expect(personName).toBe('New Person')
 
     const folder = el.querySelector<HTMLInputElement>('[aria-label="Search folder"]')!
-    folder.value = 'arc'
+    folder.value = 'a'
+    folder.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    folder.value = 'ar'
     folder.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
     press(folder, 'Enter')
     await flush()
     expect(folder.value).toBe('Archive')
 
-    folder.value = 'lib'
+    folder.value = 'note'
     folder.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
     press(folder, 'Escape')
     expect(folder.getAttribute('aria-expanded')).toBe('false')
     press(folder, 'Enter')
     await flush()
-    expect(folder.value).toBe('lib')
+    expect(folder.value).toBe('note')
   })
 
   it('registers the early presenter', () => {
