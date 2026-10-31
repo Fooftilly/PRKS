@@ -189,8 +189,127 @@ async function verifyCanonicalFolderFieldAcknowledgements() {
     assertEq('parent-id ACK invalidates stale detail', await store.getEntity('folder', id), null);
 }
 
+
+/* Folder ACK read-model coherence. These deterministic cases previously each
+ * started Chromium and a seeded server only to call a canonical Folder
+ * wrapper and inspect cache generations/contents. Use the same production
+ * reconciler and domain gate as the shipped runtime, not a test-side policy.
+ * Retain browser tests for real UI, offline reload and selective title ACK. */
+async function verifyFolderAckCacheFootprint() {
+    const store = makeFakeStore({isAvailable: async () => true});
+    const runtime = mod.createPrksOfflineRuntime({
+        store, prksRequest: () => Promise.reject(Error('unexpected transport')),
+        setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+        window: null, caches: null, navigator: null,
+    });
+    const parent = {id: 'F-PARENT', title: 'Reading', description: 'Original', parent_id: null};
+    const child = {id: 'F-CHILD', title: 'Child', description: '', parent_id: 'F-PARENT'};
+    const untouchedWork = {id: 'W-CHILD', folder_id: child.id, folder_title: child.title};
+    const memberWork = {id: 'W-PARENT', folder_id: parent.id, folder_title: parent.title};
+    const control = {id: 'CONTROL', title: 'Do not evict'};
+    const others = [
+        ['concepts', 'concept', 'concepts:index'],
+        ['positions', 'position', 'positions:index'],
+        ['arguments', 'argument', 'arguments:index'],
+        ['people', 'person', 'people:index'],
+        ['person-groups', 'person-group', 'person-groups:index'],
+        ['playlists', 'playlist', 'playlists:index'],
+    ];
+    await store.putList('folders:index', [{...parent}, {...child}], '');
+    await store.putEntity('folder', parent.id, {...parent}, '');
+    await store.putEntity('folder', child.id, {...child}, '');
+    await store.putEntity('work', memberWork.id, {...memberWork}, '');
+    await store.putEntity('work', untouchedWork.id, {...untouchedWork}, '');
+    for (const [, kind, listKey] of others) {
+        await store.putEntity(kind, control.id, {...control}, '');
+        await store.putList(listKey, [{...control}], '');
+    }
+    const list = async () => (await store.getList('folders:index')).value;
+    const row = async id => (await list()).find(folder => folder.id === id);
+    const baseline = Object.fromEntries(
+        others.map(([domain]) => [domain, runtime.currentDomainGeneration(domain)]));
+    const preserved = async label => {
+        for (const [domain, kind, listKey] of others) {
+            assertEq(label + ' ' + domain + ' generation isolated',
+                runtime.currentDomainGeneration(domain), baseline[domain]);
+            assertEq(label + ' ' + domain + ' entity cached',
+                (await store.getEntity(kind, control.id)).value, control);
+            assertEq(label + ' ' + domain + ' index cached',
+                (await store.getList(listKey)).value, [control]);
+        }
+        assertEq(label + ' unrelated member Work kept',
+            (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
+        assertEq(label + ' hierarchy index never discarded', Array.isArray(await list()), true);
+    };
+    let foldersGeneration = runtime.currentDomainGeneration('folders');
+
+    // A server-accepted new Folder is inserted into the *existing* cached
+    // hierarchy; only this domain advances, no unrelated Work is evicted.
+    const added = {id: 'F-NEW', title: 'Coherence New', description: '', parent_id: null};
+    assertEq('create ACK applied', await runtime.reconcileCreatedFolder({
+        changed: true, folder_id: added.id, folder: added,
+    }), true);
+    assertEq('create ACK changes Folder generation exactly once',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('create ACK patches new row into hierarchy', await row(added.id), added);
+    assertEq('create ACK keeps old Folder row', await row(parent.id), parent);
+    assertEq('create ACK retains parent Work',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('create ACK');
+
+    // Description is not embedded in any Work. The reconciler patches both
+    // Folder projections and changes only Folder's domain generation.
+    assertEq('description ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: parent.id, field: 'description',
+        server_revision: 2, member_work_ids: [memberWork.id],
+    }, {payload: {value: 'Edited.'}}), true);
+    assertEq('description ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('description ACK patches index', (await row(parent.id)).description, 'Edited.');
+    assertEq('description ACK patches detail',
+        (await store.getEntity('folder', parent.id)).value.description, 'Edited.');
+    assertEq('description ACK leaves member Work intact',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('description ACK');
+
+    // Reparenting means the cached parent *object* is no longer authoritative;
+    // the index has the canonical pointer, but cached member Work cards
+    // depend on Folder title, not the hierarchy.
+    assertEq('reparent ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: child.id, field: 'parent_id',
+        server_revision: 3, member_work_ids: [],
+    }, {payload: {value: ''}}), true);
+    assertEq('reparent ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('reparent ACK updates index pointer', (await row(child.id)).parent_id, null);
+    assertEq('reparent ACK drops stale Folder detail',
+        await store.getEntity('folder', child.id), null);
+    assertEq('reparent ACK preserves Work in changed Folder',
+        (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
+    assertEq('reparent ACK preserves Work in other Folder',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('reparent ACK');
+
+    // Keep the stronger browser rename test, but assert the exact selective
+    // Work eviction policy here too so the negative Work-cache contract
+    // remains sensitive to a wrong ACK implementation.
+    assertEq('rename ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: parent.id, field: 'title',
+        server_revision: 4, member_work_ids: [memberWork.id],
+    }, {payload: {value: 'Renamed Parent'}}), true);
+    assertEq('rename ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('rename ACK patches list', (await row(parent.id)).title, 'Renamed Parent');
+    assertEq('rename ACK patches detail',
+        (await store.getEntity('folder', parent.id)).value.title, 'Renamed Parent');
+    assertEq('rename ACK evicts exactly affected member Work',
+        await store.getEntity('work', memberWork.id), null);
+    await preserved('rename ACK');
+}
+
 async function run() {
     await verifyCanonicalFolderFieldAcknowledgements();
+    await verifyFolderAckCacheFootprint();
     /* Fifth-domain cleanup is audited: no sweep may touch another domain. */
     {
         const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups'];
