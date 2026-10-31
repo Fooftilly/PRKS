@@ -22,7 +22,7 @@ class E2EGateSummaryTests(unittest.TestCase):
         self.assertIn("| Planned test IDs | 626 |", report)
         self.assertIn("`pdf`, `smoke`", report)
         self.assertIn("**Aggregate result:** PASS", report)
-        self.assertIn("not independently observed", report)
+        self.assertIn("**not** independently observed", report)
 
     def test_full_selection_is_explicit_and_is_not_a_pass_count(self):
         report = format_e2e_gate_summary({
@@ -58,6 +58,15 @@ class E2EGateSummaryTests(unittest.TestCase):
             "PLAN_RUN": "false", "PLAN_MODE": "full", "PLAN_RESULT": "success",
         }, passed=True)
         self.assertIn("inconsistent or unknown selection", report)
+
+    def test_whitespace_is_not_normalized_into_a_valid_plan(self):
+        report = format_e2e_gate_summary({
+            "PLAN_RUN": "true", "PLAN_MODE": "full\\n",
+            "PLAN_RESULT": "success", "PLAN_POINTER": "true\\n",
+            "E2E_RESULT": "success",
+        }, passed=False)
+        self.assertIn("Unverified: inconsistent or unknown selection", report)
+        self.assertIn("| Pointer capture planned | unknown |", report)
 
     def test_untrusted_plan_metadata_cannot_inject_markdown(self):
         report = format_e2e_gate_summary({
