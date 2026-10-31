@@ -62,6 +62,13 @@ class ModalLifecycleContractTests(unittest.TestCase):
         self.assertIn("prksIsModalUnsavedConfirmOpen()", close)
         self.assertIn("return false", close)
         self.assertIn("window.prksModalHost", self.ui)
+        unsaved = _between(
+            self.ui,
+            "function prksOpenModalUnsavedConfirm(onDiscard)",
+            "function prksIsModalConfirmOpen()",
+        )
+        self.assertNotIn("onDiscard()", unsaved)
+        self.assertIn("openUnsavedConfirm", unsaved)
 
     def test_destructive_confirm_focuses_the_safe_control(self):
         self.assertIn("prks-modal-confirm-cancel", self.host)

@@ -137,7 +137,9 @@ function prksHideModalUnsavedConfirm(options) {
 function prksOpenModalUnsavedConfirm(onDiscard) {
     const host = prksModalHost();
     if (!host || typeof host.openUnsavedConfirm !== 'function') {
-        if (typeof onDiscard === 'function') onDiscard();
+        // The feature shell can be open before the Vue dialog host mounts.
+        // Discarding here would drop the draft with no confirmation. Leave
+        // the modal open; the next close request asks once the host exists.
         return;
     }
     host.openUnsavedConfirm(typeof onDiscard === 'function' ? onDiscard : null);

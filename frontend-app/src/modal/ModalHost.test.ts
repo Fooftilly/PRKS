@@ -178,13 +178,21 @@ describe('Vue modal host', () => {
     pressEscape()
     await expect(cancelled).resolves.toBeNull()
 
-    let submitted = false
     const multiline = host().prompt({
       title: 'Definition',
       defaultValue: 'line',
       multiline: true,
       rows: 8,
     })
+    let multilineSettled = false
+    void multiline.then(
+      () => {
+        multilineSettled = true
+      },
+      () => {
+        multilineSettled = true
+      },
+    )
     await settleFocus()
     const area = document.querySelector('.prks-modal-prompt__input')
     expect(area).toBeInstanceOf(HTMLTextAreaElement)
@@ -192,9 +200,9 @@ describe('Vue modal host', () => {
     expect((area as HTMLTextAreaElement).rows).toBe(8)
     area?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     await nextTick()
+    await Promise.resolve()
     expect(host().isConfirmOpen()).toBe(true)
-    submitted = true
-    expect(submitted).toBe(true)
+    expect(multilineSettled).toBe(false)
     document.getElementById('prks-modal-confirm-cancel')?.click()
     await expect(multiline).resolves.toBeNull()
   })
@@ -345,9 +353,8 @@ describe('Vue modal host', () => {
     expect(reasons).toEqual([])
   })
 
-  it('traps Tab inside an open feature modal on a narrow layout', async () => {
+  it('traps Tab inside an open feature modal on every layout', async () => {
     install()
-    document.documentElement.classList.add('prks-force-mobile')
     document.body.insertAdjacentHTML(
       'beforeend',
       '<div id="person-modal" class="modal"><button type="button" id="person-first">First</button><button type="button" id="person-last">Last</button></div>',
@@ -357,7 +364,6 @@ describe('Vue modal host', () => {
     const event = pressTab(false)
     expect(event.defaultPrevented).toBe(true)
     expect(document.activeElement?.id).toBe('person-first')
-    document.documentElement.classList.remove('prks-force-mobile')
   })
 
   it('restores annotation Delete on the drawer that opened the confirm', async () => {
