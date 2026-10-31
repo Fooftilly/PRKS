@@ -2089,12 +2089,12 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
                 const rows = await (await fetch('/api/concepts')).json();
                 const culture = rows.find(r => r.name === 'Culture');
                 const philosophy = rows.find(r => r.name === 'Philosophy');
-                await fetch('/api/concepts/' + culture.id + '/aliases', {
+                await prksRequest('/api/concepts/' + culture.id + '/aliases', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ aliases: ['Kulturindustrie'] }),
                 });
-                await fetch('/api/concepts/' + philosophy.id + '/parents', {
+                await prksRequest('/api/concepts/' + philosophy.id + '/parents', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ parent_ids: [culture.id] }),
@@ -2152,13 +2152,13 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         # rather than search-empty.
         page.evaluate(
             """async (workId) => {
-                await fetch('/api/works/' + workId, {
+                await prksRequest('/api/works/' + workId, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text_content: 'No concept markup here.' }),
                 });
                 const rows = await (await fetch('/api/concepts')).json();
-                await Promise.all(rows.map(r => fetch('/api/concepts/' + r.id, { method: 'DELETE' })));
+                await Promise.all(rows.map(r => prksRequest('/api/concepts/' + r.id, { method: 'DELETE' })));
             }""",
             arg=work_a,
         )
@@ -2177,7 +2177,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         position_id = server.ids["position"]
         page.evaluate(
-            """(id) => fetch('/api/positions/' + id, {
+            """(id) => prksRequest('/api/positions/' + id, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ description: 'A distinctive research phrase about standardization.' }),
@@ -2206,7 +2206,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
     def test_argument_index_search_respects_kind_filter(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.evaluate(
-            """() => fetch('/api/arguments', {
+            """() => prksRequest('/api/arguments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: 'Marx on alienation', kind: 'stance' }),
@@ -2243,12 +2243,12 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
                 const rows = await (await fetch('/api/concepts')).json();
                 const culture = rows.find(r => r.name === 'Culture');
                 const philosophy = rows.find(r => r.name === 'Philosophy');
-                await fetch('/api/concepts/' + culture.id, {
+                await prksRequest('/api/concepts/' + culture.id, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ description: 'Adorno and Horkheimer coinage.' }),
                 });
-                await fetch('/api/concepts/' + philosophy.id + '/parents', {
+                await prksRequest('/api/concepts/' + philosophy.id + '/parents', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ parent_ids: [culture.id] }),
@@ -2296,7 +2296,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         position_id = server.ids["position"]
         argument_id = page.evaluate(
             """async (posId) => {
-                const res = await fetch('/api/arguments', {
+                const res = await prksRequest('/api/arguments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2328,7 +2328,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         position_id = server.ids["position"]
         populated_id = page.evaluate(
             """async (args) => {
-                const res = await fetch('/api/arguments', {
+                const res = await prksRequest('/api/arguments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2345,7 +2345,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         )
         empty_id = page.evaluate(
             """async () => {
-                const res = await fetch('/api/arguments', {
+                const res = await prksRequest('/api/arguments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: 'Bare argument', kind: 'argument' }),
@@ -2501,7 +2501,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
     def test_argument_filtered_search_empty_is_kind_aware(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.evaluate(
-            """() => fetch('/api/arguments', {
+            """() => prksRequest('/api/arguments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: 'A real stance', kind: 'stance' }),
@@ -4291,6 +4291,65 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _wait_local_save_warning_cleared(page)
 
 class RequestCoordinatorTests(_BrowserE2E):
+    def test_session_identity_and_library_epoch_on_mutations(self):
+        """The PostgreSQL session reaches the page and every mutation names its epoch.
+
+        The harness runs each server as ``PRKS_AUTH=loopback-owner`` on its own
+        disposable database (tests/e2e/postgres_identity.py). No Work has the
+        id the PATCH names, so the admitted request changes nothing.
+        """
+        server, page, collector = self._start_app()
+        library = server.library
+        sent = []
+
+        def on_request(req):
+            if req.method == "PATCH":
+                sent.append(req.headers.get("prks-library-epoch"))
+
+        page.on("request", on_request)
+        result = page.evaluate(
+            """async () => {
+                const session = await fetch('/api/session', { cache: 'no-store' });
+                const body = await session.json();
+                const patch = {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}',
+                };
+                const coordinated = await prksRequest('/api/works/W-E2E-MISSING', patch);
+                const bare = await fetch('/api/works/W-E2E-MISSING', patch);
+                const stale = await fetch('/api/works/W-E2E-MISSING', Object.assign({}, patch, {
+                    headers: { 'Content-Type': 'application/json', 'PRKS-Library-Epoch': '999' },
+                }));
+                return {
+                    status: session.status,
+                    header: session.headers.get('PRKS-Library-Epoch'),
+                    body: body,
+                    coordinated: coordinated.status,
+                    bare: [bare.status, (await bare.json()).code],
+                    stale: [stale.status, (await stale.json()).code],
+                };
+            }"""
+        )
+        self.assertEqual(result["status"], 200)
+        session = result["body"]
+        self.assertEqual(session["auth_mode"], "loopback-owner")
+        self.assertEqual(session["instance_id"], library.instance_id)
+        self.assertEqual(session["user"]["id"], library.user_id)
+        self.assertEqual(session["library"]["id"], library.library_id)
+        self.assertEqual(session["library"]["role"], "owner")
+        self.assertEqual(session["library"]["epoch"], 1)
+        self.assertEqual(result["header"], "1")
+        self.assertEqual(result["coordinated"], 200)
+        self.assertEqual(result["bare"], [400, "LIBRARY_EPOCH_REQUIRED"])
+        self.assertEqual(result["stale"], [409, "LIBRARY_EPOCH_CHANGED"])
+        self.assertEqual(sent, ["1", None, "999"])
+        # The two refusals were deliberate; exactly they are logged.
+        refused = [entry for entry in collector.console_errors if "/api/works/W-E2E-MISSING" in entry]
+        self.assertEqual(len(refused), 2, refused)
+        for entry in refused:
+            collector.console_errors.remove(entry)
+
     def test_identical_work_detail_gets_dedupe_to_one_network_request(self):
         server, page, _collector = self._start_app()
         work_id = server.ids["work_a"]
@@ -5034,9 +5093,13 @@ class WorkspaceTabsTests(_BrowserE2E):
             created_at=stamp, depends_on=[],
         )
         origin = server_url.rsplit("/api/works/", 1)[0]
+        # A second client of the same Library: like the app, it sends its
+        # origin and names the Library epoch.
+        epoch = page.evaluate("() => prksLibraryEpochHeaders()")
         foreign = page.request.post(
             origin + "/api/sync/operations", data=json.dumps(external),
-            headers={"Content-Type": "application/json"}, timeout=10000,
+            headers={"Content-Type": "application/json", "Origin": origin, **epoch},
+            timeout=10000,
         )
         self.assertEqual(foreign.status, 200, foreign.text())
         self.assertEqual(foreign.json().get("code"), "ACKNOWLEDGED")

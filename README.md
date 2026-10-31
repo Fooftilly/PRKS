@@ -220,6 +220,8 @@ Fast test suite (no Chromium):
 
 Full browser E2E gate (Playwright; Chromium installs into `.playwright-browsers/` if missing):
 
+Every E2E server runs the PostgreSQL-backed sign-in on its own disposable database, so E2E needs `PRKS_TEST_DATABASE_URL` set to the `postgres` maintenance database of a disposable PostgreSQL 18 server (the same variable `scripts/test-postgres` uses). Without it, each E2E server refuses to start.
+
 ```bash
 ./.venv/bin/python run_tests.py --e2e
 ```
