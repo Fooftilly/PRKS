@@ -35,6 +35,60 @@ change **does not itself reduce E2E run time**; measure a bounded manual
 profile before attributing CI slowdown to PostgreSQL or changing fixture
 isolation, retry policy or shard count.
 
+## Cold E2E process startup and shutdown attribution (#740)
+
+[Manual full E2E profile #41248967692](https://github.com/Fooftilly/PRKS/actions/runs/41248967692)
+passed all **819** tests on `master@f2dd432`. Across six source-Chromium
+shards, the per-test profile measured `server_start=822.61s` and
+`server_stop=448.69s`, versus `postgres_provision=80.10s` and nested
+`postgres_drop=19.01s`. Those timings identify *where* time is spent, not
+which of the stages can be safely removed. In particular, the 50ms HTTP
+readiness probe interval does not explain the child process's cold imports.
+
+On a **manual** full E2E run with `profile: true`, the child now emits
+fixed-name, duration-only diagnostic records to its **private disposable
+stderr file**, read after the successful readiness probe. The child-side
+timings include:
+
+- `startup_imports`: top-level `prks_app.py` imports from the first
+  module statement (does **not** include the interpreter's bootstrap).
+- `startup_dependency_gate`, `startup_config`, `startup_identity`,
+  `startup_jobs`: runtime checks and authentication/worker initialization.
+- `startup_storage_open`, `startup_restore`, `startup_bind`,
+  `startup_logging`, `startup_worker_bind`: storage lease, interrupted
+  restore recovery, database bind, log binding, embedded-worker root binding.
+- `startup_thumbnail_cleanup`, `startup_pdf_cleanup`,
+  `startup_text_reconcile`, `startup_research_reconcile`,
+  `startup_staging_cleanup`: server startup reconciliation and maintenance.
+
+The parent adds `server_stop_process` (wait for the test process to exit)
+and `server_stop_temp_cleanup` (temporary storage cleanup); the existing
+`postgres_drop` phase measures database teardown. These shutdown detail
+phases are **nested in** `server_stop`, just as all `startup_*` details
+are nested in `server_start`. Their phase sums must not be added to their
+parents. `server_http_ready` includes cold process startup, so it does
+**not** measure time spent sleeping between HTTP probes. The residual
+between `server_start` and the child's reported phases includes Python
+interpreter bootstrap, uninstrumented startup work, socket setup and
+readiness/probe latency.
+
+Records require **all three flags** in the child:
+`PRKS_E2E_STARTUP_PROFILE=1`, `PRKS_E2E=1`, and
+`PRKS_TESTING=1`. The harness sets the first flag only while a
+per-test E2E profile is active and ignores inherited values otherwise.
+It accepts only finite, whitelisted phase names and numeric values; no paths,
+record contents, DB settings, URLs or exception strings are sent as metrics.
+Failed stages retain their original failure semantics and are labeled
+`*_failed`. The ordinary server and E2E gates do not add clocks, new
+processes or storage. These are **diagnostics, not a speed optimization**.
+
+**Next experiment:** manually dispatch the existing `PRKS Full E2E Gate`
+on an exact merged SHA with `profile: true` and `shard_count: 6`; compare
+the six job summaries for cold imports, dependency gate, identity,
+storage/data binding, index reconciliation, process stop and residual
+readiness. Focus any subsequent A/B on a verified dominant component. Keep
+fresh test storage, PostgreSQL Library, subprocess and Chromium contexts.
+
 ## Manual full-gate shard profile summaries (#740)
 
 The existing `PRKS Full E2E Gate` accepts a **manual** `profile: true`
