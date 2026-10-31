@@ -1124,8 +1124,113 @@ function committedPrivateAckProofIsExactAndBounded() {
     delete globalThis.prksSync;
 }
 
+
+/* Real Work private-reminder session save-selection boundary. The former E2E
+ * invoked it through page.evaluate with a stubbed enqueue and fabricated ACK
+ * receipts, so it proved pure base-selection rules, not a browser boundary.
+ * Test the shipped ui.js implementation here, alongside the actual ACK-receipt
+ * creation and 64-record bound already covered above. */
+async function privateReminderHandoffRequiresExactAckProof() {
+    const ui = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    const marker = 'async function prksSaveWorkPrivateNoteForSession(';
+    const start = ui.indexOf(marker);
+    assert.notEqual(start, -1, 'shipped private-reminder session save boundary must exist');
+    assert.equal(ui.indexOf(marker, start + marker.length), -1,
+        'do not silently pick one of two private-reminder implementations');
+    const end = ui.indexOf('\n}', start);
+    assert.notEqual(end, -1, 'session save boundary must have a closing brace');
+    const shipped = ui.slice(start, end + 2);
+    const newSave = (observed, enqueue, receiptLookup) =>
+        new Function('prksEnsureWorkNotesBase', 'prksWorkNoteObserved',
+            'prksSaveWorkNoteDurably', 'prksAcknowledgedWorkPrivateNote',
+            shipped + '\nreturn prksSaveWorkPrivateNoteForSession;')(
+            async () => { throw Error('a known observed base should not be fetched'); },
+            observed, enqueue, receiptLookup);
+    const entityId = 'W-proof-scope';
+    const handoff = {value: 'V', revision: 4};
+    const good = {entityId, baseRevision: 4, revision: 5};
+    const old = {value: 'V', revision: 4};
+    const confirmed = {value: 'X', revision: 5};
+    const cases = [
+        {name: 'absent ACK', receipt: null, expected: old},
+        {name: 'foreign Work', receipt: {...good, entityId: 'W-foreign'}, expected: old},
+        {name: 'wrong base revision', receipt: {...good, baseRevision: 3}, expected: old},
+        {name: 'future base revision', receipt: {...good, baseRevision: 6}, expected: old},
+        {name: 'ACK revision rolls back', receipt: {...good, revision: 3}, expected: old},
+        {name: 'negative revision', receipt: {...good, revision: -1}, expected: old},
+        {name: 'fractional revision', receipt: {...good, revision: 5.5}, expected: old},
+        {name: 'string revision', receipt: {...good, revision: '5'}, expected: old},
+        {name: 'missing ACK revision', receipt: {entityId, baseRevision: 4}, expected: old},
+        {name: 'missing handoff text', receipt: good, handoffText: null, expected: old},
+        {name: 'matching ACK', receipt: good, expected: confirmed},
+        {name: 'matching later ACK', receipt: {...good, revision: 8},
+            expected: {value: 'X', revision: 8}},
+        {name: 'equal but valid ACK revision', receipt: {...good, revision: 4},
+            expected: {value: 'X', revision: 4}},
+        {name: 'wrong session owner', receipt: good,
+            entityOverride: 'W-foreign', expected: old, shouldLookup: false},
+        {name: 'no queued op ID', receipt: good,
+            opId: null, expected: old, shouldLookup: false},
+        {name: 'no session', receipt: good,
+            noSession: true, expected: old, shouldLookup: false},
+    ];
+    for (const test of cases) {
+        const writes = [], lookups = [];
+        const observed = (_ctx, kind) => {
+            assert.equal(kind, PRIVATE_KIND);
+            return old;
+        };
+        const save = newSave(
+            observed,
+            async (workId, kind, text, source, options) => {
+                writes.push({workId, kind, text, source, options});
+                return {code: 'saved', opId: null};
+            },
+            opId => { lookups.push(opId); return test.receipt; },
+        );
+        const session = test.noSession ? null : {
+            entityId: test.entityOverride || entityId,
+            handoffBase: {...handoff},
+            handoffText: Object.prototype.hasOwnProperty.call(test, 'handoffText')
+                ? test.handoffText : 'X',
+            settledOpId: Object.prototype.hasOwnProperty.call(test, 'opId')
+                ? test.opId : 'original-op',
+        };
+        const editor = {
+            ctx: {ui: {workPrivateNoteSession: session},
+                getEntity: () => null, getResource: () => null},
+        };
+        const result = await save(editor, entityId, 'Y');
+        assert.deepEqual(result.base, test.expected,
+            test.name + ': next save must pin the correct base');
+        assert.deepEqual(result.result, {code: 'saved', opId: null},
+            test.name + ': return durable enqueue result');
+        assert.deepEqual(writes, [{
+            workId: entityId, kind: PRIVATE_KIND, text: 'Y',
+            source: test.expected, options: null,
+        }], test.name + ': exact durable-save inputs');
+        assert.deepEqual(lookups, test.shouldLookup === false ? [] : ['original-op'],
+            test.name + ': only this session op may supply ACK proof');
+
+        // A revert to old V must carry special cancellation provenance only
+        // when no valid acknowledgement shows the previous X was committed.
+        // Otherwise the revert is a real edit from X, not a stale-base no-op.
+        writes.length = 0;
+        const reverted = await save(editor, entityId, 'V');
+        const acked = test.expected.value === 'X';
+        assert.deepEqual(reverted.base, test.expected, test.name + ': revert base');
+        assert.deepEqual(writes, [{
+            workId: entityId, kind: PRIVATE_KIND, text: 'V',
+            source: test.expected,
+            options: !acked && session && session.entityId === entityId
+                ? {cancelPendingText: session.handoffText} : null,
+        }], test.name + ': revert cancellation vs acknowledged edit');
+    }
+}
+
 async function main() {
     acknowledgedBase();
+    await privateReminderHandoffRequiresExactAckProof();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();
     await coalescingFor(RESEARCH, 'Research');
