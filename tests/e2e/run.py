@@ -2192,21 +2192,21 @@ def _main(argv=None) -> int:
 
     if args.ci_aggregate:
         # Single source of truth for e2e-gate.yml e2e-result (no Chromium).
-        def _env_true(name: str) -> bool:
-            return (os.environ.get(name) or "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
+        # The plan job emits canonical "true"/"false" outputs. Do not
+        # interpret missing or malformed outputs as false: that previously
+        # let the required check approve a skip when the matrix was missing.
+        def _env_bool(name: str) -> bool | None:
+            return {"true": True, "false": False}.get(os.environ.get(name))
 
+        plan_run = _env_bool("PLAN_RUN")
+        plan_pointer = _env_bool("PLAN_POINTER")
         ok, msg = aggregate_ci_gate_outcome(
-            plan_run=_env_true("PLAN_RUN"),
-            plan_mode=(os.environ.get("PLAN_MODE") or "").strip() or "skip",
-            plan_pointer=_env_true("PLAN_POINTER"),
-            plan_result=(os.environ.get("PLAN_RESULT") or "").strip(),
-            e2e_result=(os.environ.get("E2E_RESULT") or "").strip(),
-            pointer_result=(os.environ.get("POINTER_RESULT") or "").strip(),
+            plan_run=plan_run,
+            plan_mode=os.environ.get("PLAN_MODE") or "",
+            plan_pointer=plan_pointer,
+            plan_result=os.environ.get("PLAN_RESULT") or "",
+            e2e_result=os.environ.get("E2E_RESULT") or "",
+            pointer_result=os.environ.get("POINTER_RESULT") or "",
         )
         # Optional diagnostics for the Actions log (reason/features are data only).
         plan_reason = (os.environ.get("PLAN_REASON") or "").strip()
@@ -2216,7 +2216,7 @@ def _main(argv=None) -> int:
             "e2e-plan: result=%s run=%s mode=%s"
             % (
                 (os.environ.get("PLAN_RESULT") or "").strip(),
-                "true" if _env_true("PLAN_RUN") else "false",
+                "unknown" if plan_run is None else ("true" if plan_run else "false"),
                 (os.environ.get("PLAN_MODE") or "").strip(),
             )
         )
@@ -2225,7 +2225,7 @@ def _main(argv=None) -> int:
         print("test_count: %s" % (plan_count or "unknown"))
         print(
             "pointer_capture planned: %s (parallel with matrix)"
-            % ("true" if _env_true("PLAN_POINTER") else "false")
+            % ("unknown" if plan_pointer is None else ("true" if plan_pointer else "false"))
         )
         if plan_reason:
             print("reason: %s" % plan_reason)

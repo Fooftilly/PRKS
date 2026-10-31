@@ -116,6 +116,12 @@ jobs:
               raise SystemExit("malformed ci-plan run/pointer_capture must be booleans")
           if mode not in ("skip", "affected", "full"):
               raise SystemExit("malformed ci-plan mode: %r" % mode)
+          if (mode == "skip") != (not plan["run"]):
+              raise SystemExit("malformed ci-plan: skip and run disagree")
+          if mode == "full" and not plan["pointer_capture"]:
+              raise SystemExit("malformed ci-plan: full mode requires pointer capture")
+          if mode == "skip" and plan["pointer_capture"]:
+              raise SystemExit("malformed ci-plan: skip mode forbids pointer capture")
           if mode == "affected":
               features = plan.get("features") or []
               if not features:
@@ -127,7 +133,9 @@ jobs:
                   )
           matrix = plan.get("matrix") or {}
           include = matrix.get("include") or []
-          if plan.get("run") and mode != "skip" and not include:
+          if mode == "skip" and include:
+              raise SystemExit("skipped plan must not schedule matrix shards")
+          if plan["run"] and not include:
               raise SystemExit("runnable plan missing matrix.include (fail closed)")
           run = "true" if plan.get("run") else "false"
           pointer = "true" if plan.get("pointer_capture") else "false"
