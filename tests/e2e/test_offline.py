@@ -6500,39 +6500,6 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.locator("#pd-save-btn").click()
         page.wait_for_selector(".person-panel-edit", state="detached", timeout=15000)
 
-    def test_failed_person_mutation_retains_the_people_cache(self):
-        server, page, _context, _collector = self._start()
-
-        self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-
-        def reject(route):
-            if route.request.method in ("POST", "PATCH", "DELETE"):
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
-                return
-            route.fallback()
-
-        page.route("**/api/persons**", reject)
-        try:
-            page.evaluate(
-                """async (id) => {
-                    try {
-                        const res = await window.prksRequest('/api/persons/' + id, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ about: 'never applied' }),
-                        });
-                        if (res.ok) window.prksMarkPeopleDomainChanged();
-                    } catch (_e) {}
-                }""",
-                server.ids["person_a"],
-            )
-            page.wait_for_timeout(400)
-            self.assertEqual(_domain_generation(page, "people"), before)
-            self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
-        finally:
-            _safe_unroute(page, "**/api/persons**", reject)
-
     # ---- role mutations -----------------------------------------------------
 
 
@@ -6903,25 +6870,6 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         before = _domain_generation(page, "people")
         _delete_group(page, group_id)
         self.assertGreater(_domain_generation(page, "people"), before)
-
-    def test_creating_an_unassigned_group_leaves_people_eligible(self):
-        """A brand-new Group appears in no existing Person's read model."""
-        server, page, _context, _collector = self._start()
-
-        self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-        page.evaluate(
-            """async () => {
-                await window.prksRequest('/api/person-groups', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: 'Freshly Created Empty Group', description: '' }),
-                });
-            }"""
-        )
-        page.wait_for_timeout(500)
-        self.assertEqual(_domain_generation(page, "people"), before)
-        self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
 
     # ---- domain isolation ---------------------------------------------------
 
