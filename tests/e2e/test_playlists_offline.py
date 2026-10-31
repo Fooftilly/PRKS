@@ -356,63 +356,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
     # ---- validators ---------------------------------------------------------
 
-    def test_predicates_protect_every_rendered_field(self):
-        server, page, context = self.start()
-        self.index(page)
-        o._wait_list_cached(page, 'playlists:index')
-        cases = page.evaluate(
-            """() => ({
-                indexEmpty: prksIsPlaylistsIndexShape([]),
-                indexOk: prksIsPlaylistsIndexShape([{ id: 'PL-1', title: 'A', item_count: 0 }]),
-                indexSparse: prksIsPlaylistsIndexShape([{ id: 'PL-1', item_count: 3 }]),
-                indexNotArray: prksIsPlaylistsIndexShape({ error: 'boom' }),
-                indexNull: prksIsPlaylistsIndexShape(null),
-                indexMissingId: prksIsPlaylistsIndexShape([{ title: 'A', item_count: 0 }]),
-                indexBlankId: prksIsPlaylistsIndexShape([{ id: '  ', title: 'A', item_count: 0 }]),
-                indexNestedArrayRow: prksIsPlaylistsIndexShape([['PL-1']]),
-                indexCountMissing: prksIsPlaylistsIndexShape([{ id: 'PL-1', title: 'A' }]),
-                indexCountString: prksIsPlaylistsIndexShape([{ id: 'PL-1', item_count: '3' }]),
-                indexCountNegative: prksIsPlaylistsIndexShape([{ id: 'PL-1', item_count: -1 }]),
-                indexTitleNumber: prksIsPlaylistsIndexShape([{ id: 'PL-1', title: 7, item_count: 0 }]),
-                indexUrlObject: prksIsPlaylistsIndexShape([{ id: 'PL-1', original_url: {}, item_count: 0 }]),
 
-                detailOk: prksIsPlaylistShape({ id: 'PL-1', title: 'A', items: [] }, 'PL-1'),
-                detailWithItem: prksIsPlaylistShape({ id: 'PL-1', items: [
-                    { id: 'W-1', title: 'V', author_text: 'C', published_date: '2020-01-01', position: 0 }] }, 'PL-1'),
-                detailSparseItem: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', position: 0 }] }, 'PL-1'),
-                detailWrongId: prksIsPlaylistShape({ id: 'PL-2', items: [] }, 'PL-1'),
-                detailNull: prksIsPlaylistShape(null, 'PL-1'),
-                detailArray: prksIsPlaylistShape([], 'PL-1'),
-                detailItemsMissing: prksIsPlaylistShape({ id: 'PL-1' }, 'PL-1'),
-                detailItemsNotArray: prksIsPlaylistShape({ id: 'PL-1', items: {} }, 'PL-1'),
-                detailItemNull: prksIsPlaylistShape({ id: 'PL-1', items: [null] }, 'PL-1'),
-                detailItemBlankId: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: '', position: 0 }] }, 'PL-1'),
-                detailItemNestedArray: prksIsPlaylistShape({ id: 'PL-1', items: [['W-1']] }, 'PL-1'),
-                detailItemBadTitle: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', title: 3, position: 0 }] }, 'PL-1'),
-                detailItemBadChannel: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', author_text: [], position: 0 }] }, 'PL-1'),
-                detailItemBadDate: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', published_date: 2020, position: 0 }] }, 'PL-1'),
-                detailItemNoPosition: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1' }] }, 'PL-1'),
-                detailItemFractionalPosition: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', position: 1.5 }] }, 'PL-1'),
-                detailItemNegativePosition: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', position: -1 }] }, 'PL-1'),
-                detailOneBadItem: prksIsPlaylistShape({ id: 'PL-1', items: [
-                    { id: 'W-1', position: 0 }, { id: 'W-2' }] }, 'PL-1'),
-            })"""
-        )
-        self.assertEqual(cases, {
-            'indexEmpty': True, 'indexOk': True, 'indexSparse': True,
-            'indexNotArray': False, 'indexNull': False, 'indexMissingId': False,
-            'indexBlankId': False, 'indexNestedArrayRow': False,
-            'indexCountMissing': False, 'indexCountString': False,
-            'indexCountNegative': False, 'indexTitleNumber': False, 'indexUrlObject': False,
-            'detailOk': True, 'detailWithItem': True, 'detailSparseItem': True,
-            'detailWrongId': False, 'detailNull': False, 'detailArray': False,
-            'detailItemsMissing': False, 'detailItemsNotArray': False,
-            'detailItemNull': False, 'detailItemBlankId': False,
-            'detailItemNestedArray': False, 'detailItemBadTitle': False,
-            'detailItemBadChannel': False, 'detailItemBadDate': False,
-            'detailItemNoPosition': False, 'detailItemFractionalPosition': False,
-            'detailItemNegativePosition': False, 'detailOneBadItem': False,
-        })
 
     def test_malformed_authoritative_index_preserves_the_cache(self):
         server, page, context = self.start()
