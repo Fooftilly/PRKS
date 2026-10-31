@@ -5077,6 +5077,7 @@ class PRKSDatabase:
             r["aliases"] = list(amap.get(r["id"], []))
 
     def add_tag(self, name: str, color: str = "#6d6cf7") -> Dict[str, Any]:
+        color = tag_sync.normalized_tag_color(color, blank_defaults=True)
         raw = (name or "").strip()
         if not raw:
             raise ValueError("tag name is empty")
