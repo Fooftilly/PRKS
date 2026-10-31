@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "operation": "check",
+  "operation": "apply",
   "items": [
     {
       "number": 509,
@@ -14,7 +14,7 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Accepted independent keyboard-accessibility defect reverified in current Work/Folder tag picker source; native blockers empty, no open PR modifies either picker implementation; Cursor owns this scoped frontend fix with keyboard E2E.",
+      "reason": "Accepted and reverified Work/Folder tag picker keyboard defect; no native blockers; inspected open PR changed paths and found no direct picker overlap. Assign to Cursor for accessible keyboard interaction and E2E regression coverage.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
@@ -30,7 +30,7 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Accepted independent Publisher draft-loss race reverified in current Vue route; native blockers empty and no open PR touches Publisher files; Cursor owns guarded async draft/session regression fix.",
+      "reason": "Accepted and reverified Publisher draft-loss on late success; no native blockers; inspected open PR changed paths and found no Publisher overlap. Assign to Cursor for session-aware draft preservation and deferred-response tests.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
