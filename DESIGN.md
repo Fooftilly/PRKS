@@ -859,7 +859,7 @@ Application operational states:
 Only implement operational states that exist today. Offline connectivity uses
 `offline` and `stale` for the disposable read cache. Durable local-first edits
 use `queued` / `syncing` / `conflict` on editors and in Settings → Diagnostics
-(`prks-local-v1` outbox). Do not invent a parallel visual system for sync UI.
+(`prks-local-v2:<scope>` outbox). Do not invent a parallel visual system for sync UI.
 
 Rules:
 

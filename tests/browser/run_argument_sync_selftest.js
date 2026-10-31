@@ -11,7 +11,7 @@ require("../../frontend/js/argument-state.js");
 
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
-const newStore = () => createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+const newStore = () => createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 20; i += 1) await tick(); }
 const operations = store => store.listOperations();

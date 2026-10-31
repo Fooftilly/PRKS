@@ -106,7 +106,7 @@ function handlerContract() {
 }
 
 async function coalescingFor(operation, kindLabel) {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
     const save = text => store.saveWorkNote('W-1', operation, text, observed('A', 0));
     const rowsOf = async () => noteRows(await store.listOperations(), operation, 'W-1');
@@ -159,7 +159,7 @@ async function coalescingFor(operation, kindLabel) {
 }
 
 async function scopesDoNotBlockEachOther() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     await store.saveWorkNote('W-1', RESEARCH, 'R-B', observed('A', 0));
     const research = (await store.listOperations()).find(r => r.operation === RESEARCH);
     await store.claimOperation(research.op_id);
@@ -177,7 +177,7 @@ async function scopesDoNotBlockEachOther() {
 }
 
 async function byteLimits() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const researchLimit = globalThis.PRKS_LOCAL_WORK_RESEARCH_NOTE_BYTES;
     const privateLimit = globalThis.PRKS_LOCAL_WORK_PRIVATE_NOTE_BYTES;
     assert.equal(researchLimit, 32 * 1024 * 1024);
@@ -223,7 +223,7 @@ async function mutationTestAtoBtoA() {
     fs.writeFileSync(tmp, mutated, { mode: 0o600 });
     try {
         const { createPrksLocalStore: createMutated } = require(tmp);
-        const store = createMutated({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createMutated({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         await store.saveWorkNote('W-1', RESEARCH, 'B', observed('A', 0));
         await store.saveWorkNote('W-1', RESEARCH, 'A', observed('A', 0));
         const rows = noteRows(await store.listOperations(), RESEARCH, 'W-1');
@@ -261,7 +261,7 @@ async function durableSaveThroughObservedBaseCancels() {
     /* Mirrors prksEnqueueWorkResearchNotesSave: editor text + prksWorkNoteObserved
      * → prksSaveWorkNoteDurably. Store-only coalescing is covered above; this
      * proves the acknowledged-base selection the editor path relies on. */
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store, changed() {} };
     const resources = {
         workNotesObserved: {
@@ -302,7 +302,7 @@ async function durableSaveThroughObservedBaseCancels() {
 
     /* Failure mode Codex called out: feeding the effective body as observed
      * makes editing back to A look like a new change. */
-    const poison = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const poison = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     await poison.saveWorkNote('W-1', RESEARCH, 'B', observed('A', 0));
     await poison.saveWorkNote('W-1', RESEARCH, 'A', observed('B', 0));
     const poisoned = noteRows(await poison.listOperations(), RESEARCH, 'W-1');
@@ -355,7 +355,7 @@ async function enqueuePathAtoBtoACancels() {
     if (typeof globalThis.prksResetResearchDraftsForTest === 'function') {
         globalThis.prksResetResearchDraftsForTest();
     }
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store, changed() {} };
 
     let editorText = 'A';
@@ -429,7 +429,7 @@ const STILL_SYNCING = 'Still syncing — wait or resolve the conflict in Diagnos
 async function busyNoteHarness(tabId, options) {
     ensureWorksEnqueueLoaded();
     globalThis.prksResetResearchDraftsForTest();
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const listeners = new Set();
     let saveCalls = 0;
     const realSave = store.saveWorkNote;
@@ -889,7 +889,7 @@ async function busyRetryIsOwnerScoped() {
 }
 
 async function reconciliation() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     await cache.putEntity('work', 'W-1', {
         id: 'W-1', title: 'Paper', text_content: 'A', private_notes: 'P',
     });
@@ -970,7 +970,7 @@ async function reconciliation() {
      * changed=false. Only the second must fence, because this device's
      * derived caches may still be from the older body it observed. */
     async function researchAckFence(workId, baseRevision, serverRevision) {
-        const cacheN = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+        const cacheN = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
         await cacheN.putEntity('work', workId, { id: workId, text_content: 'Same' });
         await cacheN.putEntity('work-notes-state', workId, {
             work_id: workId, research_note_revision: serverRevision, private_note_revision: 0,
@@ -1033,7 +1033,7 @@ async function reconciliation() {
 
 
 async function guardedCarriedReminderCancellation() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const base = observed('V', 4);
     const rows = async () => noteRows(await store.listOperations(), PRIVATE, 'W-1')
         .filter(row => row.status !== 'acknowledged');

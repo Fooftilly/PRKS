@@ -67,7 +67,7 @@ let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 16; i++) await tick(); }
-const newStore = () => createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+const newStore = () => createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
 
 const fieldBase = (revision, value) => ({ description: { value: value || "", revision: revision || 0 } });
 const identityBase = (name, aliases, revision) =>
@@ -484,7 +484,7 @@ async function anEditorWithNoKnownBaseDoesNotOpen() {
  * the cached base would pair the new revision with the old text (#568). */
 async function aFailedTextWriteDoesNotPublishTheRevision() {
     const id = "C-" + "4".repeat(32);
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     const state = globalThis.prksNewConceptState(id, { name: "Systems" });
     state.fields.description = { value: "Old", revision: 2 };
     await cache.putEntity("concept", id, { id: id, name: "Systems", description: "Old" });

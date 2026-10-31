@@ -338,7 +338,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         }), 3.0)
 
 
-def _fake_library(_storage_root):
+def _fake_library(_storage_root, **_kwargs):
     """Stands in for the disposable PostgreSQL Library these timing tests never reach."""
     return mock.Mock(server_env=mock.Mock(return_value={}))
 

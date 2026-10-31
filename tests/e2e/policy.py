@@ -347,6 +347,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_offline.OfflineFoundationTests",
             "tests.e2e.test_local_store_durability",
+            "tests.e2e.test_browser_scope",
             "tests.e2e.test_editor_recovery_store",
         ),
     },
@@ -403,6 +404,7 @@ AFFECTED_RULES = (
             "frontend/js/api.js",
             "frontend/js/ui.js",
             "frontend/js/request-coordinator.js",
+            "frontend/js/browser-scope.js",
             "frontend/js/tab-context.js",
             "frontend/js/command-palette.js",
             "frontend/index.html",

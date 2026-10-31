@@ -22,7 +22,7 @@ let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 16; i++) await tick(); }
-const newStore = () => createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+const newStore = () => createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
 
 function baseAt(revisions, values) {
     const base = {};

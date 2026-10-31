@@ -125,7 +125,7 @@ def render_assets(root: Path) -> tuple[str, dict[str, str], str]:
     groups = _classic_groups(original)
     if counts != {group: len(paths) for group, paths in groups.items()}:
         raise ValueError("benchmark candidate and source inventory disagree")
-    if counts != {"head": 5, "body": 79}:
+    if counts != {"head": 5, "body": 80}:
         raise ValueError(f"classic inventory has changed: {counts}; review before packaging")
     html = candidate.replace(HEAD_URL, HEAD_BUNDLE).replace(BODY_URL, BODY_BUNDLE)
     if HEAD_URL in html or BODY_URL in html:

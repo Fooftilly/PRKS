@@ -40,7 +40,7 @@ function openRuntime(store, request, reconcile) {
 
 /* ---- the durable event: one effective never-sent open per Work ---- */
 async function recording() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const first = await store.recordWorkOpened('W-1', '2026-09-11T10:00:00.000Z', null);
     const second = await store.recordWorkOpened('W-1', '2026-09-11T10:05:00.000Z', null);
     const third = await store.recordWorkOpened('W-1', '2026-09-11T10:10:00.000Z', null);
@@ -88,7 +88,7 @@ async function recording() {
 
 /* ---- the optimistic Recent overlay ---- */
 async function overlay() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const base = [row('W-A', '2026-09-11 12:00:00.000'), row('W-B', '2026-09-11 11:00:00.000')];
 
     assert.deepEqual(globalThis.prksEffectiveRecent(base, []).map(r => r.id), ['W-A', 'W-B']);
@@ -137,10 +137,10 @@ async function overlay() {
 /* ---- reload durability of the overlay ---- */
 async function reload() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     const base = [row('W-A', '2026-09-11 12:00:00.000')];
     await store.recordWorkOpened('W-A', '2026-09-11T18:00:00.000Z', null);
-    const afterReload = createPrksLocalStore({ indexedDB: factory, uuid });
+    const afterReload = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     const effective = globalThis.prksEffectiveRecent(base, await afterReload.listOperations());
     assert.equal(effective[0].last_opened_at, '2026-09-11 18:00:00.000',
         'the overlay is reconstructed from prks-local-v1, not from tab memory');
@@ -149,8 +149,8 @@ async function reload() {
 /* ---- acknowledgement: reconcile, then retire ---- */
 async function acknowledgement() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putList('recent:index', [row('W-A', '2026-09-11 12:00:00.000'),
         row('W-B', '2026-09-11 11:00:00.000')], '');
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
@@ -184,7 +184,7 @@ async function acknowledgement() {
 /* ---- a GET that began before the ACK cannot publish over it ---- */
 async function staleRecentRead() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putList('recent:index', [row('W-A', '2026-09-11 12:00:00.000')], '');
     let release = null;
     const inFlight = new Promise(resolve => { release = resolve; });
@@ -207,7 +207,7 @@ async function staleRecentRead() {
 /* ---- terminal outcomes have no conflict UI ---- */
 async function terminal() {
     for (const [code, status] of [['ENTITY_NOT_FOUND', 404], ['INVALID_ENVELOPE', 400], ['OP_ID_REUSE', 409]]) {
-        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const op = await store.recordWorkOpened('W-GONE', '2026-09-11T10:00:00.000Z', null);
         let calls = 0;
         const runtime = openRuntime(store, async () => {
@@ -225,7 +225,7 @@ async function terminal() {
     }
 
     // Transport faults are still ordinary retryable failures.
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const op = await store.recordWorkOpened('W-1', '2026-09-11T10:00:00.000Z', null);
     const runtime = openRuntime(store, async () => { throw new TypeError('Failed to fetch'); }, async () => true);
     await runtime.wake(); await settle(); runtime.stop();
@@ -240,7 +240,7 @@ async function terminal() {
      * WorkOpenSyncTests.test_replay_is_exact_after_the_work_is_reopened proves
      * that replaying that op_id is idempotent at the ledger boundary. */
     {
-        const retryStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const retryStore = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const retryOp = await retryStore.recordWorkOpened(
             'W-LOST', '2026-09-11T10:00:00.000Z', null);
         const sent = [];
@@ -311,7 +311,7 @@ async function isolation() {
         { conflict: { code: 'TAG_DELETED' } });
 
     // An unregistered family is never claimed or sent.
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const opened = await store.recordWorkOpened('W-1', '2026-09-11T10:00:00.000Z', null);
     let sent = 0;
     const runtime = globalThis.createPrksSyncRuntime({ store, online: () => true,

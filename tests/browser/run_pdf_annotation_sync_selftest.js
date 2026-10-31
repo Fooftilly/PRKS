@@ -68,7 +68,7 @@ function effectiveOverlay() {
 
 async function coalesceCreateSetDelete() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid: uuid, now: () => Date.now() });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: uuid, now: () => Date.now() });
     await store.getOrCreateDeviceId();
     const observedAbsent = { present: false, revision: 0, annotation: null, annotation_id: 'ann-x' };
     const first = highlight('ann-x', 'one');
@@ -92,7 +92,7 @@ async function coalesceCreateSetDelete() {
 
 async function coalesceSetCancelAndSentSuccessor() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid: uuid, now: () => Date.now() });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: uuid, now: () => Date.now() });
     await store.getOrCreateDeviceId();
     const body = highlight('ann-y', 'base');
     const observed = { present: true, revision: 2, annotation: body, annotation_id: 'ann-y' };
@@ -197,7 +197,7 @@ function handlerShapes() {
  */
 async function conflictTerminalSettlesThroughStore() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid: uuid, now: () => Date.now() });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: uuid, now: () => Date.now() });
     await store.getOrCreateDeviceId();
     const body = highlight('ann-settle', 'base');
     const edited = highlight('ann-settle', 'mine');

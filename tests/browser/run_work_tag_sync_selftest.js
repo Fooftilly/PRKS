@@ -17,8 +17,8 @@ const tag = { id: 'T-A', name: 'Existing', color: '#123456', aliases: [] };
 const ack = { code: 'ACKNOWLEDGED', work_id: 'W-A', tag_id: tag.id, present: true, server_revision: 1, tag };
 async function main() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const opts = { work_id: 'W-A', assigned: [], known_absent: {} };
     await cache.putEntity('work', 'W-A', { id: 'W-A', title: 'Complete base', tags: [] });
     await cache.putEntity('work-tag-options', 'W-A', opts);
@@ -119,10 +119,10 @@ function syncRuntime(store, request, reconcile) {
  * then hit `scope_busy` over a request that never left the machine. */
 async function connectivity() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     let reachable = false;
     const offline = createPrksOfflineRuntime({
-        store: createPrksOfflineStore({ indexedDB: factory }), window: null,
+        store: createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory }), window: null,
         setTimeout: () => null, clearTimeout: () => {},
         prksRequest: async () => {
             if (!reachable) throw new Error('unreachable');
@@ -198,7 +198,7 @@ async function transport() {
         ['ACK with a non-integer revision', async () => ({ ok: true, status: 200, json: async () => ({ ...ack, work_id: 'W-T', server_revision: 'one' }) })],
     ];
     for (const [label, handler] of failures) {
-        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const op = await store.coalesceWorkTag('W-T', tag.id, true, false, 0, tag);
         let calls = 0;
         const runtime = syncRuntime(store, async (path, init) => {
@@ -236,7 +236,7 @@ async function transport() {
      * WorkTagSyncTests separately proves that replaying that op_id is
      * idempotent at the ledger/domain boundary. */
     {
-        const retryStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const retryStore = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const retryOp = await retryStore.coalesceWorkTag('W-LOST', tag.id, true, false, 0, tag);
         const sent = [];
         let loseFirstResponse = true;
@@ -273,7 +273,7 @@ async function transport() {
     /* Recognized terminal protocol errors must not enter a transport retry
      * loop; they persist a bounded structured result for the user instead. */
     for (const code of ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION', 'UNSUPPORTED_DEPENDENCIES']) {
-        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const op = await store.coalesceWorkTag('W-T', tag.id, true, false, 0, tag);
         let calls = 0;
         const runtime = syncRuntime(store,
@@ -287,7 +287,7 @@ async function transport() {
     }
 
     /* FUTURE_REVISION is a domain outcome, not a transport fault. */
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const op = await store.coalesceWorkTag('W-T', tag.id, true, false, 0, tag);
     const runtime = syncRuntime(store, async () => ({ ok: false, status: 400, json: async () => ({
         work_id: 'W-T', tag_id: tag.id, code: 'FUTURE_REVISION',
@@ -305,8 +305,8 @@ async function transport() {
  * anywhere earlier leaves a replayable row rather than a lost edit. */
 async function lifecycle() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-L', { id: 'W-L', title: 'Lifecycle', tags: [] });
     await cache.putEntity('work-tag-options', 'W-L', { work_id: 'W-L', assigned: [], known_absent: {} });
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
@@ -377,7 +377,7 @@ async function lifecycle() {
  * one race covers the Work detail and the tag-options projection together. */
 async function staleReads() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = { work_id: 'W-S', assigned: [{ tag_id: tag.id, relation_revision: 5 }], known_absent: {} };
     await cache.putEntity('work', 'W-S', { id: 'W-S', title: 'Race', tags: [] });
     await cache.putEntity('work-tag-options', 'W-S', { work_id: 'W-S', assigned: [], known_absent: {} });
@@ -418,8 +418,8 @@ async function staleReads() {
  * Web Locks available. Exactly one may claim an operation. */
 async function claimRace() {
     const factory = createFakeIndexedDBFactory();
-    const a = createPrksLocalStore({ indexedDB: factory, uuid });
-    const b = createPrksLocalStore({ indexedDB: factory, uuid });
+    const a = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const b = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     const op = await a.coalesceWorkTag('W-R', tag.id, true, false, 0, tag);
     const claims = await Promise.all([a.claimOperation(op.op_id), b.claimOperation(op.op_id)]);
     assert.equal(claims.filter(Boolean).length, 1, 'exactly one claimant wins');

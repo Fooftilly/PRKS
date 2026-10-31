@@ -402,7 +402,7 @@ def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
     wait_for_async(page,
         """(path) => {
             if (typeof caches === 'undefined') return false;
-            return caches.open('prks-pdf-v1').then(c => c.match(path)).then(m => !!m);
+            return prksOfflinePdfCacheName().then(n => n ? caches.open(n) : null).then(c => c ? c.match(path) : null).then(m => !!m);
         }""",
         arg=pdf_path,
         timeout=timeout,
@@ -410,11 +410,11 @@ def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
 
 
 def _pdf_cache_fingerprint(page, pdf_path):
-    """Length and FNV-1a of the prks-pdf-v1 whole-file entry, or None."""
+    """Length and FNV-1a of the scoped PDF cache's whole-file entry, or None."""
     return page.evaluate(
         """async (path) => {
             if (typeof caches === 'undefined' || !path) return null;
-            const cache = await caches.open('prks-pdf-v1');
+            const cache = await caches.open(await prksOfflinePdfCacheName());
             const match = await cache.match(path);
             if (!match) return null;
             const bytes = new Uint8Array(await match.arrayBuffer());
@@ -435,7 +435,7 @@ def _wait_pdf_cache_replaced(page, pdf_path, previous, timeout=30000):
         page,
         """async (arg) => {
             if (typeof caches === 'undefined') return false;
-            const cache = await caches.open('prks-pdf-v1');
+            const cache = await caches.open(await prksOfflinePdfCacheName());
             const match = await cache.match(arg.path);
             if (!match) return false;
             const bytes = new Uint8Array(await match.arrayBuffer());
@@ -453,7 +453,7 @@ def _wait_pdf_cache_replaced(page, pdf_path, previous, timeout=30000):
             "hash": previous["hash"],
         },
         timeout=timeout,
-        message="in-place PDF materialization did not replace prks-pdf-v1",
+        message="in-place PDF materialization did not replace the scoped PDF cache",
     )
 
 
@@ -1356,7 +1356,7 @@ class OfflineFoundationTests(unittest.TestCase):
         )
 
     def test_inplace_pdf_materialization_refreshes_whole_file_cache(self):
-        """In-place annotation materialization replaces prks-pdf-v1.
+        """In-place annotation materialization replaces the scoped PDF cache entry.
 
         Opening a PDF primes the whole-file cache. A later exclusive POST /pdf
         keeps the same /api/pdfs/ path (no COW). Range loads never rewrite that
@@ -1405,7 +1405,7 @@ class OfflineFoundationTests(unittest.TestCase):
         # The PDF save drops the disposable Work snapshot. Re-read that JSON
         # while still online so an offline reload can mount the page. This
         # must not be a PDF GET: a whole-file network response would rewrite
-        # prks-pdf-v1 on its own and hide a missing cache seed.
+        # the scoped PDF cache on its own and hide a missing cache seed.
         warmed = page.evaluate(
             """async (id) => {
                 const result = await prksOfflineReadEntity(

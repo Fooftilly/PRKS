@@ -2,10 +2,10 @@
  * PRKS local store -- DURABLE user-owned local state, IndexedDB only.
  *
  * This is NOT the offline cache. `offline-store.js` holds downloaded server
- * data in `prks-offline-v1`, which is deliberately disposable: it may be
+ * data in `prks-offline-v2:<scope key>`, which is deliberately disposable: it may be
  * discarded when corrupt, and "Clear offline cache" empties it. Unsynchronized
  * user work cannot share that lifecycle, so it lives in a **separate database**
- * (`prks-local-v1`). The separation is physical, not a convention: even a bug
+ * (`prks-local-v2:<scope key>`). The separation is physical, not a convention: even a bug
  * in `offline-store.clearAll()` cannot reach another database.
  *
  * Scope:
@@ -24,7 +24,10 @@
  * a request's `onsuccess` -- a request can succeed and its transaction still
  * abort, rolling the row back.
  *
- * Schema ("prks-local-v1", version 1):
+ * One database per signed-in scope, `prks-local-v2:<scope key>`
+ * (browser-scope.js): an account's queue is never opened by another.
+ *
+ * Schema (version 1):
  *   operations -- keyPath "op_id"  immutable semantic envelope + mutable sync state
  *   metadata   -- keyPath "key"    durable local identity/bookkeeping (device_id, sequence)
  *
@@ -34,7 +37,6 @@
 (function (root) {
     'use strict';
 
-    const DB_NAME = 'prks-local-v1';
     const DB_VERSION = 1;
     const STORE_OPERATIONS = 'operations';
     const STORE_METADATA = 'metadata';
@@ -807,7 +809,10 @@
             : defaultIndexedDB();
         const now = options.now || defaultNow;
         const uuid = options.uuid || defaultUuid;
-        const dbName = options.dbName || DB_NAME;
+        // A name the caller gives (tests), or the signed-in scope's database
+        // (`prks-local-v2:<scope key>`, browser-scope.js). There is no
+        // unscoped default: without a scope the store opens nothing.
+        const scope = options.dbName ? null : (options.scope || root.prksBrowserScope || null);
         const dbVersion = options.dbVersion || DB_VERSION;
 
         let dbPromise = null;
@@ -815,6 +820,27 @@
         // deleting. IndexedDB blocks a delete on any open connection --
         // including this store's own.
         let openDbHandle = null;
+
+        function closeHandle() {
+            if (openDbHandle) {
+                try {
+                    openDbHandle.close();
+                } catch (_e) {
+                    /* ignore */
+                }
+                openDbHandle = null;
+            }
+            dbPromise = null;
+        }
+
+        // Another account signed in: this page's database closes for good.
+        if (scope && typeof scope.subscribe === 'function') scope.subscribe(closeHandle);
+
+        function resolveDbName() {
+            if (options.dbName) return Promise.resolve(options.dbName);
+            if (!scope || typeof scope.dbName !== 'function') return Promise.resolve(null);
+            return scope.dbName('local');
+        }
 
         function ensureStores(db) {
             if (!db.objectStoreNames.contains(STORE_OPERATIONS)) {
@@ -832,7 +858,11 @@
          */
         function openDb() {
             if (dbPromise) return dbPromise;
-            dbPromise = new Promise(function (resolve, reject) {
+            dbPromise = resolveDbName().then(function (dbName) { return new Promise(function (resolve, reject) {
+                if (!dbName) {
+                    reject(localStoreError('unavailable', 'Sign in to keep changes on this device.'));
+                    return;
+                }
                 if (!idbFactory) {
                     reject(localStoreError('unavailable', 'IndexedDB is unavailable.'));
                     return;
@@ -875,7 +905,7 @@
                 req.onblocked = function () {
                     reject(localStoreError('blocked', 'Local storage is blocked by another tab.'));
                 };
-            });
+            }); });
             // A failed open must not be cached forever: a later attempt (after
             // the blocking tab closes, or quota is freed) should retry.
             dbPromise.catch(function () {
@@ -4448,7 +4478,11 @@
          * explicit, separately-confirmed user action.
          */
         function resetDurableLocalState() {
-            return new Promise(function (resolve, reject) {
+            return resolveDbName().then(function (dbName) { return new Promise(function (resolve, reject) {
+                if (!dbName) {
+                    reject(localStoreError('unavailable', 'Sign in to reset this device\'s changes.'));
+                    return;
+                }
                 if (!idbFactory) {
                     reject(localStoreError('unavailable', 'IndexedDB is unavailable.'));
                     return;
@@ -4484,7 +4518,7 @@
                 req.onblocked = function () {
                     reject(localStoreError('blocked', 'Local state is in use by another tab.'));
                 };
-            });
+            }); });
         }
 
         return {
@@ -4546,7 +4580,6 @@
         createPrksLocalStore: createPrksLocalStore,
         prksNormalizeOperationEnvelope: normalizeOperationEnvelope,
         prksUnresolvedDependentClosure: unresolvedDependentClosure,
-        PRKS_LOCAL_DB_NAME: DB_NAME,
         PRKS_LOCAL_DB_VERSION: DB_VERSION,
         PRKS_LOCAL_OPERATION_TYPES: OPERATION_TYPES,
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,

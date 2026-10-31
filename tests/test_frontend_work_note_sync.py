@@ -128,7 +128,7 @@ const { createPrksLocalStore } = require(process.argv[2]);
 let n = 0;
 const uuid = () => '00000000-0000-4000-8000-' + (++n).toString(16).padStart(12, '0');
 (async () => {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = { value: 'A', revision: 0 };
     await store.saveWorkNote('W-1', 'SET_WORK_RESEARCH_NOTE', 'B', observed);
     await store.saveWorkNote('W-1', 'SET_WORK_RESEARCH_NOTE', 'A', observed);

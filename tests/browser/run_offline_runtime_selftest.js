@@ -1847,10 +1847,19 @@ async function run() {
             window: null,
             caches: fakeCaches,
             navigator: null,
+            scope: { dbName: async (kind) => (kind === 'pdf' ? 'prks-pdf-v2:S' : null) },
         });
         const ok = await runtime.clearCache();
         assert('clearCache resolves true', ok === true);
-        assertEq('clearCache removes the pdf cache by its documented name', deletedCacheName, mod.PRKS_OFFLINE_PDF_CACHE_NAME);
+        assertEq('clearCache removes the signed-in scope\'s pdf cache', deletedCacheName, 'prks-pdf-v2:S');
+        deletedCacheName = null;
+        const unscoped = mod.createPrksOfflineRuntime({
+            prksRequest: null, store: makeFakeStore(), setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout, window: null, caches: fakeCaches, navigator: null,
+            scope: { dbName: async () => null },
+        });
+        await unscoped.clearCache();
+        assertEq('without a scope no pdf cache is touched', deletedCacheName, null);
         assertEq('clearCache actually empties the store', store._entities.size, 0);
     }
 

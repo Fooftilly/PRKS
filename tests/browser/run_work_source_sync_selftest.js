@@ -181,7 +181,7 @@ function handlerContract() {
 
 /* ---- one active intent per Work ---- */
 async function coalescing() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
     const identity = url => globalThis.prksWorkSourceIdentity(
         globalThis.prksCanonicalWorkSource(url));
@@ -231,7 +231,7 @@ async function coalescing() {
     /* A history with more than one active row is AMBIGUOUS, not a choice.
      * `getAll()` order is not a decision, so a store written before coalescing
      * existed must refuse rather than resolve it differently per device. */
-    const legacy = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const legacy = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     for (const url of [WATCH('BBB'), WATCH('CCC')]) {
         await legacy.enqueueOperation({
             operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W-9',
@@ -251,7 +251,7 @@ async function coalescing() {
 
 /* ---- a source conflict the user can actually answer ---- */
 async function conflictResolution() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const identity = url => globalThis.prksWorkSourceIdentity(
         globalThis.prksCanonicalWorkSource(url));
     const enqueue = () => store.saveWorkSource('W-1',
@@ -329,7 +329,7 @@ async function conflictResolution() {
 
 /* ---- the exact payload shape gets the URL's own allowance ---- */
 async function payloadAllowance() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const limit = globalThis.PRKS_LOCAL_WORK_SOURCE_URL_BYTES;
     /* The server accepts a URL up to this many BYTES, so the durable store has
      * to accept the same one: a value savable online and impossible offline is
@@ -368,7 +368,7 @@ async function payloadAllowance() {
  * trailing convergent block below stages SHORT→WATCH through the sync handler.
  */
 async function reconciliation() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     /* A cached video row carries the identity AND the presentation the server
      * derives from it: the thumbnail of the video it is, and the date it was
      * accessed. Both are rewritten by a source change. */
@@ -451,7 +451,7 @@ async function reconciliation() {
      * sync handler (not a hand-built reconcileWorkSource call) so the ACK
      * path copies the stored WATCH spelling. Open-editor acceptAck spelling
      * remains a Chromium KEEP. */
-    const convergentCache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const convergentCache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     await convergentCache.putEntity('work', 'W-1', {
         id: 'W-1', title: 'Clip', source_kind: 'video', provider: 'youtube',
         provider_id: 'AAA', source_url: WATCH('AAA'),
@@ -487,7 +487,7 @@ async function reconciliation() {
 
 /* ---- a GET that began before the acknowledgement must lose ---- */
 async function staleRead() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     const stale = [{ id: 'W-1', provider_id: 'AAA', source_url: WATCH('AAA') }];
     await cache.putEntity('work', 'W-1', { id: 'W-1', provider_id: 'AAA' });
     await cache.putList('works-browse:index', JSON.parse(JSON.stringify(stale)), '');

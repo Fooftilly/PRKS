@@ -27,6 +27,9 @@ _ALLOWED_FETCH = (
     (_API, "fetch('/api/backups/stage',"),
     (_API, "fetch('/api/backups/restore',"),
     (os.path.join(_FRONTEND, "js", "ui.js"), "fetch(oembed, { method: 'GET' })"),
+    # The session read that decides which account's storage the page opens:
+    # never deduplicated or served from the burst cache (#629).
+    (os.path.join(_FRONTEND, "js", "browser-scope.js"), "return root.fetch(url, init);"),
 )
 
 

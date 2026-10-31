@@ -439,7 +439,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("runtime.viewerFilePath", mount_fn)
 
     def test_inplace_materialization_refreshes_whole_file_pdf_cache(self):
-        """Successful POST /pdf refreshes prks-pdf-v1 only on the canonical path.
+        """Successful POST /pdf refreshes the scoped PDF cache only on the canonical path.
 
         The success body always includes file_path. A path that differs from
         this tab retargets; an equal path is the only in-place cache write.
@@ -500,7 +500,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("export const PDF_CACHE_INSTALL_ACK_TIMEOUT_MS = 120000;", install_src)
         self.assertIn("throw new Error('PDF cache install unacknowledged')", install_src)
         self.assertIn(
-            "prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome)",
+            "prksPostPdfCacheInstall(controller, pathname, body, { cacheName }).then(prksPdfCacheInstallOutcome)",
             works_pdf,
         )
         self.assertIn("from '/js/pdf-cache-install.js'", works_pdf)
