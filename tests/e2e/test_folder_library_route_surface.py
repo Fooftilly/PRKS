@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import unittest
 
-from tests.e2e.fixtures import seed_graph_context_library
+from tests.e2e.fixtures import seed_folders_library, seed_graph_context_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
 
 
@@ -157,4 +157,63 @@ class FolderLibraryRouteSurfaceTests(unittest.TestCase):
         self.assertEqual(
             page.locator(".prks-tile--main [data-prks-folder-library-view]").count(),
             0,
+        )
+
+    def test_restored_filter_survives_folder_round_trip(self):
+        """#1034: a claimed session filter stays on the pane after leave/return, and tree icons hydrate."""
+        server = AppServer(seed_fn=seed_folders_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(
+            _BROWSER, server.origin, service_workers="allow"
+        )
+        self.addCleanup(context.close)
+        self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        page.evaluate(
+            "() => sessionStorage.setItem('prks-folder-library-filter', 'E2E Parent')"
+        )
+        page.reload()
+        page.wait_for_function(
+            """() => {
+                const input = document.querySelector('#prks-folder-library-search');
+                const host = document.querySelector('.prks-tile--main [data-prks-folder-tree-host]');
+                return !!(
+                    input && input.value === 'E2E Parent' &&
+                    host && host.querySelector('.prks-folder-tree__icon svg, .prks-folder-tree__toggle svg')
+                );
+            }""",
+            timeout=15000,
+        )
+        parent_id = server.ids["folder_parent"]
+        href = page.evaluate(
+            "id => '#/folders/' + encodeURIComponent(id)",
+            parent_id,
+        )
+        page.locator(
+            f'.prks-tile--main [data-prks-folder-tree-host] a[href="{href}"]'
+        ).click()
+        page.wait_for_function(
+            """() => {
+                const host = document.querySelector(
+                    '.prks-tile--main [data-prks-folder-detail-tree-host]'
+                );
+                return !!(
+                    host &&
+                    host.querySelector('.prks-folder-tree__row') &&
+                    host.querySelector('.prks-folder-tree__icon svg, .prks-folder-tree__toggle svg')
+                );
+            }""",
+            timeout=15000,
+        )
+        page.locator(".prks-tile--main .prks-folder-detail__tree-all").click()
+        page.wait_for_function(
+            """() => {
+                const input = document.querySelector('#prks-folder-library-search');
+                const host = document.querySelector('.prks-tile--main [data-prks-folder-tree-host]');
+                return !!(
+                    input && input.value === 'E2E Parent' &&
+                    host && host.querySelector('.prks-folder-tree__icon svg, .prks-folder-tree__toggle svg')
+                );
+            }""",
+            timeout=15000,
         )

@@ -1,13 +1,3 @@
-function prksFolderEsc(s) {
-    if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
-    if (s == null || s === '') return '';
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
 function prksFolderPathLabel(folderId, byId) {
     const parts = [];
     const guard = new Set();
@@ -41,286 +31,6 @@ function prksCollectFolderDescendantIds(folderId, allList) {
     }
     walk(folderId);
     return out;
-}
-
-function prksFolderCollapsedMap() {
-    if (!window.__prksFolderTreeCollapsed || typeof window.__prksFolderTreeCollapsed !== 'object') {
-        window.__prksFolderTreeCollapsed = {};
-    }
-    return window.__prksFolderTreeCollapsed;
-}
-
-function prksFolderNodeCollapsed(folderId) {
-    const m = prksFolderCollapsedMap();
-    return m[String(folderId)] !== false;
-}
-
-function prksSetFolderNodeCollapsed(folderId, collapsed) {
-    const m = prksFolderCollapsedMap();
-    m[String(folderId)] = !!collapsed;
-}
-
-function prksFolderLibraryTreeInnerHtml(list, filterQuery, options) {
-    const opts = options && typeof options === 'object' ? options : {};
-    if (!list || !list.length) {
-        return (
-            '<div class="prks-folder-tree__empty-state">' +
-            '<p class="prks-inline-message prks-folder-tree__empty">No folders yet.</p>' +
-            '<button type="button" class="prks-btn prks-btn--primary prks-folder-tree__create-btn" data-prks-create-folder-query="">New folder</button>' +
-            '</div>'
-        );
-    }
-    return `<div class="prks-folder-tree" role="tree">${renderFolderTreeRoots(list, {
-        filterQuery,
-        delegateToggle: !!opts.delegateToggle,
-    })}</div>`;
-}
-
-function prksRerenderFolderTreeOnly() {
-    const st = window.__prksFolderDashboardState;
-    if (!st || !st.container) return;
-    const host = st.container.querySelector('[data-prks-folder-tree-host]');
-    if (host) {
-        host.innerHTML = prksFolderLibraryTreeInnerHtml(st.folders, st.filterQuery);
-        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(host);
-    }
-    prksUpdateFolderLibraryExpandToggleBtn();
-}
-
-function prksFolderLibraryExpandToggleLabel(folders) {
-    return prksFolderTreeAllCollapsed(folders) ? 'Expand all' : 'Collapse all';
-}
-
-function prksFolderLibraryExpandToggleInnerHtml() {
-    const iconHtml = typeof prksIcon === 'function' ? prksIcon('chevronDown', { size: 'sm' }) : '▾';
-    return `<span class="ribbon-btn__icon">${iconHtml}</span>`;
-}
-
-function prksUpdateFolderLibraryExpandToggleBtn() {
-    const st = window.__prksFolderDashboardState;
-    if (!st || !st.container) return;
-    const btn = st.container.querySelector('#prks-folder-library-expand-toggle');
-    if (!btn) return;
-    const label = prksFolderLibraryExpandToggleLabel(st.folders);
-    const allCollapsed = prksFolderTreeAllCollapsed(st.folders);
-    if (!btn.querySelector('.ribbon-btn__icon')) {
-        btn.innerHTML = prksFolderLibraryExpandToggleInnerHtml();
-        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
-    }
-    btn.classList.toggle('is-collapse-all', !allCollapsed);
-    btn.setAttribute('aria-label', label);
-    btn.setAttribute('title', label);
-}
-
-function prksFolderTreeHosts() {
-    const hosts = [];
-    const seen = new Set();
-    function add(el) {
-        if (!el || seen.has(el)) return;
-        seen.add(el);
-        hosts.push(el);
-    }
-    const st = window.__prksFolderDashboardState;
-    if (st && st.container) add(st.container.querySelector('[data-prks-folder-tree-host]'));
-    document.querySelectorAll('[data-prks-folder-detail-tree-host]').forEach(add);
-    return hosts;
-}
-
-function prksFolderTreeIdCssEscape(folderId) {
-    const id = String(folderId || '');
-    return typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-function prksSyncFolderTreeBranchUi(host, folderId, collapsed) {
-    if (!host || folderId == null || folderId === '') return;
-    const idEsc = prksFolderTreeIdCssEscape(folderId);
-    const branch = host.querySelector(`.prks-folder-tree__branch[data-folder-id="${idEsc}"]`);
-    if (!branch) return;
-    branch.classList.toggle('is-collapsed', !!collapsed);
-    const row = host.querySelector(`.prks-folder-tree__row[data-folder-id="${idEsc}"]`);
-    if (!row) return;
-    const expanded = !collapsed;
-    row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    const toggle = row.querySelector('.prks-folder-tree__toggle');
-    if (toggle) {
-        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        toggle.setAttribute('title', collapsed ? 'Expand subfolders' : 'Collapse subfolders');
-    }
-}
-
-function prksSyncAllFolderTreeBranchesUi(host, folders) {
-    if (!host || !Array.isArray(folders)) return;
-    folders.forEach((f) => {
-        if (Number(f && f.child_count ? f.child_count : 0) > 0) {
-            prksSyncFolderTreeBranchUi(host, f.id, prksFolderNodeCollapsed(f.id));
-        }
-    });
-}
-
-function prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, folders) {
-    if (!treeHost || typeof treeHost.closest !== 'function') {
-        prksUpdateFolderLibraryExpandToggleBtn();
-        return;
-    }
-    const root = treeHost.closest('.prks-folder-library') || treeHost.closest('[data-prks-folder-library-view]');
-    const btn = root
-        ? root.querySelector('#prks-folder-library-expand-toggle')
-        : null;
-    if (!btn) {
-        prksUpdateFolderLibraryExpandToggleBtn();
-        return;
-    }
-    const list = Array.isArray(folders) ? folders : [];
-    const label = prksFolderLibraryExpandToggleLabel(list);
-    const allCollapsed = prksFolderTreeAllCollapsed(list);
-    if (!btn.querySelector('.ribbon-btn__icon')) {
-        btn.innerHTML = prksFolderLibraryExpandToggleInnerHtml();
-        if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
-    }
-    btn.classList.toggle('is-collapse-all', !allCollapsed);
-    btn.setAttribute('aria-label', label);
-    btn.setAttribute('title', label);
-}
-
-/** Host-scoped expand/collapse — does not touch another pane's tree. */
-function prksToggleFolderNodeInHost(treeHost, folderId, folders) {
-    const idRaw = String(folderId || '').trim();
-    const id = idRaw ? decodeURIComponent(idRaw) : '';
-    if (!id || !treeHost) return;
-    prksSetFolderNodeCollapsed(id, !prksFolderNodeCollapsed(id));
-    const collapsed = prksFolderNodeCollapsed(id);
-    prksSyncFolderTreeBranchUi(treeHost, id, collapsed);
-    const st = window.__prksFolderDashboardState;
-    const list = Array.isArray(folders)
-        ? folders
-        : (st && Array.isArray(st.folders) ? st.folders : null);
-    prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, list);
-}
-
-/** Host-scoped expand/collapse-all using the owning projection's folders. */
-function prksToggleAllFolderNodesInHost(treeHost, folders) {
-    if (!treeHost || !Array.isArray(folders)) return;
-    const allCollapsed = prksFolderTreeAllCollapsed(folders);
-    prksSetAllFolderNodesCollapsed(folders, !allCollapsed);
-    prksSyncAllFolderTreeBranchesUi(treeHost, folders);
-    prksUpdateFolderLibraryExpandToggleBtnNear(treeHost, folders);
-}
-
-function prksToggleAllFolderNodes() {
-    const st = window.__prksFolderDashboardState;
-    if (!st || !Array.isArray(st.folders)) return;
-    const allCollapsed = prksFolderTreeAllCollapsed(st.folders);
-    prksSetAllFolderNodesCollapsed(st.folders, !allCollapsed);
-    const hosts = prksFolderTreeHosts();
-    if (hosts.length) {
-        hosts.forEach((host) => prksSyncAllFolderTreeBranchesUi(host, st.folders));
-        prksUpdateFolderLibraryExpandToggleBtn();
-    } else {
-        prksRerenderFolderTreeOnly();
-    }
-}
-
-function prksToggleFolderNode(folderId) {
-    const idRaw = String(folderId || '').trim();
-    const id = idRaw ? decodeURIComponent(idRaw) : '';
-    if (!id) return;
-    prksSetFolderNodeCollapsed(id, !prksFolderNodeCollapsed(id));
-    const collapsed = prksFolderNodeCollapsed(id);
-    const hosts = prksFolderTreeHosts();
-    if (hosts.length) {
-        hosts.forEach((host) => {
-            prksSyncFolderTreeBranchUi(host, id, collapsed);
-        });
-        prksUpdateFolderLibraryExpandToggleBtn();
-    } else {
-        prksRerenderFolderTreeOnly();
-    }
-}
-
-function prksSetAllFolderNodesCollapsed(folders, collapsed) {
-    const list = Array.isArray(folders) ? folders : [];
-    list.forEach((f) => {
-        if (Number(f && f.child_count ? f.child_count : 0) > 0) {
-            prksSetFolderNodeCollapsed(f.id, collapsed);
-        }
-    });
-}
-
-function prksFolderTreeHasCollapsibleNodes(folders) {
-    return (Array.isArray(folders) ? folders : []).some(
-        (f) => Number(f && f.child_count ? f.child_count : 0) > 0
-    );
-}
-
-function prksFolderTreeAllCollapsed(folders) {
-    const list = Array.isArray(folders) ? folders : [];
-    const collapsible = list.filter((f) => Number(f && f.child_count ? f.child_count : 0) > 0);
-    if (collapsible.length === 0) return false;
-    return collapsible.every((f) => prksFolderNodeCollapsed(f.id));
-}
-
-function prksFolderTreeMetaLabel(node) {
-    const workCount = Number(node.work_count || 0);
-    const childCount = Number(node.child_count || 0);
-    const bits = [];
-    if (workCount) bits.push(`${workCount} file${workCount === 1 ? '' : 's'}`);
-    if (childCount) bits.push(`${childCount} subfolder${childCount === 1 ? '' : 's'}`);
-    return bits.join(' · ');
-}
-
-/**
- * One folder row (library tree or detail subfolder list).
- * @param {object} node folder row with id, title, work_count, child_count
- * @param {number} depth indent level for tree
- * @param {{ expandable?: boolean, collapsed?: boolean, matchClass?: string, role?: string }} options
- */
-function prksFolderTreeRowHtml(node, depth, options = {}) {
-    const opts = options && typeof options === 'object' ? options : {};
-    const childCount = Number(node.child_count || 0);
-    const hasChildren = childCount > 0;
-    const expandable = opts.expandable !== false && hasChildren;
-    const collapsed = !!opts.collapsed;
-    const expanded = expandable && !collapsed;
-    const matchClass = opts.matchClass || '';
-    const selected =
-        opts.selectedId != null && String(opts.selectedId) === String(node.id);
-    const selectedClass = selected ? ' is-selected' : '';
-    const currentAttr = selected ? ' aria-current="page"' : '';
-    const role = opts.role === 'listitem' ? 'listitem' : 'treeitem';
-    const fidEnc = encodeURIComponent(String(node.id || ''));
-    const hash = `#/folders/${fidEnc}`;
-    const meta = prksFolderTreeMetaLabel(node);
-    const metaHtml = meta
-        ? `<span class="prks-folder-tree__meta">${prksFolderEsc(meta)}</span>`
-        : '<span class="prks-folder-tree__meta" aria-hidden="true"></span>';
-    const nodeIdAttr = prksFolderEsc(String(node.id || ''));
-    const ariaExpandedAttr =
-        role === 'treeitem'
-            ? ` aria-expanded="${hasChildren ? (expanded ? 'true' : 'false') : 'false'}"`
-            : '';
-
-    // Vue Folder Library hosts own toggles via delegated click (no inline
-    // stopPropagation that would block the host listener).
-    const toggleOnclick = opts.delegateToggle
-        ? ''
-        : ` onclick="event.preventDefault(); event.stopPropagation(); prksToggleFolderNode('${fidEnc}');"`;
-    const toggleHtml = expandable
-        ? `<button type="button" class="prks-folder-tree__toggle" aria-expanded="${expanded ? 'true' : 'false'}" title="${
-              collapsed ? 'Expand subfolders' : 'Collapse subfolders'
-          }"${toggleOnclick}>${
-              typeof prksIcon === 'function' ? prksIcon('chevronRight', { size: 14 }) : '▸'
-          }</button>`
-        : '<span class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>';
-
-    return `
-            <div class="prks-folder-tree__row${matchClass}${selectedClass}" data-folder-id="${nodeIdAttr}" role="${role}"${ariaExpandedAttr} style="--depth:${depth}">
-                ${toggleHtml}
-                <a class="prks-folder-tree__link" href="${hash}"${currentAttr}>
-                    <span class="prks-folder-tree__icon">${typeof prksIcon === 'function' ? prksIcon('folder') : ''}</span>
-                    <span class="prks-folder-tree__title">${prksFolderEsc(node.title || 'Folder')}</span>
-                </a>
-                ${metaHtml}
-            </div>`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -454,103 +164,6 @@ function prksOpenFolderModalFromLibrarySearch(query) {
 
 window.prksOpenFolderModalFromLibrarySearch = prksOpenFolderModalFromLibrarySearch;
 
-function prksFolderTreeEmptySearchHtml(filterQuery) {
-    const q = String(filterQuery || '').trim();
-    if (!q) {
-        return '<p class="prks-inline-message prks-folder-tree__empty">No folders match your search.</p>';
-    }
-    const label = prksFolderEsc(q);
-    const attrQ = prksFolderEsc(q);
-    return (
-        '<div class="prks-folder-tree__empty-state">' +
-        '<p class="prks-inline-message prks-folder-tree__empty">No folders match your search.</p>' +
-        `<button type="button" class="prks-btn prks-btn--primary prks-folder-tree__create-btn" data-prks-create-folder-query="${attrQ}">Create folder &quot;${label}&quot;</button>` +
-        '</div>'
-    );
-}
-
-/** @returns {null|Set<string>} null = no filter; empty Set = no matches */
-function prksFolderTreeVisibleIds(list, query) {
-    const q = String(query || '').trim().toLowerCase();
-    if (!q) return null;
-    const rows = Array.isArray(list) ? list : [];
-    const byId = new Map(rows.map((f) => [f.id, f]));
-    const matchIds = new Set();
-    rows.forEach((f) => {
-        if (String(f.title || '').toLowerCase().includes(q)) matchIds.add(f.id);
-    });
-    if (matchIds.size === 0) return new Set();
-
-    const visible = new Set();
-    matchIds.forEach((id) => {
-        visible.add(id);
-        prksCollectFolderDescendantIds(id, rows).forEach((d) => visible.add(d));
-        let cur = byId.get(id);
-        while (cur && cur.parent_id) {
-            visible.add(cur.parent_id);
-            cur = byId.get(cur.parent_id);
-        }
-    });
-    return visible;
-}
-
-function renderFolderTreeRoots(folders, options = {}) {
-    const list = Array.isArray(folders) ? folders : [];
-    const filterQuery = options.filterQuery != null ? String(options.filterQuery) : '';
-    const visibleSet = prksFolderTreeVisibleIds(list, filterQuery);
-    const filtering = visibleSet !== null;
-    const matchIds = filtering
-        ? new Set(
-              list
-                  .filter((f) => String(f.title || '').toLowerCase().includes(filterQuery.trim().toLowerCase()))
-                  .map((f) => f.id)
-          )
-        : null;
-
-    if (filtering && visibleSet.size === 0) {
-        return prksFolderTreeEmptySearchHtml(filterQuery);
-    }
-
-    function childrenOf(pid) {
-        return list
-            .filter((f) => f.parent_id === pid && (!filtering || visibleSet.has(f.id)))
-            .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
-    }
-
-    function renderNode(node, depth) {
-        const childCount = Number(node.child_count || 0);
-        const hasChildren = childCount > 0;
-        const collapsed = filtering ? false : hasChildren && prksFolderNodeCollapsed(node.id);
-        const matchClass =
-            filtering && matchIds && matchIds.has(node.id) ? ' prks-folder-tree__row--match' : '';
-        const nodeIdAttr = prksFolderEsc(String(node.id || ''));
-        const collapsedClass = collapsed ? ' is-collapsed' : '';
-
-        let html = prksFolderTreeRowHtml(node, depth, {
-            expandable: true,
-            collapsed,
-            matchClass,
-            selectedId: options.selectedId,
-            delegateToggle: !!options.delegateToggle,
-        });
-
-        if (hasChildren) {
-            let branchInner = '';
-            childrenOf(node.id).forEach((child) => {
-                branchInner += renderNode(child, depth + 1);
-            });
-            html += `<div class="prks-folder-tree__branch${collapsedClass}" data-folder-id="${nodeIdAttr}"><div class="prks-folder-tree__branch-inner">${branchInner}</div></div>`;
-        }
-        return html;
-    }
-
-    const roots = list
-        .filter((f) => !f.parent_id && (!filtering || visibleSet.has(f.id)))
-        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' }));
-
-    return roots.map((r) => renderNode(r, 0)).join('');
-}
-
 function prksSwitchFolderLibraryTab(tab) {
     const st = window.__prksFolderDashboardState;
     if (!st || !st.container) return;
@@ -590,18 +203,6 @@ function prksFolderLibraryCatalogGlanceParts(folders) {
             ? workSum + (workSum === 1 ? ' file in folders' : ' files in folders')
             : null,
     ];
-}
-
-function prksPaintFolderLibraryGlance(host, parts) {
-    if (!host) return;
-    if (typeof prksPageSummaryHtml !== 'function') {
-        host.innerHTML = '';
-        return;
-    }
-    host.innerHTML = prksPageSummaryHtml({
-        parts: parts,
-        ariaLabel: 'Library at a glance',
-    });
 }
 
 async function prksPeekCachedBrowseList(listKey) {
@@ -768,47 +369,14 @@ async function prksScheduleFolderLibraryGlance(root, options) {
         extras = [];
     }
     if (!host.isConnected || host.dataset.glanceToken !== token) return;
-    prksPaintFolderLibraryGlance(host, catalogParts.concat(extras || []));
+    const parts = catalogParts.concat(extras || []);
+    if (typeof opts.onParts === 'function') opts.onParts(parts);
 }
 
 // Container width for compact Location+Nearby fallback. Kept below the common
 // stacked Main content width (~700px at 1280 with the app sidebar) so normal
 // desktop stays on tree|contents; true narrow tiles still fall under this.
 const PRKS_FOLDER_DETAIL_NARROW_PX = 560;
-
-function prksFolderDetailExpandAncestors(folderId, rows) {
-    const list = Array.isArray(rows) ? rows : [];
-    const byId = new Map(list.map((f) => [String(f.id), f]));
-    let cur = byId.get(String(folderId));
-    const guard = new Set();
-    while (cur && cur.parent_id && !guard.has(String(cur.id))) {
-        guard.add(String(cur.id));
-        const parentId = String(cur.parent_id);
-        prksSetFolderNodeCollapsed(parentId, false);
-        cur = byId.get(parentId);
-    }
-    // Current folder with children: expand so Nearby context is visible in-tree.
-    const self = byId.get(String(folderId));
-    if (self && Number(self.child_count || 0) > 0) {
-        prksSetFolderNodeCollapsed(folderId, false);
-    }
-}
-
-function prksFolderDetailTreeHtml(rows, selectedId) {
-    const list = Array.isArray(rows) ? rows : [];
-    if (!list.length) {
-        return (
-            '<div class="prks-folder-tree__empty-state">' +
-            '<p class="prks-inline-message prks-folder-tree__empty">No folders yet.</p>' +
-            '</div>'
-        );
-    }
-    return (
-        '<div class="prks-folder-tree prks-folder-tree--detail-nav" role="tree" aria-label="Folder hierarchy">' +
-        renderFolderTreeRoots(list, { selectedId: selectedId }) +
-        '</div>'
-    );
-}
 
 function prksBindFolderDetailLayout(root, ctx) {
     if (!root) return;
@@ -861,43 +429,6 @@ function prksBindFolderDetailLayout(root, ctx) {
 }
 
 /**
- * In-place tree selection for Folder→Folder: expand ancestors in the live DOM
- * and move aria-current / is-selected without rebuilding the hierarchy pane.
- * @returns {boolean} true when the destination row was found and selected
- */
-function prksFolderDetailSelectInTree(host, folderId, rows) {
-    if (!host || folderId == null || folderId === '') return false;
-    const list = Array.isArray(rows) ? rows : null;
-    if (list) {
-        prksFolderDetailExpandAncestors(folderId, list);
-        const byId = new Map(list.map((f) => [String(f.id), f]));
-        let cur = byId.get(String(folderId));
-        const guard = new Set();
-        while (cur && cur.parent_id && !guard.has(String(cur.id))) {
-            guard.add(String(cur.id));
-            prksSyncFolderTreeBranchUi(host, cur.parent_id, false);
-            cur = byId.get(String(cur.parent_id));
-        }
-        const self = byId.get(String(folderId));
-        if (self && Number(self.child_count || 0) > 0) {
-            prksSyncFolderTreeBranchUi(host, folderId, false);
-        }
-    }
-    host.querySelectorAll('.prks-folder-tree__row.is-selected').forEach(function (row) {
-        row.classList.remove('is-selected');
-        const link = row.querySelector('.prks-folder-tree__link');
-        if (link) link.removeAttribute('aria-current');
-    });
-    const idEsc = prksFolderTreeIdCssEscape(folderId);
-    const target = host.querySelector(`.prks-folder-tree__row[data-folder-id="${idEsc}"]`);
-    if (!target) return false;
-    target.classList.add('is-selected');
-    const targetLink = target.querySelector('.prks-folder-tree__link');
-    if (targetLink) targetLink.setAttribute('aria-current', 'page');
-    return true;
-}
-
-/**
  * Claim a Folder-detail hierarchy refresh token for `mode`, or null when the
  * TabContext cannot begin (destroyed / API absent). Shared by the initial
  * claim and the selection-fallback full claim so Sonar does not flag the
@@ -930,6 +461,31 @@ function prksFolderHierarchyClaimMayCommit(ctx, token, container, signal) {
  * tree or destination row), it claims full ownership first so an older full
  * cannot overwrite that newer topology. Route AbortSignal still covers A→B→C.
  */
+
+function prksReadFolderDetailTreeSnapshot(host) {
+    return host && host.__prksFolderDetailTreeSnapshot ? host.__prksFolderDetailTreeSnapshot : null;
+}
+
+function prksSnapshotHasFolder(snapshot, folderId) {
+    if (!snapshot || snapshot.status !== 'ready' || !Array.isArray(snapshot.rows)) return false;
+    const id = String(folderId);
+    return snapshot.rows.some(function (row) {
+        return row && String(row.id) === id;
+    });
+}
+
+/**
+ * Hand a typed hierarchy snapshot to the Vue tree. The host callback renders
+ * rows; this function does not write HTML.
+ */
+function prksPublishFolderDetailTree(host, snapshot) {
+    if (!host) return;
+    host.__prksFolderDetailTreeSnapshot = snapshot;
+    if (typeof host.__prksApplyFolderDetailTree === 'function') {
+        host.__prksApplyFolderDetailTree(snapshot);
+    }
+}
+
 async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const opts = options && typeof options === 'object' ? options : {};
     const selectionOnly = !!opts.selectionOnly;
@@ -978,16 +534,23 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
     const commitFolder =
         liveFolder && liveFolder.id != null && liveFolder.id !== '' ? liveFolder : folder;
     if (!Array.isArray(rows)) {
-        liveHost.innerHTML =
-            '<p class="prks-inline-message prks-folder-tree__empty">Could not load folders.</p>';
+        prksPublishFolderDetailTree(liveHost, {
+            status: 'error',
+            rows: [],
+            selectedId: String(commitFolder.id || ''),
+            selectionOnly: false,
+        });
         return;
     }
-    // Same-workspace Folder→Folder: keep the hierarchy DOM; only move selection.
-    if (
-        selectionOnly &&
-        liveHost.querySelector('.prks-folder-tree--detail-nav') &&
-        prksFolderDetailSelectInTree(liveHost, commitFolder.id, rows)
-    ) {
+    // Same-workspace Folder→Folder: keep the published rows; only move selection.
+    const previous = prksReadFolderDetailTreeSnapshot(liveHost);
+    if (selectionOnly && prksSnapshotHasFolder(previous, commitFolder.id)) {
+        prksPublishFolderDetailTree(liveHost, {
+            status: 'ready',
+            rows: previous.rows,
+            selectedId: String(commitFolder.id),
+            selectionOnly: true,
+        });
         return;
     }
     // Selection-only fell through to a topology rebuild (tree not built yet, or
@@ -1000,9 +563,12 @@ async function prksFillFolderDetailTree(ctx, folder, container, options) {
             return;
         }
     }
-    prksFolderDetailExpandAncestors(commitFolder.id, rows);
-    liveHost.innerHTML = prksFolderDetailTreeHtml(rows, commitFolder.id);
-    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(liveHost);
+    prksPublishFolderDetailTree(liveHost, {
+        status: 'ready',
+        rows: rows,
+        selectedId: String(commitFolder.id),
+        selectionOnly: false,
+    });
 }
 
 /**
@@ -1027,10 +593,11 @@ function prksRefreshLiveFolderDetailTrees() {
 
 /**
  * Folder detail route paint lives in frontend-app/src/features/folder-detail/.
- * This module still owns the hierarchy tree resource, the layout observer, and
- * the canonical new-folder / delete wrappers. Vue calls prksCommitFolderDetailSurface
- * after it paints the host. #303 B2 removes that host-side writer when TabContext
- * resource lifetime is consolidated. Vue Folder-detail Work cards are PrksWorkCard.
+ * Vue renders the hierarchy rows, subfolder list, and page summary. This module
+ * still owns the hierarchy refresh claim, the layout observer, offline binding,
+ * and the canonical new-folder / delete wrappers. prksCommitFolderDetailSurface
+ * binds those and publishes a typed tree snapshot; it does not write row HTML.
+ * Vue Folder-detail Work cards are PrksWorkCard.
  * Folder Library Recently Added is Vue-owned (`RecentlyAddedPane` / `PrksWorkCard`).
  */
 
@@ -1043,45 +610,6 @@ function prksEffectiveFolderDetailWorks(folder) {
     return typeof prksEffectiveWorkSummaryRows === 'function'
         ? prksEffectiveWorkSummaryRows(works)
         : works;
-}
-
-function prksFolderDetailSummaryHtml(folder) {
-    const childN = folder && Array.isArray(folder.children) ? folder.children.length : null;
-    const workN = folder && Array.isArray(folder.works) ? folder.works.length : null;
-    return typeof prksPageSummaryHtml === 'function'
-        ? prksPageSummaryHtml({
-              parts: [
-                  childN != null ? childN + (childN === 1 ? ' subfolder' : ' subfolders') : null,
-                  workN != null ? workN + (workN === 1 ? ' file' : ' files') : null,
-              ],
-          })
-        : '';
-}
-
-function prksFolderDetailNavHtml(ctx, folder) {
-    if (!folder) return '';
-    const inner =
-        typeof prksFolderNavTriggerHtml === 'function'
-            ? prksFolderNavTriggerHtml(folder, null, { tabId: ctx && ctx.tabId })
-            : '';
-    if (!inner) return '';
-    return `<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav" aria-label="Folder navigation">${inner}</nav>`;
-}
-
-function prksFolderDetailSubfoldersHtml(children) {
-    const subfolders = Array.isArray(children) ? children : [];
-    const subfoldersSorted = [...subfolders].sort((a, b) =>
-        String(a.title || '').localeCompare(String(b.title || ''), undefined, { sensitivity: 'base' })
-    );
-    if (!subfoldersSorted.length) return '';
-    return `
-            <div class="prks-page-header page-header"><h3>Subfolders</h3></div>
-            <div class="prks-folder-tree prks-folder-tree--detail-subfolders" role="list">
-                ${subfoldersSorted
-                    .map((ch) => prksFolderTreeRowHtml(ch, 0, { expandable: false, role: 'listitem' }))
-                    .join('')}
-            </div>
-        `;
 }
 
 function prksOpenNewFolderFromDetail(folder) {
@@ -1459,29 +987,15 @@ window.renderFolderAttachControlsHtml = renderFolderAttachControlsHtml;
 window.mountFolderAttachControlsForWork = mountFolderAttachControlsForWork;
 window.prksFolderRowLabel = prksFolderRowLabel;
 window.prksCollectFolderDescendantIds = prksCollectFolderDescendantIds;
-window.prksToggleFolderNode = prksToggleFolderNode;
-window.prksToggleFolderNodeInHost = prksToggleFolderNodeInHost;
-window.prksSetAllFolderNodesCollapsed = prksSetAllFolderNodesCollapsed;
-window.prksToggleAllFolderNodes = prksToggleAllFolderNodes;
-window.prksToggleAllFolderNodesInHost = prksToggleAllFolderNodesInHost;
 window.prksRefreshLiveFolderDetailTrees = prksRefreshLiveFolderDetailTrees;
 window.prksFillFolderDetailTree = prksFillFolderDetailTree;
-window.prksFolderLibraryTreeInnerHtml = prksFolderLibraryTreeInnerHtml;
 window.prksFolderLibraryCatalogGlanceParts = prksFolderLibraryCatalogGlanceParts;
-window.prksPaintFolderLibraryGlance = prksPaintFolderLibraryGlance;
 window.prksScheduleFolderLibraryGlance = prksScheduleFolderLibraryGlance;
 window.prksPublishFolderDashboardState = prksPublishFolderDashboardState;
 window.prksUnpublishFolderDashboardState = prksUnpublishFolderDashboardState;
 window.prksFolderDashboardStateForRoot = prksFolderDashboardStateForRoot;
-window.prksFolderLibraryExpandToggleLabel = prksFolderLibraryExpandToggleLabel;
-window.prksFolderLibraryExpandToggleInnerHtml = prksFolderLibraryExpandToggleInnerHtml;
-window.prksFolderTreeHasCollapsibleNodes = prksFolderTreeHasCollapsibleNodes;
-window.prksFolderTreeAllCollapsed = prksFolderTreeAllCollapsed;
 window.prksBindFolderOfflineState = prksBindFolderOfflineState;
 window.prksEffectiveFolderDetailWorks = prksEffectiveFolderDetailWorks;
-window.prksFolderDetailSummaryHtml = prksFolderDetailSummaryHtml;
-window.prksFolderDetailNavHtml = prksFolderDetailNavHtml;
-window.prksFolderDetailSubfoldersHtml = prksFolderDetailSubfoldersHtml;
 window.prksOpenNewFolderFromDetail = prksOpenNewFolderFromDetail;
 window.prksCommitFolderDetailSurface = prksCommitFolderDetailSurface;
 window.prksDeleteFolderFromDetail = deleteFolder;

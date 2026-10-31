@@ -1,7 +1,12 @@
 import type { InjectionKey } from 'vue'
+import {
+  readFolderTreeChrome,
+  writeFolderTreeExpanded,
+  type FolderTreeChromeOwner,
+} from '../folder-library/chrome'
 
 /** Owning TabContext fields Folder detail intents need. Not a second route model. */
-export interface FolderDetailIntentOwner {
+export interface FolderDetailIntentOwner extends FolderTreeChromeOwner {
   tabId?: string
   generation?: number
   isCurrent?: (generation: number) => boolean
@@ -14,6 +19,8 @@ export interface FolderDetailIntents {
   owner(): FolderDetailIntentOwner | null
   remove(folderId: string): Promise<void>
   createChild(folder: Record<string, unknown>): void
+  readExpanded(): readonly string[]
+  writeExpanded(expandedIds: readonly string[]): void
 }
 
 export const folderDetailIntentsKey: InjectionKey<FolderDetailIntents> = Symbol(
@@ -57,6 +64,12 @@ export function browserFolderDetailIntents(
       const id = String(folder?.id ?? '').trim()
       if (!ownsFolder(owner, generation, id)) return
       window.prksOpenNewFolderFromDetail?.(folder)
+    },
+    readExpanded() {
+      return readFolderTreeChrome(owner).expandedIds
+    },
+    writeExpanded(expandedIds) {
+      writeFolderTreeExpanded(owner, expandedIds)
     },
   }
 }

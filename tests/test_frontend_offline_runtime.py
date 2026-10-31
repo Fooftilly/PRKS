@@ -1236,7 +1236,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         pane = _read(os.path.join(
             _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "RecentlyAddedPane.vue"))
         body = intents[intents.index("async loadRecentlyAdded"):]
-        body = body[: body.index("toggleExpand(")]
+        body = body[: body.index("bindFolderOfflineState(")]
         self.assertIn("prksOfflineRecentlyAddedFetch", body)
         self.assertIn("prksResolveOfflineRecentlyAdded", body)
         self.assertNotIn("fetchRecentlyAdded", body)

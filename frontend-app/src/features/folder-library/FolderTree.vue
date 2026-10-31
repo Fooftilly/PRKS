@@ -1,74 +1,107 @@
 <script setup lang="ts">
-import { useEventListener } from '@vueuse/core'
-import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
-import { folderLibraryIntentsKey } from './intents'
+import { computed, onMounted, onUpdated, ref } from 'vue'
+import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
+import FolderTreeNode from './FolderTreeNode.vue'
+import { buildFolderTree } from './tree'
+import { folderTreeIconHost, refreshFolderIcons } from './tree-icons'
 import type { FolderRow } from './types'
 
-const props = defineProps<{
-  folders: readonly FolderRow[]
-  filterQuery: string
-  generation: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    folders: readonly FolderRow[]
+    filterQuery?: string
+    expandedIds?: ReadonlySet<string>
+    selectedId?: string | null
+    /** Detail hierarchy uses the nav label and has no create action. */
+    variant?: 'library' | 'detail'
+  }>(),
+  {
+    filterQuery: '',
+    expandedIds: () => new Set<string>(),
+    selectedId: null,
+    variant: 'library',
+  },
+)
 
 const emit = defineEmits<{
-  collapsedChanged: []
+  toggle: [folderId: string]
+  create: [query: string]
 }>()
 
-const intents = inject(folderLibraryIntentsKey)
-const treeHost = ref<HTMLElement | null>(null)
+const iconRoot = ref<HTMLElement | null>(null)
 
-const treeHtml = computed(() => {
-  void props.generation
-  const fn = window.prksFolderLibraryTreeInnerHtml
-  if (typeof fn !== 'function') return ''
-  // Omit inline onclick so host-scoped Vue click delegation owns expand.
-  return fn(props.folders, props.filterQuery, { delegateToggle: true })
-})
-
-function paintTree(): void {
-  const host = treeHost.value
-  if (!host) return
-  host.innerHTML = treeHtml.value
-  window.prksRefreshIcons?.(host)
+function paintIcons(): void {
+  refreshFolderIcons(folderTreeIconHost(iconRoot.value))
 }
 
-useEventListener(treeHost, 'click', (event: MouseEvent) => {
-  const target = event.target as HTMLElement | null
-  if (!target) return
-  const createBtn = target.closest('[data-prks-create-folder-query]')
-  if (createBtn) {
-    event.preventDefault()
-    const q = createBtn.getAttribute('data-prks-create-folder-query') || ''
-    intents?.createFolder(q)
-    return
-  }
-  const toggle = target.closest('.prks-folder-tree__toggle')
-  if (toggle) {
-    event.preventDefault()
-    event.stopPropagation()
-    const row = toggle.closest('[data-folder-id]')
-    const folderId = row?.getAttribute('data-folder-id') || ''
-    if (folderId) {
-      intents?.toggleExpand(folderId, treeHost.value, props.folders)
-      emit('collapsedChanged')
-    }
-  }
-})
+onMounted(paintIcons)
+onUpdated(paintIcons)
 
-onMounted(() => {
-  paintTree()
-})
+const tree = computed(() =>
+  buildFolderTree(props.folders, props.filterQuery, props.expandedIds, {
+    selectedId: props.selectedId,
+  }),
+)
 
-watch(treeHtml, async () => {
-  await nextTick()
-  paintTree()
-})
+const filtering = computed(() => props.filterQuery.trim() !== '')
+const createQuery = computed(() => props.filterQuery.trim())
+
+function onCreate(): void {
+  emit('create', createQuery.value)
+}
 </script>
 
 <template>
+  <div ref="iconRoot" style="display: contents">
   <div
-    ref="treeHost"
-    class="prks-folder-library__scroll"
-    data-prks-folder-tree-host
-  ></div>
+    v-if="tree.empty && variant === 'library'"
+    class="prks-folder-tree__empty-state"
+  >
+    <PrksInlineMessage class="prks-folder-tree__empty">No folders yet.</PrksInlineMessage>
+    <PrksButton
+      variant="primary"
+      class="prks-folder-tree__create-btn"
+      data-prks-create-folder-query=""
+      @click="onCreate"
+    >
+      New folder
+    </PrksButton>
+  </div>
+  <div v-else-if="tree.empty" class="prks-folder-tree__empty-state">
+    <PrksInlineMessage class="prks-folder-tree__empty">No folders yet.</PrksInlineMessage>
+  </div>
+  <div
+    v-else-if="tree.emptySearch && variant === 'library'"
+    class="prks-folder-tree__empty-state"
+  >
+    <PrksInlineMessage class="prks-folder-tree__empty">No folders match your search.</PrksInlineMessage>
+    <PrksButton
+      variant="primary"
+      class="prks-folder-tree__create-btn"
+      :data-prks-create-folder-query="createQuery"
+      @click="onCreate"
+    >
+      Create folder "{{ createQuery }}"
+    </PrksButton>
+  </div>
+  <PrksInlineMessage v-else-if="tree.emptySearch" class="prks-folder-tree__empty">
+    No folders match your search.
+  </PrksInlineMessage>
+  <div
+    v-else
+    class="prks-folder-tree"
+    :class="{ 'prks-folder-tree--detail-nav': variant === 'detail' }"
+    role="tree"
+    :aria-label="variant === 'detail' ? 'Folder hierarchy' : undefined"
+  >
+    <FolderTreeNode
+      v-for="node in tree.nodes"
+      :key="node.id"
+      :node="node"
+      :filtering="filtering"
+      @toggle="emit('toggle', $event)"
+    />
+  </div>
+  </div>
 </template>

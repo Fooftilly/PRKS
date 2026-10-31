@@ -200,9 +200,11 @@ interface Window {
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
   prksOpenCommandPalette?: () => void
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
-  prksFolderDetailSummaryHtml?: (folder: unknown) => string
-  prksFolderDetailNavHtml?: (ctx: unknown, folder: unknown) => string
-  prksFolderDetailSubfoldersHtml?: (children: readonly unknown[]) => string
+  prksFolderNavTriggerHtml?: (
+    folder: unknown,
+    rows: unknown,
+    options?: { tabId?: string },
+  ) => string
   prksCommitFolderDetailSurface?: (
     ctx: unknown,
     folder: unknown,
@@ -294,18 +296,13 @@ interface Window {
   prksTogglePersonWorksEdit?: (ctx?: unknown) => void
   prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>
   prksPersonViewInGraph?: () => void
-  prksFolderLibraryTreeInnerHtml?: (
-    list: unknown,
-    filterQuery?: string,
-    options?: { delegateToggle?: boolean },
-  ) => string
   prksFolderLibraryCatalogGlanceParts?: (folders: unknown) => Array<string | null>
-  prksPaintFolderLibraryGlance?: (host: HTMLElement, parts: unknown) => void
   prksScheduleFolderLibraryGlance?: (
     root: ParentNode | HTMLElement,
     options?: {
       folders?: unknown[]
       recentlyAddedWorks?: unknown[] | null
+      onParts?: (parts: readonly unknown[]) => void
     },
   ) => void
   prksPublishFolderDashboardState?: (state: {
@@ -317,23 +314,8 @@ interface Window {
     [key: string]: unknown
   }) => void
   prksUnpublishFolderDashboardState?: (container: HTMLElement) => void
-  prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
-  prksFolderLibraryExpandToggleInnerHtml?: () => string
-  prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
-  prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
   prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
   prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
-  prksToggleFolderNode?: (folderId: string) => void
-  prksToggleFolderNodeInHost?: (
-    treeHost: HTMLElement,
-    folderId: string,
-    folders?: readonly unknown[],
-  ) => void
-  prksToggleAllFolderNodes?: () => void
-  prksToggleAllFolderNodesInHost?: (
-    treeHost: HTMLElement,
-    folders: readonly unknown[],
-  ) => void
   prksOfflineRecentlyAddedFetch?: () => Promise<{
     source?: string
     value?: unknown

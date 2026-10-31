@@ -16,14 +16,8 @@ afterEach(() => {
 })
 
 beforeEach(() => {
-  window.prksFolderLibraryTreeInnerHtml = () => '<div class="prks-folder-tree"></div>'
   window.prksFolderLibraryCatalogGlanceParts = () => []
-  window.prksPaintFolderLibraryGlance = () => {}
   window.prksScheduleFolderLibraryGlance = () => {}
-  window.prksFolderTreeHasCollapsibleNodes = () => false
-  window.prksFolderTreeAllCollapsed = () => true
-  window.prksFolderLibraryExpandToggleLabel = () => 'Expand all'
-  window.prksFolderLibraryExpandToggleInnerHtml = () => '<span></span>'
   window.prksBindFolderOfflineState = () => {}
   window.prksTagSearchIconHtml = () => ''
   window.prksWorkBrowseModeToggleHtml = () => ''
@@ -83,8 +77,9 @@ describe('Folder Library route lifecycle hardening', () => {
     openWorkModal: () => {},
     navigateFolder: () => {},
     switchTab: () => {},
-    toggleExpand: () => {},
-    toggleExpandAll: () => {},
+    readTreeChrome: () => ({ expandedIds: [], libraryQuery: null }),
+    writeExpanded: () => {},
+    writeLibraryQuery: () => {},
     bindFolderOfflineState: () => () => {},
     scheduleGlance: () => {},
     subscribeMetadataOverlay: () => () => {},
@@ -234,17 +229,12 @@ describe('Folder Library route lifecycle hardening', () => {
       const list = Array.isArray(folders) ? folders : []
       return list.length ? [`${list.length} folders`] : []
     }
-    window.prksPaintFolderLibraryGlance = (host, parts) => {
-      const texts = (Array.isArray(parts) ? parts : [])
-        .map((p) => (typeof p === 'string' ? p : String((p as { text?: string })?.text || '')))
-        .filter(Boolean)
-      host.textContent = texts.join(' · ')
-    }
 
     const settled: Array<{ rootId: string; folders: unknown[]; ra: unknown[] | null }> = []
     const scheduleGlance = vi.fn(async (root: HTMLElement | null, options?: {
       folders?: readonly unknown[]
       recentlyAddedWorks?: unknown[] | null
+      onParts?: (parts: readonly unknown[]) => void
     }) => {
       const host = root?.querySelector(
         '[data-prks-role="folder-library-glance-host"]',
@@ -262,7 +252,7 @@ describe('Folder Library route lifecycle hardening', () => {
         ...(window.prksFolderLibraryCatalogGlanceParts?.(folders) || []),
         Array.isArray(ra) && ra.length ? `${ra.length} recently added` : null,
       ].filter(Boolean)
-      window.prksPaintFolderLibraryGlance?.(host, parts)
+      options?.onParts?.(parts)
       settled.push({ rootId: root.id, folders, ra })
     })
 
