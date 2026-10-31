@@ -35,6 +35,34 @@ change **does not itself reduce E2E run time**; measure a bounded manual
 profile before attributing CI slowdown to PostgreSQL or changing fixture
 isolation, retry policy or shard count.
 
+## Manual full-gate shard profile summaries (#740)
+
+The existing `PRKS Full E2E Gate` accepts a **manual** `profile: true`
+input. Each successful source-Chromium shard now publishes a small
+aggregate-only phase breakdown in its **GitHub Actions job summary**, alongside
+the existing per-test diagnostic lines in the job log. The summary includes
+`postgres_provision` and `postgres_drop` next to seed build/clone, server
+spawn/readiness, browser context, app readiness and async waits. Its phase
+rows are inclusive and can overlap; do not add the rows as if they were
+exclusive wall-clock partitions. Missing phase samples say **not observed**,
+not zero.
+
+The shard step writes a schema-v2 aggregate benchmark JSON into
+`RUNNER_TEMP` only when `workflow_dispatch` sets `profile: true`.
+A fail-closed, standard-library summary renderer validates test completion,
+navigation counters and numeric phase names/durations before printing Markdown.
+It emits no test identifiers, file paths, fixtures, record data or database
+names and uploads **no report artifact**. If a successful manual profile
+has a missing or corrupt report, the summary step fails rather than showing
+misleading numbers. Ordinary PR/push source and packaged gates, selection,
+isolation, sharding, test history and required status checks are unchanged.
+
+To collect the next evidence under #740, dispatch the manual full gate on
+one fixed master SHA with `profile: true`, leave `shard_count: 6`, and
+inspect the six individual E2E job summaries. Compare PostgreSQL setup,
+server readiness, seed and browser time before proposing optimizations.
+This is **diagnostic output**, not evidence of faster tests by itself.
+
 ## Exact E2E feature-selector drift guard (#740)
 
 The Unit/API gate now validates the **exact method IDs** in
