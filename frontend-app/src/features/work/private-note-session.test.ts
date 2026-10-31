@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
+import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import { registerWorkPrivateNotesBridge, resetWorkPrivateNotesForTests } from './private-note-session'
 
@@ -163,6 +164,7 @@ function notesField(owner: WorkCtx, workId: string) {
 beforeAll(() => {
   panelWindow.eval(ownerResourceSource)
   panelWindow.eval(tabContextSource)
+  panelWindow.eval(workNotesStateSource)
   panelWindow.eval(uiSource)
   registerWorkPrivateNotesBridge(window)
 })
