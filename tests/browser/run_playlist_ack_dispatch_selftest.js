@@ -13,7 +13,6 @@ const assert = Object.assign(
         deepEqual(...args) { checks++; return strict.deepEqual(...args); },
         fail(...args) { checks++; return strict.fail(...args); },
     });
-const {runInThisContext} = require("node:vm");
 // The Unit/API runner sets cwd to the repository root; use fixed repository paths.
 const fs = require("node:fs");
 const {createFakeIndexedDBFactory} = require("./lib/fake_indexeddb.js");
@@ -50,53 +49,19 @@ require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/playlist-state.js");
 globalThis.window = globalThis;
 
-/* Load exactly the production functions rather than reconstructing their
- * decisions in the test. This is the existing playlist Node-selftest method. */
-function loadTopLevelFunction(source, name) {
-    const marker = "function " + name + "(";
-    let at = source.indexOf("async " + marker);
-    if (at < 0) at = source.indexOf(marker);
-    assert.notEqual(at, -1, "production function missing: " + name);
-    const brace = source.indexOf("{", at);
-    let depth = 0;
-    for (let i = brace; i < source.length; i++) {
-        if (source[i] === "{") depth++;
-        if (source[i] === "}" && --depth === 0) {
-            runInThisContext(source.slice(at, i + 1),
-                {filename: "playlist-production-wrapper.js", timeout: 1000});
-            return;
-        }
-    }
-    throw new Error("unclosed production wrapper: " + name);
-}
-const app = fs.readFileSync("frontend/js/app.js", "utf8");
-const playlistUI = fs.readFileSync("frontend/js/components/playlists.js", "utf8");
-loadTopLevelFunction(app, "prksDurableOperationsOrNone");
-for (const name of ["prksPlaylistSaveMessage", "prksPlaylistBaseUnavailable",
-    "updatePlaylist", "reorderPlaylist"]) loadTopLevelFunction(playlistUI, name);
-
-/* Production read validators, extracted (not reimplemented) from the shipped
- * app.js. Seeded and ACK-patched snapshots must remain renderable offline. */
-function readValidators() {
-    const names = ["prksHasUsableRowId", "prksIsOptionalString",
-        "prksIsPlaylistItemCount", "prksIsPlaylistScalarShape",
-        "prksIsPlaylistIndexRowShape", "prksIsPlaylistsIndexShape",
-        "prksIsPlaylistItemShape", "prksIsPlaylistShape"];
-    const declarations = names.map(name => {
-        const marker = "function " + name + "(";
-        const at = app.indexOf(marker);
-        assert.notEqual(at, -1, "production validator missing: " + name);
-        assert.equal(app.indexOf(marker, at + marker.length), -1,
-            "ambiguous production validator: " + name);
-        const end = app.indexOf("\n}", at);
-        assert.notEqual(end, -1);
-        return app.slice(at, end + 2);
-    });
-    return runInThisContext(declarations.join("\n") +
-        "\n({" + names.join(",") + "});",
-        {filename: "playlist-production-validators.js", timeout: 1000});
-}
-const validation = readValidators();
+/* The browser binds these wrappers on window. Node imports the same actual
+ * production functions through CommonJS exports, without code-string execution.
+ * This shim represents the app.js store lookup, not playlist save logic. */
+globalThis.prksDurableOperationsOrNone = async () => {
+    try {
+        const sync = globalThis.prksSync;
+        return sync && sync.store ? await sync.store.listOperations() : [];
+    } catch (_error) { return []; }
+};
+const {updatePlaylist, reorderPlaylist} =
+    require("../../frontend/js/components/playlists.js");
+// Reuse the exact production predicates from the existing 102-case shape test.
+const validation = require("./run_offline_read_model_shape_selftest.js");
 const syncSource = fs.readFileSync("frontend/js/sync-runtime.js", "utf8");
 const registryStart = syncSource.indexOf("runtime = createRuntime({ store, online,");
 const registryEnd = syncSource.indexOf("\n        lock:", registryStart);
@@ -216,7 +181,7 @@ async function scenario(name, write, expectedOperations = 1) {
 }
 async function main() {
     await scenario("description", async () => {
-        await globalThis.updatePlaylist(ID, {description: "New description"});
+        await updatePlaylist(ID, {description: "New description"});
     }).then(async ({before, state, detail, envelope}) => {
         assert.equal(envelope.operation, "SET_PLAYLIST_FIELD");
         assert.deepEqual(envelope.payload, {field: "description", value: "New description"});
@@ -233,7 +198,7 @@ async function main() {
         // Original Chromium case changed both title and description in one
         // wrapper call. Keep the two independent durable operations, ACKs and
         // revision fences; testing only title would silently lose coverage.
-        await globalThis.updatePlaylist(ID,
+        await updatePlaylist(ID,
             {title: "Renamed title", description: ""});
     }, 2).then(async ({state, detail, envelopes}) => {
         assert.deepEqual(envelopes.map(e => e.operation),
@@ -255,7 +220,7 @@ async function main() {
         assert(await cache.getEntity("work", OTHER), "title keeps outside Work");
     });
     await scenario("reorder", async () => {
-        await globalThis.reorderPlaylist(ID, [W2, W1]);
+        await reorderPlaylist(ID, [W2, W1]);
     }).then(async ({state, detail, envelope}) => {
         assert.equal(envelope.operation, "REORDER_PLAYLIST_ITEMS");
         assert.deepEqual(envelope.payload.work_ids, [W2, W1]);
