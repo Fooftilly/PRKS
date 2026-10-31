@@ -3,18 +3,18 @@
   "operation": "apply",
   "items": [
     {
-      "number": 629,
+      "number": 275,
       "set": {
-        "Agent": "Claude Code",
-        "Status": "In Progress",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": "Claude Code",
+        "Agent": "Cursor Cloud",
         "Status": "Ready",
         "Execution": "Agent"
       },
-      "reason": "Existing Claude Code L-F-1 work is actively being implemented in open PR #1023, following merged PR #1021. Update Project #3 lifecycle from Ready to In Progress without changing owner, execution or code ownership. Verified #626 closed; #1023 review blockers tracked in #629 and must be fixed before merge.",
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Maintainer explicitly tracked the unresolved accessibility review finding from merged PR #271 as scoped follow-up #275, with concrete Vue tab-role acceptance/tests. Current master still lacks role=tab on all three buttons. Candidate redesign #407 remains unapproved. Live #275 open, unassigned, native blocked_by empty, and no active PR covers the Arguments route. Previous Cursor #509 and #969 work is closed; assigning one new scoped UI task does not exceed capacity. No code or agent session started.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
