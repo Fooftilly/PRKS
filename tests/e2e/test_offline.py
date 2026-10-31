@@ -6562,52 +6562,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
 
     # ---- role mutations -----------------------------------------------------
 
-    def test_every_role_type_invalidates_people_but_only_author_invalidates_arguments(self):
-        """People carries assigned_roles, the Person's linked Work rows and
-        aliases (credit names), so EVERY role type stales it. Arguments only
-        lists a source Work's Authors."""
-        server, page, _context, _collector = self._start()
-        work_b = server.ids["work_b"]
-        person_unvisited = server.ids["person_unvisited"]
 
-        # Non-Author role: People only.
-        self._cache_people(page, server)
-        _open_argument(page, server.ids["argument_a"])
-        _wait_entity_cached(page, "argument", server.ids["argument_a"])
-        before = _domain_generation(page, "people")
-        arguments_before = _domain_generation(page, "arguments")
-        page.evaluate(
-            """async ([workId, personId]) => {
-                const res = await window.prksRequest('/api/roles', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Editor' }),
-                });
-                if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Editor');
-            }""",
-            [work_b, person_unvisited],
-        )
-        self._assert_people_invalidated(page, server, before)
-        self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
-        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
-
-        # Author role: People AND Arguments.
-        self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-        arguments_before = _domain_generation(page, "arguments")
-        page.evaluate(
-            """async ([workId, personId]) => {
-                const res = await window.prksRequest('/api/roles', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Author' }),
-                });
-                if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Author');
-            }""",
-            [work_b, person_unvisited],
-        )
-        self._assert_people_invalidated(page, server, before)
-        self.assertGreater(_domain_generation(page, "arguments"), arguments_before)
 
     def test_role_changes_through_the_real_ui_invalidate_people_and_groups(self):
         """`prksMarkWorkRoleChanged()` owns the People/Person Groups/Arguments

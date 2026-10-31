@@ -801,56 +801,9 @@ class FoldersOfflineTests(unittest.TestCase):
     # Work-metadata mark helpers → folders generation remains owned by
     # work-metadata Node selftests (vacuous Chromium helper-call E2E dropped).
 
-    def test_author_and_editor_roles_invalidate_folders_but_other_roles_do_not(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
 
-        def rewarm_folders_index():
-            # After an invalidation the route may already be #/folders, so a
-            # second index() is a no-op that never refetches. Leave and return.
-            page.evaluate("() => prksNavigate('#/people')")
-            page.wait_for_function("() => location.hash === '#/people'", timeout=15000)
-            self.index(page)
-            o._wait_list_cached(page, 'folders:index')
 
-        for role in ('Author', 'Editor'):
-            with self.subTest(role=role):
-                rewarm_folders_index()
-                before = o._domain_generation(page, 'folders')
-                page.evaluate("([id, r]) => prksMarkWorkRoleChanged(id, r)", [ids['work_a'], role])
-                self.assertGreater(o._domain_generation(page, 'folders'), before)
-                o._wait_list_uncached(page, 'folders:index')
-        # A role the Work card never renders must leave Folders eligible.
-        rewarm_folders_index()
-        before = o._domain_generation(page, 'folders')
-        page.evaluate("(id) => prksMarkWorkRoleChanged(id, 'Reviewer')", ids['work_a'])
-        self.assertEqual(o._domain_generation(page, 'folders'), before)
-        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
-    def test_person_rename_invalidates_folders_but_biography_does_not(self):
-        server, page, context, _c = self.start()
-        ids = server.ids
-        self.cache(page, ids, all_domains=True)
-        o._open_person(page, ids['person'])
-        o._wait_entity_cached(page, 'person', ids['person'])
-        self.index(page)
-        o._wait_list_cached(page, 'folders:index')
-
-        before = o._domain_generation(page, 'folders')
-        page.evaluate(
-            """async (id) => {
-                await prksRequest('/api/persons/' + encodeURIComponent(id), {
-                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ about: 'Biography only.' }),
-                });
-                prksMarkPeopleDomainChanged();
-            }""",
-            ids['person'],
-        )
-        # Biography is absent from the Work-card credit line.
-        self.assertEqual(o._domain_generation(page, 'folders'), before)
-        self.assertIsNotNone(o._cached_list(page, 'folders:index'))
 
     def test_folder_tag_mutation_patches_folder_without_dropping_index(self):
         """ADD/REMOVE_FOLDER_TAG reconcile like Work tags: patch the Folder

@@ -1602,6 +1602,47 @@ sum to **14.384 historical test-execution seconds per full inventory**,
 critical-path wall-clock improvement. No production, retry, E2E selection,
 shard, or packaged-test policy changes.
 
+### Work-role and biography cache-domain helpers (three MOVE contracts, #740)
+
+Three E2Es checked explicit legacy coherence hooks by directly calling
+`prksMarkWorkRoleChanged` or `prksMarkPeopleDomainChanged` after manually
+issuing a server request; one also reloaded the Folder index between helper
+calls. These were not tests of the **current durable-role ACK wiring**, which
+is exercised by retained Work-People/People browser suites and the production
+reconciliation tests.
+
+| Removed browser test | Fast replacement contract |
+| --- | --- |
+| `FoldersOfflineTests.test_author_and_editor_roles_invalidate_folders_but_other_roles_do_not` | Author and Editor invalidate Folder hierarchy; Reviewer and other roles do not. Folder index/entity preservation and eviction are checked directly against the shipped offline runtime. |
+| `FoldersOfflineTests.test_person_rename_invalidates_folders_but_biography_does_not` | Despite its name, the former test PATCHed only `about` (not a rename), then explicitly called `prksMarkPeopleDomainChanged`. Fast coverage proves People invalidation leaves Folder index/details untouched. Actual Person editing remains E2E. |
+| `OfflinePeopleCoherenceTests.test_every_role_type_invalidates_people_but_only_author_invalidates_arguments` | Every role stales People and Person Groups; **only Author** also stales Arguments. Author/Editor additionally stale Folder Work-card credit and relevant browse caches; other roles do not. |
+
+The new `tests/browser/run_work_role_domain_coherence_selftest.js` extracts
+the **shipped functions from `frontend/js/api.js`** (rather than rewriting
+branch policy) and invokes their real domain markers and cache sweeps from
+`frontend/js/offline-runtime.js`. It tests Author, Editor, Reviewer,
+Translator and empty role values through both the legacy Work-evicting
+delegate and the shared ACK-safe dependency helper, plus the old alias
+delegate and biography-only People invalidation. Every domain's actual
+generation, list/entity retention, and Work entity fate is asserted.
+`tests/test_frontend_work_role_domain_coherence.py` registers the suite in
+the existing fast Unit/API/contract gate.
+
+**Retained browser boundaries:** durable Work-role edit, role pickers and
+credit rendering in `test_work_people_offline.py` and related Person E2Es;
+real Folder index rendering, invalidation, and role-dependent Work credit
+through other tests; actual Person metadata edit/ACK and offline reload
+behavior in `test_person_edit_offline.py`. Work-role server ACK projection
+patching and revision ownership are also tested in the separate production
+`run_work_role_sync_selftest.js`. This slice moves only the manually invoked
+cache-hook policy, not those end-to-end contracts.
+
+Historical 2026-10-28 baseline weights: 5.272 + 4.968 + 3.736 =
+**13.976 seconds summed per full E2E inventory**, 27.952s across source and
+packaged inventories. These are *historical test scheduling weights*, not
+measured wall-clock savings. No production changes, CI selection alterations,
+timeouts, retries, sharding changes, or packaged exception.
+
 ## Benchmark protocol
 
 For any optimization:
