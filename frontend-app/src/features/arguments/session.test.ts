@@ -230,6 +230,28 @@ describe('Arguments route bridge', () => {
     expect(el.querySelector('#prks-stance-new-empty')).toBeNull()
   })
 
+  it('renders Stance-only empty state and a populated Argument filter with native routes', () => {
+    paintHelpers()
+    const pane = owner('filtered')
+    const el = host()
+    presentArgumentsIndex({ owner: pane, host: el, kind: 'stance', items: [], generation: 1 })
+    expect(el.querySelector('[data-prks-argument-rows] .prks-research-index__empty .meta-row')?.textContent?.trim()).toBe(
+      'No Stances yet.',
+    )
+    expect(el.querySelector('#prks-stance-new-empty')).not.toBeNull()
+    expect(el.querySelector('#prks-argument-new-empty')).toBeNull()
+    expect(el.textContent).not.toContain('No Arguments or Stances yet.')
+    expect(readRouteSurface(pane)?.canonicalHash).toBe('#/arguments?kind=stance')
+
+    presentArgumentsIndex({ owner: pane, host: el, kind: 'argument', items: [rows[1]], generation: 2 })
+    const visible = el.querySelectorAll('[data-prks-argument-rows] .prks-research-row')
+    expect(visible).toHaveLength(1)
+    expect(visible[0]?.textContent).toContain('Unrelated Argument')
+    expect(el.querySelector('#prks-stance-new-empty')).toBeNull()
+    expect(el.querySelector('#prks-argument-new-empty')).toBeNull()
+    expect(readRouteSurface(pane)?.canonicalHash).toBe('#/arguments?kind=argument')
+  })
+
   it('paints detail overlays, unavailable, and not-found without fetch', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
