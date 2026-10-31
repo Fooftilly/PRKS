@@ -226,8 +226,16 @@ describe('Folder Library route bridge', () => {
   it('does not give a new pane another panes session filter', () => {
     stubFolderLibraryWindow()
     sessionStorage.setItem(FOLDER_LIBRARY_FILTER_KEY, 'physics')
-    const main = { tabId: 'main', isCurrent: () => true, ui: {} }
-    const side = { tabId: 'side', isCurrent: () => true, ui: {} }
+    const main = {
+      tabId: 'main',
+      isCurrent: () => true,
+      ui: {} as { folderTree?: { libraryQuery?: string } },
+    }
+    const side = {
+      tabId: 'side',
+      isCurrent: () => true,
+      ui: {} as { folderTree?: { libraryQuery?: string } },
+    }
     const folders = [{ id: 'F1', title: 'Physics notes', parent_id: null, work_count: 0, child_count: 0 }]
     const mainHost = host()
     const sideHost = host()
