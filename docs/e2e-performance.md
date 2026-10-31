@@ -1677,6 +1677,45 @@ packaged inventories). This is scheduling-weight accounting, *not*
 measured CI wall time or runner-minute savings. No production/runtime
 changes, retries, shard selection, or packaged policy changes.
 
+### Playlist field/reorder ACK read-model coherence (three MOVE contracts, #740)
+
+Three Playlist Chromium tests booted a browser/server to call the classic
+`updatePlaylist` / `reorderPlaylist` wrappers via `page.evaluate` and inspect
+the resulting *disposable cache* without interacting with the UI or testing
+browser offline/reload behavior:
+
+| Removed E2E | Replacement fast assertion |
+| --- | --- |
+| `test_a_description_edit_keeps_member_work_caches` | Description ACK patches both index and detail, advances the per-field sync base and keeps member Work snapshots |
+| `test_a_title_edit_stales_member_work_snapshots_only` | One combined title+description wrapper edit yields two field-scoped operations and ACKs, patches the index/detail and invalidates exactly cached member Works, not an unrelated Work |
+| `test_a_reorder_keeps_member_work_caches_and_reorders_the_detail` | Order ACK updates the cached detail's item order and order revision, fences stale index only, keeps member and unrelated Works |
+
+The replacement `run_playlist_ack_dispatch_selftest.js` imports the
+**production** wrappers from `frontend/js/components/playlists.js` through
+guarded CommonJS exports (classic browser window bindings are unchanged), uses
+the actual IndexedDB-style local durable queue, and drives the real
+`createPrksSyncRuntime` protocol dispatcher and `playlist-state.js`
+field/order handlers against deterministic ACK envelopes. It then inspects
+the real offline-runtime reconciler's cache and reuses the shipped `app.js`
+read validators from the existing 102-case
+`run_offline_read_model_shape_selftest.js` rather than dynamically compiling
+another copy. The app.js durable-store read is represented by a minimal
+test adapter to the real sync store. It checks handler registration, ACK
+events and queue retirement, revisions, isolation of unrelated cached data
+and member Work retention/eviction.
+Registered under existing `tests/test_frontend_playlist_sync.py` Unit/API gate.
+
+**KEEP in Chromium:** live Playlist navigation and item rendering; offline
+refresh/reload and degraded client; real membership operations, actual ACKs,
+conflicts and refusal paths; stale read fencing, Work/Playlist cross-navigation
+and SW behavior in `test_playlists_offline.py` and other Playlist E2Es. The only browser-source change is a guarded Node export of existing wrappers; no browser behavior, durable semantics or test-only mutation hook changes.
+
+The 2026-10-28 timing baseline weights for these three former E2Es sum to
+**15.629 historical seconds per full test inventory**, or 31.258s across
+source and packaged inventories. This is a *summed historical test weight*,
+not a verified reduction in critical-path wall-clock CI time. No E2E runner,
+selection, shard, packaged, timeout or retry policy changes.
+
 ## Benchmark protocol
 
 For any optimization:
