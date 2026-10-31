@@ -422,7 +422,10 @@
         emptyCreate: false,
         navigationTarget: 'current',
         splitPlacement: null,
+        viewRevision: 0,
     };
+
+    const viewListeners = [];
 
     function debounceMs() {
         return typeof root.__prksPaletteDebounceMs === 'number' ? root.__prksPaletteDebounceMs : DEBOUNCE_MS;
@@ -430,15 +433,6 @@
 
     function doc() {
         return typeof document !== 'undefined' ? document : null;
-    }
-
-    function esc(s) {
-        if (typeof root.prksEscapeHtml === 'function') return root.prksEscapeHtml(s);
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
     }
 
     function normalizeQuery(raw) {
@@ -831,6 +825,15 @@
         return false;
     }
 
+    /** Confirm and the unsaved prompt sit above the palette and own Escape. */
+    function confirmLayerOpen() {
+        if (typeof root.prksIsModalConfirmOpen === 'function' && root.prksIsModalConfirmOpen()) return true;
+        if (typeof root.prksIsModalUnsavedConfirmOpen === 'function' && root.prksIsModalUnsavedConfirmOpen()) {
+            return true;
+        }
+        return false;
+    }
+
     function isOpenShortcut(e) {
         if (!e) return false;
         const key = e.key;
@@ -845,11 +848,6 @@
         return isEditableTarget(target);
     }
 
-    function iconHtml(name) {
-        if (typeof root.prksIcon === 'function') return root.prksIcon(name, { size: 'sm' });
-        return '';
-    }
-
     function sectionLabel(section) {
         if (section === 'goto') return 'Go to';
         if (section === 'create') return 'Create';
@@ -859,34 +857,6 @@
         if (section === 'actions') return 'Actions';
         if (section === 'open-tabs') return 'Open tabs';
         return '';
-    }
-
-    function paletteEls() {
-        const d = doc();
-        if (!d) return {};
-        return {
-            root: d.getElementById('prks-command-palette'),
-            input: d.getElementById('prks-command-palette-input'),
-            list: d.getElementById('prks-command-palette-results'),
-            title: d.getElementById('prks-command-palette-title'),
-            status: d.getElementById('prks-command-palette-status'),
-            hints: d.getElementById('prks-command-palette-hints'),
-        };
-    }
-
-    function setHidden(el, hide) {
-        if (!el) return;
-        el.hidden = !!hide;
-        if (hide) el.setAttribute('hidden', '');
-        else el.removeAttribute('hidden');
-    }
-
-    function setStatus(text) {
-        const parts = paletteEls();
-        if (!parts.status) return;
-        /* Keep the live region mounted and exposed (never hidden/display:none): AT must
-         * observe text mutations. Empty visual footprint is CSS :empty, not the hidden attr. */
-        parts.status.textContent = text ? String(text) : '';
     }
 
     function rowCanBeSecondary(row) {
@@ -1217,83 +1187,110 @@
         return combined;
     }
 
-    function renderResults() {
-        const parts = paletteEls();
-        if (!parts.list) return;
-        const rows = assembleResults();
-        state.results = rows;
-        if (state.activeIndex >= rows.length) state.activeIndex = Math.max(0, rows.length - 1);
-        if (state.activeIndex < 0) state.activeIndex = 0;
+    /**
+     * Loading wins over split-empty guidance. The live region stays mounted in
+     * the Vue dialog (never hidden); this string is the only status source.
+     */
+    function statusText(rows) {
+        if (state.fetchFailed) return 'Some quick-open results could not be loaded.';
+        if (state.emptyCreate) return 'No create command matches.';
+        if (state.worksLoading) return 'Searching library…';
+        if (!rows.length && state.navigationTarget === 'tile') return splitPaletteEmptyMessage();
+        return '';
+    }
 
-        let html = '';
-        if (!state.emptyCreate && rows.length) {
-            let lastSection = '';
-            for (let i = 0; i < rows.length; i++) {
-                const row = rows[i];
-                const sec = row.section || '';
-                if (sec && sec !== lastSection) {
-                    html +=
-                        '<div class="prks-command-palette__heading" role="presentation">' +
-                        esc(sectionLabel(sec)) +
-                        '</div>';
-                    lastSection = sec;
-                }
-                const selected = i === state.activeIndex;
-                const sub = row.subtitle ? '<span class="prks-command-palette__sub">' + esc(row.subtitle) + '</span>' : '';
-                html +=
-                    '<div class="prks-command-palette__option' +
-                    (selected ? ' is-active' : '') +
-                    '" role="option" id="prks-palette-opt-' +
-                    i +
-                    '" data-palette-index="' +
-                    i +
-                    '" aria-selected="' +
-                    (selected ? 'true' : 'false') +
-                    '"><span class="prks-command-palette__option-icon">' +
-                    iconHtml(row.icon || 'search') +
-                    '</span><span class="prks-command-palette__option-text"><span class="prks-command-palette__option-label">' +
-                    esc(row.label) +
-                    '</span>' +
-                    sub +
-                    '</span></div>';
+    function paletteTitle() {
+        if (state.scope === 'create') return 'Create…';
+        if (state.navigationTarget === 'new-tab') return 'Open in new tab';
+        if (state.navigationTarget === 'tile') return 'Open in split view';
+        return 'Search or jump';
+    }
+
+    function palettePlaceholder() {
+        if (state.scope === 'create') return 'Create…';
+        if (state.navigationTarget === 'new-tab') return 'Open in new tab…';
+        if (state.navigationTarget === 'tile') return 'Open in split view…';
+        return 'Search or jump…';
+    }
+
+    function displayRows(rows) {
+        const out = [];
+        let lastSection = '';
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const sec = row.section || '';
+            out.push({
+                index: i,
+                id: String(row.id || ''),
+                label: String(row.label || ''),
+                subtitle: row.subtitle ? String(row.subtitle) : '',
+                icon: row.icon ? String(row.icon) : 'search',
+                section: sec,
+                heading: sec && sec !== lastSection ? sectionLabel(sec) : '',
+            });
+            if (sec) lastSection = sec;
+        }
+        return out;
+    }
+
+    function currentView() {
+        const open = !!state.open;
+        const rows = open ? state.results : [];
+        const activeDescendant = open && rows.length ? 'prks-palette-opt-' + state.activeIndex : '';
+        return {
+            open: open,
+            title: paletteTitle(),
+            placeholder: palettePlaceholder(),
+            query: open ? String(state.query || '') : '',
+            scope: state.scope === 'create' ? 'create' : 'all',
+            navigationTarget: state.navigationTarget,
+            createMode: state.scope === 'create',
+            activeIndex: state.activeIndex,
+            activeDescendant: activeDescendant,
+            rows: displayRows(rows),
+            status: open ? statusText(rows) : '',
+            hints: open && state.scope !== 'create' ? paletteHintsText() : '',
+            showHints: open && state.scope !== 'create',
+            revision: state.viewRevision,
+        };
+    }
+
+    function freezeView(view) {
+        const rows = [];
+        for (let i = 0; i < view.rows.length; i++) rows.push(Object.freeze(view.rows[i]));
+        view.rows = Object.freeze(rows);
+        return Object.freeze(view);
+    }
+
+    function publish(opts) {
+        /* A blocked open still accepts a query: callers read the same result
+         * list the dialog would have painted. Closing does not reassemble,
+         * so the last list stays available and the view simply hides it. */
+        if (!opts || opts.assemble !== false) {
+            state.results = assembleResults();
+            if (state.activeIndex >= state.results.length) {
+                state.activeIndex = Math.max(0, state.results.length - 1);
             }
+            if (state.activeIndex < 0) state.activeIndex = 0;
         }
-        parts.list.innerHTML = html;
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(parts.list);
-
-        if (parts.input) {
-            parts.input.setAttribute('aria-expanded', 'true');
-            const activeId = rows.length ? 'prks-palette-opt-' + state.activeIndex : '';
-            if (activeId) parts.input.setAttribute('aria-activedescendant', activeId);
-            else parts.input.removeAttribute('aria-activedescendant');
-        }
-
-        /* Guidance uses the persistent status live region (sibling of the listbox), never a
-         * status node injected inside role=listbox — invalid owned children break AT. */
-        if (state.fetchFailed) setStatus('Some quick-open results could not be loaded.');
-        else if (state.emptyCreate) setStatus('No create command matches.');
-        else if (state.worksLoading) setStatus('Searching library…');
-        else if (!rows.length && state.navigationTarget === 'tile') setStatus(splitPaletteEmptyMessage());
-        else setStatus('');
+        state.viewRevision += 1;
+        const view = freezeView(currentView());
+        state.view = view;
+        for (let i = 0; i < viewListeners.length; i++) viewListeners[i](view);
     }
 
     function setActive(index) {
         const n = state.results.length;
         if (!n) {
             state.activeIndex = 0;
-            renderResults();
+            publish();
             return;
         }
         let i = index;
         if (i < 0) i = n - 1;
         if (i >= n) i = 0;
         state.activeIndex = i;
-        renderResults();
-        const d = doc();
-        const el = d && d.getElementById('prks-palette-opt-' + i);
-        if (el && typeof el.scrollIntoView === 'function') {
-            el.scrollIntoView({ block: 'nearest' });
-        }
+        publish();
     }
 
     function executeRow(row, execOpts) {
@@ -1352,6 +1349,31 @@
         executeRow(state.results[state.activeIndex], execOpts);
     }
 
+    function activateFromPointer(index, event) {
+        if (!state.open) return;
+        const idx = typeof index === 'number' ? index : parseInt(index, 10);
+        if (!Number.isFinite(idx)) return;
+        const e = event || {};
+        state.activeIndex = idx;
+        executeActive({
+            backgroundTab:
+                !!(e.ctrlKey || e.metaKey) &&
+                !e.altKey &&
+                state.navigationTarget !== 'new-tab' &&
+                state.navigationTarget !== 'tile',
+            tile: !!e.altKey && state.navigationTarget !== 'new-tab',
+        });
+    }
+
+    function subscribeView(fn) {
+        if (typeof fn !== 'function') return function () {};
+        viewListeners.push(fn);
+        return function () {
+            const at = viewListeners.indexOf(fn);
+            if (at >= 0) viewListeners.splice(at, 1);
+        };
+    }
+
     function clearCaches() {
         state.folderCache = null;
         state.personCache = null;
@@ -1393,14 +1415,14 @@
                 if (!state.open || session !== state.sessionGen) return;
                 const list = Array.isArray(data) ? data : [];
                 assign(list);
-                renderResults();
+                publish();
                 return list;
             })
             .catch(function () {
                 if (!state.open || session !== state.sessionGen) return;
                 state.fetchFailed = true;
                 assign([]);
-                renderResults();
+                publish();
                 return [];
             });
     }
@@ -1483,18 +1505,18 @@
         if (state.scope === 'create' || normalizeQuery(q).length < MIN_DYNAMIC_LEN) {
             state.works = [];
             state.worksLoading = false;
-            if (gen === state.queryGen) renderResults();
+            if (gen === state.queryGen) publish();
             return;
         }
         const fetchSearch = root.fetchSearch;
         if (typeof fetchSearch !== 'function') {
             state.works = [];
             state.worksLoading = false;
-            if (gen === state.queryGen) renderResults();
+            if (gen === state.queryGen) publish();
             return;
         }
         state.worksLoading = true;
-        if (gen === state.queryGen) renderResults();
+        if (gen === state.queryGen) publish();
         Promise.resolve(fetchSearch(q, null, { any: '1' }))
             .then(function (data) {
                 if (gen !== state.queryGen) return;
@@ -1518,14 +1540,14 @@
                 }
                 state.works = works;
                 state.worksLoading = false;
-                renderResults();
+                publish();
             })
             .catch(function () {
                 if (gen !== state.queryGen) return;
                 state.fetchFailed = true;
                 state.works = [];
                 state.worksLoading = false;
-                renderResults();
+                publish();
             });
     }
 
@@ -1548,7 +1570,7 @@
         const gen = state.queryGen;
         state.works = [];
         ensureCatalogs();
-        renderResults();
+        publish();
         scheduleWorks(state.query, gen);
     }
 
@@ -1583,126 +1605,16 @@
         }
     }
 
-    function syncPaletteHints() {
-        const parts = paletteEls();
-        if (!parts.hints) return;
-        const hide = !state.open || state.scope === 'create';
-        setHidden(parts.hints, hide);
-        if (!hide) {
-            const here = paletteOrientationText();
-            parts.hints.textContent = here
-                ? here + '   ·   ' + paletteHintText()
-                : paletteHintText();
-        }
+    function paletteHintsText() {
+        const here = paletteOrientationText();
+        const keys = paletteHintText();
+        return here ? here + '   ·   ' + keys : keys;
     }
 
     function syncShortcutHint() {
         const d = doc();
         const hint = d && d.querySelector('[data-palette-shortcut-hint]');
         if (hint) hint.textContent = isMacPlatform() ? '⌘ K' : 'Ctrl K';
-    }
-
-    function el(tag, attrs) {
-        const d = doc();
-        const node = d.createElement(tag);
-        if (attrs) {
-            Object.keys(attrs).forEach(function (k) {
-                const v = attrs[k];
-                if (k === 'id') node.id = v;
-                else if (k === 'className') node.className = v;
-                else if (k === 'hidden') {
-                    node.hidden = true;
-                    node.setAttribute('hidden', '');
-                } else if (k === 'text') node.textContent = v;
-                else node.setAttribute(k, v);
-            });
-        }
-        return node;
-    }
-
-    function ensureMarkup() {
-        const d = doc();
-        if (!d || !d.body) return paletteEls();
-        if (d.getElementById('prks-command-palette')) return paletteEls();
-        const wrap = el('div', {
-            id: 'prks-command-palette',
-            role: 'dialog',
-            'aria-modal': 'true',
-            'aria-labelledby': 'prks-command-palette-title',
-            hidden: true,
-        });
-        const scrim = el('div', { className: 'prks-command-palette__scrim', 'data-palette-dismiss': '1' });
-        const panel = el('div', { className: 'prks-command-palette__panel' });
-        const title = el('h2', {
-            id: 'prks-command-palette-title',
-            className: 'prks-command-palette__title',
-            text: 'Search or jump',
-        });
-        const inputRow = el('div', { className: 'prks-command-palette__input-row' });
-        const iconWrap = el('span', { className: 'prks-command-palette__input-icon', 'aria-hidden': 'true' });
-        iconWrap.innerHTML = iconHtml('search');
-        const input = el('input', {
-            id: 'prks-command-palette-input',
-            type: 'text',
-            role: 'combobox',
-            'aria-autocomplete': 'list',
-            'aria-expanded': 'false',
-            'aria-controls': 'prks-command-palette-results',
-            autocomplete: 'off',
-            spellcheck: 'false',
-            placeholder: 'Search or jump…',
-        });
-        const list = el('div', {
-            id: 'prks-command-palette-results',
-            className: 'prks-command-palette__results',
-            role: 'listbox',
-        });
-        const status = el('p', {
-            id: 'prks-command-palette-status',
-            className: 'prks-command-palette__status',
-            role: 'status',
-            'aria-live': 'polite',
-        });
-        const hints = el('p', {
-            id: 'prks-command-palette-hints',
-            className: 'prks-command-palette__hints',
-            hidden: true,
-        });
-        inputRow.appendChild(iconWrap);
-        inputRow.appendChild(input);
-        panel.appendChild(title);
-        panel.appendChild(inputRow);
-        panel.appendChild(list);
-        panel.appendChild(status);
-        panel.appendChild(hints);
-        wrap.appendChild(scrim);
-        wrap.appendChild(panel);
-        d.body.appendChild(wrap);
-        if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(wrap);
-        wrap.addEventListener('click', function (e) {
-            const t = e.target;
-            if (!t || !t.closest) return;
-            if (t.closest('[data-palette-dismiss]')) {
-                closePalette({ restoreFocus: true });
-                return;
-            }
-            const opt = t.closest('[data-palette-index]');
-            if (opt) {
-                const idx = parseInt(opt.getAttribute('data-palette-index'), 10);
-                if (Number.isFinite(idx)) {
-                    state.activeIndex = idx;
-                    executeActive({
-                        backgroundTab: !!(e.ctrlKey || e.metaKey) && !e.altKey && state.navigationTarget !== 'new-tab' && state.navigationTarget !== 'tile',
-                        tile: !!e.altKey && state.navigationTarget !== 'new-tab',
-                    });
-                }
-            }
-        });
-        input.addEventListener('input', function () {
-            applyQuery(input.value);
-        });
-        input.addEventListener('keydown', onPaletteKeydown);
-        return paletteEls();
     }
 
     function onPaletteKeydown(e) {
@@ -1737,6 +1649,7 @@
             return;
         }
         if (key === 'Escape') {
+            if (confirmLayerOpen()) return;
             e.preventDefault();
             e.stopPropagation();
             closePalette({ restoreFocus: true });
@@ -1746,8 +1659,10 @@
     function onDocumentKeydown(e) {
         if (state.open) {
             if (e.key === 'Escape') {
+                if (confirmLayerOpen()) return;
                 e.preventDefault();
                 e.stopPropagation();
+                if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
                 closePalette({ restoreFocus: true });
                 return;
             }
@@ -1768,8 +1683,6 @@
             closePalette({ restoreFocus: false });
         }
         if (isBlockingDialogOpen()) return false;
-        const parts = ensureMarkup();
-        if (!parts.root || !parts.input) return false;
         const d = doc();
         if (!state.open) {
             state.prevFocus = d && d.activeElement ? d.activeElement : null;
@@ -1794,32 +1707,7 @@
         clearDebounce();
         clearCaches();
         watchSavedViewWrites();
-        parts.input.value = '';
-        if (parts.title) {
-            if (state.scope === 'create') parts.title.textContent = 'Create…';
-            else if (state.navigationTarget === 'new-tab') parts.title.textContent = 'Open in new tab';
-            else if (state.navigationTarget === 'tile') parts.title.textContent = 'Open in split view';
-            else parts.title.textContent = 'Search or jump';
-        }
-        parts.input.setAttribute(
-            'placeholder',
-            state.scope === 'create'
-                ? 'Create…'
-                : state.navigationTarget === 'new-tab'
-                  ? 'Open in new tab…'
-                  : state.navigationTarget === 'tile'
-                    ? 'Open in split view…'
-                    : 'Search or jump…'
-        );
-        setHidden(parts.root, false);
-        parts.root.classList.toggle('prks-command-palette--create', state.scope === 'create');
-        renderResults();
-        syncPaletteHints();
-        const focusInput = function () {
-            if (parts.input && typeof parts.input.focus === 'function') parts.input.focus();
-        };
-        if (typeof root.requestAnimationFrame === 'function') root.requestAnimationFrame(focusInput);
-        else focusInput();
+        publish();
         return true;
     }
 
@@ -1838,19 +1726,7 @@
         clearDebounce();
         clearCaches();
         unwatchSavedViewWrites();
-        const parts = paletteEls();
-        if (parts.input) {
-            parts.input.value = '';
-            parts.input.removeAttribute('aria-activedescendant');
-            parts.input.setAttribute('aria-expanded', 'false');
-        }
-        if (parts.list) parts.list.innerHTML = '';
-        setStatus('');
-        syncPaletteHints();
-        if (parts.root) {
-            setHidden(parts.root, true);
-            parts.root.classList.remove('prks-command-palette--create');
-        }
+        publish({ assemble: false });
         if (restore && prev && typeof prev.focus === 'function') {
             try {
                 const d = doc();
@@ -1877,7 +1753,6 @@
     function init() {
         if (state.inited) return;
         state.inited = true;
-        ensureMarkup();
         bindChrome();
         const d = doc();
         if (d && d.addEventListener) d.addEventListener('keydown', onDocumentKeydown, true);
@@ -1912,6 +1787,11 @@
         prksCloseCommandPalette: function () {
             closePalette({ restoreFocus: true });
         },
+        prksCommandPaletteView: function () {
+            return state.view || freezeView(currentView());
+        },
+        prksCommandPaletteSubscribe: subscribeView,
+        prksCommandPaletteActivateFromPointer: activateFromPointer,
         prksCommandPaletteIsOpen: function () {
             return !!state.open;
         },
