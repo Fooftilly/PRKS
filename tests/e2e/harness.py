@@ -1139,7 +1139,8 @@ class AppServer:
     def start(self):
         if self.library is None:
             try:
-                self.library = provision_library(self.storage_root)
+                with profile_e2e_phase("postgres_provision"):
+                    self.library = provision_library(self.storage_root)
             except Exception:
                 self._tmpdir.cleanup()
                 raise
@@ -1288,7 +1289,8 @@ class AppServer:
     def _drop_library(self):
         # Cleared only once dropped, so a failed drop can be retried by stop().
         if self.library is not None:
-            self.library.drop()
+            with profile_e2e_phase("postgres_drop"):
+                self.library.drop()
             self.library = None
 
 
