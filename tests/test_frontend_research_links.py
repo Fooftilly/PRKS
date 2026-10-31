@@ -108,9 +108,13 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_create_edit_use_in_app_prompt(self):
         ui = _read(_UI)
+        host = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "modal", "ModalHost.vue"
+        ))
         self.assertIn("function prksPromptTextDialog", ui)
         self.assertIn("window.prksPromptTextDialog", ui)
-        self.assertIn("prks-modal-prompt__input--multiline", ui)
+        self.assertIn("host.prompt(options || {})", ui)
+        self.assertIn("prks-modal-prompt__input--multiline", host)
         for path in (_CONCEPTS, _POSITIONS, _ARGS):
             src = _read(path)
             self.assertNotIn("window.prompt", src, path)

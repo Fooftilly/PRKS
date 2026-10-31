@@ -486,12 +486,6 @@ async editable-draft confirmation begins. `prksRenderTabRoute` does not repeat i
 This is the sole native-confirm exception.
 Person profile and Work metadata dirty-draft leave guards use the styled async
 confirmation and are awaited by workspace `awaitLeave()` before mutation.
-Those decisions stay with the feature probes and `prksTabLeave`. The dialog
-itself is the Vue modal host (`frontend-app/src/modal/ModalHost.vue`):
-`prksConfirmDialog`, `prksPromptTextDialog`, and `prksAlertDialog` in `ui.js`
-are the classic call sites and do not paint a second stack. Dirty form
-baselines and feature-modal shells (`openModal` / `closeModals`) stay in
-`ui.js` until those forms move.
 
 Every other confirmation, including both PDF annotation-delete entry points
 (the annotation editor's Delete button and the annotation-list row's Delete
