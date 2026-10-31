@@ -73,6 +73,19 @@ class WorkNoteSyncFrontendTests(unittest.TestCase):
         self.assertIn('prksWorkPrivateNoteNeedsCommittedHandoff: '
                       'prksWorkPrivateNoteNeedsCommittedHandoff', work)
         self.assertIn('window.prksWorkPrivateNoteNeedsCommittedHandoff(', ui)
+        # Vitest evaluates the classic UI directly; its fixtures must load
+        # the production Work-notes owner first, like the actual app shell.
+        for suffix in (
+            'features/folder-detail/private-note-session.test.ts',
+            'features/work/private-note-session.test.ts',
+            'features/work/private-note-draft.test.ts',
+            'features/work/panel-focus-switch.test.ts',
+        ):
+            with self.subTest(fixture=suffix):
+                fixture = (ROOT / 'frontend-app' / 'src' / suffix).read_text()
+                self.assertIn("work-notes-state.js?raw", fixture)
+                self.assertLess(fixture.index('eval(workNotesStateSource)'),
+                                fixture.index('eval(uiSource)'))
 
     def test_production_javascript_parses(self):
         for path in (FRONTEND / 'work-notes-state.js', FRONTEND / 'local-store.js',
