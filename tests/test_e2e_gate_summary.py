@@ -61,8 +61,8 @@ class E2EGateSummaryTests(unittest.TestCase):
 
     def test_whitespace_is_not_normalized_into_a_valid_plan(self):
         report = format_e2e_gate_summary({
-            "PLAN_RUN": "true", "PLAN_MODE": "full\\n",
-            "PLAN_RESULT": "success", "PLAN_POINTER": "true\\n",
+            "PLAN_RUN": "true", "PLAN_MODE": "full\n",
+            "PLAN_RESULT": "success", "PLAN_POINTER": "true\n",
             "E2E_RESULT": "success",
         }, passed=False)
         self.assertIn("Unverified: inconsistent or unknown selection", report)
