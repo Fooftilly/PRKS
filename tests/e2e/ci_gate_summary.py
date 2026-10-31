@@ -45,8 +45,8 @@ def format_e2e_gate_summary(env: Mapping[str, str], *, passed: bool) -> str:
     Only fixed labels and strictly validated planner fields enter Markdown.
     The plan's arbitrary reason string is deliberately not rendered.
     """
-    run = (env.get("PLAN_RUN") or "").strip()
-    mode = (env.get("PLAN_MODE") or "").strip()
+    run = env.get("PLAN_RUN") or ""
+    mode = env.get("PLAN_MODE") or ""
     plan_result = _job_result(env.get("PLAN_RESULT"))
     if plan_result != "success":
         scope = "Unverified: planner did not succeed"
@@ -64,7 +64,7 @@ def format_e2e_gate_summary(env: Mapping[str, str], *, passed: bool) -> str:
         scope = "Unverified: inconsistent or unknown selection"
         caveat = "Inspect the E2E plan job; do not infer browser coverage."
 
-    pointer = (env.get("PLAN_POINTER") or "").strip()
+    pointer = env.get("PLAN_POINTER") or ""
     pointer_planned = {"true": "yes", "false": "no"}.get(pointer, "unknown")
     features = _features(env.get("PLAN_FEATURES")) if mode == "affected" else "not applicable"
     return (
