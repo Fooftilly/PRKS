@@ -81,6 +81,14 @@ Any command that depends on transient command-palette operation state (e.g.
 must snapshot that state before calling `closePalette()`, because closing the
 palette clears it. Read the snapshot afterward, never the live state.
 
+`frontend-app/src/palette/CommandPalette.vue` paints the dialog, input, result
+rows, status, and hints from `prksCommandPaletteView`. `command-palette.js`
+keeps the catalog, filtering, search, cancellation, and allowlisted dispatch,
+and it does not build result HTML. The ribbon control
+`#prks-command-palette-launch` is bound once in that module. Confirm and the
+unsaved prompt own Escape while they are open; the palette does not close
+under them.
+
 ## Workspace navigation
 
 Internal PRKS navigation uses prksNavigate.

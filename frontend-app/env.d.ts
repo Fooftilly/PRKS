@@ -198,7 +198,22 @@ interface Window {
   }) => void
   /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
-  prksOpenCommandPalette?: () => void
+  prksOpenCommandPalette?: (options?: {
+    scope?: 'all' | 'create'
+    navigationTarget?: 'current' | 'new-tab' | 'tile'
+    splitPlacement?: { targetLeafTabId?: string; axis?: string; placement?: string } | null
+  }) => boolean | void
+  prksCloseCommandPalette?: () => void
+  prksCommandPaletteView?: () => import('./src/palette/types').PaletteView
+  prksCommandPaletteSubscribe?: (
+    listener: (view: import('./src/palette/types').PaletteView) => void,
+  ) => () => void
+  prksCommandPaletteSetQuery?: (raw: string) => void
+  prksCommandPaletteHandleKey?: (event: KeyboardEvent) => void
+  prksCommandPaletteActivateFromPointer?: (
+    index: number,
+    event?: import('./src/palette/types').PalettePointerEvent,
+  ) => void
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
   prksFolderNavTriggerHtml?: (
     folder: unknown,
