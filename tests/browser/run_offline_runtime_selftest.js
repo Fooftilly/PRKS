@@ -367,6 +367,20 @@ async function verifyFolderFieldAckDispatch() {
     require(path.join(rootDir, 'frontend/js/sync-runtime.js'));
     const fs = require('fs');
     const api = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
+    // The browser bootstraps the production coordinator registry after its
+    // document gate. This Node runner instantiates the same coordinator with
+    // the real exported handler, so also pin the shipped registry wiring:
+    // otherwise removing that registration would silently bypass this test.
+    const syncSource = fs.readFileSync(path.join(rootDir, 'frontend/js/sync-runtime.js'), 'utf8');
+    const registryStart = syncSource.indexOf('runtime = createRuntime({ store, online,');
+    const registryEnd = syncSource.indexOf('\n        lock:', registryStart);
+    if (registryStart < 0 || registryEnd < registryStart) {
+        throw new Error('production sync coordinator registry not found');
+    }
+    const registry = syncSource.slice(registryStart, registryEnd);
+    const entries = registry.match(/\bSET_FOLDER_FIELD:\s*root\.prksFolderFieldSyncHandler\s*,/g) || [];
+    assertEq('production sync registry maps SET_FOLDER_FIELD to Folder field handler',
+        entries.length, 1);
     const marker = 'async function patchFolder(folderId, updates) {';
     const start = api.indexOf(marker);
     if (start < 0 || api.indexOf(marker, start + marker.length) !== -1) {
