@@ -80,10 +80,14 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("releaseFolderSave", ui)
         self.assertIn("afterPersonReset()", ui)
         self.assertIn("el.value = ''", ui)
-        self.assertNotIn("getElementById('save-folder-btn')", app)
+        self.assertIn("if (!window.prksCreateForms)", app)
+        fallback = app.split("if (!window.prksCreateForms)", 1)[1].split(
+            "const saveRoleBtn", 1
+        )[0]
+        self.assertIn("getElementById('save-folder-btn')", fallback)
+        self.assertIn("getElementById('save-playlist-btn')", fallback)
         self.assertNotIn("getElementById('save-person-btn')", app)
         self.assertNotIn("getElementById('save-group-btn')", app)
-        self.assertNotIn("getElementById('save-playlist-btn')", app)
         self.assertIn("id=\"save-work-btn\"", (ROOT / "frontend" / "index.html").read_text(encoding="utf-8"))
 
 
