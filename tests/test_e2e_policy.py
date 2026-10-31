@@ -213,6 +213,27 @@ class SmokeSelectionTests(unittest.TestCase):
 
 
 class FeatureSelectionTests(unittest.TestCase):
+    @staticmethod
+    def _is_exact_method_selector(selector: str) -> bool:
+        # A module such as tests.e2e.test_positions_durable also starts with
+        # "test_"; only module.Class.test_method has a method segment.
+        parts = selector.split(".")
+        return len(parts) >= 5 and parts[-1].startswith("test_")
+
+    def test_exact_selector_classification_preserves_broad_feature_prefixes(self):
+        self.assertFalse(self._is_exact_method_selector("tests.e2e.test_positions_durable"))
+        self.assertFalse(
+            self._is_exact_method_selector(
+                "tests.e2e.test_app.ResearchIndexAndDetailPolishTests"
+            )
+        )
+        self.assertTrue(
+            self._is_exact_method_selector(
+                "tests.e2e.test_app.ResearchIndexAndDetailPolishTests"
+                ".test_argument_index_search_respects_kind_filter"
+            )
+        )
+
     def test_graph_feature_selects_app_and_offline_graph(self):
         selected = policy.select_features(FAKE_IDS, ["graph"])
         self.assertTrue(
@@ -240,7 +261,7 @@ class FeatureSelectionTests(unittest.TestCase):
         for feature, config in policy.FEATURES.items():
             for selector in config["selectors"]:
                 parts = selector.split(".")
-                if not parts[-1].startswith("test_"):
+                if not self._is_exact_method_selector(selector):
                     continue
                 with self.subTest(feature=feature, selector=selector):
                     self.assertGreaterEqual(len(parts), 5)
