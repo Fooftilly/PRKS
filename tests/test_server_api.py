@@ -4448,6 +4448,40 @@ class TestServerAPI(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(payload.decode("utf-8")).get("id"))
 
+    def test_trust_cross_origin_rescan_get_forbidden(self):
+        status, payload = self._raw_http(
+            "GET",
+            "/api/processing-files?rescan=1",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+            ],
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._json_error(payload), "origin_not_allowed")
+
+    def test_trust_same_origin_rescan_get_allowed(self):
+        status, payload = self._raw_http(
+            "GET",
+            "/api/processing-files?rescan=1",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", f"http://localhost:{self._test_port}"),
+            ],
+        )
+        self.assertEqual(status, 200)
+
+    def test_trust_cross_origin_plain_get_allowed(self):
+        status, payload = self._raw_http(
+            "GET",
+            "/api/processing-files",
+            [
+                ("Host", f"localhost:{self._test_port}"),
+                ("Origin", "https://evil.example"),
+            ],
+        )
+        self.assertEqual(status, 200)
+
     def test_trust_missing_content_type_rejected(self):
         before = json.loads(
             urllib.request.urlopen(f"{self._base_url}/api/works").read().decode()
