@@ -6035,11 +6035,331 @@ function initForms() {
 
 
 
-    // Folder, Person, Person Group, and Playlist create forms are Vue
-    // (frontend-app/src/features/create-forms/). They call createFolder,
-    // prksCreatePersonDurably, prksCreatePersonGroupDurably, and createPlaylist.
-    // New File stays here until its own slice.
+    // Vue owns these submits when prksCreateForms is installed (before
+    // DOMContentLoaded). This fallback is only for the Node membership
+    // harness, which drives onclick without the Vue bundle.
+    if (!window.prksCreateForms) {
+    const folderTitleInput = document.getElementById('folder-title');
+    const folderTitleError = document.getElementById('folder-title-error');
+    const folderBtn = document.getElementById('save-folder-btn');
+    const folderParentInput = document.getElementById('folder-parent-search');
+    const folderParentHidden = document.getElementById('folder-parent-id');
+    const folderParentResults = document.getElementById('folder-parent-results');
+    let revalidateFolderTitle = null;
+    if (folderTitleInput && folderTitleError && folderBtn) {
+        let folderModalFolders = [];
+        let folderParentBound = false;
 
+        function folderTitleNormKey(s) {
+            return (s || '').trim().toLowerCase();
+        }
+        function folderParentNormKey(parentId) {
+            return String(parentId || '').trim();
+        }
+        function effectiveFolderTitleFromInput(raw) {
+            const t = (raw || '').trim();
+            return t || 'Untitled Folder';
+        }
+        function folderTitleConflicts(raw, folders, parentId) {
+            const key = folderTitleNormKey(effectiveFolderTitleFromInput(raw));
+            const pKey = folderParentNormKey(parentId);
+            return folders.some(
+                (f) =>
+                    folderTitleNormKey(f.title) === key &&
+                    folderParentNormKey(f.parent_id) === pKey
+            );
+        }
+        function updateFolderTitleDuplicateUi() {
+            const parentId = folderParentHidden ? folderParentHidden.value : '';
+            const dup = folderTitleConflicts(folderTitleInput.value, folderModalFolders, parentId);
+            if (dup) {
+                folderTitleError.textContent = 'A folder with this name already exists in this location.';
+                folderTitleError.classList.remove('hidden');
+                folderTitleInput.setAttribute('aria-invalid', 'true');
+                folderBtn.disabled = true;
+            } else {
+                folderTitleError.textContent = '';
+                folderTitleError.classList.add('hidden');
+                folderTitleInput.removeAttribute('aria-invalid');
+                // Input events and async validation must not enable Save while busy.
+                folderBtn.disabled = folderBtn.getAttribute('aria-busy') === 'true';
+            }
+        }
+        revalidateFolderTitle = updateFolderTitleDuplicateUi;
+        function renderFolderParentDropdown() {
+            if (!folderParentInput || !folderParentHidden || !folderParentResults) return;
+            const q = String(folderParentInput.value || '').trim().toLowerCase();
+            const filtered = folderModalFolders.filter((f) => {
+                const label = typeof window.prksFolderRowLabel === 'function'
+                    ? window.prksFolderRowLabel(f, folderModalFolders)
+                    : String(f.title || '');
+                return (
+                    !q ||
+                    label.toLowerCase().includes(q) ||
+                    String(f.title || '').toLowerCase().includes(q)
+                );
+            });
+            folderParentResults.innerHTML = '';
+            if (filtered.length === 0) {
+                folderParentResults.innerHTML = '<div class="result-item no-results">No folders found</div>';
+            } else {
+                filtered.slice(0, 80).forEach((f) => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item';
+                    div.textContent = typeof window.prksFolderRowLabel === 'function'
+                        ? window.prksFolderRowLabel(f, folderModalFolders)
+                        : String(f.title || 'Folder');
+                    div.onmousedown = (ev) => {
+                        ev.preventDefault();
+                        folderParentHidden.value = String(f.id || '');
+                        folderParentInput.value = div.textContent || '';
+                        prksHideInlineComboboxResults(folderParentResults);
+                        updateFolderTitleDuplicateUi();
+                    };
+                    folderParentResults.appendChild(div);
+                });
+            }
+            if (typeof prksShowInlineComboboxResults === 'function') {
+                prksShowInlineComboboxResults(folderParentInput, folderParentResults);
+            } else {
+                folderParentResults.classList.remove('hidden');
+            }
+        }
+        function bindFolderParentCombobox() {
+            if (
+                folderParentBound ||
+                !folderParentInput ||
+                !folderParentHidden ||
+                !folderParentResults
+            ) {
+                return;
+            }
+            folderParentBound = true;
+            folderParentInput.addEventListener('focus', () => renderFolderParentDropdown());
+            folderParentInput.addEventListener('input', () => {
+                folderParentHidden.value = '';
+                renderFolderParentDropdown();
+                updateFolderTitleDuplicateUi();
+            });
+            folderParentInput.addEventListener('blur', () =>
+                setTimeout(() => prksHideInlineComboboxResults(folderParentResults), 200)
+            );
+        }
+        window.prksRefreshFolderModalValidation = async function () {
+            try {
+                folderModalFolders = await fetchFolders();
+            } catch (e) {
+                folderModalFolders = [];
+            }
+            bindFolderParentCombobox();
+            updateFolderTitleDuplicateUi();
+        };
+        folderTitleInput.addEventListener('input', updateFolderTitleDuplicateUi);
+    }
+
+    if (folderBtn) {
+        // A second click must not mint a second durable CREATE_FOLDER id while
+        // the first save is still queued or resolving (including offline).
+        let folderCreateInFlight = null;
+        folderBtn.onclick = async () => {
+            const folderModal = document.getElementById('folder-modal');
+            const opening = folderModal ? folderModal.dataset.prksOpenGeneration : '';
+            const isCurrentOpening = () => !!folderModal &&
+                !folderModal.classList.contains('hidden') &&
+                folderModal.dataset.prksOpenGeneration === opening;
+            if (folderCreateInFlight && folderCreateInFlight.opening === opening) return;
+            if (folderBtn.disabled) return;
+            const saveToken = { opening };
+            folderCreateInFlight = saveToken;
+            if (typeof prksSetButtonBusy === 'function') {
+                prksSetButtonBusy(folderBtn, true, { busyLabel: 'Creating…' });
+            }
+            try {
+                /* No offline guard: a folder is created durably, under an id this
+                 * device mints, so it exists and is usable the moment it is saved. */
+                const ownerCtx =
+                    typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
+                const payload = {
+                    title: document.getElementById('folder-title').value,
+                    description: document.getElementById('folder-description').value,
+                    parent_id: (() => {
+                        const raw = (document.getElementById('folder-parent-id')?.value || '').trim();
+                        return raw || null;
+                    })()
+                };
+                let newFolderId;
+                try {
+                    newFolderId = await createFolder(payload.title, payload.description, {
+                        parent_id: payload.parent_id,
+                    });
+                } catch (e) {
+                    if (!isCurrentOpening()) return;
+                    if (!prksOfflineWasGuardRefusal(e)) {
+                        await prksAlertMessage((e && e.message) || 'Could not create folder', 'Could not save');
+                    }
+                    return;
+                } finally {
+                    if (folderCreateInFlight === saveToken) {
+                        folderCreateInFlight = null;
+                        if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
+                            prksSetButtonBusy(folderBtn, false);
+                            if (revalidateFolderTitle) revalidateFolderTitle();
+                        }
+                    }
+                }
+                // The durable create is complete; the later Work attachment
+                // owns a separate liveness fence and does not hold this guard.
+                if (!isCurrentOpening()) return;
+                const data = { id: newFolderId };
+                const pending = window.__prksPendingWorkFolderAttach;
+                if (pending && pending.workId && typeof patchWorkFolder === 'function') {
+                    const attachWid = String(pending.workId);
+                    const opener = pending.tabId && typeof prksGetTabContext === 'function'
+                        ? prksGetTabContext(String(pending.tabId)) : null;
+                    const still = function () {
+                        return typeof prksCapturedWorkPanelStill === 'function' &&
+                            prksCapturedWorkPanelStill(pending);
+                    };
+                    window.__prksPendingWorkFolderAttach = null;
+                    closeModals();
+                    if (!still()) return;
+                    let attachCoherenceToken = null;
+                    try {
+                        attachCoherenceToken = await patchWorkFolder(attachWid, data.id, still);
+                    } catch (e) {
+                        if (still()) {
+                            await prksAlertMessage(
+                                (e && e.message) || 'Folder created but could not assign this file.',
+                                'Error'
+                            );
+                        }
+                    }
+                    if (!still()) return;
+                    if (typeof fetchWorkDetails === 'function') {
+                        const _aw = await fetchWorkDetails(attachWid);
+                        if (_aw && typeof prksOfflineCacheEntityIfCurrent === 'function' && attachCoherenceToken != null) {
+                            void prksOfflineCacheEntityIfCurrent('work', attachWid, _aw, attachCoherenceToken);
+                        }
+                        if (typeof prksApplyOwnedWorkEntity === 'function' && prksApplyOwnedWorkEntity(opener, attachWid, _aw)) {
+                            if (opener && opener.ui) opener.ui.workFolderEditing = false;
+                            if (typeof prksTabContextIsFocused === 'function' ? prksTabContextIsFocused(opener) : false) {
+                                updatePanelContent('details');
+                            }
+                        }
+                    }
+                    return;
+                }
+                closeModals();
+                const ownerRoute = ownerCtx && (ownerCtx.lastResolvedRoute || ownerCtx.route);
+                if (
+                    ownerRoute &&
+                    ownerRoute.name === 'folders' &&
+                    typeof prksNavigate === 'function'
+                ) {
+                    prksNavigate('#/folders', { replace: true, tabId: ownerCtx.tabId });
+                    return;
+                }
+                /* Not a reload: the record is local, and reloading would throw away
+                 * every other pending change on the page. The Folder Library is
+                 * where a new folder belongs, so go there. */
+                if (typeof prksNavigate === 'function') prksNavigate('#/folders');
+            } finally {
+                if (folderCreateInFlight === saveToken) {
+                    folderCreateInFlight = null;
+                    if (isCurrentOpening() && typeof prksSetButtonBusy === 'function') {
+                        prksSetButtonBusy(folderBtn, false);
+                        if (revalidateFolderTitle) revalidateFolderTitle();
+                    }
+                }
+            }
+        };
+    }
+
+    const playlistBtn = document.getElementById('save-playlist-btn');
+    if (playlistBtn) {
+        playlistBtn.onclick = async () => {
+            /* No connectivity guard: a Playlist is created under an id this
+             * device mints, and the video waiting to be attached is ordered
+             * behind that creation by the dependency mechanism. */
+            const titleEl = document.getElementById('playlist-title');
+            const descEl = document.getElementById('playlist-description');
+            const errEl = document.getElementById('playlist-error');
+            const title = titleEl ? String(titleEl.value || '').trim() : '';
+            const description = descEl ? String(descEl.value || '').trim() : '';
+            if (!title) {
+                if (errEl) {
+                    errEl.textContent = 'Playlist title is required.';
+                    errEl.classList.remove('hidden');
+                }
+                return;
+            }
+            if (errEl) {
+                errEl.textContent = '';
+                errEl.classList.add('hidden');
+            }
+            playlistBtn.disabled = true;
+            const old = playlistBtn.textContent;
+            playlistBtn.textContent = 'Creating…';
+            try {
+                // The durable boundary: it mints the id and enqueues the
+                // creation. The reconciler owns the cache once the server
+                // answers.
+                const newId = await createPlaylist(title, description);
+                if (!newId) throw new Error('Could not create playlist');
+                closeModals();
+                // If a video is waiting to be attached, attach it now. The
+                // membership names the new playlist, so it is ordered behind
+                // the creation automatically.
+                const pending = window.__prksPendingPlaylistAttach;
+                const still = function () {
+                    return typeof prksCapturedWorkPanelStill === 'function' &&
+                        prksCapturedWorkPanelStill(pending);
+                };
+                let attachedWork = false;
+                if (pending && pending.workId && still()) {
+                    try {
+                        await addWorkToPlaylist(newId, pending.workId, still);
+                        attachedWork = !!still();
+                    } catch (_e) {}
+                }
+                if (pending) window.__prksPendingPlaylistAttach = null;
+                // Refresh select controls only when the captured Work panel
+                // still owns the attachment. A stale opener must not repaint
+                // whichever pane is focused now.
+                if (attachedWork && typeof window.__prksRefreshPlaylistSelects === 'function') {
+                    await window.__prksRefreshPlaylistSelects(newId);
+                }
+                if (attachedWork && typeof window.__prksRefreshAllPlaylistSelects === 'function') {
+                    await window.__prksRefreshAllPlaylistSelects(newId);
+                }
+                // Navigate only when playlist creation came from the playlists index (not from New File flow).
+                const createTabId = typeof window.prksTakePlaylistIndexCreateTabId === 'function'
+                    ? window.prksTakePlaylistIndexCreateTabId()
+                    : '';
+                if (window.__prksReturnToWorkModalAfterPlaylist === true) {
+                    // closeModals() will restore the New File modal.
+                } else if (!attachedWork && createTabId && typeof prksNavigate === 'function') {
+                    prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId });
+                }
+            } catch (e) {
+                console.error(e);
+                /* The durable layer names the actual problem -- an unknown base
+                 * for the video that was waiting to be attached, say -- and a
+                 * flat "Could not create playlist." would hide it. */
+                const message = String((e && e.message) || 'Could not create playlist.');
+                if (errEl) {
+                    errEl.textContent = message;
+                    errEl.classList.remove('hidden');
+                } else {
+                    await prksAlertMessage(message, 'Error');
+                }
+            } finally {
+                playlistBtn.disabled = false;
+                playlistBtn.textContent = old;
+            }
+        };
+    }
+    }
 
     const saveRoleBtn = document.getElementById('save-role-btn');
     /* One busy owner for the shared Create Link button. A newer opening
