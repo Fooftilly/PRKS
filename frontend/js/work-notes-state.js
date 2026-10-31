@@ -401,6 +401,37 @@
         },
     };
 
+    /* A remount may read the previous server body after a same-tab save ACK.
+     * Only carry a settled local body when the source, tab, revision and
+     * canonical base prove that the read is stale. Browser presentation
+     * delegates to this pure Work-note rule; Node exercises it directly. */
+    function prksWorkPrivateNoteNeedsCommittedHandoff(family, existing, ctx, id, initialText, carried) {
+        if (carried || family.entityType !== 'work' || !existing ||
+            existing.retired || existing.dirty || existing.promise ||
+            existing.state !== 'committed' ||
+            String(existing.entityId) !== String(id) ||
+            String(existing.ownerTabId) !== String(ctx.tabId) ||
+            !Number.isSafeInteger(existing.settledSaveToken) ||
+            existing.settledSaveToken <= 0 ||
+            existing.settledSaveToken !== existing.latestSaveToken) return false;
+        const base = existing.settledBase;
+        const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+        if (!base || typeof base.value !== 'string' ||
+            !Number.isSafeInteger(base.revision) || base.revision < 0 ||
+            !canonical || String(canonical.id) !== String(id) ||
+            !canonical.sources || canonical.sources.private !== 'server' ||
+            canonical.private_notes !== base.value ||
+            canonical.private_notes === String(existing.draftText)) return false;
+        /* Read the body before overlay, not initialText: initialText may already
+         * be this pane's queued text. A different body cannot be proved stale;
+         * it could be another device's newer save. */
+        const painted = String(initialText == null ? '' : initialText);
+        if (painted !== base.value && painted !== String(existing.draftText)) return false;
+        const observed = ctx.getResource && ctx.getResource('workNotesObserved');
+        const rev = observed && observed.private ? observed.private.revision : null;
+        return !Number.isSafeInteger(rev) || rev <= base.revision + 1;
+    }
+
     Object.assign(root, {
         PRKS_MAX_RESEARCH_NOTE_BYTES: MAX_RESEARCH_BYTES,
         PRKS_MAX_PRIVATE_NOTE_BYTES: MAX_PRIVATE_BYTES,
@@ -420,6 +451,7 @@
         prksWorkNoteObserved: observed,
         prksBindWorkNotesSync: bindSync,
         prksAcknowledgedWorkPrivateNote: acknowledgedPrivateNote,
+        prksWorkPrivateNoteNeedsCommittedHandoff: prksWorkPrivateNoteNeedsCommittedHandoff,
         prksSaveWorkNoteDurably: saveWorkNote,
         prksNoteSyncHandler: handler,
     });
