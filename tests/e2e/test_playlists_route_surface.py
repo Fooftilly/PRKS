@@ -136,6 +136,56 @@ class PlaylistsRouteSurfaceTests(unittest.TestCase):
             timeout=15000,
         )
 
+    def test_untrusted_legacy_url_and_tag_colors_render_without_injected_css(self):
+        """Exercise the real classic renderers in Chromium, without source evaluation."""
+        _server, page = self.start()
+        observed = page.evaluate(
+            """() => {
+                const renderUrl = (url) => {
+                    const host = document.createElement('div');
+                    host.innerHTML = renderPlaylistSummarySidebarHtml({
+                        title: 'Provenance', original_url: url, items: [],
+                    }, false);
+                    const row = [...host.querySelectorAll('p.meta-row')]
+                        .find((node) => node.textContent.includes('Original playlist URL:'));
+                    return {
+                        text: row.textContent,
+                        hrefs: [...row.querySelectorAll('a')].map((a) => a.getAttribute('href')),
+                    };
+                };
+                const tag = { id: 'T1', name: 'Example', color: 'red;position:fixed;inset:0;z-index:9999' };
+                const renderAccent = (html) => {
+                    const host = document.createElement('div');
+                    host.innerHTML = html;
+                    const chip = host.querySelector('.work-tag-chip');
+                    return {
+                        accent: chip.style.getPropertyValue('--tag-accent'),
+                        position: chip.style.position,
+                        inset: chip.style.inset,
+                    };
+                };
+                return {
+                    javascript: renderUrl('javascript:alert(1)'),
+                    data: renderUrl('data:text/html,hello'),
+                    https: renderUrl('https://example.test/reference'),
+                    folder: renderAccent(renderFolderTagsChipsHtml({ id: 'F1', tags: [tag] })),
+                    work: renderAccent(renderWorkTagsChips({ id: 'W1', tags: [tag] })),
+                    valid: renderAccent(renderWorkTagsChips({
+                        id: 'W1', tags: [{ ...tag, color: '#123abc' }],
+                    })),
+                };
+            }"""
+        )
+        for scheme in ("javascript", "data"):
+            self.assertEqual(observed[scheme]["hrefs"], [])
+            self.assertIn(scheme + ":", observed[scheme]["text"])
+        self.assertEqual(observed["https"]["hrefs"], ["https://example.test/reference"])
+        for kind in ("folder", "work"):
+            self.assertEqual(observed[kind]["accent"], "#6d6cf7")
+            self.assertEqual(observed[kind]["position"], "")
+            self.assertEqual(observed[kind]["inset"], "")
+        self.assertEqual(observed["valid"]["accent"], "#123abc")
+
     def test_empty_index_offers_new_playlist_in_the_page(self):
         def empty(root):
             ids = seed_playlists_library(root)
