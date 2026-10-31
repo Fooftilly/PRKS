@@ -2557,33 +2557,6 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
  * overlay has gone. Keep this specific same-tab body visible as clean text
  * until a read agrees; never re-enqueue it or apply this rule to Folder notes.
  */
-function prksWorkPrivateNoteNeedsCommittedHandoff(family, existing, ctx, id, initialText, carried) {
-    if (carried || family.entityType !== 'work' || !existing ||
-        existing.retired || existing.dirty || existing.promise ||
-        existing.state !== 'committed' ||
-        String(existing.entityId) !== String(id) ||
-        String(existing.ownerTabId) !== String(ctx.tabId) ||
-        !Number.isSafeInteger(existing.settledSaveToken) ||
-        existing.settledSaveToken <= 0 ||
-        existing.settledSaveToken !== existing.latestSaveToken) return false;
-    const base = existing.settledBase;
-    const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
-    if (!base || typeof base.value !== 'string' ||
-        !Number.isSafeInteger(base.revision) || base.revision < 0 ||
-        !canonical || String(canonical.id) !== String(id) ||
-        !canonical.sources || canonical.sources.private !== 'server' ||
-        canonical.private_notes !== base.value ||
-        canonical.private_notes === String(existing.draftText)) return false;
-    /* Read the body before overlay, not initialText: initialText may already
-     * be this pane's queued text. A different body cannot be proved stale;
-     * it could be another device's newer save. */
-    const painted = String(initialText == null ? '' : initialText);
-    if (painted !== base.value && painted !== String(existing.draftText)) return false;
-    const observed = ctx.getResource && ctx.getResource('workNotesObserved');
-    const rev = observed && observed.private ? observed.private.revision : null;
-    return !Number.isSafeInteger(rev) || rev <= base.revision + 1;
-}
-
 function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     if (!family || !ctx || !ctx.ui || id == null || String(id) === '') return null;
     const existing = ctx.ui[family.sessionSlot];
@@ -2598,7 +2571,7 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     }
     const remembered = prksTakeRememberedPrivateNote(family, ctx, id);
     const carried = remembered != null;
-    const priorCommitted = prksWorkPrivateNoteNeedsCommittedHandoff(
+    const priorCommitted = window.prksWorkPrivateNoteNeedsCommittedHandoff(
         family, existing, ctx, id, initialText, carried
     );
     const session = {

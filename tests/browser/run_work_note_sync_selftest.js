@@ -1125,6 +1125,88 @@ function committedPrivateAckProofIsExactAndBounded() {
 }
 
 
+/* The Work reminder remount gate is a synchronous decision over a committed
+ * same-tab session and a canonical server read. The previous Chromium check
+ * launched an entire browser but supplied only synthetic JavaScript objects,
+ * so exercise the same shipped production predicate beside ACK coverage. */
+function committedReminderRemountRequiresExactEvidence() {
+    const guard = globalThis.prksWorkPrivateNoteNeedsCommittedHandoff;
+    assert.equal(typeof guard, 'function', 'production Work note guard exported');
+    const family = {entityType: 'work'};
+    const saved = {
+        entityId: 'W', ownerTabId: 'tab',
+        state: 'committed', retired: false, dirty: false,
+        promise: null, latestSaveToken: 1, settledSaveToken: 1,
+        draftText: 'locally queued X',
+        settledBase: {value: 'previous V', revision: 4},
+    };
+    function probe(options = {}) {
+        const own = key => Object.prototype.hasOwnProperty.call(options, key);
+        const session = {...saved, ...(options.session || {})};
+        const ctx = {tabId: own('tabId') ? options.tabId : 'tab',
+            getResource: key => {
+                if (key === 'workNotesCanonical') return own('canonical')
+                    ? options.canonical : {
+                        id: 'W',
+                        private_notes: own('canonicalText') ? options.canonicalText : 'previous V',
+                        sources: {private: own('source') ? options.source : 'server'},
+                    };
+                if (key === 'workNotesObserved') return own('observed')
+                    ? options.observed : {
+                        private: {revision: own('revision') ? options.revision : 5},
+                    };
+                return null;
+            },
+        };
+        return guard(own('family') ? options.family : family,
+            session, ctx, own('id') ? options.id : 'W',
+            own('displayed') ? options.displayed : 'previous V',
+            !!options.carried);
+    }
+    const cases = [
+        ['previous server body is stale after same-tab save', {}, true],
+        ['painted pending overlay must survive remount', {displayed:'locally queued X'}, true],
+        ['canonical confirms same text: nothing to hand off',
+            {canonicalText:'locally queued X'}, false],
+        ['foreign newer canonical body is not overwritten',
+            {canonicalText:'foreign B', revision:6, displayed:'foreign B'}, false],
+        ['revision newer than settled ACK is authoritative', {revision:7}, false],
+        ['non-server cache is not proof', {source:'cache'}, false],
+        ['inflight save cannot be treated as committed', {session:{promise:{}}}, false],
+        ['failed save retains draft status, never a committed handoff',
+            {session:{state:'error',dirty:true}}, false],
+        ['unsettled token cannot be carried', {session:{settledSaveToken:0}}, false],
+        ['missing settled base is unsafe', {session:{settledBase:null}}, false],
+        ['other tab does not inherit proof', {session:{ownerTabId:'elsewhere'}}, false],
+        ['Folder notes do not use Work handoff', {family:{entityType:'folder'}}, false],
+        ['carried recovery draft owns its text', {carried:true}, false],
+        ['retired session does not own a handoff', {session:{retired:true}}, false],
+        ['dirty session does not own a handoff', {session:{dirty:true}}, false],
+        ['wrong Work entity is not the owner', {session:{entityId:'W-other'}}, false],
+        ['canonical Work identity must match', {canonical:{id:'W-other',
+            private_notes:'previous V',sources:{private:'server'}}}, false],
+        ['missing server canonical cannot prove stale read', {canonical:null}, false],
+        ['missing canonical source cannot prove stale read', {canonical:{
+            id:'W',private_notes:'previous V'}}, false],
+        ['wrong painted text is not reused', {displayed:'unrelated text'}, false],
+        ['future save token is not settled',
+            {session:{latestSaveToken:2,settledSaveToken:1}}, false],
+        ['invalid negative base revision', {session:{settledBase:{
+            value:'previous V', revision:-1}}}, false],
+        ['unknown revision cannot disprove a known stale read', {revision:null}, true],
+        ['equal revision remains safely within the handoff fence', {revision:4}, true],
+        ['base plus one is the latest allowable revision', {revision:5}, true],
+        ['base plus two is not safe', {revision:6}, false],
+    ];
+    for (const [name, options, expected] of cases) {
+        assert.equal(probe(options), expected, name);
+    }
+    // Mutation control: if a caller erases the same-tab gate, this negative
+    // case must fail. Both session and current tab must match.
+    assert.equal(probe({tabId:'foreign'}), false,
+        'a foreign current tab cannot inherit another session');
+}
+
 /* Real Work private-reminder session save-selection boundary. The former E2E
  * invoked it through page.evaluate with a stubbed enqueue and fabricated ACK
  * receipts, so it proved pure base-selection rules, not a browser boundary.
@@ -1230,6 +1312,7 @@ async function privateReminderHandoffRequiresExactAckProof() {
 
 async function main() {
     acknowledgedBase();
+    committedReminderRemountRequiresExactEvidence();
     await privateReminderHandoffRequiresExactAckProof();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();

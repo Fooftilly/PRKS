@@ -1765,6 +1765,18 @@ both). These are not measured critical-path or runner-minute savings.
 No production runtime code, E2E runner, workflow path selection, sharding,
 timeout, retry or packaged-asset coverage changes.
 
+### Work private-reminder committed-handoff guard (one MOVE, #740)
+
+The removed `WorkspaceTabsTests.test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves` case started a full browser and evaluated 11 fabricated JavaScript states against the synchronous `prksWorkPrivateNoteNeedsCommittedHandoff` predicate. It did not click, navigate, fetch, save, reload or exercise service-worker/IndexedDB persistence. Unlike the surrounding WorkspaceTabs tests, its assertion was a pure Boolean guard matrix.
+
+The shipped predicate now has exactly one owner in `frontend/js/work-notes-state.js`; the existing classic `frontend/js/ui.js` calls it from `prksEnsurePrivateNoteSession` rather than holding a duplicated implementation. The browser `work-notes-state.js` already loads before `ui.js`, so the production function is available via the same `window.prksWorkPrivateNoteNeedsCommittedHandoff` name. Its observed input and return behavior are unchanged.
+
+`tests/browser/run_work_note_sync_selftest.js` runs **27 cases** against that exported production predicate without opening a browser: same-tab committed stale canonical reads and pending overlay paint; authoritative foreign or newer server content; unconfirmed, pending, inflight, failed, retired or carried sessions; foreign owner tabs and Work IDs; Folder exclusion; missing or invalid revisions/bases; and the exact base+one revision boundary. `tests/test_frontend_work_note_sync.py` checks single ownership and classic script order. The existing Unit/API gate owns both tests.
+
+**KEEP in Chromium:** `test_private_reminder_handoff_revert_cancels_never_sent_row`, `test_private_reminder_hide_show_prefers_unsettled_complete_draft`, `test_private_reminder_acknowledged_handoff_revert_persists`, `test_private_reminder_handoff_without_ack_proof_still_conflicts`, `test_private_reminder_handoff_proven_ack_rejects_foreign_write`, and research-note session and reload tests. These continue checking actual routes, DOM/editor states, durable saves, transport/ACK, and race-sensitive browser behavior; none is superseded by a pure guard test.
+
+The former E2E carried **1.476 seconds of historical calibrated test weight per source or packaged full suite**, or 2.952 summed seconds across both inventories. This is not measured wall-clock or runner-minute savings. No HTTP service, test selection, sharding, timeout, retry or packaged test gate changes.
+
 ## Benchmark protocol
 
 For any optimization:

@@ -188,7 +188,6 @@
   "tests.e2e.test_app.WorkspaceTabsTests.test_pending_research_notes_flush_on_tab_switch": 2.986,
   "tests.e2e.test_app.WorkspaceTabsTests.test_private_reminder_ack_proof_must_match_work_and_base": 1.606,
   "tests.e2e.test_app.WorkspaceTabsTests.test_private_reminder_acknowledged_handoff_revert_persists": 3.018,
-  "tests.e2e.test_app.WorkspaceTabsTests.test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves": 1.476,
   "tests.e2e.test_app.WorkspaceTabsTests.test_private_reminder_handoff_proven_ack_rejects_foreign_write": 2.98,
   "tests.e2e.test_app.WorkspaceTabsTests.test_private_reminder_handoff_revert_cancels_never_sent_row": 1.251,
   "tests.e2e.test_app.WorkspaceTabsTests.test_private_reminder_handoff_without_ack_proof_still_conflicts": 2.81,
