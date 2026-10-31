@@ -221,9 +221,8 @@ async function run() {
         const savedAC = global.AbortController;
         try {
             delete global.AbortController;
-            const loadingHtml = '<p class="prks-inline-message">Loading…</p>';
             const ctx = mountCtx('no-ac', { id: 'x', title: 'Old' });
-            const dom = detailTreeDom(loadingHtml);
+            const dom = detailTreeDom();
             const race = await startDeferredRace(ctx, dom.container, [
                 { folder: { id: 'x', title: 'Old' } },
             ]);
@@ -248,7 +247,7 @@ async function run() {
     // --- commitAllowed contracts ---
     {
         const ctx = createPrksTabContext('allowed');
-        const dom = detailTreeDom('');
+        const dom = detailTreeDom();
         ctx.mount({ appendChild: function () {}, children: [] });
         const tok = ctx.beginFolderHierarchyRefresh('full');
         ok(
@@ -277,7 +276,7 @@ async function run() {
     {
         const folder = { id: 'alpha', title: 'Alpha' };
         const ctx = mountCtx('race', folder);
-        const dom = detailTreeDom('');
+        const dom = detailTreeDom();
         const race = await startDeferredRace(ctx, dom.container, [
             { folder: folder },
             { folder: folder },
@@ -301,7 +300,7 @@ async function run() {
         const oldF = { id: 'old-sel', title: 'Old' };
         const newF = { id: 'new-sel', title: 'New' };
         const ctx = mountCtx('full-vs-sel', oldF);
-        const dom = detailTreeDom('');
+        const dom = detailTreeDom();
         installSyncLoad([row('old-sel', 'PRE-SYNC'), row('new-sel', 'PRE-SYNC-B')]);
         await fillTree(ctx, oldF, dom.container, { selectionOnly: false });
         ok('seed has PRE-SYNC', hasTitle(dom.liveHost.__prksFolderDetailTreeSnapshot, 'PRE-SYNC'));
@@ -340,7 +339,7 @@ async function run() {
         const oldF = { id: 'old', title: 'Old' };
         const newF = { id: 'new', title: 'New' };
         const ctx = mountCtx('sel-fallback', oldF);
-        const dom = detailTreeDom('<p class="loading">LOADING</p>');
+        const dom = detailTreeDom();
         const race = await startDeferredRace(ctx, dom.container, [
             { folder: oldF },
             { entity: newF, selectionOnly: true },
@@ -369,7 +368,7 @@ async function run() {
         const aF = { id: 'a-sel', title: 'A' };
         const bF = { id: 'b-sel', title: 'B' };
         const ctx = mountCtx('sel', aF);
-        const dom = detailTreeDom('');
+        const dom = detailTreeDom();
         const race = await startDeferredRace(ctx, dom.container, [
             { folder: aF },
             { entity: bF },
@@ -391,9 +390,8 @@ async function run() {
 
     // --- Destroy mid-flight: no commit, no throw ---
     {
-        const loadingHtml = '<p class="loading">LOADING</p>';
         const ctx = mountCtx('unmount', { id: 'u1', title: 'U' });
-        const dom = detailTreeDom(loadingHtml);
+        const dom = detailTreeDom();
         const race = await startDeferredRace(ctx, dom.container, [
             { folder: { id: 'u1', title: 'U' } },
         ]);
@@ -413,7 +411,7 @@ async function run() {
     {
         const root = { id: 'root', title: 'Root' };
         const ctx = mountCtx('rapid', root);
-        const dom = detailTreeDom('');
+        const dom = detailTreeDom();
         const snaps = [
             [row('root', 'v1')],
             [row('root', 'v2-renamed', null, 1), row('kid', 'Kid', 'root')],

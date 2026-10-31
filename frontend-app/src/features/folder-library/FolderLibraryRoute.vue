@@ -2,6 +2,7 @@
 import { useDebounceFn } from '@vueuse/core'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import FolderIcon from './FolderIcon.vue'
 import FolderTree from './FolderTree.vue'
 import RecentlyAddedPane from './RecentlyAddedPane.vue'
 import {
@@ -83,11 +84,6 @@ const hasCollapsible = computed(() => treeView.value.hasCollapsible)
 const expandAllCollapsed = computed(() => treeView.value.allCollapsed)
 
 const expandToggleLabel = computed(() => (expandAllCollapsed.value ? 'Expand all' : 'Collapse all'))
-
-const expandIcon = computed(() => {
-  if (typeof window.prksIcon !== 'function') return ''
-  return window.prksIcon('chevronDown', { size: 'sm' })
-})
 
 const foldersActive = computed(() => activeTab.value !== 'recently-added')
 
@@ -496,7 +492,7 @@ onBeforeUnmount(() => {
             :title="expandToggleLabel"
             @click="onExpandAll"
           >
-            <span class="ribbon-btn__icon" v-html="expandIcon"></span>
+            <span class="ribbon-btn__icon"><FolderIcon name="chevron-down" size="sm" /></span>
           </button>
         </div>
       </div>

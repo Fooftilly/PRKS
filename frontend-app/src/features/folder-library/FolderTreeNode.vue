@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import FolderIcon from './FolderIcon.vue'
 import type { FolderTreeNode } from './tree'
 
 const props = withDefaults(
@@ -16,12 +17,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   toggle: [folderId: string]
 }>()
-
-function icon(name: string, size?: number): string {
-  if (typeof window.prksIcon !== 'function') return ''
-  if (size == null) return window.prksIcon(name)
-  return window.prksIcon(name, { size })
-}
 
 function href(id: string): string {
   return `#/folders/${encodeURIComponent(id)}`
@@ -56,7 +51,7 @@ const treeItem = props.role === 'treeitem'
       :title="node.collapsed ? 'Expand subfolders' : 'Collapse subfolders'"
       @click="onToggle"
     >
-      <span v-html="icon('chevronRight', 14)"></span>
+      <FolderIcon name="chevron-right" :size="14" />
     </button>
     <span v-else class="prks-folder-tree__toggle-spacer" aria-hidden="true"></span>
     <a
@@ -64,7 +59,7 @@ const treeItem = props.role === 'treeitem'
       :href="href(node.id)"
       :aria-current="node.selected ? 'page' : undefined"
     >
-      <span class="prks-folder-tree__icon" v-html="icon('folder')"></span>
+      <span class="prks-folder-tree__icon"><FolderIcon name="folder" /></span>
       <span class="prks-folder-tree__title">{{ node.title || 'Folder' }}</span>
     </a>
     <span v-if="node.meta" class="prks-folder-tree__meta">{{ node.meta }}</span>
