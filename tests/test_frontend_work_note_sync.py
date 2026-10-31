@@ -61,6 +61,18 @@ class WorkNoteSyncFrontendTests(unittest.TestCase):
                         html.index('/js/sync-runtime.js'))
         sw = (ROOT / 'frontend' / 'sw.js').read_text()
         self.assertIn('/js/work-notes-state.js', sw)
+        self.assertLess(html.index('/js/work-notes-state.js'), html.index('/js/ui.js'),
+                        'the Work remount guard must be available before the UI consumes it')
+
+    def test_committed_reminder_handoff_has_one_production_owner(self):
+        work = (FRONTEND / 'work-notes-state.js').read_text()
+        ui = (FRONTEND / 'ui.js').read_text()
+        marker = 'function prksWorkPrivateNoteNeedsCommittedHandoff('
+        self.assertEqual(work.count(marker), 1)
+        self.assertNotIn(marker, ui, 'UI must not fork the Work remount decision')
+        self.assertIn('prksWorkPrivateNoteNeedsCommittedHandoff: '
+                      'prksWorkPrivateNoteNeedsCommittedHandoff', work)
+        self.assertIn('window.prksWorkPrivateNoteNeedsCommittedHandoff(', ui)
 
     def test_production_javascript_parses(self):
         for path in (FRONTEND / 'work-notes-state.js', FRONTEND / 'local-store.js',
