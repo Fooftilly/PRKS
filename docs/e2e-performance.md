@@ -1531,8 +1531,8 @@ only cache invalidation/generation outcomes had stronger surviving coverage:
 
 | Former E2E (removed) | Preserved browser coverage | Fast contract |
 | --- | --- | --- |
-| `OfflinePositionTests.test_argument_source_change_does_not_invalidate_positions` | `OfflineArgumentCoherenceTests.test_argument_sources_invalidate_arguments_but_not_positions` already proves actual successful source synchronization fences Arguments but preserves Positions and Concepts | Real `prksOfflineReconcileArgumentSources` with unchanged and changed ACK responses; an unchanged ACK retains every cache, changed ACK sweeps Arguments and Graph but leaves Position/Concept/People snapshots and lists eligible |
-| `OfflineArgumentCoherenceTests.test_argument_targets_invalidate_arguments_and_positions_only` | `OfflinePositionTests.test_argument_target_change_invalidates_the_position_domain` verifies server ACK, updated Position verdict, authoritative refetch and real offline reload; the Argument-source coherence E2E retains Argument cache-fencing integration | Real `prksOfflineReconcileArgumentTargets` ACK clears Arguments/Positions/Graph but preserves Concepts and People |
+| `OfflinePositionTests.test_argument_source_change_does_not_invalidate_positions` | The later full-stack Node ACK contract replaces the surviving source-only E2E; real browser failed-transport behavior remains in `OfflineArgumentCoherenceTests.test_failed_argument_mutations_retain_the_cache` | Real `prksOfflineReconcileArgumentSources` with unchanged and changed ACK responses; an unchanged ACK retains every cache, changed ACK sweeps Arguments and Graph but leaves Position/Concept/People snapshots and lists eligible |
+| `OfflineArgumentCoherenceTests.test_argument_targets_invalidate_arguments_and_positions_only` | `OfflinePositionTests.test_argument_target_change_invalidates_the_position_domain` verifies server ACK, updated Position verdict, authoritative refetch and real offline reload; the full-stack Node source-ACK contract retains Argument cache-fencing integration | Real `prksOfflineReconcileArgumentTargets` ACK clears Arguments/Positions/Graph but preserves Concepts and People |
 
 The new `tests/browser/run_argument_ack_coherence_selftest.js` calls the
 **production `frontend/js/offline-runtime.js` singleton's exported
@@ -1715,6 +1715,55 @@ The 2026-10-28 timing baseline weights for these three former E2Es sum to
 source and packaged inventories. This is a *summed historical test weight*,
 not a verified reduction in critical-path wall-clock CI time. No E2E runner,
 selection, shard, packaged, timeout or retry policy changes.
+
+### Argument-source production ACK lifecycle (one additional MOVE, #740)
+
+The former
+`OfflineArgumentCoherenceTests.test_argument_sources_invalidate_arguments_but_not_positions`
+called `window.putArgumentSources` with a seeded browser cache and asserted
+that a successful write invalidated the Argument domain but preserved cached
+Positions and Concepts. It did not navigate, reload, disconnect, exercise
+service-worker behavior or check the contents of a rendered destination.
+Its successful ACK/cache-fencing requirement now has a more precise
+`tests/browser/run_argument_ack_coherence_selftest.js` replacement:
+
+- `prksSetArgumentSourcesDurably` writes a source aggregate and its
+  acknowledged revision to the real `createPrksLocalStore` using disposable
+  IndexedDB; before connectivity is enabled it must remain one unattempted
+  pending operation and must not evict cached Arguments.
+- Production `createPrksSyncRuntime` and
+  `prksArgumentSourcesSyncHandler` send that immutable envelope, validate
+  the server ACK, update `argument-state` source revision while preserving the
+  targets revision, emit exactly one ACK and retire the durable row only after
+  reconciliation. The test also checks that the real browser coordinator
+  registers `SET_ARGUMENT_SOURCES` to that same handler.
+- The shipped offline-runtime reconciler invalidates cached Argument detail
+  and index; Position, Concept and People lists and entities remain eligible.
+  An intentional extra Position eviction must fail the retained-domain
+  assertions.
+- A mismatched Argument ID or malformed server revision must **not**
+  reconcile, evict Argument cache, emit an ACK or retire durable intent.
+  The coordinator retains each row as pending with a retryable error.
+  These failure cases are independent negative controls for result validation.
+
+This replacement exercises the actual durable writer, sync protocol and cache
+implementation, but **does not** spin up the PostgreSQL HTTP server or execute
+the `putArgumentSources` browser API wrapper itself. Its delegation to the
+durable writer is covered by the existing
+`tests/test_frontend_argument_sync.py` structural contract. Chromium still
+exercises the public wrapper on transport failure in
+`test_failed_argument_mutations_retain_the_cache`, real offline Argument
+editor/route behavior in `test_offline_argument_index_and_detail_mutate_through_durable_queue`,
+and authoritative Position verdicts and offline reload in
+`test_argument_target_change_invalidates_the_position_domain`. These,
+along with cross-tab ownership, PDF, SW and persistence tests, remain browser
+checks; there is no claim that Node replaces those boundaries.
+
+The removed test has a **3.449-second historical calibrated scheduling weight
+per full source or packaged test inventory** (6.898 seconds summed across
+both). These are not measured critical-path or runner-minute savings.
+No production runtime code, E2E runner, workflow path selection, sharding,
+timeout, retry or packaged-asset coverage changes.
 
 ## Benchmark protocol
 
