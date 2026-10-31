@@ -1,0 +1,27 @@
+name: Regenerate security branch frontend build
+on:
+  push:
+    branches:
+      - fix/devin-security-hardening-20261031
+permissions:
+  contents: write
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - name: Build checked-in Vue bundle and manifests
+        run: |
+          npm ci --ignore-scripts --prefix frontend-app
+          npm run build --prefix frontend-app
+      - name: Commit generated artifacts on this branch
+        run: |
+          git add frontend/vue frontend/vendor/DEPENDENCY-MANIFEST.json frontend/js/workspace-model.js frontend/js/work-route-projection.js frontend/js/search-query-codec.js frontend/js/tab-leave.js frontend/js/owner-resource.js frontend/js/editor-recovery.js frontend/js/route-model.js frontend/sw.js
+          if git diff --cached --quiet; then exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "build: regenerate security fix Vue assets"
+          git push origin HEAD:fix/devin-security-hardening-20261031
