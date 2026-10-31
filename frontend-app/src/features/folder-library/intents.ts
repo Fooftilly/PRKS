@@ -1,4 +1,11 @@
 import type { InjectionKey } from 'vue'
+import {
+  readFolderTreeChrome,
+  writeFolderLibraryQuery,
+  writeFolderTreeExpanded,
+  type FolderTreeChromeOwner,
+  type FolderTreeChromeRead,
+} from './chrome'
 import type { FolderLibraryTab, RecentlyAddedWork } from './types'
 import {
   FOLDER_LIBRARY_FILES_FILTER_KEY,
@@ -6,7 +13,7 @@ import {
   FOLDER_LIBRARY_TAB_KEY,
 } from './types'
 
-export interface FolderIntentOwner {
+export interface FolderIntentOwner extends FolderTreeChromeOwner {
   tabId?: string
   generation?: number
   isCurrent?: (generation: number) => boolean
@@ -33,22 +40,20 @@ export interface FolderLibraryIntents {
   openWorkModal(): void
   navigateFolder(folderId: string): void
   switchTab(tab: FolderLibraryTab): void
+  readTreeChrome(): FolderTreeChromeRead
+  writeExpanded(expandedIds: readonly string[]): void
+  writeLibraryQuery(query: string): void
   loadRecentlyAdded(
     force: boolean | undefined,
     cache: RecentlyAddedCacheHint,
   ): Promise<RecentlyAddedLoadResult>
-  toggleExpand(
-    folderId: string,
-    treeHost: HTMLElement | null,
-    folders?: readonly unknown[],
-  ): void
-  toggleExpandAll(treeHost: HTMLElement | null, folders: readonly unknown[]): void
   bindFolderOfflineState(contentRoot: HTMLElement | null): () => void
   scheduleGlance(
     root: HTMLElement | null,
     options?: {
       folders?: readonly unknown[]
       recentlyAddedWorks?: RecentlyAddedWork[] | null
+      onParts?: (parts: readonly unknown[]) => void
     },
   ): void
   subscribeMetadataOverlay(onChange: () => void): () => void
@@ -157,6 +162,18 @@ export function browserFolderLibraryIntents(
       persistFolderLibraryTab(want)
     },
 
+    readTreeChrome() {
+      return readFolderTreeChrome(owner)
+    },
+
+    writeExpanded(expandedIds) {
+      writeFolderTreeExpanded(owner, expandedIds)
+    },
+
+    writeLibraryQuery(query) {
+      writeFolderLibraryQuery(owner, query)
+    },
+
     async loadRecentlyAdded(force, cache) {
       if (!ownsSurface(owner, generation)) {
         return {
@@ -256,26 +273,6 @@ export function browserFolderLibraryIntents(
       }
     },
 
-    toggleExpand(folderId, treeHost, folders) {
-      if (typeof window.prksToggleFolderNodeInHost === 'function' && treeHost) {
-        window.prksToggleFolderNodeInHost(treeHost, folderId, folders)
-        return
-      }
-      if (typeof window.prksToggleFolderNode === 'function') {
-        window.prksToggleFolderNode(folderId)
-      }
-    },
-
-    toggleExpandAll(treeHost, folders) {
-      if (typeof window.prksToggleAllFolderNodesInHost === 'function' && treeHost) {
-        window.prksToggleAllFolderNodesInHost(treeHost, folders)
-        return
-      }
-      if (typeof window.prksToggleAllFolderNodes === 'function') {
-        window.prksToggleAllFolderNodes()
-      }
-    },
-
     bindFolderOfflineState(contentRoot) {
       const fn = window.prksBindFolderOfflineState
       if (typeof fn !== 'function' || !contentRoot) return () => {}
@@ -299,6 +296,7 @@ export function browserFolderLibraryIntents(
         recentlyAddedWorks: Array.isArray(options.recentlyAddedWorks)
           ? [...options.recentlyAddedWorks]
           : (options.recentlyAddedWorks ?? null),
+        onParts: options.onParts,
       })
     },
 

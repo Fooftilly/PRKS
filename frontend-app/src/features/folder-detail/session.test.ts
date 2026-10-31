@@ -17,10 +17,8 @@ afterEach(() => {
   delete window.prksCommitFolderDetailSurface
   delete window.prksDeleteFolderFromDetail
   delete window.prksOpenNewFolderFromDetail
-  delete window.prksFolderDetailSummaryHtml
-  delete window.prksFolderDetailNavHtml
+  delete window.prksFolderNavTriggerHtml
   delete window.prksMountFolderHierarchyNav
-  delete window.prksFolderDetailSubfoldersHtml
   delete window.prksReleaseWorkThumbPreview
   delete window.prksReleaseLazyWorkThumbs
   delete (window as Window & { __prksWorkThumbPreviewSource?: unknown }).__prksWorkThumbPreviewSource
@@ -352,8 +350,8 @@ describe('Folder detail route bridge', () => {
   })
 
   it('rebinds hierarchy nav when its projection changes inside the same generation', async () => {
-    let nav = '<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">one</nav>'
-    window.prksFolderDetailNavHtml = () => nav
+    let shell = '<div class="prks-folder-nav__band">one</div>'
+    window.prksFolderNavTriggerHtml = () => shell
     const commits: string[] = []
     const mounts: string[] = []
     window.prksCommitFolderDetailSurface = () => {
@@ -373,11 +371,11 @@ describe('Folder detail route bridge', () => {
     expect(commits).toEqual(['commit'])
     expect(mounts).toEqual([])
     expect(el.querySelector('[data-prks-role="folder-hierarchy-nav"]')?.textContent).toBe('one')
-    nav = '<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">two</nav>'
+    shell = '<div class="prks-folder-nav__band">two</div>'
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f1', title: 'First', works: [], children: [] },
+      folder: { id: 'f1', title: 'First', parent: { id: 'p', title: 'Parent' }, works: [], children: [] },
       preserveWorkspace: false,
       generation: 4,
     })
@@ -385,7 +383,7 @@ describe('Folder detail route bridge', () => {
     expect(el.querySelector('[data-prks-role="folder-hierarchy-nav"]')?.textContent).toBe('two')
     expect(mounts).toEqual(['two'])
     expect(commits).toEqual(['commit'])
-    nav = '<nav class="prks-folder-nav" data-prks-role="folder-hierarchy-nav">three</nav>'
+    shell = '<div class="prks-folder-nav__band">three</div>'
     presentFolderDetail({
       owner: pane,
       host: el,

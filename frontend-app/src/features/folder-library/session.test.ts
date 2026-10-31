@@ -14,12 +14,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
   delete window.prksVueDismissRoute
-  delete window.prksFolderLibraryTreeInnerHtml
   delete window.prksFolderLibraryCatalogGlanceParts
-  delete window.prksPaintFolderLibraryGlance
   delete window.prksScheduleFolderLibraryGlance
-  delete window.prksFolderTreeHasCollapsibleNodes
-  delete window.prksFolderTreeAllCollapsed
   delete window.prksBindFolderOfflineState
   delete window.prksOfflineRecentlyAddedFetch
   delete window.prksResolveOfflineRecentlyAdded
@@ -36,15 +32,8 @@ function owner(tabId = 'tab') {
 }
 
 function stubFolderLibraryWindow(): void {
-  window.prksFolderLibraryTreeInnerHtml = () =>
-    '<div class="prks-folder-tree" role="tree"><span data-test="tree">tree</span></div>'
   window.prksFolderLibraryCatalogGlanceParts = () => ['1 folder']
-  window.prksPaintFolderLibraryGlance = (el, parts) => {
-    el.textContent = (parts as string[]).join(' · ')
-  }
   window.prksScheduleFolderLibraryGlance = () => {}
-  window.prksFolderTreeHasCollapsibleNodes = () => false
-  window.prksFolderTreeAllCollapsed = () => false
   window.prksBindFolderOfflineState = () => {}
   window.prksOfflineRecentlyAddedFetch = async () => ({ source: 'network', value: [] })
   window.prksResolveOfflineRecentlyAdded = () => []
@@ -73,8 +62,8 @@ describe('Folder Library route bridge', () => {
     })
     expect(mainHost.querySelector('[data-prks-folder-library-view]')).not.toBeNull()
     expect(mainHost.textContent).toContain('Folder Library')
-    expect(mainHost.textContent).toContain('tree')
-    expect(secondaryHost.textContent).toContain('tree')
+    expect(mainHost.textContent).toContain('Main folder')
+    expect(secondaryHost.textContent).toContain('Side folder')
     expect(readRouteSurface(main)).toMatchObject({
       name: 'folders',
       canonicalHash: '#/folders',
@@ -202,6 +191,34 @@ describe('Folder Library route bridge', () => {
     // Tab leave / route leave must still tear down the retained Vue tree.
     beginRouteCleanups(cleanups)
     expect(routeHost.querySelector('[data-prks-folder-library-view]')).toBeNull()
+  })
+
+  it('keeps expand and filter chrome on the owning pane', async () => {
+    stubFolderLibraryWindow()
+    const main = {
+      tabId: 'main',
+      isCurrent: () => true,
+      ui: {} as { folderTree?: { expandedIds?: string[]; libraryQuery?: string } },
+    }
+    const side = {
+      tabId: 'side',
+      isCurrent: () => true,
+      ui: {} as { folderTree?: { expandedIds?: string[]; libraryQuery?: string } },
+    }
+    const folders = [
+      { id: 'parent', title: 'Parent', parent_id: null, work_count: 0, child_count: 1 },
+      { id: 'child', title: 'Child', parent_id: 'parent', work_count: 0, child_count: 0 },
+    ]
+    const mainHost = host()
+    const sideHost = host()
+    presentFolderLibrary({ owner: main, host: mainHost, folders, generation: 1, shell: true })
+    presentFolderLibrary({ owner: side, host: sideHost, folders, generation: 1, shell: false })
+    mainHost.querySelector<HTMLButtonElement>('.prks-folder-tree__toggle')?.click()
+    await nextTick()
+    expect(main.ui.folderTree?.expandedIds).toEqual(['parent'])
+    expect(side.ui.folderTree?.expandedIds ?? []).toEqual([])
+    expect(mainHost.querySelector('.prks-folder-tree__branch')?.classList.contains('is-collapsed')).toBe(false)
+    expect(sideHost.querySelector('.prks-folder-tree__branch')?.classList.contains('is-collapsed')).toBe(true)
   })
 
   it('unmounts on dismiss without affecting another owner', () => {

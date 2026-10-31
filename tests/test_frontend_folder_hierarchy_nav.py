@@ -34,12 +34,15 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
 
     def test_folder_detail_mounts_switcher(self):
         folders = _read(_FOLDERS)
-        self.assertIn("prksFolderNavTriggerHtml", folders)
+        self.assertNotIn("prksFolderNavTriggerHtml", folders)
         self.assertIn("prksMountFolderHierarchyNav", folders)
         detail = _read(os.path.join(
             _ROOT, "frontend-app", "src", "features", "folder-detail", "FolderDetailRoute.vue"))
+        nav = _read(os.path.join(
+            _ROOT, "frontend-app", "src", "features", "folder-detail", "FolderDetailNav.vue"))
         self.assertIn("prks-folder-detail__header", detail)
-        self.assertIn("data-prks-role=\"folder-hierarchy-nav\"", folders)
+        self.assertIn("data-prks-role=\"folder-hierarchy-nav\"", nav)
+        self.assertIn("prksFolderNavTriggerHtml", nav)
         self.assertIn("tabId: ctx && ctx.tabId", folders)
         # Desktop IA: persistent hierarchy tree | contents; compact band is fallback.
         self.assertIn("data-prks-folder-detail-tree-host", folders)
@@ -54,8 +57,9 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertIn("No baseline yet", _read(_NAV))
         # Folder→Folder in-place workspace (no generic Loading wipe).
         self.assertIn("preserveFolderWorkspace", folders)
-        self.assertIn("prksFolderDetailSelectInTree", folders)
+        self.assertIn("prksPublishFolderDetailTree", folders)
         self.assertIn("selectionOnly", folders)
+        self.assertNotIn("function prksFolderDetailSelectInTree", folders)
         # New folder on detail clears modal via shared helper + default parent.
         self.assertIn("prksOpenFolderModalFromLibrarySearch('')", folders)
         app = _read(os.path.join(_ROOT, "frontend", "js", "app.js"))
