@@ -107,10 +107,10 @@ def render_summary(payload: object, *, shard: str) -> str:
     ]
     for name in names:
         value = phases[name]
-        lines.append(f"| \`{name}\` | {value:.3f} | {value / tests:.3f} |")
+        lines.append(f"| `{name}` | {value:.3f} | {value / tests:.3f} |")
     for name in ("postgres_provision", "postgres_drop"):
         if name not in phases:
-            lines.append(f"| \`{name}\` | not observed | — |")
+            lines.append(f"| `{name}` | not observed | — |")
     lines.extend([
         "",
         f"Browser navigation samples: {nav['captured']}/{nav['attempted']}.",
