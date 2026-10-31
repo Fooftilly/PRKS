@@ -249,44 +249,72 @@ class FeatureSelectionTests(unittest.TestCase):
             policy.select_features(FAKE_IDS, ["not-a-real-group"])
         self.assertIn("unknown E2E feature", str(ctx.exception))
 
-    def test_exact_feature_selectors_point_to_existing_e2e_methods(self):
-        """A retired E2E method must not silently remain in a feature group.
+    def _assert_feature_selector_source(self, selector, parsed_modules):
+        """Check module/class/method prefixes using source AST, not Playwright."""
+        parts = selector.split(".")
+        self.assertIn(
+            len(parts), (3, 4, 5), f"unsupported E2E selector shape: {selector}"
+        )
+        self.assertEqual(parts[:2], ["tests", "e2e"], selector)
+        self.assertTrue(parts[2].startswith("test_"), selector)
+        path = Path(_PROJECT_DIR, "tests", "e2e", parts[2] + ".py")
+        self.assertTrue(path.is_file(), f"missing E2E module for {selector}")
+        if path not in parsed_modules:
+            parsed_modules[path] = ast.parse(
+                path.read_text(encoding="utf-8"), filename=str(path)
+            )
+        if len(parts) == 3:
+            return  # Module-wide selector: the source module exists.
+        classes = [
+            node for node in parsed_modules[path].body
+            if isinstance(node, ast.ClassDef) and node.name == parts[3]
+        ]
+        self.assertTrue(classes, f"missing E2E class for {selector}")
+        if len(parts) == 4:
+            return  # Class-wide selector: the declared class exists.
+        self.assertTrue(
+            self._is_exact_method_selector(selector),
+            f"invalid E2E method selector: {selector}",
+        )
+        self.assertTrue(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == parts[4]
+                for cls in classes for node in cls.body
+            ),
+            f"stale exact E2E feature selector: {selector}",
+        )
 
-        Check the declared source methods without importing Playwright, running
-        test fixtures, or relying on the timing baseline (which can also be
-        stale). Class/module prefix selectors remain intentionally supported.
+    def test_declared_feature_selectors_point_to_existing_e2e_source(self):
+        """Retired module/class/method selectors must not silently lose coverage.
+
+        Every feature prefix is checked, without importing the browser harness.
+        AST reads are cached per module; unittest discovery stays authoritative
+        for inherited tests and dynamic collection.
         """
         parsed_modules = {}
-        checked = 0
+        checked_kinds = set()
         for feature, config in policy.FEATURES.items():
             for selector in config["selectors"]:
-                parts = selector.split(".")
-                if not self._is_exact_method_selector(selector):
-                    continue
                 with self.subTest(feature=feature, selector=selector):
-                    self.assertGreaterEqual(len(parts), 5)
-                    self.assertEqual(parts[:2], ["tests", "e2e"])
-                    path = Path(_PROJECT_DIR).joinpath(*parts[:-2]).with_suffix(".py")
-                    self.assertTrue(path.is_file(), f"missing E2E module for {selector}")
-                    if path not in parsed_modules:
-                        parsed_modules[path] = ast.parse(
-                            path.read_text(encoding="utf-8"), filename=str(path)
-                        )
-                    classes = [
-                        node for node in parsed_modules[path].body
-                        if isinstance(node, ast.ClassDef) and node.name == parts[-2]
-                    ]
-                    self.assertTrue(classes, f"missing E2E class for {selector}")
-                    self.assertTrue(
-                        any(
-                            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and node.name == parts[-1]
-                            for cls in classes for node in cls.body
-                        ),
-                        f"stale exact E2E feature selector: {selector}",
-                    )
-                    checked += 1
-        self.assertGreater(checked, 0, "feature catalog contains no exact method selectors")
+                    self._assert_feature_selector_source(selector, parsed_modules)
+                checked_kinds.add(len(selector.split(".")))
+        self.assertEqual(checked_kinds, {3, 4, 5})
+
+    def test_missing_module_class_and_exact_method_selectors_fail_closed(self):
+        missing = (
+            "tests.e2e.test_nonexistent_feature_module",
+            "tests.e2e.test_app.NonexistentFeatureClass",
+            "tests.e2e.test_app.AppShellAndNavigationTests.test_deleted_feature_method",
+        )
+        parsed_modules = {}
+        for selector in missing:
+            with self.subTest(selector=selector):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    r"missing E2E module|missing E2E class|stale exact E2E",
+                ):
+                    self._assert_feature_selector_source(selector, parsed_modules)
 
     def test_catalog_lists_every_feature(self):
         text = policy.format_feature_catalog()
