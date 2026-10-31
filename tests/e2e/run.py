@@ -49,6 +49,7 @@ from tests.e2e.harness import (
     stop_all_servers,
 )
 from tests.e2e.install_browser import ensure_chromium_installed
+from tests.e2e.ci_gate_summary import format_e2e_gate_summary
 from tests.e2e.policy import (
     FAILURE_DIAGNOSTICS_PATH,
     FULL_GATE_EXTERNAL_SHARDS,
@@ -2233,6 +2234,13 @@ def _main(argv=None) -> int:
             "pointer_capture: %s"
             % ((os.environ.get("POINTER_RESULT") or "").strip())
         )
+        # The required job name remains stable for branch protection, but it
+        # can select full, affected or skipped browser coverage. Surface that
+        # distinction on the job summary rather than hiding it in raw logs.
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(format_e2e_gate_summary(os.environ, passed=ok))
         if ok:
             print(msg)
             return 0
