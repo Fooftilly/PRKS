@@ -66,9 +66,13 @@ async function seed() {
     lists.clear();
     invalidations.length = 0;
     await store.putEntity("argument", "A-1", {id:"A-1", kind:"argument"}, "");
-    await store.putEntity("argument-state", "A-1", {
-        argument_id: "A-1", sources: {revision: 1}, targets: {revision: 1}
-    }, "");
+    // With argument-state.js loaded, offline-runtime validates its full
+    // production sync-state shape before patching an acknowledged revision.
+    const state = globalThis.prksNewArgumentState("A-1");
+    state.sources.revision = 1;
+    state.targets.revision = 1;
+    assert.equal(globalThis.prksIsArgumentStateShape(state, "A-1"), true);
+    await store.putEntity("argument-state", "A-1", state, "");
     await store.putList("arguments:index", [{id:"A-1",kind:"argument"}], "");
     await store.putEntity("position", "P-1", {id:"P-1", arguments:[]}, "");
     await store.putList("positions:index", [{id:"P-1",name:"Target"}], "");
