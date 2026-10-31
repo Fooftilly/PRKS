@@ -13,7 +13,7 @@ const assert = Object.assign(
         deepEqual(...args) { checks++; return strict.deepEqual(...args); },
         fail(...args) { checks++; return strict.fail(...args); },
     });
-const {Script} = require("node:vm");
+const {runInThisContext} = require("node:vm");
 // The Unit/API runner sets cwd to the repository root; use fixed repository paths.
 const fs = require("node:fs");
 const {createFakeIndexedDBFactory} = require("./lib/fake_indexeddb.js");
@@ -62,8 +62,8 @@ function loadTopLevelFunction(source, name) {
     for (let i = brace; i < source.length; i++) {
         if (source[i] === "{") depth++;
         if (source[i] === "}" && --depth === 0) {
-            new Script(source.slice(at, i + 1),
-                {filename: "playlist-production-wrapper.js"}).runInThisContext({timeout: 1000});
+            runInThisContext(source.slice(at, i + 1),
+                {filename: "playlist-production-wrapper.js", timeout: 1000});
             return;
         }
     }
@@ -92,9 +92,9 @@ function readValidators() {
         assert.notEqual(end, -1);
         return app.slice(at, end + 2);
     });
-    return new Script(declarations.join("\n") +
+    return runInThisContext(declarations.join("\n") +
         "\n({" + names.join(",") + "});",
-        {filename: "playlist-production-validators.js"}).runInThisContext({timeout: 1000});
+        {filename: "playlist-production-validators.js", timeout: 1000});
 }
 const validation = readValidators();
 const syncSource = fs.readFileSync("frontend/js/sync-runtime.js", "utf8");
