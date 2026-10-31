@@ -1,6 +1,6 @@
 import { PEOPLE_ROLES, type PeopleRole } from '../domain/people-roles'
+import { WORK_STATUSES, type WorkStatus } from '../domain/work-status'
 import { progressCanonicalHash } from '../routing/route-model'
-import type { WorkStatus } from '../domain/work-status'
 import type { NavTarget } from './chrome'
 
 export interface NavLinkItem extends NavTarget {
@@ -10,8 +10,16 @@ export interface NavLinkItem extends NavTarget {
   role?: string
 }
 
-/** Sidebar order. Domain `WORK_STATUSES` sorts Completed before Paused. */
-const PROGRESS_NAV_ORDER = ['Not Started', 'Planned', 'In Progress', 'Paused', 'Completed'] as const satisfies readonly WorkStatus[]
+/**
+ * Sidebar lists the domain statuses with the last two swapped.
+ * `WORK_STATUSES` ends Completed, Paused; the sidebar lists Paused, then Completed.
+ */
+function sidebarProgressOrder(): readonly WorkStatus[] {
+  const earlier = WORK_STATUSES.slice(0, -2)
+  const beforeLast = WORK_STATUSES[WORK_STATUSES.length - 2]
+  const last = WORK_STATUSES[WORK_STATUSES.length - 1]
+  return [...earlier, last, beforeLast]
+}
 
 const PEOPLE_SHORTCUT_LABEL: Record<PeopleRole, string> = {
   Author: 'Authors',
@@ -63,7 +71,7 @@ export function peopleRoleLinks(): NavLinkItem[] {
 }
 
 export function progressLinks(): NavLinkItem[] {
-  return PROGRESS_NAV_ORDER.map((status) => ({
+  return sidebarProgressOrder().map((status) => ({
     href: progressCanonicalHash(status),
     label: status,
     icon: '',
