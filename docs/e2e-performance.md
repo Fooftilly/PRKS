@@ -1436,6 +1436,48 @@ KEEP (entrypoint UI, not helper-call):
 
 Playlist stale-hold E2Es (in-flight GET held across a durable membership/delete) stay in Chromium until the Node selftest covers that richer hold/release composition. Folder/Playlist cache render, route ownership, and disconnect control matrices remain KEEP.
 
+### Position / Playlist direct-API pilot (six MOVE contracts, #740)
+
+The six E2Es listed below invoked the classic public functions directly via
+\`page.evaluate\`, then inspected durable pending operations or canonical state.
+They never clicked the Position form, Playlist editor, or drag target. A
+real-browser offline/reload/projection boundary is retained by the other
+Position and Playlist E2Es; these six were **pure queue/API composition** rather
+than independent user-interaction coverage.
+
+| Former E2E (removed) | Fast replacement (production code under test) |
+| --- | --- |
+| \`DurablePositionTests.test_an_edit_taken_back_before_it_is_sent_leaves_no_intent\` | \`run_position_sync_selftest.js\`: real \`api.js updatePosition\` → \`prksAcknowledgedPositionBase\` → dirty fields → durable writer. The known revision 3 stays attached to A→B→A, which must leave zero \`SET_POSITION_FIELD\` rows. |
+| \`DurablePositionTests.test_deleting_a_position_created_offline_folds_the_whole_case_away\` | Same Node selftest: real \`api.js createPosition\` / \`deletePosition\`, permanent distributed ID, queued create and empty final operation list. |
+| \`DurablePlaylistTests.test_a_rename_taken_back_before_it_is_sent_leaves_no_intent\` | \`run_playlist_sync_selftest.js\`: real \`components/playlists.js updatePlaylist\`, a cached acknowledged title at revision 3, A→B→A, zero \`SET_PLAYLIST_FIELD\` operations. |
+| \`DurablePlaylistTests.test_a_second_drag_replaces_the_first_rather_than_racing_it\` | Same Node selftest: real \`reorderPlaylist\` over acknowledged order at revision 2; first replacement is one ordered operation, return to original order has zero queued reorders. The browser drag event path is separately exercised by retained scenarios. |
+| \`DurablePlaylistTests.test_putting_a_video_back_where_it_started_leaves_no_intent\` | Same Node selftest: real \`addWorkToPlaylist\` / \`prksSetWorkPlaylist\` using a cached Work playlist-state at revision 4; moving away and back leaves zero membership operations. |
+| \`DurablePlaylistTests.test_deleting_a_playlist_created_offline_folds_the_whole_case_away\` | Same Node selftest: real \`createPlaylist\` / \`deletePlaylistCanonical\`; unsent create folds to zero queue rows. |
+
+Each Node selftest has a **mutation negative-control**: temporarily replace
+the real durable field writer with a no-op during the cancel call, confirm the
+zero-pending assertion *fails*, restore the writer, and prove the genuine wrapper
+cancels the pending operation. The existing local-store Node tests still own
+coalescing, dependency, and fold behavior; Python backend sync tests own
+ordinary server acceptance and idempotency. The pre-existing
+\`tests.test_frontend_position_sync\` and \`tests.test_frontend_playlist_sync\`
+Python tests invoke these Node scripts in the normal unit/contract gate.
+
+**Retained in Chromium**: Position/Playlist creation and editing offline
+across real reload, user-visible list/detail/Work projections, separate
+revision conflict UI, deletion tombstone/refusal, genuine playlist drag
+persistence and reconnect, ordering/dependency races, and actual API/server
+handoff. Do not remove these merely because a Node store test has a similar
+name.
+
+The October 28 calibrated timing-baseline weights for the six removed IDs
+sum to about **31.2 seconds** per complete E2E inventory, about **62.4
+aggregate test-execution seconds** across source and packaged gates. These
+are *historical scheduling weights*, not measured runner-minute savings or a
+promise of shorter CI wall time. Both gates must still run their entire
+remaining six-shard inventories on the exact PR head. No change to selection,
+runner deadlines, retries, browser isolation, or packaged policy.
+
 ## Benchmark protocol
 
 For any optimization:
