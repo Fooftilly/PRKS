@@ -1643,6 +1643,40 @@ packaged inventories. These are *historical test scheduling weights*, not
 measured wall-clock savings. No production changes, CI selection alterations,
 timeouts, retries, sharding changes, or packaged exception.
 
+### Work private-reminder handoff proof selection (one MOVE contract, #740)
+
+`WorkspaceTabsTests.test_private_reminder_ack_proof_must_match_work_and_base`
+previously launched Chromium but invoked only
+`prksSaveWorkPrivateNoteForSession` from `frontend/js/ui.js` with a
+**stubbed** `prksSaveWorkNoteDurably` and synthetic ACK receipts. It
+neither exercised a live UI save nor verified server ACK delivery or
+IndexedDB persistence, so its specific contract belongs in the fast
+Node layer.
+
+`tests/browser/run_work_note_sync_selftest.js` now extracts and calls that
+**exact shipped session-save implementation**, alongside its existing
+`committedPrivateAckProofIsExactAndBounded` test of the real Work-note ACK
+receipt registry. The replacement covers 16 receipt/session variations:
+absent or foreign proof; mismatched, negative, fractional, string or stale
+revisions; missing session proof or handoff text; and valid matching, later
+and equal revisions. For every case it asserts the observed base, exact
+durable enqueue arguments and result, receipt lookup scope, and the
+critical **revert** distinction: cancel the never-sent X row only without
+proven ACK; with valid ACK, saving V is a new edit against X.
+
+**KEEP in Chromium:** `test_private_reminder_acknowledged_handoff_revert_persists`,
+`test_private_reminder_handoff_without_ack_proof_still_conflicts`,
+`test_private_reminder_handoff_proven_ack_rejects_foreign_write`,
+cold park/remount behavior and real user-visible notes/save state. Those
+require browser lifecycle, real durable queue and a server-side foreign
+writer. The replacement deliberately does not claim to test them.
+
+Historical calibrated weight for the removed synthetic-proof E2E:
+**1.606 seconds per full E2E inventory** (3.212s across source and
+packaged inventories). This is scheduling-weight accounting, *not*
+measured CI wall time or runner-minute savings. No production/runtime
+changes, retries, shard selection, or packaged policy changes.
+
 ## Benchmark protocol
 
 For any optimization:
