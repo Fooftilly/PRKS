@@ -2222,25 +2222,25 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         )
         page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("#prks-argument-rows .prks-research-row").first.wait_for()
+        page.locator("[data-prks-argument-rows] .prks-research-row").first.wait_for()
         search = page.locator("#prks-argument-search")
 
         search.fill("Marx")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 1"
         )
-        self.assertIn("Marx on alienation", page.locator("#prks-argument-rows").inner_text())
+        self.assertIn("Marx on alienation", page.locator("[data-prks-argument-rows]").inner_text())
 
         # An Argument name must not surface while the Stances kind filter is active.
         search.fill("Unrelated Argument")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 0"
         )
 
         search.fill("")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 1"
         )
 
     def test_concept_detail_sections_and_relationship_navigation(self):
@@ -2459,29 +2459,29 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
     def test_clear_search_across_indexes_targets_current_input(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         sequence = [
-            ("#/concepts", "prks-concept-search", "prks-concept-rows"),
-            ("#/positions", "prks-position-search", "prks-position-rows"),
-            ("#/arguments", "prks-argument-search", "prks-argument-rows"),
+            ("#/concepts", "prks-concept-search", "#prks-concept-rows"),
+            ("#/positions", "prks-position-search", "#prks-position-rows"),
+            ("#/arguments", "prks-argument-search", "[data-prks-argument-rows]"),
         ]
-        for hash_route, input_id, rows_host_id in sequence:
+        for hash_route, input_id, rows_host in sequence:
             page.evaluate("(h) => window.prksNavigate(h)", arg=hash_route)
             page.wait_for_function("(h) => location.hash === h", arg=hash_route)
-            page.locator("#" + rows_host_id + " .prks-research-row").first.wait_for()
+            page.locator(rows_host + " .prks-research-row").first.wait_for()
             total = page.evaluate(
-                "(id) => document.querySelectorAll('#' + id + ' .prks-research-row').length",
-                arg=rows_host_id,
+                "(sel) => document.querySelectorAll(sel + ' .prks-research-row').length",
+                arg=rows_host,
             )
             search = page.locator("#" + input_id)
             search.fill("zzz-nonexistent-query")
             page.wait_for_function(
-                "(id) => document.querySelectorAll('#' + id + ' .prks-research-row').length === 0",
-                arg=rows_host_id,
+                "(sel) => document.querySelectorAll(sel + ' .prks-research-row').length === 0",
+                arg=rows_host,
             )
-            page.locator("#" + rows_host_id + " [data-research-search-clear]").click()
+            page.locator(rows_host + " [data-research-search-clear]").click()
             self.assertEqual(search.input_value(), "", hash_route)
             page.wait_for_function(
-                "(a) => document.querySelectorAll('#' + a.id + ' .prks-research-row').length === a.n",
-                arg={"id": rows_host_id, "n": total},
+                "(a) => document.querySelectorAll(a.sel + ' .prks-research-row').length === a.n",
+                arg={"sel": rows_host, "n": total},
             )
             self.assertEqual(
                 page.evaluate("() => document.activeElement && document.activeElement.id"),
@@ -2493,17 +2493,17 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("#prks-argument-rows").wait_for()
-        empty_text = page.locator("#prks-argument-rows").inner_text()
+        page.locator("[data-prks-argument-rows]").wait_for()
+        empty_text = page.locator("[data-prks-argument-rows]").inner_text()
         self.assertIn("No Stances yet.", empty_text)
         self.assertNotIn("No Arguments or Stances yet.", empty_text)
-        self.assertEqual(page.locator("#prks-argument-rows #prks-stance-new-empty").count(), 1)
-        self.assertEqual(page.locator("#prks-argument-rows #prks-argument-new-empty").count(), 0)
+        self.assertEqual(page.locator("[data-prks-argument-rows] #prks-stance-new-empty").count(), 1)
+        self.assertEqual(page.locator("[data-prks-argument-rows] #prks-argument-new-empty").count(), 0)
 
         page.evaluate("() => window.prksNavigate('#/arguments?kind=argument')")
         page.wait_for_function("() => location.hash === '#/arguments?kind=argument'")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length > 0"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length > 0"
         )
 
     def test_argument_filtered_search_empty_is_kind_aware(self):
@@ -2517,20 +2517,20 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         )
         page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("#prks-argument-rows .prks-research-row").first.wait_for()
+        page.locator("[data-prks-argument-rows] .prks-research-row").first.wait_for()
         search = page.locator("#prks-argument-search")
 
         search.fill("zzz-nonexistent")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 0"
         )
-        empty_text = page.locator("#prks-argument-rows").inner_text()
+        empty_text = page.locator("[data-prks-argument-rows]").inner_text()
         self.assertIn("No Stances match", empty_text)
         self.assertNotIn("No Arguments or Stances match", empty_text)
 
-        page.locator("#prks-argument-rows [data-research-search-clear]").click()
+        page.locator("[data-prks-argument-rows] [data-research-search-clear]").click()
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 1"
         )
         self.assertEqual(page.evaluate("() => location.hash"), "#/arguments?kind=stance")
         self.assertEqual(

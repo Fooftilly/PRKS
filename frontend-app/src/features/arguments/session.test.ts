@@ -160,6 +160,22 @@ describe('Arguments route bridge', () => {
     expect(readRouteSurface(main)?.ownsMainShell).toBe(true)
     expect(readRouteSurface(side)?.ownsMainShell).toBe(false)
     expect(readRouteSurface(side)?.canonicalHash).toBe('#/arguments?kind=argument')
+    expect(mainHost.querySelector('[data-prks-argument-rows]')?.id).toBe('prks-arg-main-rows')
+    expect(secondaryHost.querySelector('[data-prks-argument-rows]')?.id).toBe('prks-arg-side-rows')
+    expect(mainHost.querySelector('[data-prks-argument-rows]')?.getAttribute('aria-labelledby')).toBe(
+      'prks-arg-main-kind-all',
+    )
+    expect(secondaryHost.querySelector('[data-prks-argument-rows]')?.getAttribute('aria-labelledby')).toBe(
+      'prks-arg-side-kind-argument',
+    )
+    expect(mainHost.querySelector('[data-arg-filter="all"]')?.getAttribute('aria-controls')).toBe(
+      'prks-arg-main-rows',
+    )
+    expect(secondaryHost.querySelector('[data-arg-filter="argument"]')?.getAttribute('aria-controls')).toBe(
+      'prks-arg-side-rows',
+    )
+    expect(mainHost.querySelector('#prks-arg-side-kind-argument')).toBeNull()
+    expect(secondaryHost.querySelector('#prks-arg-main-kind-all')).toBeNull()
   })
 
   it('filters kind in the projection and searches name and main text locally', async () => {
