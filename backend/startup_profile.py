@@ -32,7 +32,6 @@ PHASES = frozenset({
     "startup_text_reconcile",
     "startup_research_reconcile",
     "startup_staging_cleanup",
-    "startup_socket",
 })
 _RECORD = re.compile(
     r"^PRKS_E2E_STARTUP_PHASE (startup_[a-z_]+(?:_failed)?) "
