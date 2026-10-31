@@ -14,6 +14,7 @@ const assert = Object.assign(
         fail(...args) { checks++; return strict.fail(...args); },
     });
 const {Script} = require("node:vm");
+// The Unit/API runner sets cwd to the repository root; use fixed repository paths.
 const fs = require("node:fs");
 const {createFakeIndexedDBFactory} = require("./lib/fake_indexeddb.js");
 const {createPrksLocalStore} = require("../../frontend/js/local-store.js");
@@ -68,9 +69,8 @@ function loadTopLevelFunction(source, name) {
     }
     throw new Error("unclosed production wrapper: " + name);
 }
-const app = fs.readFileSync(require.resolve("../../frontend/js/app.js"), "utf8");
-const playlistUI = fs.readFileSync(
-    require.resolve("../../frontend/js/components/playlists.js"), "utf8");
+const app = fs.readFileSync("frontend/js/app.js", "utf8");
+const playlistUI = fs.readFileSync("frontend/js/components/playlists.js", "utf8");
 loadTopLevelFunction(app, "prksDurableOperationsOrNone");
 for (const name of ["prksPlaylistSaveMessage", "prksPlaylistBaseUnavailable",
     "updatePlaylist", "reorderPlaylist"]) loadTopLevelFunction(playlistUI, name);
@@ -97,7 +97,7 @@ function readValidators() {
         {filename: "playlist-production-validators.js"}).runInThisContext({timeout: 1000});
 }
 const validation = readValidators();
-const syncSource = fs.readFileSync(require.resolve("../../frontend/js/sync-runtime.js"), "utf8");
+const syncSource = fs.readFileSync("frontend/js/sync-runtime.js", "utf8");
 const registryStart = syncSource.indexOf("runtime = createRuntime({ store, online,");
 const registryEnd = syncSource.indexOf("\n        lock:", registryStart);
 assert(registryStart >= 0 && registryEnd > registryStart, "production sync registry");
