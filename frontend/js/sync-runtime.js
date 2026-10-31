@@ -252,6 +252,7 @@
                 // Checked before the claim, so a held row's attempt count
                 // stays where it was.
                 if (!await sessionAllowsSend()) break;
+                const priorAttempts = candidate.attempt_count || 0;
                 const op = await store.claimOperation(candidate.op_id);
                 if (!op) continue;
                 const family = handlers[op.operation];
@@ -270,7 +271,12 @@
                     const data = await response.json().catch(() => null);
                     const heldBy = admissionHold(response, data);
                     if (heldBy) {
-                        await store.updateOperationSyncState(op.op_id, { status: 'pending', last_error: 'Waiting for sign-in.' });
+                        // An admission refusal proves this attempt never ran,
+                        // so the claim's attempt is given back: a never-sent
+                        // row can still be revised or cancelled locally.
+                        await store.updateOperationSyncState(op.op_id, {
+                            status: 'pending', attempt_count: priorAttempts, last_error: 'Waiting for sign-in.',
+                        });
                         hold(heldBy);
                         break;
                     }

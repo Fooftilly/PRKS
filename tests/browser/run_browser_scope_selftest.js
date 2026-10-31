@@ -224,6 +224,8 @@ async function testHold() {
         record('a ' + label + ' holds the queue', r.runtime.held() === reason, String(r.runtime.held()));
         record('a ' + label + ' keeps the row pending, never settled',
             r.rows.length === 1 && r.rows[0].status === 'pending' && !r.rows[0].server_result, JSON.stringify(r.rows[0] && r.rows[0].status));
+        record('a ' + label + ' gives back the never-run attempt', r.sent.length === 1 && r.rows[0].attempt_count === 0,
+            String(r.rows[0] && r.rows[0].attempt_count));
     }
 
     const signedOut = await runWith(() => json({ code: 'ACKNOWLEDGED' }), ['signed_out']);
