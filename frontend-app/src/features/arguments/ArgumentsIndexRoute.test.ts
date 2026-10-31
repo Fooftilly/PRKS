@@ -54,15 +54,15 @@ describe('Arguments kind selector tabs', () => {
     expect(tabs.map((tab) => tab.attributes('data-arg-filter'))).toEqual(['all', 'argument', 'stance'])
     expect(tabs.map((tab) => tab.attributes('aria-selected'))).toEqual(['false', 'true', 'false'])
     expect(tabs.map((tab) => tab.attributes('aria-controls'))).toEqual([
-      'prks-argument-rows',
-      'prks-argument-rows',
-      'prks-argument-rows',
+      'prks-arg-pane-rows',
+      'prks-arg-pane-rows',
+      'prks-arg-pane-rows',
     ])
     expect(tabs.map((tab) => tab.attributes('tabindex'))).toEqual(['-1', '0', '-1'])
     expect(tabs.map((tab) => tab.classes().includes('is-active'))).toEqual([false, true, false])
-    const panel = wrapper.get('#prks-argument-rows')
+    const panel = wrapper.get('#prks-arg-pane-rows')
     expect(panel.attributes('role')).toBe('tabpanel')
-    expect(panel.attributes('aria-labelledby')).toBe('prks-argument-kind-argument')
+    expect(panel.attributes('aria-labelledby')).toBe('prks-arg-pane-kind-argument')
 
     await tabs[0]!.trigger('click')
     await tabs[2]!.trigger('click')
@@ -73,7 +73,7 @@ describe('Arguments kind selector tabs', () => {
     expect(updated.map((tab) => tab.attributes('aria-selected'))).toEqual(['false', 'false', 'true'])
     expect(updated.map((tab) => tab.attributes('tabindex'))).toEqual(['-1', '-1', '0'])
     expect(updated.map((tab) => tab.classes().includes('is-active'))).toEqual([false, false, true])
-    expect(panel.attributes('aria-labelledby')).toBe('prks-argument-kind-stance')
+    expect(panel.attributes('aria-labelledby')).toBe('prks-arg-pane-kind-stance')
     wrapper.unmount()
   })
 
@@ -88,37 +88,37 @@ describe('Arguments kind selector tabs', () => {
         },
       },
     })
-    const argument = wrapper.get('#prks-argument-kind-argument')
+    const argument = wrapper.get('#prks-arg-pane-kind-argument')
     const argumentEl = argument.element as HTMLElement
     argumentEl.focus()
     await argument.trigger('keydown', { key: 'ArrowRight' })
     expect(filterKind.mock.calls).toEqual([['stance']])
-    expect(document.activeElement).toBe(wrapper.get('#prks-argument-kind-stance').element)
+    expect(document.activeElement).toBe(wrapper.get('#prks-arg-pane-kind-stance').element)
 
     await wrapper.setProps({ projection: projection('stance') })
-    await wrapper.get('#prks-argument-kind-stance').trigger('keydown', { key: 'ArrowRight' })
+    await wrapper.get('#prks-arg-pane-kind-stance').trigger('keydown', { key: 'ArrowRight' })
     expect(filterKind.mock.calls).toEqual([['stance'], ['all']])
-    expect(document.activeElement).toBe(wrapper.get('#prks-argument-kind-all').element)
+    expect(document.activeElement).toBe(wrapper.get('#prks-arg-pane-kind-all').element)
 
     await wrapper.setProps({ projection: projection('all') })
-    await wrapper.get('#prks-argument-kind-all').trigger('keydown', { key: 'ArrowLeft' })
+    await wrapper.get('#prks-arg-pane-kind-all').trigger('keydown', { key: 'ArrowLeft' })
     expect(filterKind.mock.calls.at(-1)).toEqual(['stance'])
 
     await wrapper.setProps({ projection: projection('stance') })
     filterKind.mockClear()
-    await wrapper.get('#prks-argument-kind-stance').trigger('keydown', { key: 'Home' })
+    await wrapper.get('#prks-arg-pane-kind-stance').trigger('keydown', { key: 'Home' })
     expect(filterKind.mock.calls).toEqual([['all']])
-    expect(document.activeElement).toBe(wrapper.get('#prks-argument-kind-all').element)
+    expect(document.activeElement).toBe(wrapper.get('#prks-arg-pane-kind-all').element)
 
     await wrapper.setProps({ projection: projection('all') })
     filterKind.mockClear()
-    await wrapper.get('#prks-argument-kind-all').trigger('keydown', { key: 'End' })
+    await wrapper.get('#prks-arg-pane-kind-all').trigger('keydown', { key: 'End' })
     expect(filterKind.mock.calls).toEqual([['stance']])
 
     await wrapper.setProps({ projection: projection('stance') })
     filterKind.mockClear()
-    await wrapper.get('#prks-argument-kind-stance').trigger('keydown', { key: 'End' })
-    await wrapper.get('#prks-argument-kind-stance').trigger('keydown', { key: 'ArrowUp' })
+    await wrapper.get('#prks-arg-pane-kind-stance').trigger('keydown', { key: 'End' })
+    await wrapper.get('#prks-arg-pane-kind-stance').trigger('keydown', { key: 'ArrowUp' })
     expect(filterKind).not.toHaveBeenCalled()
     wrapper.unmount()
   })

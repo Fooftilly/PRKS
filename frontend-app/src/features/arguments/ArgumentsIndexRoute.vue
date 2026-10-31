@@ -4,6 +4,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
+import { argumentDomScopeKey } from './dom-scope'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
 import { argumentKindUi, filterArgumentIndexItems, normalizeArgumentSearchQuery } from './match'
@@ -57,7 +58,12 @@ const emptyActionKind = computed((): ArgumentKind => {
 })
 
 const KIND_FILTERS = ['all', 'argument', 'stance'] as const
-const ROWS_ID = 'prks-argument-rows'
+const domScope = inject(argumentDomScopeKey, 'prks-arg-pane')
+const rowsId = `${domScope}-rows`
+
+function kindTabId(kind: (typeof KIND_FILTERS)[number]): string {
+  return `${domScope}-kind-${kind}`
+}
 
 function tabSelected(kind: 'all' | ArgumentKind): boolean {
   return props.projection.kind === kind
@@ -67,7 +73,7 @@ function isKindFilter(value: string | null): value is (typeof KIND_FILTERS)[numb
   return value === 'all' || value === 'argument' || value === 'stance'
 }
 
-const activeTabId = computed(() => `prks-argument-kind-${props.projection.kind}`)
+const activeTabId = computed(() => kindTabId(props.projection.kind))
 
 function onFilter(kind: 'all' | ArgumentKind): void {
   intents?.filterKind(kind)
@@ -88,7 +94,7 @@ function onTabKeydown(event: KeyboardEvent): void {
   event.preventDefault()
   const kind = KIND_FILTERS[next]!
   if (!tabSelected(kind)) onFilter(kind)
-  rootEl.value?.querySelector<HTMLButtonElement>(`#prks-argument-kind-${kind}`)?.focus()
+  rootEl.value?.querySelector<HTMLButtonElement>(`[data-arg-filter="${kind}"]`)?.focus()
 }
 
 function onCreate(kind: ArgumentKind): void {
@@ -146,13 +152,13 @@ function onCreate(kind: ArgumentKind): void {
         @keydown="onTabKeydown"
       >
         <button
-          id="prks-argument-kind-all"
+          :id="kindTabId('all')"
           type="button"
           class="prks-tab"
           :class="{ 'is-active': tabSelected('all') }"
           role="tab"
           :aria-selected="tabSelected('all') ? 'true' : 'false'"
-          :aria-controls="ROWS_ID"
+          :aria-controls="rowsId"
           :tabindex="tabSelected('all') ? 0 : -1"
           data-arg-filter="all"
           @click="onFilter('all')"
@@ -160,13 +166,13 @@ function onCreate(kind: ArgumentKind): void {
           All
         </button>
         <button
-          id="prks-argument-kind-argument"
+          :id="kindTabId('argument')"
           type="button"
           class="prks-tab"
           :class="{ 'is-active': tabSelected('argument') }"
           role="tab"
           :aria-selected="tabSelected('argument') ? 'true' : 'false'"
-          :aria-controls="ROWS_ID"
+          :aria-controls="rowsId"
           :tabindex="tabSelected('argument') ? 0 : -1"
           data-arg-filter="argument"
           @click="onFilter('argument')"
@@ -174,13 +180,13 @@ function onCreate(kind: ArgumentKind): void {
           Arguments
         </button>
         <button
-          id="prks-argument-kind-stance"
+          :id="kindTabId('stance')"
           type="button"
           class="prks-tab"
           :class="{ 'is-active': tabSelected('stance') }"
           role="tab"
           :aria-selected="tabSelected('stance') ? 'true' : 'false'"
-          :aria-controls="ROWS_ID"
+          :aria-controls="rowsId"
           :tabindex="tabSelected('stance') ? 0 : -1"
           data-arg-filter="stance"
           @click="onFilter('stance')"
@@ -201,7 +207,8 @@ function onCreate(kind: ArgumentKind): void {
         >
       </div>
       <div
-        id="prks-argument-rows"
+        :id="rowsId"
+        data-prks-argument-rows
         class="list-view prks-research-index"
         role="tabpanel"
         :aria-labelledby="activeTabId"
