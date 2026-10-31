@@ -66,7 +66,7 @@ class E2EGateSummaryTests(unittest.TestCase):
             "PLAN_FEATURES": '["pdf", "bad` | forged"]',
             "PLAN_REASON": "\n# injected heading\n",
             "POINTER_RESULT": "success\n| fake | passed |",
-            "PLAN_POINTER": "true\n",
+            "PLAN_POINTER": "true\n| injected flag |",
         }, passed=False)
         self.assertNotIn("forged", report)
         self.assertNotIn("injected", report)
