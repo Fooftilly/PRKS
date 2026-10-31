@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
-import uiSource from '../../../../frontend/js/ui.js?raw'
+import uiClassicSource from '../../../../frontend/js/ui.js?raw'
 import { registerWorkMetadataEditorBridge, resetWorkMetadataEditorForTests } from './metadata-session'
 
 type WorkRecord = {
@@ -47,12 +47,15 @@ type PanelWindow = {
   prksRefreshPendingWorkNotes: () => Promise<void>
 }
 
+// Execute the real classic Work-notes dependency before UI in the existing
+// single-script test harness. No extra dynamic evaluation or test-only guard.
+const uiSource = workNotesStateSource + '\n' + uiClassicSource
+
 const panelWindow = window as unknown as PanelWindow
 
 beforeAll(() => {
   panelWindow.eval(ownerResourceSource)
   panelWindow.eval(tabContextSource)
-  panelWindow.eval(workNotesStateSource)
   panelWindow.eval(uiSource)
   registerWorkMetadataEditorBridge(window)
 })
