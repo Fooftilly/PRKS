@@ -15,7 +15,7 @@ import threading
 from contextlib import redirect_stderr
 from datetime import timedelta
 from typing import Any, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import prks_app
 from backend.api_contract.jobs import JobDiagnostics, JobWorkerCounters
@@ -79,6 +79,15 @@ class EmbeddedWorkerTestCase(WorkerTestCase):
 
 
 class LifecycleTests(EmbeddedWorkerTestCase):
+    def test_http_server_uses_bounded_shutdown_poll_without_worker(self) -> None:
+        # No worker means this isolates the HTTP serve/close contract.
+        # The real graceful job drain and SIGTERM behavior are tested below.
+        httpd = MagicMock()
+        WebJobs(self.db, None).serve(httpd)
+        httpd.serve_forever.assert_called_once_with(poll_interval=0.1)
+        httpd.server_close.assert_called_once_with()
+        httpd.shutdown.assert_not_called()
+
     def test_the_worker_starts_with_the_server_and_stops_with_it_gracefully(self) -> None:
         inside, go = self.blocking_handler()
         job_id = self.enqueue_instance()
