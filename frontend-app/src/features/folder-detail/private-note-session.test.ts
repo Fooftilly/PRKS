@@ -8,7 +8,7 @@ import folderStateSource from '../../../../frontend/js/folder-state.js?raw'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
-import uiSource from '../../../../frontend/js/ui.js?raw'
+import uiClassicSource from '../../../../frontend/js/ui.js?raw'
 import { createFolderQueue, type FolderServer } from './test-support/folder-note-queue'
 
 type Folder = { id: string; title: string; private_notes: string }
@@ -65,6 +65,10 @@ type W = {
   prksDurableOperationsOrNone: () => Promise<unknown[]>
   prksSync?: unknown
 }
+
+// Execute the real classic Work-notes dependency before UI in the existing
+// single-script test harness. No extra dynamic evaluation or test-only guard.
+const uiSource = workNotesStateSource + '\n' + uiClassicSource
 
 const w = window as unknown as W
 const FA = 'F-A'
@@ -172,7 +176,6 @@ beforeAll(() => {
   w.eval(ownerResourceSource)
   w.eval(tabContextSource)
   w.eval(folderStateSource)
-  w.eval(workNotesStateSource)
   w.eval(uiSource)
 })
 
