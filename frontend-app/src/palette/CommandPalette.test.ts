@@ -158,6 +158,7 @@ describe('command palette dialog', () => {
     expect(input).toBeInstanceOf(HTMLInputElement)
     expect(document.activeElement).toBe(input)
     expect(input?.getAttribute('role')).toBe('combobox')
+    expect(input?.getAttribute('aria-labelledby')).toBe('prks-command-palette-title')
     expect(input?.getAttribute('aria-expanded')).toBe('true')
     expect(input?.getAttribute('aria-activedescendant')).toBe('prks-palette-opt-1')
     expect(input?.getAttribute('placeholder')).toBe('Open in split view…')

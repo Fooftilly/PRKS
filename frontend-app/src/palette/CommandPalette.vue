@@ -136,6 +136,7 @@ watch(
             ref="inputEl"
             type="text"
             role="combobox"
+            aria-labelledby="prks-command-palette-title"
             aria-autocomplete="list"
             :aria-expanded="view.open ? 'true' : 'false'"
             aria-controls="prks-command-palette-results"
