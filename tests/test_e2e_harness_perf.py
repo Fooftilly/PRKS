@@ -422,5 +422,52 @@ class E2EDiagnosticAndChromiumHolderTests(unittest.TestCase):
             self.assertEqual(holder.browser, "browser-ok")
 
 
+class PersonRecentActionabilityProbeTests(unittest.TestCase):
+    """The manual-only probe never changes ordinary E2E navigation."""
+
+    @staticmethod
+    def _tab_calls(profile_prefix, enabled):
+        from tests.e2e.test_app import _open_work_from_home
+
+        page = mock.Mock()
+        recent = mock.Mock()
+
+        def locator(selector, **_kwargs):
+            if selector == '.prks-folder-library__tab-btn[data-tab="recently-added"]':
+                return recent
+            return mock.Mock()
+
+        page.locator.side_effect = locator
+        with mock.patch.dict(
+            os.environ,
+            {"PRKS_E2E_PERSON_RECENT_TRIAL": "1" if enabled else "0"},
+        ):
+            _open_work_from_home(
+                page, "Synthetic Work", profile_prefix=profile_prefix
+            )
+        # Original Work selection and readiness checks are still executed.
+        page.wait_for_function.assert_called()
+        return recent.click.call_args_list
+
+    def test_default_and_unrelated_navigation_have_one_real_click(self):
+        for prefix in (None, "person_create", "person_edit", "other"):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    self._tab_calls(prefix, enabled=False), [mock.call()]
+                )
+                if prefix not in ("person_create", "person_edit"):
+                    self.assertEqual(
+                        self._tab_calls(prefix, enabled=True), [mock.call()]
+                    )
+
+    def test_opt_in_person_probe_precedes_the_real_click(self):
+        for prefix in ("person_create", "person_edit"):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(
+                    self._tab_calls(prefix, enabled=True),
+                    [mock.call(trial=True), mock.call()],
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
