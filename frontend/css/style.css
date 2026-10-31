@@ -7189,6 +7189,13 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
 .modal--settings .modal-header {
     flex-shrink: 0;
 }
+/* Flex child of the column modal, and the flex parent of the workspace.
+   Without min-height: 0 the root stays content-sized and the modal clips it. */
+#prks-settings-root {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
 .prks-settings-workspace {
     display: flex;
     flex: 1 1 auto;
