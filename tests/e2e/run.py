@@ -1692,6 +1692,10 @@ def _profile_infrastructure_total(phases: dict) -> float:
     nested = set()
     if "server_start" in phases:
         nested.update(("server_spawn", "server_http_ready"))
+    if "server_stop" in phases:
+        # The PostgreSQL drop occurs during AppServer.stop(), and its duration
+        # is a diagnostic subdivision, not additional wall time.
+        nested.update(("postgres_drop", "postgres_drop_failed"))
     if "app_ready" in phases:
         nested.update((
             "app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait"
