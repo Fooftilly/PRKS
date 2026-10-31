@@ -1,62 +1,36 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 629,
+      "number": 509,
       "set": {
-        "Status": "Ready"
-      },
-      "expected_before": {
-        "Agent": "Claude Code",
-        "Status": "Inbox",
-        "Execution": "Agent"
-      },
-      "reason": "Approved L-F-1 browser store/sync scope; sole native prerequisite #626 is closed, no open overlapping frontend migration PR, and this is an already-owned Claude slice awaiting readiness.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 630,
-      "set": {
-        "Status": "Ready"
-      },
-      "expected_before": {
-        "Agent": "Claude Code",
-        "Status": "Inbox",
-        "Execution": "Agent"
-      },
-      "reason": "Approved L-D-1 Compose/health remainder; native #623/#626/#627 blockers are closed, prior partial implementation merged, and no overlapping open Compose/health PR remains.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 631,
-      "set": {
+        "Agent": "Cursor Cloud",
         "Status": "Ready",
         "Execution": "Agent"
       },
       "expected_before": {
-        "Agent": "Claude Code",
+        "Agent": "Cursor Cloud",
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Approved L-W-2; native prerequisite #628 is closed, bulk/BibTeX/wiki/merge-foundation PRs already merged, and only focused acceptance/closure audit remains; avoid implementing deferred MERGE_WORKS execution or duplicating merged work.",
+      "reason": "Accepted independent keyboard-accessibility defect reverified in current Work/Folder tag picker source; native blockers empty, no open PR modifies either picker implementation; Cursor owns this scoped frontend fix with keyboard E2E.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 634,
+      "number": 969,
       "set": {
+        "Agent": "Cursor Cloud",
         "Status": "Ready",
         "Execution": "Agent"
       },
       "expected_before": {
-        "Agent": "Claude Code",
+        "Agent": "Cursor Cloud",
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Approved L-R-1 PostgreSQL Research backend; both native prerequisites #628 and #627 are closed, #647 design follow-up merged, no open Research implementation PR, and this unblocks L-B-1/PG-C1.",
+      "reason": "Accepted independent Publisher draft-loss race reverified in current Vue route; native blockers empty and no open PR touches Publisher files; Cursor owns guarded async draft/session regression fix.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
