@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import folderStateSource from '../../../../frontend/js/folder-state.js?raw'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
+import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 import { createFolderQueue, type FolderServer } from './test-support/folder-note-queue'
 
@@ -171,6 +172,7 @@ beforeAll(() => {
   w.eval(ownerResourceSource)
   w.eval(tabContextSource)
   w.eval(folderStateSource)
+  w.eval(workNotesStateSource)
   w.eval(uiSource)
 })
 
