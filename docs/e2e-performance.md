@@ -1765,6 +1765,41 @@ both). These are not measured critical-path or runner-minute savings.
 No production runtime code, E2E runner, workflow path selection, sharding,
 timeout, retry or packaged-asset coverage changes.
 
+### Research detail presentation contracts (two MOVE, #740)
+
+Two `ResearchIndexAndDetailPolishTests` cases created fixture records by
+calling raw `POST /api/arguments` in `page.evaluate`, then navigated to a
+ready route and inspected only rendered text, counters and link attributes:
+
+- `test_position_relationship_rows_use_shared_research_row_language` checked
+  the Argument name/kind/verdict, native Argument href and Position relationship
+  counter. The production `PositionDetailRoute.vue` fixture in the existing
+  Vue `session.test.ts` now checks all five against the actual shared
+  `PrksResearchRow` and `PrksResearchSectionHead` renderers.
+- `test_argument_detail_counts_and_contextual_empty_wording` checked four
+  section counters and four contextual empty messages after synthetic record
+  creation. The production `ArgumentDetailRoute.vue` fixture now checks each
+  populated section counter, and a second fixture asserts each zero counter
+  and exact empty-state message. Both execute the shipped Vue presentation
+  rather than copying HTML strings into a test-only implementation.
+
+These tests did not activate links, save through the durable editors, verify
+server ACKs, reload, test service-worker cache or cross a browser connectivity
+boundary. **KEEP in Chromium:** Argument target changes and Position-domain
+invalidation, real Position→Argument cached/uncached navigation, Position
+relationship rendering offline, Argument detail durable edits and the
+Argument/Position cross-route and sync/refusal cases in
+`test_offline.py`, `test_positions_durable.py`, and
+`test_arguments_durable.py`. These remain responsible for real browser,
+server/route and durable synchronization integrations; the Vue tests cover
+only the presentation aspects.
+
+Historical weights: **1.578 + 1.628 = 3.206 test-seconds** per independently
+scheduled source or packaged E2E inventory (6.412 summed). These are not
+observed wall-time, critical-path, or runner-minute savings. No production
+code, runner, workflow selection, shards, retries, timeouts or packaged
+coverage policy changed.
+
 ### Position/Argument offline-navigation guard (one MOVE, #740)
 
 `OfflinePositionTests.test_position_code_no_longer_applies_its_own_argument_offline_policy`
