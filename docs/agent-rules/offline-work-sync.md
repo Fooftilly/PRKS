@@ -234,7 +234,7 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   that cannot arrive.
 - `source_url` is synchronized only as PROVENANCE, and the server REFUSES a
   field-scoped write to it on a video Work (`FIELD_KIND_GUARDS`). There it is
-  one spelling of an identity spanning four columns, and `prksYoutubeEmbedUrl()`
+  one spelling of an identity spanning four columns, and `resolveWorkVideoEmbed()`
   short-circuits on `provider_id` -- so changing the URL alone would move the
   stored value while the video that plays stays the same.
 

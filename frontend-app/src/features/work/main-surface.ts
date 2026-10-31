@@ -1,9 +1,11 @@
 import type { RelSummaryPart } from '../../components/relSummary'
+import type { WorkVideoSource } from './video-embed'
 
 /**
  * Work tile shell model. The route session paints `WorkMainSurface`.
- * Video HTML comes from renderVideoViewerPane. The PDF host is filled by
- * initPdfViewerForWork. Research Notes mount into the anchor afterwards.
+ * A video kind carries the effective source; `WorkVideoPane` resolves the
+ * player. The PDF host is filled by initPdfViewerForWork. Research Notes
+ * mount into the anchor afterwards.
  */
 
 export type WorkMainSurfaceKind = 'pdf' | 'video' | 'empty'
@@ -17,6 +19,6 @@ export interface WorkMainSurfaceModel {
   title: string
   docTypeHtml: string
   relSummaryParts: RelSummaryPart[]
-  viewerHtml: string
+  video: WorkVideoSource | null
   editorRegionId: string
 }

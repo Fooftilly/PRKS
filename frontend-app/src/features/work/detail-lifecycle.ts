@@ -1,7 +1,7 @@
 /**
  * Work-detail mount sequence.
  * Presentation is the `work` route surface. This module owns the order:
- * notes ticket, viewer modules, shell, then PDF / Research Notes / panel.
+ * notes ticket, PDF viewer module, shell, then PDF / Research Notes / panel.
  * It is not a second Work store and does not write annotations.
  */
 import type { RelSummaryPart } from '../../components/relSummary'
@@ -9,6 +9,7 @@ import { workCardCreditText } from '../../components/work-card'
 import { describeWorkDetail } from './detail-model'
 import type { WorkMainSurfaceModel } from './main-surface'
 import { presentWorkResearchNotes } from './research-note-session'
+import { workVideoSourceFromWork } from './video-embed'
 
 export interface WorkDetailMountRequest {
   generation?: number
@@ -151,12 +152,6 @@ export async function mountWorkDetail(
     pdfModule = await loadModule('/js/components/works-pdf.js')
   }
   if (!isCurrent()) return false
-  let videoReady = false
-  if (inferredKind === 'video') {
-    await loadModule('/js/components/works-video.js')
-    videoReady = true
-  }
-  if (!isCurrent()) return false
 
   const rolesFn = classic('prksEffectiveWorkDetailRoles')
   const rolesForRel = rolesFn ? rolesFn(current as never) : current
@@ -165,13 +160,6 @@ export async function mountWorkDetail(
     inferredKind,
     rolesForRel && typeof rolesForRel === 'object' ? (rolesForRel as Record<string, unknown>) : null,
   )
-  const renderVideo = classic('renderVideoViewerPane')
-  let viewerHtml = ''
-  if (inferredKind === 'video') {
-    viewerHtml = videoReady && renderVideo
-      ? String(renderVideo(current as never) || '')
-      : '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">Video viewer unavailable.</p></div>'
-  }
   if (typeof ctx.setEntity === 'function') ctx.setEntity('work', current)
   const badge = classic('prksDocTypeBadgeHtml')
   const shell: WorkMainSurfaceModel = {
@@ -183,7 +171,7 @@ export async function mountWorkDetail(
     title: described.title,
     docTypeHtml: badge ? String(badge(current.doc_type as never) || '') : '',
     relSummaryParts: relSummaryParts(current, described),
-    viewerHtml,
+    video: described.kind === 'video' ? workVideoSourceFromWork(current) : null,
     editorRegionId: typeof ctx.domId === 'function' ? ctx.domId('work-notes-editor-region') : 'work-notes-editor-region',
   }
 

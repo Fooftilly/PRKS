@@ -6,7 +6,10 @@ type PresentCall = {
   fields: {
     availability: string
     workId: string
-    surface: { kind?: string; viewerHtml?: string } | null
+    surface: {
+      kind?: string
+      video?: { provider: string; providerId: string; sourceUrl: string } | null
+    } | null
     attach: (() => void) | null
   }
 }
@@ -145,16 +148,18 @@ describe('mountWorkDetail', () => {
 
   it('skips the video source refresh when the route already prepared it', async () => {
     const order: string[] = []
+    const presented: PresentCall[] = []
     g.prksInferWorkSourceKind = () => 'video'
     g.prksRefreshPendingWorkSources = async () => {
       order.push('refresh')
     }
     g.renderVideoViewerPane = () => {
       order.push('video-html')
-      return '<iframe src="https://www.youtube.com/embed/abcdefghijk"></iframe>'
+      return '<iframe src="https://evil.example/"></iframe>'
     }
-    g.prksPresentVueRoute = () => {
+    g.prksPresentVueRoute = (_ctx: unknown, _host: unknown, feature: string, fields: PresentCall['fields']) => {
       order.push('present')
+      presented.push({ feature, fields })
     }
     const ctx = {
       generation: 1,
@@ -167,7 +172,13 @@ describe('mountWorkDetail', () => {
     await mountWorkDetail(
       ctx,
       host(),
-      { id: 'v1', title: 'Talk' },
+      {
+        id: 'v1',
+        title: 'Talk',
+        provider: 'youtube',
+        provider_id: 'abcdefghijk',
+        source_url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      },
       { generation: 1, workId: 'v1', sourcePrepared: true },
       async (url) => {
         order.push(url)
@@ -175,8 +186,58 @@ describe('mountWorkDetail', () => {
       },
     )
     expect(order).not.toContain('refresh')
-    expect(order.indexOf('video-html')).toBeLessThan(order.indexOf('present'))
-    expect(order).toContain('/js/components/works-video.js')
+    expect(order).not.toContain('video-html')
+    expect(order).not.toContain('/js/components/works-video.js')
+    expect(order).toEqual(['present'])
+    expect(presented[0]?.fields.surface?.kind).toBe('video')
+    expect(presented[0]?.fields.surface?.video).toEqual({
+      provider: 'youtube',
+      providerId: 'abcdefghijk',
+      sourceUrl: 'https://www.youtube.com/watch?v=abcdefghijk',
+    })
+  })
+
+  it('applies the effective video source and does not load a classic viewer', async () => {
+    const order: string[] = []
+    const presented: PresentCall[] = []
+    g.prksInferWorkSourceKind = () => 'video'
+    g.prksRefreshPendingWorkSources = async () => {
+      order.push('refresh')
+    }
+    g.prksEffectiveWorkSource = (work: Record<string, unknown>) => ({
+      ...work,
+      provider: 'youtube',
+      provider_id: 'abcdefghijk',
+      source_url: 'https://youtu.be/abcdefghijk',
+    })
+    g.prksPresentVueRoute = (_ctx: unknown, _host: unknown, feature: string, fields: PresentCall['fields']) => {
+      order.push('present')
+      presented.push({ feature, fields })
+    }
+    const ctx = {
+      generation: 1,
+      ui: {},
+      isCurrent: () => true,
+      resourceTicket: () => 'ticket',
+      setEntity() {},
+      domId: (name: string) => name,
+    }
+    await mountWorkDetail(
+      ctx,
+      host(),
+      { id: 'v1', title: 'Talk', source_url: 'https://evil.example/old' },
+      { generation: 1, workId: 'v1' },
+      async (url) => {
+        order.push(url)
+        return {}
+      },
+    )
+    expect(order).toEqual(['refresh', 'present'])
+    expect(presented[0]?.fields.surface?.video).toEqual({
+      provider: 'youtube',
+      providerId: 'abcdefghijk',
+      sourceUrl: 'https://youtu.be/abcdefghijk',
+    })
   })
 
   it('logs related-folder load failures with the caught error and suppresses aborts', async () => {
