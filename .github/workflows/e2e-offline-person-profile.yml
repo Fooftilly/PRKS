@@ -143,7 +143,10 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"])
           for scenario, stages in stage_sets.items():
               compared = {}
-              trial_key = f"person_{scenario}_link_nav_recent_trial"
+              trial_key = {
+                  "create": "person_create_link_nav_recent_trial",
+                  "edit": "person_edit_link_nav_recent_trial",
+              }[scenario]
               for mode in ("baseline", "trial"):
                   records = [
                       json.loads((root / f"person-{scenario}-{mode}-profile-{i}.json").read_text())
