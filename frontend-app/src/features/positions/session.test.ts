@@ -163,7 +163,12 @@ describe('Positions route bridge', () => {
       '[data-prks-role="position-argument-link"]',
     )
     expect(argumentLink).not.toBeNull()
-    expect(argumentLink?.getAttribute('href')).toBe('#/arguments/A1')
+    expect(argumentLink?.getAttribute('href')).toBe('#/arguments/A1'
+    expect(argumentLink?.classList.contains('prks-research-row')).toBe(true)
+    expect(argumentLink?.textContent).toContain('Pending argument name')
+    expect(argumentLink?.textContent).toContain('Argument')
+    expect(argumentLink?.textContent).toContain('Supports')
+    expect(el.querySelector('#prks-position-args-h')?.parentElement?.querySelector('.research-entity__section-count')?.textContent).toBe('1'))
     expect(argumentLink?.getAttribute('aria-disabled')).toBeNull()
     expect(argumentLink?.getAttribute('title')).toBeNull()
     expect(argumentLink?.hasAttribute('disabled')).toBe(false)
