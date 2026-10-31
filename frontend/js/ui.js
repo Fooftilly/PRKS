@@ -811,30 +811,16 @@ function prksSetOverlayBackdropVisible(visible) {
 }
 
 function prksSyncMobileToggleButtons() {
-    const navBtn = document.getElementById('prks-mobile-nav-btn');
-    const detBtn = document.getElementById('prks-mobile-details-btn');
-    if (!navBtn && !detBtn) return;
     const sbOpen = document.body.classList.contains('prks-sidebar-open');
     const rpOpen = document.body.classList.contains('prks-right-panel-open');
-    if (navBtn) navBtn.setAttribute('aria-expanded', sbOpen ? 'true' : 'false');
-    if (detBtn) detBtn.setAttribute('aria-expanded', rpOpen ? 'true' : 'false');
+    if (typeof window.prksNoteShellChrome === 'function') {
+        window.prksNoteShellChrome({ sidebarOpen: sbOpen, detailsOpen: rpOpen });
+    }
 }
 
 function prksIsTiledWorkspace() {
     const app = document.getElementById('app-container');
     return !!(app && app.classList.contains('app-container--tiled'));
-}
-
-function prksPrepareSidebarRailTooltips() {
-    const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
-    const controls = sidebar.querySelectorAll(
-        '.nav-menu > li > .nav-link, .nav-menu > li > .nav-disclosure__row > .nav-link, .nav-menu > li > .nav-disclosure__row > .nav-disclosure__toggle--full'
-    );
-    for (let i = 0; i < controls.length; i++) {
-        const label = controls[i].querySelector('.nav-link__label');
-        if (label && label.textContent) controls[i].title = label.textContent.trim();
-    }
 }
 
 function prksSyncDenseWorkspaceShell(tiled) {
@@ -901,37 +887,19 @@ function prksToggleRightPanelOverlay(forceOpen) {
 }
 
 function initMobileShell() {
-    const navBtn = document.getElementById('prks-mobile-nav-btn');
-    const detBtn = document.getElementById('prks-mobile-details-btn');
+    // Nav, details, expand, and collapse controls are Vue app-shell buttons.
+    // This runs after the module mounts, so binding them here would add a
+    // second click listener. The right-panel close control stays classic.
     const closeBtn = document.getElementById('prks-right-panel-close');
     const overlayBackdrop = document.getElementById('prks-overlay-backdrop');
-    const expandBtn = document.getElementById('prks-sidebar-expand-btn');
-    const collapseBtn = document.getElementById('prks-sidebar-collapse-btn');
 
-    prksPrepareSidebarRailTooltips();
-
-    if (navBtn && navBtn.dataset.bound !== '1') {
-        navBtn.dataset.bound = '1';
-        navBtn.addEventListener('click', () => prksToggleSidebarDrawer());
-    }
-    if (detBtn && detBtn.dataset.bound !== '1') {
-        detBtn.dataset.bound = '1';
-        detBtn.addEventListener('click', () => prksToggleRightPanelOverlay());
-    }
     if (closeBtn && closeBtn.dataset.bound !== '1') {
         closeBtn.dataset.bound = '1';
         closeBtn.addEventListener('click', () => {
             prksToggleRightPanelOverlay(false);
-            if (detBtn && typeof detBtn.focus === 'function') detBtn.focus();
+            const detailsBtn = document.getElementById('prks-mobile-details-btn');
+            if (detailsBtn && typeof detailsBtn.focus === 'function') detailsBtn.focus();
         });
-    }
-    if (expandBtn && expandBtn.dataset.bound !== '1') {
-        expandBtn.dataset.bound = '1';
-        expandBtn.addEventListener('click', () => prksToggleSidebarDrawer(true));
-    }
-    if (collapseBtn && collapseBtn.dataset.bound !== '1') {
-        collapseBtn.dataset.bound = '1';
-        collapseBtn.addEventListener('click', () => prksToggleSidebarDrawer(false));
     }
     if (overlayBackdrop && overlayBackdrop.dataset.bound !== '1') {
         overlayBackdrop.dataset.bound = '1';

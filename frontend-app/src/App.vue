@@ -9,10 +9,12 @@
   </Teleport>
   <ModalHost />
   <WorkspaceShell />
+  <AppChrome />
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import AppChrome from './app-shell/AppChrome.vue'
 import EditorRecoveryDiagnostics from './features/editor-recovery/EditorRecoveryDiagnostics.vue'
 import PerformanceDiagnostics from './features/performance-diagnostics/PerformanceDiagnostics.vue'
 import ModalHost from './modal/ModalHost.vue'

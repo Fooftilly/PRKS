@@ -7,6 +7,7 @@ import unittest
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _INDEX = os.path.join(_FRONTEND, "index.html")
+_SIDEBAR = os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "SidebarNav.vue")
 _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _SELFTEST = os.path.join(_PROJECT_DIR, "tests", "browser", "navigation_selftest.js")
@@ -82,7 +83,9 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertNotIn("PRKS_PEOPLE_LIBRARY_FILTER_KEY", _read(_NAV))
 
     def test_sidebar_removes_duplicate_disclosure_headings(self):
-        html = _read(_INDEX)
+        html = _read(_SIDEBAR)
+        shell = _read(_INDEX)
+        self.assertIn('id="sidebar"', shell)
         self.assertNotIn('<li class="nav-section">People</li>', html)
         self.assertNotIn('<li class="nav-section">Research</li>', html)
         self.assertNotIn('<li class="nav-section">Progress</li>', html)
@@ -91,7 +94,7 @@ class FrontendNavigationTests(unittest.TestCase):
         self.assertIn('nav-disclosure--section-break', html)
 
     def test_sidebar_research_progress_are_full_row_buttons(self):
-        html = _read(_INDEX)
+        html = _read(_SIDEBAR)
         # People keeps a real link plus a separate chevron toggle.
         self.assertIn('data-nav-disclosure="people"', html)
         self.assertIn('href="#/people" class="nav-link nav-disclosure__link"', html)

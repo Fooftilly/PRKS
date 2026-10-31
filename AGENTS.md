@@ -167,7 +167,7 @@ When a finding is fixed, obsolete, rejected, superseded, or duplicated, close it
 - `backend/research_index.py` disposable derived note-reference index
 - `backend/research_graph.py` read-only Research Graph projection
 - `backend/performance.py` in-memory performance diagnostics
-- `frontend/` legacy UI shell (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs, `frontend/js/workspace-persistence.js` workspace localStorage, `frontend/js/ribbon-create.js` unified New File split button)
+- `frontend/` legacy UI shell (`frontend/js/tab-context.js` per-tab runtime, `frontend/js/workspace-tabs.js` stacked workspace tabs, `frontend/js/workspace-persistence.js` workspace localStorage, `frontend-app/src/app-shell/` unified New File split button)
 - `frontend-app/` Vue 3 + TypeScript source and maintainer Vite build (not a runtime dependency; see `frontend-app/AGENTS.md`; load `frontend/AGENTS.md` too when work crosses the legacy/runtime bridge or offline/sync contracts)
 - `frontend/vue/` committed Vite production bundle served with the rest of `frontend/`
 - `frontend/js/offline-store.js` disposable IndexedDB client cache (see `frontend/AGENTS.md` section "Offline / PWA")

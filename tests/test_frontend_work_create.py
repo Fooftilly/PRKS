@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import unittest
 
@@ -16,7 +15,6 @@ _APP = os.path.join(_FRONTEND, "js", "app.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "AGENTS.md")
-_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_ribbon_create_selftest.js")
 
 
 def _read(path: str) -> str:
@@ -81,16 +79,17 @@ vm.runInContext(
 
 class FrontendWorkCreateTests(unittest.TestCase):
     def test_single_ribbon_create_affordance(self):
-        html = _read(_INDEX)
-        center = html.split("top-ribbon__center", 1)[1].split("top-ribbon__right", 1)[0]
+        ribbon = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "TopRibbon.vue"))
+        center = ribbon.split("top-ribbon__center", 1)[1].split("top-ribbon__right", 1)[0]
         self.assertIn('id="prks-ribbon-create"', center)
         self.assertIn('id="prks-ribbon-new-file"', center)
         self.assertIn('id="prks-ribbon-new-more"', center)
-        self.assertIn("openModal('work-modal')", center)
+        self.assertIn("openModal?.('work-modal')", ribbon)
         self.assertNotIn("New…", center)
         self.assertIn('aria-haspopup="menu"', center)
         self.assertEqual(center.count('id="prks-ribbon-new-file"'), 1)
         self.assertEqual(center.count('id="prks-ribbon-new-more"'), 1)
+        self.assertNotIn("ribbon-create.js", _read(_INDEX))
 
     def test_modal_primary_and_advanced_hierarchy(self):
         html = _read(_INDEX)
@@ -425,23 +424,16 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("New File / Work creation", design)
         self.assertIn("sticky modal footer", design.lower())
         self.assertIn("canonical Work creation path", agents)
-        self.assertIn("ribbon-create.js", agents)
+        self.assertIn("app-shell", agents)
 
-    def test_ribbon_create_selftest(self):
-        node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for ribbon-create tests")
-        proc = subprocess.run(
-            [node, _RUNNER],
-            cwd=_PROJECT_DIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
-        self.assertIn("passed", proc.stdout)
-        self.assertIn(", 0 failed", proc.stdout)
-        self.assertNotIn("FAIL  ", proc.stdout)
+    def test_ribbon_create_lives_in_vue_shell(self):
+        chrome = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "chrome.ts"))
+        self.assertIn("id: 'new-file'", chrome)
+        self.assertIn("modalId: 'work-modal'", chrome)
+        self.assertIn("id: 'new-folder'", chrome)
+        self.assertIn("id: 'new-person'", chrome)
+        self.assertIn("id: 'new-group'", chrome)
+        self.assertFalse(os.path.isfile(os.path.join(_FRONTEND, "js", "ribbon-create.js")))
 
 
 if __name__ == "__main__":

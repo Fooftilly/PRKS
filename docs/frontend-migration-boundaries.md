@@ -84,6 +84,7 @@ owner on each side, or it is migration debt.
 | `prksProcessingRecords` | `src/features/processing/session.ts` (records service in `records.ts`) | `app.js` Processing case | Processing inbox reads and writes are owned by the typed client in Vue, which also owns file save and import. The coordinator loads the inbox through this service rather than a second client. The classic quick-create helpers in `processing-files.js` call their own durable APIs and do not use it. |
 | `prksWorkMetadataGroupFields`, `prksWorkPanelReadOwns` | `src/features/work/metadata-session.ts`, `src/features/work/panel-session.ts` | `work-metadata-editor.js` | The metadata field grouping and the panel-read ownership check are Vue rules. The classic durable metadata editor asks Vue instead of keeping a copy. |
 | `prksWorkspaceInitDrag`, `prksWorkspaceCancelActiveDrag` | `src/workspace-shell/WorkspaceShell.vue`, `src/workspace-dnd/adapter.ts` | `workspace-tabs.js` (init), `workspace-tiling.js` (cancel) | `workspace-tabs.js` is the live workspace effect coordinator. The Vue shell owns presentation and Pragmatic DnD sensors; the coordinator starts and cancels drags through these hooks. `workspace-drag.js` only publishes idle no-op defaults that the Vue shell replaces, so pre-Vue callers stay safe. `__prksWorkspaceShellOwned` is set by `workspace-tabs.js` before bootstrap and again by the Vue shell on mount; only `workspace-tabs.js` reads it, to take the presentation path instead of the legacy tile reconciler. |
+| `prksVueApplyShellChrome` | `src/app-shell/AppChrome.vue` | `navigation.js` `prksNoteShellChrome` | Vue owns sidebar, top ribbon, and create-menu presentation (#1038). Classic publishes the Main route's active href, disclosure revision, drawer flags, connectivity, processing count, and sync-queue cue. `__prksShellChrome` is the early snapshot for a publish that lands before the module registers. |
 
 ## Vue to classic runtime services (classic owns, Vue calls)
 
@@ -93,6 +94,7 @@ for a migrated surface.
 | Family | Classic owner | Representative globals | Why it stays |
 | --- | --- | --- | --- |
 | Route coordinator | `app.js`, `tab-context.js`, `navigation.js` | `prksPresentVueRoute`, `prksTabContextOwnsEntityRoute`, `prksNavigate` | Owns the host and request envelope for every route feature, and the TabContext generation checks. |
+| App chrome semantics | `navigation.js`, `ui.js`, `command-palette.js`, `app.js` | `prksSyncSidebarActive`, `prksNavDisclosureExpanded`, `prksWriteNavExpandedPref`, `prksToggleSidebarDrawer`, `prksToggleRightPanelOverlay`, `prksOpenCommandPalette`, `openModal`, `prksRenderConnectivityIndicator` | Active href uses canonical origins. Disclosure keys stay `prks.nav.*Expanded`. Drawer body classes, the palette body, connectivity, and the sync-queue count stay classic. Vue calls these; it does not copy them. |
 | People, Person Group, Playlist route families | `people.js`, `people-groups.js`, `playlists.js` | `renderPeopleList`, `renderPersonDetails`, `renderPlaylistDetail`, `prksRefreshPersonGroupMain`, `prksReloadPlaylistDetail` | They resolve the effective/offline/durable record and hand it to `prksPresentVueRoute`, then bind offline state. They paint no HTML. |
 | Durable and offline operations | `api.js`, `local-store.js`, `offline-runtime.js`, `sync-runtime.js`, `tags.js`, feature `*-state.js`, `work-metadata-editor.js`, `work-source-editor.js` | `savePersonProfileDraft`, `updatePlaylist`, `prksTagsMerge`, `prksTagsDelete`, `prksSaveWorkMetadataFields`, `prksSaveWorkSource`, `prksResolveWorkMetadataFieldConflict`, `prksOfflineRuntimeState`, `prksOfflineGuardMutation`, `prksSync` | One durable queue and one effective-state model. Vue never mirrors them. |
 | Modals and dialogs | `ui.js` feature shells, `saved-views.js`, `concepts.js`, feature modal openers; presentation in `src/modal/ModalHost.vue` | `openModal`, `closeModals`, `requestModalClose`, `prksConfirmDestructive`, `prksPromptTextDialog`, `prksAlertDialog`, `prksOpenNewPersonModalFromPeoplePage`, `prksOpenSavedViewModal`, `prksCreateConceptFlow` | Feature-modal shells and their dirty baselines stay classic until each form moves. Confirm, alert, prompt, unsaved dismissal, Escape, and focus return are the Vue host, reached through `window.prksModalHost`. The Saved View modal saves through `prksSavedViewRecords`. |
@@ -120,6 +122,7 @@ Each has one writer and one reader.
 | Marker | Written by | Read by | Purpose |
 | --- | --- | --- | --- |
 | `host.__prksVueRouteRequest` | `app.js` (`prksDeliverVueRoute`) | `src/route-surface/lifecycle.ts` | Early host-local route request for a route that paints before the Vue module registers. |
+| `__prksShellChrome` | `navigation.js` `prksNoteShellChrome` (also `app.js` connectivity, processing, and sync-queue counts, and `ui.js` drawer flags) | `src/app-shell/AppChrome.vue` | Early shell snapshot so the first Vue paint matches the Main route already published. |
 | `panel.__prksWorkPanelReadRequest` | `ui.js` | `src/features/work/panel-session.ts` | Same early-request handoff for the Work view-mode panel. |
 | `panel.dataset.prksOwnerTabId`, `panel.dataset.prksOwnerGeneration` | `ui.js` | Work panel, metadata, and private-note sessions | TabContext ownership of the right panel; Vue drops stale presents. |
 | `ctx.__prksRetain*Surface` (People, Person Groups, Playlists, Arguments, Positions, Concepts, Folder Library, Folder detail) | `app.js` | the matching `src/features/*/session.ts` cleanup | Same-route refresh in one TabContext keeps the Vue host instead of disposing it. |
@@ -127,6 +130,10 @@ Each has one writer and one reader.
 | `host.__prksFolderDetailTreeSnapshot`, `host.__prksApplyFolderDetailTree` | `folders.js` (`prksFillFolderDetailTree`) | `src/features/folder-detail/FolderDetailRoute.vue` | Typed hierarchy snapshot for one Folder detail tree host. Vue renders it. A stale claim does not publish. |
 | `textarea.dataset.prksNotesBound` | `ui.js` | `src/features/work/detail-lifecycle.ts` | Marks the private-notes field as bound so mount does not bind twice. |
 | `err.prksOfflineRefused` | `api.js` offline guard, and the Saved View records error in `src/features/saved-views/records.ts` | `prksOfflineWasGuardRefusal` in `api.js` | One offline-refusal flag, so classic callers skip a duplicate alert for a refusal from either client. |
+
+## Shell chrome (#1038)
+
+`#sidebar` and `#prks-top-ribbon` in `index.html` are permanent hosts. They stay empty until `AppChrome` mounts. That empty host is the load gap before the module, not a second renderer and not a no-JS product surface. `ribbon-create.js`, `prksInitNavDisclosures`, and `prksSetDisclosureVisual` are retired: the last click and DOM writers moved into `src/app-shell/`.
 
 ## Retired by the final audit
 

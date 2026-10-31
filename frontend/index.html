@@ -28,193 +28,13 @@
     <!-- Vue app host (#230). Hidden bootstrap marker; performance diagnostics teleports into Settings. -->
     <div id="prks-vue-root" hidden></div>
     <div id="app-container">
-        <!-- Sidebar -->
-        <nav id="sidebar">
-            <div class="sidebar-header sidebar-header--split">
-                <a href="#/folders" class="sidebar-brand" aria-label="Home — Folder Library">
-                    <img class="logo sidebar-logo" src="/logo.svg" alt="" width="32" height="32" fetchpriority="high" decoding="async">
-                    <div>
-                        <h2>PRKS</h2>
-                        <p>Personal Research</p>
-                        <p class="sidebar-caption-sm">Knowledge System</p>
-                    </div>
-                </a>
-                <div class="sidebar-header__actions">
-                    <button type="button" id="prks-sidebar-expand-btn" class="prks-icon-btn prks-icon-btn--ghost" title="Expand navigation" aria-label="Expand navigation"><span class="ribbon-btn__icon"><i data-lucide="panel-left-open" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
-                    <button type="button" id="prks-sidebar-collapse-btn" class="prks-icon-btn prks-icon-btn--ghost" title="Collapse navigation" aria-label="Collapse navigation"><span class="ribbon-btn__icon"><i data-lucide="panel-left-close" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
-                    <button onclick="openModal('settings-modal')" class="prks-icon-btn prks-icon-btn--ghost settings-btn" title="Settings" aria-label="Settings"><span class="ribbon-btn__icon"><i data-lucide="settings" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span></button>
-                </div>
-            </div>
-
-            <ul class="nav-menu">
-                <li class="nav-section">Library</li>
-                <li><a href="#/folders" class="nav-link active"><span class="nav-link__icon"><i data-lucide="folder" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Folders</span></a></li>
-                <li><a href="#/recent" class="nav-link"><span class="nav-link__icon"><i data-lucide="clock" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Recent</span></a></li>
-                <li><a href="#/views" class="nav-link"><span class="nav-link__icon"><i data-lucide="bookmark" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Saved Views</span></a></li>
-                <li><a href="#/types" class="nav-link"><span class="nav-link__icon"><i data-lucide="library" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">File Types</span></a></li>
-                <li><a href="#/playlists" class="nav-link"><span class="nav-link__icon"><i data-lucide="clapperboard" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Playlists</span></a></li>
-
-                <li class="nav-disclosure nav-disclosure--section-break" data-nav-disclosure="people">
-                    <div class="nav-disclosure__row">
-                        <a href="#/people" class="nav-link nav-disclosure__link"><span class="nav-link__icon"><i data-lucide="users" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">People</span></a>
-                        <button type="button" class="nav-disclosure__toggle" data-nav-disclosure-toggle="people" aria-expanded="false" aria-controls="prks-nav-people-children" aria-label="Show People shortcuts"><i data-lucide="chevron-down" class="prks-icon prks-icon--nav-sub nav-disclosure__chevron" aria-hidden="true"></i></button>
-                    </div>
-                    <ul id="prks-nav-people-children" class="nav-disclosure__children" hidden>
-                        <li><a href="#/people/role/Author" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="pen-line" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Authors</span></a></li>
-                        <li><a href="#/people/role/Editor" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="file-pen" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Editors</span></a></li>
-                        <li><a href="#/people/role/Reviewer" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="clipboard-list" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Reviewers</span></a></li>
-                        <li><a href="#/people/role/Translator" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="languages" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Translators</span></a></li>
-                        <li><a href="#/people/role/Introduction" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="book-marked" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Introduction writers</span></a></li>
-                        <li><a href="#/people/role/Foreword" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="book-open" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Foreword writers</span></a></li>
-                        <li><a href="#/people/role/Afterword" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="book" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Afterword writers</span></a></li>
-                        <li><a href="#/people/groups" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="folders" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Groups</span></a></li>
-                    </ul>
-                </li>
-
-                <li class="nav-disclosure nav-disclosure--section-break" data-nav-disclosure="research">
-                    <div class="nav-disclosure__row">
-                        <button type="button" class="nav-disclosure__toggle nav-disclosure__toggle--full" data-nav-disclosure-toggle="research" aria-expanded="false" aria-controls="prks-nav-research-children">
-                            <span class="nav-link__icon"><i data-lucide="network" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span>
-                            <span class="nav-link__label">Research</span>
-                            <i data-lucide="chevron-down" class="prks-icon prks-icon--nav-sub nav-disclosure__chevron" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                    <ul id="prks-nav-research-children" class="nav-disclosure__children" hidden>
-                        <li><a href="#/concepts" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="network" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Concepts</span></a></li>
-                        <li><a href="#/positions" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="flag" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Positions</span></a></li>
-                        <li><a href="#/arguments" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="messages-square" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Arguments &amp; Stances</span></a></li>
-                        <li><a href="#/graph" class="nav-link nav-link--sub"><span class="nav-link__icon"><i data-lucide="share-2" class="prks-icon prks-icon--nav-sub" aria-hidden="true"></i></span><span class="nav-link__label">Graph</span></a></li>
-                    </ul>
-                </li>
-
-                <li class="nav-section">Organize</li>
-                <li><a href="#/tags" class="nav-link"><span class="nav-link__icon"><i data-lucide="tags" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Tags</span></a></li>
-                <li><a href="#/publishers" class="nav-link"><span class="nav-link__icon"><i data-lucide="building-2" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span><span class="nav-link__label">Publishers</span></a></li>
-
-                <li class="nav-disclosure nav-disclosure--section-break sidebar-progress-block" data-nav-disclosure="progress">
-                    <div class="nav-disclosure__row">
-                        <button type="button" class="nav-disclosure__toggle nav-disclosure__toggle--full" data-nav-disclosure-toggle="progress" aria-expanded="false" aria-controls="prks-nav-progress-children">
-                            <span class="nav-link__icon"><i data-lucide="list" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span>
-                            <span class="nav-link__label">Progress</span>
-                            <i data-lucide="chevron-down" class="prks-icon prks-icon--nav-sub nav-disclosure__chevron" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                    <ul id="prks-nav-progress-children" class="progress-legend nav-disclosure__children" hidden>
-                        <li>
-                            <a href="#/progress?status=Not%20Started" class="nav-link progress-filter nav-link--sub" data-status="Not Started">
-                                <span class="nav-link__icon" aria-hidden="true">
-                                    <i data-lucide="circle" class="prks-status-icon prks-icon"></i>
-                                </span>
-                                Not Started
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#/progress?status=Planned" class="nav-link progress-filter nav-link--sub" data-status="Planned">
-                                <span class="nav-link__icon" aria-hidden="true">
-                                    <i data-lucide="clipboard-list" class="prks-status-icon prks-icon"></i>
-                                </span>
-                                Planned
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#/progress?status=In%20Progress" class="nav-link progress-filter nav-link--sub" data-status="In Progress">
-                                <span class="nav-link__icon" aria-hidden="true">
-                                    <i data-lucide="play" class="prks-status-icon prks-icon"></i>
-                                </span>
-                                In Progress
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#/progress?status=Paused" class="nav-link progress-filter nav-link--sub" data-status="Paused">
-                                <span class="nav-link__icon" aria-hidden="true">
-                                    <i data-lucide="pause" class="prks-status-icon prks-icon"></i>
-                                </span>
-                                Paused
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#/progress?status=Completed" class="nav-link progress-filter nav-link--sub" data-status="Completed">
-                                <span class="nav-link__icon" aria-hidden="true">
-                                    <i data-lucide="check" class="prks-status-icon prks-icon"></i>
-                                </span>
-                                Completed
-                            </a>
-                        </li>
-                    </ul>
-                </li>
-                <li class="sidebar-nav-section-break">
-                    <a href="#/processing-files" class="nav-link" data-prks-role="nav-processing">
-                        <span class="nav-link__icon"><i data-lucide="inbox" class="prks-icon prks-icon--nav" aria-hidden="true"></i></span>
-                        <span class="nav-link__label">Files for Processing</span>
-                        <span data-prks-role="nav-processing-badge"></span>
-                    </a>
-                </li>
-            </ul>
-        </nav>
+        <!-- Sidebar and top ribbon hosts. Vue app-shell (#1038) paints them.
+             Empty until the bundle mounts; there is no classic painter beside it. -->
+        <nav id="sidebar"></nav>
 
         <!-- Main Content -->
         <main id="main-content">
-            <div class="top-ribbon">
-                <div class="top-ribbon__left">
-                    <button
-                        type="button"
-                        id="prks-mobile-nav-btn"
-                        class="prks-icon-btn prks-icon-btn--ghost"
-                        aria-label="Open navigation"
-                        aria-expanded="false"
-                        aria-controls="sidebar"
-                        title="Menu"
-                    ><span class="ribbon-btn__icon"><i data-lucide="menu" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="prks-sr-only">Menu</span></button>
-                </div>
-                <div class="top-ribbon__center" aria-label="Quick actions">
-                    <button type="button" id="prks-command-palette-launch" class="prks-palette-launch" title="Search or jump" aria-label="Search or jump" aria-haspopup="dialog">
-                        <span class="prks-palette-launch__icon" aria-hidden="true"><i data-lucide="search" class="prks-icon prks-icon--ribbon"></i></span>
-                        <span class="prks-palette-launch__label">Search or jump…</span>
-                        <kbd class="prks-palette-launch__hint" data-palette-shortcut-hint>Ctrl K</kbd>
-                    </button>
-                    <div class="prks-split-btn" id="prks-ribbon-create">
-                        <button type="button" class="prks-btn prks-btn--secondary ribbon-btn prks-split-btn__main" onclick="openModal('work-modal')" title="New File" id="prks-ribbon-new-file">
-                            <span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
-                            <span class="ribbon-btn__label">New File</span>
-                        </button>
-                        <button type="button" id="prks-ribbon-new-more" class="prks-btn prks-btn--secondary ribbon-btn prks-split-btn__chevron" title="More" aria-label="More create actions" aria-haspopup="menu" aria-expanded="false" aria-controls="prks-create-menu">
-                            <span class="ribbon-btn__icon"><i data-lucide="chevron-down" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span>
-                        </button>
-                    </div>
-                </div>
-                <div class="top-ribbon__right">
-                    <div
-                        id="prks-connectivity-indicator"
-                        class="prks-connectivity-indicator hidden"
-                        role="status"
-                        aria-live="polite"
-                        hidden
-                    >
-                        <span class="prks-connectivity-indicator__icon" aria-hidden="true"><i data-lucide="wifi-off" class="prks-icon prks-icon--sm"></i></span>
-                        <span class="prks-connectivity-indicator__label" id="prks-connectivity-indicator-label">Offline</span>
-                    </div>
-                    <button
-                        type="button"
-                        id="prks-sync-queue-cue"
-                        class="prks-sync-queue-cue hidden"
-                        hidden
-                        aria-label="Queued changes"
-                        title="Open Settings → Diagnostics"
-                    >
-                        <span class="prks-sync-queue-cue__icon" aria-hidden="true"><i data-lucide="cloud-upload" class="prks-icon prks-icon--sm"></i></span>
-                        <span data-prks-role="sync-queue-badge"></span>
-                    </button>
-                    <button
-                        type="button"
-                        id="prks-mobile-details-btn"
-                        class="prks-icon-btn prks-icon-btn--ghost"
-                        aria-label="Open details panel"
-                        aria-expanded="false"
-                        aria-controls="right-panel"
-                        title="Details"
-                    ><span class="ribbon-btn__icon"><i data-lucide="info" class="prks-icon prks-icon--ribbon" aria-hidden="true"></i></span><span class="prks-sr-only">Details</span></button>
-                </div>
-            </div>
+            <div class="top-ribbon" id="prks-top-ribbon"></div>
             <div class="prks-workspace-tabs-shell">
                 <div
                     id="prks-workspace-tabs"
@@ -1088,7 +908,6 @@
     <script src="/js/overview-primitives.js"></script>
     <script src="/js/combobox-keys.js"></script>
     <script src="/js/ui.js"></script>
-    <script src="/js/ribbon-create.js"></script>
     <script src="/js/components/work-cards.js"></script>
     <script src="/js/folder-hierarchy-nav.js"></script>
     <script src="/js/components/folders.js"></script>

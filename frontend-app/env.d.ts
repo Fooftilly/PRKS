@@ -198,7 +198,35 @@ interface Window {
   }) => void
   /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
-  prksOpenCommandPalette?: () => void
+  prksOpenCommandPalette?: (options?: { scope?: string }) => void
+  prksParseRoute?: (hash: string) => import('./src/app-shell/chrome').ShellChromeRoute
+  prksSidebarHrefForRoute?: (
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+    originRoute?: { name?: string; canonicalHash?: string; hash?: string } | null,
+  ) => string | null
+  prksReadOriginForRoute?: (
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+  ) => { name?: string; hash?: string; label?: string } | null
+  prksNavDisclosureExpanded?: (
+    which: string,
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+  ) => boolean
+  prksNavFamilyForcesOpen?: (
+    which: string,
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+  ) => boolean
+  prksWriteNavExpandedPref?: (key: string, on: boolean) => void
+  PRKS_NAV_DISCLOSURES?: Record<string, { prefKey: string; listId?: string; show?: string; hide?: string }>
+  prksSyncSidebarActive?: (route: import('./src/app-shell/chrome').ShellChromeRoute | null) => void
+  prksSyncNavDisclosures?: (route?: import('./src/app-shell/chrome').ShellChromeRoute | null) => void
+  prksNoteShellChrome?: (patch: Partial<import('./src/app-shell/chrome').ShellChromeSnapshot>) => void
+  prksVueApplyShellChrome?: (snapshot: import('./src/app-shell/chrome').ShellChromeSnapshot) => void
+  __prksShellChrome?: Partial<import('./src/app-shell/chrome').ShellChromeSnapshot>
+  prksToggleSidebarDrawer?: (forceOpen?: boolean) => void
+  prksOpenSidebarDrawer?: () => void
+  prksToggleRightPanelOverlay?: (forceOpen?: boolean) => void
+  prksNavAttentionBadgeHtml?: (options: { count?: number | null; ariaLabel?: string }) => string
+  prksRoleTypeIconHtml?: (role: string, opts?: { size?: string; className?: string }) => string
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
   prksFolderNavTriggerHtml?: (
     folder: unknown,
