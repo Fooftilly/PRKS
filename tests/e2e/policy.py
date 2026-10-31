@@ -855,7 +855,7 @@ AFFECTED_RULES = (
     {
         "name": "work-create",
         "paths": (
-            "frontend/js/ribbon-create.js",
+            "frontend-app/src/app-shell/**",
             "frontend/js/components/work-cards.js",
         ),
         "features": ("work-create", "shell"),

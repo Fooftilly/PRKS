@@ -153,13 +153,15 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotIn("box-shadow", css[css.find(".prks-workspace-status") : css.find(".prks-workspace-status") + 400])
 
     def test_dense_tiled_shell_contract(self):
-        html = _read(_INDEX)
+        sidebar = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "SidebarNav.vue"))
+        ribbon = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "TopRibbon.vue"))
         css = _read(_CSS)
         ui = _read(_UI)
         tiling = _read(_TILING)
 
-        self.assertIn('id="prks-sidebar-collapse-btn"', html)
-        self.assertIn('id="prks-mobile-details-btn"', html)
+        self.assertIn('id="prks-sidebar-expand-btn"', sidebar)
+        self.assertIn('id="prks-sidebar-collapse-btn"', sidebar)
+        self.assertIn('id="prks-mobile-details-btn"', ribbon)
         self.assertIn("app-container--tiled", css)
         self.assertIn("flex: 0 0 54px", css)
         self.assertIn("margin-right: -196px", css)

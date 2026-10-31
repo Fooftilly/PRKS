@@ -31,7 +31,7 @@
  *   .prks-segmented — Vue + classic; physically in 12.
  * There is no generic .prks-disclosure family in 05. PrksDisclosureButton
  * uses the button contract; classic graph JS still owns live expanded state.
- * .nav-disclosure is sidebar shell (11), classic-owned.
+ * .nav-disclosure is sidebar shell (11). Vue app-shell paints it; rules stay here.
  *
  * B5 feature/shell (do not delete wholesale): 11 application shell,
  * 12 feature layouts (work cards, PDF, ribbon, folder tree, processing,

@@ -135,8 +135,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initRouter();
     initTabs();
     initForms();
-    if (typeof prksInitNavDisclosures === 'function') prksInitNavDisclosures();
-    if (typeof prksInitRibbonCreate === 'function') prksInitRibbonCreate();
     if (typeof prksInitCommandPalette === 'function') prksInitCommandPalette();
     if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
     initUploadDragAndDrop();
@@ -159,24 +157,9 @@ function prksGetProcessingAttentionCount() {
 }
 
 function prksPaintProcessingNavBadge() {
-    const host = document.querySelector('[data-prks-role="nav-processing-badge"]');
-    if (!host) return;
-    if (__prksProcessingAttentionCount == null) {
-        host.innerHTML = '';
-        return;
+    if (typeof prksNoteShellChrome === 'function') {
+        prksNoteShellChrome({ processingCount: __prksProcessingAttentionCount });
     }
-    if (typeof prksNavAttentionBadgeHtml !== 'function') {
-        host.innerHTML = '';
-        return;
-    }
-    host.innerHTML = prksNavAttentionBadgeHtml({
-        count: __prksProcessingAttentionCount,
-        ariaLabel:
-            __prksProcessingAttentionCount +
-            (__prksProcessingAttentionCount === 1
-                ? ' file for processing'
-                : ' files for processing'),
-    });
 }
 
 async function prksRefreshProcessingNavBadge(options) {
@@ -199,9 +182,6 @@ async function prksRefreshProcessingNavBadge(options) {
 }
 
 async function prksRefreshSyncQueueCue() {
-    const cue = document.getElementById('prks-sync-queue-cue');
-    const host = document.querySelector('[data-prks-role="sync-queue-badge"]');
-    if (!cue) return;
     let n = null;
     let conflicts = 0;
     try {
@@ -222,44 +202,22 @@ async function prksRefreshSyncQueueCue() {
     } catch (_e) {
         n = null;
     }
+    if (typeof prksNoteShellChrome !== 'function') return;
     if (n == null || n <= 0) {
-        cue.hidden = true;
-        cue.classList.add('hidden');
-        if (host) host.innerHTML = '';
+        prksNoteShellChrome({ syncQueue: null });
         return;
     }
     const queued = n - conflicts;
     const labels = [];
     if (queued) labels.push(queued + (queued === 1 ? ' change queued' : ' changes queued'));
     if (conflicts) labels.push(conflicts + (conflicts === 1 ? ' change needs attention' : ' changes need attention'));
-    const ariaLabel = labels.join('; ');
-    cue.hidden = false;
-    cue.classList.remove('hidden');
-    cue.setAttribute('aria-label', ariaLabel);
-    cue.title = 'Open Settings → Diagnostics';
-    if (host && typeof prksNavAttentionBadgeHtml === 'function') {
-        host.innerHTML = prksNavAttentionBadgeHtml({
-            count: n,
-            ariaLabel: ariaLabel,
-        });
-    }
+    prksNoteShellChrome({ syncQueue: { count: n, ariaLabel: labels.join('; ') } });
 }
 
 function initPrksNavAttentionBadges() {
     prksPaintProcessingNavBadge();
     void prksRefreshProcessingNavBadge({ rescan: false });
     void prksRefreshSyncQueueCue();
-    const cue = document.getElementById('prks-sync-queue-cue');
-    if (cue && cue.dataset.bound !== '1') {
-        cue.dataset.bound = '1';
-        cue.addEventListener('click', function () {
-            if (typeof openModal === 'function') openModal('settings-modal');
-            const diagBtn = document.querySelector(
-                '[data-prks-settings-category="diagnostics"]'
-            );
-            if (diagBtn && typeof diagBtn.click === 'function') diagBtn.click();
-        });
-    }
     if (!window.__prksNavAttentionSubscribed) {
         window.__prksNavAttentionSubscribed = true;
         if (typeof prksOfflineRuntimeSubscribe === 'function') {
@@ -2844,14 +2802,9 @@ function prksOfflineMaybeRefreshFocusedRoute() {
 let __prksOfflinePrevState = 'online';
 
 function prksRenderConnectivityIndicator(state) {
-    const el = document.getElementById('prks-connectivity-indicator');
-    const label = document.getElementById('prks-connectivity-indicator-label');
-    if (!el) return;
-    const online = state !== 'offline' && state !== 'reconnecting';
-    el.hidden = online;
-    el.classList.toggle('hidden', online);
-    el.classList.toggle('prks-connectivity-indicator--reconnecting', state === 'reconnecting');
-    if (label) label.textContent = state === 'reconnecting' ? 'Reconnecting…' : 'Offline';
+    if (typeof prksNoteShellChrome === 'function') {
+        prksNoteShellChrome({ connectivity: state || 'online' });
+    }
 }
 
 function initPrksConnectivityIndicator() {

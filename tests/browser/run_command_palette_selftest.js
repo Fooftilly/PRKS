@@ -520,7 +520,6 @@ root.prksNavigate = function (hash, opts) {
     location.hash = String(hash || '');
 };
 root.__prksPaletteDebounceMs = 0;
-root.prksInitNavDisclosures();
 root.prksInitCommandPalette();
 
 let passed = 0;
@@ -990,62 +989,6 @@ Promise.resolve()
         root.prksOpenCommandPalette({ scope: 'create' });
         assertEq('create scope via API', root.prksCommandPaletteScope(), 'create');
         root.prksCloseCommandPalette();
-
-        location.hash = '#/folders';
-        localStorage.setItem('prks.nav.peopleExpanded', '0');
-        localStorage.setItem('prks.nav.progressExpanded', '0');
-        root.prksSyncSidebarActive(root.prksParseRoute('#/folders'));
-        assert('people collapsed', peopleKids.hidden === true);
-        assertEq('people aria collapsed', peopleBtn.getAttribute('aria-expanded'), 'false');
-        peopleBtn.click();
-        assert('people toggle open', peopleKids.hidden === false);
-        assertEq('people aria open', peopleBtn.getAttribute('aria-expanded'), 'true');
-        peopleBtn.click();
-        assert('people toggle closed', peopleKids.hidden === true);
-
-        progressBtn.click();
-        assert('progress toggle open', progressKids.hidden === false);
-        progressBtn.click();
-        assert('progress toggle closed', progressKids.hidden === true);
-
-        // Unset preference: the active family route auto-expands its shortcuts.
-        localStorage.removeItem('prks.nav.peopleExpanded');
-        location.hash = '#/people/role/Author';
-        root.prksSyncSidebarActive(root.prksParseRoute('#/people/role/Author'));
-        assert('author auto-opens people on unset pref', peopleKids.hidden === false);
-        assertEq('author current', authorLink.getAttribute('aria-current'), 'page');
-        assertEq('one current on author', document.querySelectorAll('.nav-link[aria-current="page"]').length, 1);
-        assert('disclosure btn not current', peopleBtn.getAttribute('aria-current') == null);
-
-        location.hash = '#/folders';
-        root.prksSyncSidebarActive(root.prksParseRoute('#/folders'));
-        assert('people collapses after leaving unset family route', peopleKids.hidden === true);
-
-        // Explicit collapse now wins over the route family — no forced-open no-op.
-        localStorage.setItem('prks.nav.peopleExpanded', '0');
-        location.hash = '#/people/role/Author';
-        root.prksSyncSidebarActive(root.prksParseRoute('#/people/role/Author'));
-        assert('explicit collapse beats author route', peopleKids.hidden === true);
-        assertEq('pref still collapsed', localStorage.getItem('prks.nav.peopleExpanded'), '0');
-        assert(
-            'people family still shows contains-current while collapsed',
-            peopleWrap.classList.contains('nav-disclosure--contains-current')
-        );
-
-        localStorage.removeItem('prks.nav.progressExpanded');
-        location.hash = '#/progress?status=Paused';
-        root.prksSyncSidebarActive(root.prksParseRoute('#/progress?status=Paused'));
-        assert('paused auto-opens progress on unset pref', progressKids.hidden === false);
-        assertEq('paused current', pausedLink.getAttribute('aria-current'), 'page');
-        location.hash = '#/recent';
-        root.prksSyncSidebarActive(root.prksParseRoute('#/recent'));
-        assert('progress collapses after leaving unset family route', progressKids.hidden === true);
-
-        localStorage.setItem('prks.nav.progressExpanded', '0');
-        location.hash = '#/progress?status=Paused';
-        root.prksSyncSidebarActive(root.prksParseRoute('#/progress?status=Paused'));
-        assert('explicit collapse beats paused route', progressKids.hidden === true);
-        assertEq('progress pref still collapsed', localStorage.getItem('prks.nav.progressExpanded'), '0');
 
         location.hash = '#/recent';
         root.prksOpenCommandPalette();
