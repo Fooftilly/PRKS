@@ -1,4 +1,4 @@
-"""Browser-level durability of `prks-local-v1`, the DURABLE local database.
+"""Browser-level durability of the DURABLE local database (`prks-local-v2:<scope>`).
 
 The Node selftest covers the local store's logic against a fake IndexedDB.
 What only a real browser can prove is the property the whole local-first plan
@@ -173,8 +173,17 @@ class LocalStoreDurabilityTests(unittest.TestCase):
         # This E2E suite runs pinned Chromium, which supports this API.
         # Do not silently skip the physical database-isolation contract.
         self.assertIsNotNone(names, 'pinned Chromium must expose indexedDB.databases()')
-        self.assertIn('prks-offline-v1', names)
-        self.assertIn('prks-local-v1', names)
+        scoped = page.evaluate(
+            "async () => [await prksBrowserScope.dbName('local'), await prksBrowserScope.dbName('offline')]"
+        )
+        local, offline = scoped
+        self.assertTrue(local and local.startswith('prks-local-v2:'), local)
+        self.assertTrue(offline and offline.startswith('prks-offline-v2:'), offline)
+        self.assertIn(offline, names)
+        self.assertIn(local, names)
+        # Both are this account's: nothing unscoped is ever opened.
+        self.assertNotIn('prks-offline-v1', names)
+        self.assertNotIn('prks-local-v1', names)
 
     def test_a_real_browser_enforces_the_byte_limit_on_multibyte_payloads(self):
         """String .length undercounts UTF-8; a limit documented in bytes has

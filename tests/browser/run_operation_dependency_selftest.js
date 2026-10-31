@@ -48,7 +48,7 @@ function runtimeFor(store, respond, reconciled) {
 
 /* ---- order: the prerequisite goes first ---- */
 async function ordering() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     const role = await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
@@ -72,7 +72,7 @@ async function ordering() {
 
 /* ---- retention: a prerequisite outlives its own acknowledgement ---- */
 async function retention() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
@@ -100,7 +100,7 @@ async function retention() {
 
 /* ---- outcome: a REFUSED prerequisite must not unlock its dependent ---- */
 async function failedPrerequisite() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
@@ -138,7 +138,7 @@ async function failedPrerequisite() {
 
 /* ---- readiness is judged on OUTCOME, not on local status alone ---- */
 async function readinessJudgesOutcome() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
@@ -168,7 +168,7 @@ async function readinessJudgesOutcome() {
      * dependent. Do not mutate the refused prerequisite into a fictitious
      * success: the dependent is now durably failed and cannot be resurrected
      * by rewriting the server outcome in test data. */
-    const goodStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const goodStore = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const goodPerson = await goodStore.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     await goodStore.saveWorkPersonRole('W-2',
         { person_id: goodPerson.entity_id, role_type: 'Author', state: '' },
@@ -188,7 +188,7 @@ async function readinessJudgesOutcome() {
 
 /* ---- a server that disagrees about dependencies is terminal, not retried ---- */
 async function unsatisfiedDependencyIsTerminal() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     await store.saveWorkPersonRole('W-1',
         { person_id: created.entity_id, role_type: 'Author', state: '' },
@@ -224,7 +224,7 @@ async function unsatisfiedDependencyIsTerminal() {
 
 /* ---- A chain of three: failure travels the WHOLE graph ---- */
 async function failurePropagatesThroughAChain() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     /* A realistic chain, not a contrived one. The Person does not exist on the
      * server yet, so the link waits for its creation; the credit names a role
      * that does not exist there either, so it waits for the link. */
@@ -280,7 +280,7 @@ async function failurePropagatesThroughAChain() {
 
 /* ---- branching: every descendant blocked, each exactly once ---- */
 async function failureFansOutWithoutRepeating() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     //  A -> B -> D
     //   \-> C
     const a = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
@@ -321,7 +321,7 @@ async function failureFansOutWithoutRepeating() {
     /* A DIAMOND is what actually exercises the visited set: the tree above
      * reaches every row by exactly one path, so it would pass without one.
      * Here the last operation is reachable through both branches. */
-    const store2 = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store2 = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const root = await store2.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     const left = await store2.saveWorkPersonRole('W-1',
         { person_id: root.entity_id, role_type: 'Author', state: '' },
@@ -344,7 +344,7 @@ async function failureFansOutWithoutRepeating() {
 
 /* ---- resolving a conflict must not orphan what waits behind it ---- */
 async function resolutionDoesNotOrphanDependents() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const a = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     const b = await store.saveWorkPersonRole('W-1',
         { person_id: a.entity_id, role_type: 'Author', state: '' },
@@ -369,7 +369,7 @@ async function resolutionDoesNotOrphanDependents() {
 
     /* REAPPLY. The intent survives under a NEW op_id, so its waiters follow it
      * there rather than keeping the id of an envelope the store discarded. */
-    const store2 = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store2 = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const p = await store2.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     const role = await store2.saveWorkPersonRole('W-1',
         { person_id: p.entity_id, role_type: 'Author', state: '' },
@@ -392,7 +392,7 @@ async function resolutionDoesNotOrphanDependents() {
 
 /* ---- a failed prerequisite cannot acquire NEW dependents ---- */
 async function failedPrerequisiteRefusesNewDependents() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const a = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     /* A dependent is what KEEPS the refused row in the store: retirement waits
      * for dependents, so a failed prerequisite is exactly the kind of row that
@@ -463,7 +463,7 @@ async function failedPrerequisiteRefusesNewDependents() {
 
 /* ---- the family writer does not hand the boundary a dead prerequisite ---- */
 async function roleSaveRejectsAFailedCreation() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const create = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
     await store.saveWorkPersonRole('W-1',
         { person_id: create.entity_id, role_type: 'Author', state: '' },

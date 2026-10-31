@@ -1953,11 +1953,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // per-path generation with an in-flight prime GET. No controller means
     // that GET is not being cached by sw.js, so a direct put cannot race it.
     // `body` is an ArrayBuffer this page already copied; it is transferred.
-    function installPdfBytesThroughController(pathname, body) {
+    function installPdfBytesThroughController(pathname, body, cacheName) {
         const controller = pdfCacheController();
         if (!controller || typeof MessageChannel === 'undefined') return null;
         if (!(body instanceof ArrayBuffer)) return null;
-        return prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome);
+        return prksPostPdfCacheInstall(controller, pathname, body, { cacheName }).then(prksPdfCacheInstallOutcome);
     }
 
     function pdfCacheInstallBody(buffer) {
@@ -1974,14 +1974,19 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!path || !buffer || !buffer.byteLength) return false;
         const body = pdfCacheInstallBody(buffer);
         if (!body) return false;
-        const viaController = installPdfBytesThroughController(path, body);
+        const cacheName = typeof window.prksOfflinePdfCacheName === 'function'
+            ? await window.prksOfflinePdfCacheName()
+            : null;
+        // No signed-in scope: this page has no PDF cache, so no earlier
+        // whole-file entry can be served to it.
+        if (!cacheName) return true;
+        const viaController = installPdfBytesThroughController(path, body, cacheName);
         if (viaController) return viaController;
         if (typeof caches === 'undefined' || !caches || typeof caches.open !== 'function') {
             // Nothing can be serving a previous whole-file entry.
             return true;
         }
         try {
-            const cacheName = window.PRKS_OFFLINE_PDF_CACHE_NAME || 'prks-pdf-v1';
             const cache = await caches.open(cacheName);
             const response = new Response(body, {
                 status: 200,
@@ -2300,7 +2305,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
         // Every successful replacement names the canonical managed path.
         // Retarget when it differs from this tab (another tab may already
-        // have moved the Work off a shared key). Refresh prks-pdf-v1 in
+        // have moved the Work off a shared key). Refresh the scoped PDF cache in
         // place only when it matches — never under a stale runtime.filePath.
         // Range loads do not replace that whole-file entry. A failed cache
         // write throws before pendingMaterializationRevision is cleared.

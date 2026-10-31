@@ -10,7 +10,10 @@
  *     rejects) and degrades to a safe "unavailable" result if IndexedDB is
  *     missing, blocked, corrupt, or over quota.
  *
- * Schema ("prks-offline-v1", version 1):
+ * One cache per signed-in scope, `prks-offline-v2:<scope key>`
+ * (browser-scope.js). Without a scope the cache is unavailable.
+ *
+ * Schema (version 1):
  *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision }
  *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
@@ -25,7 +28,6 @@
 (function (root) {
     'use strict';
 
-    const DB_NAME = 'prks-offline-v1';
     const DB_VERSION = 1;
     const STORE_ENTITIES = 'entities';
     const STORE_LISTS = 'lists';
@@ -355,13 +357,37 @@
         const wrap = idbApi && typeof idbApi.wrap === 'function' ? idbApi.wrap : null;
         const unwrap = idbApi && typeof idbApi.unwrap === 'function' ? idbApi.unwrap : null;
         const now = options.now || defaultNow;
-        const dbName = options.dbName || DB_NAME;
+        // A name the caller gives (tests), or the signed-in scope's cache
+        // (`prks-offline-v2:<scope key>`, browser-scope.js). Without a scope
+        // the cache is unavailable, never an unscoped database.
+        const scope = options.dbName ? null : (options.scope || root.prksBrowserScope || null);
         const dbVersion = options.dbVersion || DB_VERSION;
         const keyRangeApi = defaultKeyRangeApi(options);
 
         let dbPromise = null;
         let openDbHandle = null;
         let unavailable = !idbFactory || !wrap;
+
+        function closeHandle() {
+            if (openDbHandle) {
+                try {
+                    openDbHandle.close();
+                } catch (_e) {
+                    /* ignore */
+                }
+                openDbHandle = null;
+            }
+            dbPromise = null;
+        }
+
+        // Another account signed in: this page's cache closes for good.
+        if (scope && typeof scope.subscribe === 'function') scope.subscribe(closeHandle);
+
+        function resolveDbName() {
+            if (options.dbName) return Promise.resolve(options.dbName);
+            if (!scope || typeof scope.dbName !== 'function') return Promise.resolve(null);
+            return scope.dbName('offline').catch(function () { return null; });
+        }
 
         function rawDb(db) {
             return unwrapRawDb(db, unwrap);
@@ -370,7 +396,12 @@
         function openDb() {
             if (unavailable) return Promise.resolve(null);
             if (dbPromise) return dbPromise;
-            dbPromise = new Promise(function (resolve) {
+            dbPromise = resolveDbName().then(function (dbName) { return new Promise(function (resolve) {
+                if (!dbName) {
+                    dbPromise = null;
+                    resolve(null);
+                    return;
+                }
                 let req;
                 let settled = false;
                 function finish(db) {
@@ -420,7 +451,7 @@
                         finish(db);
                     })
                     .catch(markUnavailable);
-            });
+            }); });
             return dbPromise;
         }
 
@@ -564,8 +595,8 @@
                 openDbHandle = null;
             }
             dbPromise = null;
-            return new Promise(function (resolve) {
-                if (!idbFactory) {
+            return resolveDbName().then(function (dbName) { return new Promise(function (resolve) {
+                if (!dbName || !idbFactory) {
                     resolve(true);
                     return;
                 }
@@ -585,7 +616,7 @@
                 req.onblocked = function () {
                     resolve(false);
                 };
-            });
+            }); });
         }
 
         function countAll(storeName) {
@@ -645,7 +676,6 @@
 
     const api = {
         createPrksOfflineStore: createPrksOfflineStore,
-        PRKS_OFFLINE_DB_NAME: DB_NAME,
         PRKS_OFFLINE_DB_VERSION: DB_VERSION,
     };
 

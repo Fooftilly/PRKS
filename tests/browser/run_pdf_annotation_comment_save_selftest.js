@@ -172,7 +172,7 @@ async function settleAcknowledged(store, row) {
 }
 
 async function freshStore() {
-    const store = createPrksLocalStore({
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test',
         indexedDB: createFakeIndexedDBFactory(),
         uuid: uuid,
         now: () => Date.now(),

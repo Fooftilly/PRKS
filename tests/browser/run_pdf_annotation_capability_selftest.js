@@ -32,7 +32,7 @@ function installGlobals(opts) {
         },
         changed() { opts.changedCalls = (opts.changedCalls || 0) + 1; },
     };
-    globalThis.PRKS_OFFLINE_PDF_CACHE_NAME = 'prks-pdf-v1';
+    globalThis.prksOfflinePdfCacheName = async () => 'prks-pdf-v2:test';
     globalThis.caches = {
         open: async (name) => ({
             match: async (path) => {
@@ -115,7 +115,7 @@ async function offlineNeedsPdfAndBase() {
         durable: true,
         entities: {},
     });
-    fakeCaches.set('prks-pdf-v1', new Map());
+    fakeCaches.set('prks-pdf-v2:test', new Map());
     let cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
         { id: 'W1', file_path: '/api/pdfs/a.pdf' },
         {}
@@ -123,7 +123,7 @@ async function offlineNeedsPdfAndBase() {
     assert.equal(cap.mode, 'preview');
     assert.equal(cap.reason, 'pdf_bytes_unavailable');
 
-    fakeCaches.set('prks-pdf-v1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v2:test', new Map([['/api/pdfs/a.pdf', true]]));
     cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
         { id: 'W1', file_path: '/api/pdfs/a.pdf' },
         {}
@@ -136,7 +136,7 @@ async function offlineNeedsPdfAndBase() {
         durable: true,
         entities: { 'work-annotations-snapshot:W1': [] },
     });
-    fakeCaches.set('prks-pdf-v1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v2:test', new Map([['/api/pdfs/a.pdf', true]]));
     cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
         { id: 'W1', file_path: '/api/pdfs/a.pdf' },
         {}
@@ -148,7 +148,7 @@ async function offlineNeedsPdfAndBase() {
         durable: true,
         entities: { 'work-annotations-snapshot:W1': coherentSnap('W1') },
     });
-    fakeCaches.set('prks-pdf-v1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v2:test', new Map([['/api/pdfs/a.pdf', true]]));
     cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
         { id: 'W1', file_path: '/api/pdfs/a.pdf' },
         {
@@ -170,7 +170,7 @@ async function pendingDeleteBlocks() {
         pendingDelete: new Set(['W1']),
         entities: { 'work-annotations-snapshot:W1': coherentSnap('W1') },
     });
-    fakeCaches.set('prks-pdf-v1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v2:test', new Map([['/api/pdfs/a.pdf', true]]));
     const cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
         { id: 'W1', file_path: '/api/pdfs/a.pdf' },
         { annotationDurableBridgeReady: true }

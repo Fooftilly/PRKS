@@ -68,7 +68,7 @@ reconciliation; **this read cache must never grow one**. Durable user intent
 belongs in `local-store.js` and the sync coordinator. There is still no CRDT or
 character-level merging, no multi-user sync and no server push, and
 PDF annotations on an already-available managed PDF are local-first
-(metadata durable ops; PDF bytes stay in Cache Storage `prks-pdf-v1`).
+(metadata durable ops; PDF bytes stay in Cache Storage `prks-pdf-v2:<scope>`).
 New PDF binary ingestion remains connection-required.
 
 A family becomes durable only by being *implemented* as one — a semantic

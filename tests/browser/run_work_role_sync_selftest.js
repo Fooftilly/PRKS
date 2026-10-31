@@ -302,7 +302,7 @@ function graphOverlay() {
 
 /* ---- the acknowledgement patches the cached Graph ---- */
 async function graphReconciliation() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     const snapshot = {
         meta: { people_included: true, node_count: 2, edge_count: 0 },
         nodes: [
@@ -359,7 +359,7 @@ async function graphReconciliation() {
 
 /* ---- one active intent per element ---- */
 async function coalescing() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const rows = async () => (await store.listOperations())
         .filter(r => globalThis.PRKS_WORK_ROLE_OPERATION_TYPES.indexOf(r.operation) !== -1);
     const save = (state, observed) => store.saveWorkPersonRole('W-1',
@@ -424,7 +424,7 @@ async function coalescing() {
 
 /* ---- a link to a Person this device has not synchronized yet ---- */
 async function creationDependency() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const created = await store.createPerson({ first_name: 'Jane', last_name: 'Doe' });
 
     /* The role must WAIT for the creation. Without the dependency the
@@ -497,7 +497,7 @@ function handlerContract() {
 
 /* ---- acknowledgement reaches every cached representation ---- */
 async function reconciliation() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     const row = () => ({ id: 'W-1', title: 'Paper',
         linked_people: [link(JANE, 'Author', 'Jane Doe')],
         linked_authors: 'Jane Doe', primary_author: 'Jane Doe', primary_editor: '' });
@@ -558,7 +558,7 @@ async function reconciliation() {
 
 /* ---- credit promotion patches person-metadata-state aliases revision ---- */
 async function aliasesRevisionReconciliation() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     const fields = {};
     for (const name of globalThis.PRKS_PERSON_METADATA_FIELDS) {
         fields[name] = { revision: 0 };
@@ -609,7 +609,7 @@ async function aliasesRevisionReconciliation() {
 
 /* ---- a GET that began before the acknowledgement must lose ---- */
 async function staleRead() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     const stale = [{ id: 'W-1', linked_people: [], linked_authors: '', primary_author: '',
         primary_editor: '' }];
     await cache.putList('works-browse:index', JSON.parse(JSON.stringify(stale)), '');

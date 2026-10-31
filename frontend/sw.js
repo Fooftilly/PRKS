@@ -28,7 +28,17 @@
     const DEPENDENCY_REVISION = 'bd1b69adc334';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
-    const PDF_CACHE = 'prks-pdf-v1';
+    // Managed PDFs are cached per signed-in scope, `prks-pdf-v2:<scope key>`
+    // (frontend/js/browser-scope.js). The worker learns the scope from the
+    // record of the last confirmed scope that the page keeps; with no record
+    // it neither reads nor writes any PDF cache. The unscoped cache of
+    // earlier builds is retired.
+    const PDF_CACHE_BASE = 'prks-pdf-v2';
+    const RETIRED_PDF_CACHE = 'prks-pdf-v1';
+    const SCOPE_POINTER_DB = 'prks-browser-scope-v1';
+    const SCOPE_POINTER_STORE = 'pointer';
+    const SCOPE_POINTER_KEY = 'current';
+    const SCOPE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
     // unable to poison the active shell cache"): a currently-active worker
     // may still be serving fetches out of SHELL_CACHE/STATIC_CACHE while a
@@ -41,7 +51,7 @@
     // into the live cache names and deletes the staging buckets.
     const SHELL_STAGING_CACHE = SHELL_CACHE + '-staging';
     const STATIC_STAGING_CACHE = STATIC_CACHE + '-staging';
-    const CURRENT_CACHES = [SHELL_CACHE, STATIC_CACHE, PDF_CACHE];
+    const CURRENT_CACHES = [SHELL_CACHE, STATIC_CACHE];
     const RETIRE_PREFIXES = ['prks-shell-', 'prks-static-'];
 
     // Navigation-fallback entry points only. handleNavigation() falls back to
@@ -116,6 +126,7 @@
         '/js/tab-leave.js',
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
+        '/js/browser-scope.js',
         '/vendor/idb/idb.min.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
@@ -261,7 +272,7 @@
         return true;
     }
 
-    // Per-path generation for prks-pdf-v1 whole-file writes. The page and the
+    // Per-path generation for whole-file writes into a scoped PDF cache. The page and the
     // network GET do not share a heap, so every whole-file put goes through
     // this worker: a post-save install advances the generation before its
     // put, and a network GET that snapshotted an older generation skips its
@@ -352,15 +363,20 @@
      * Page → worker install. Returns null for any other message so the
      * listener can ignore it. Resolves false when the bytes were not stored.
      */
-    function handlePdfCacheMessage(data, cachesApi) {
+    function handlePdfCacheMessage(data, cachesApi, pdfCacheName) {
         if (!data || data.type !== PDF_CACHE_INSTALL_MESSAGE) return null;
         if (!cachesApi || typeof cachesApi.open !== 'function') return Promise.resolve(false);
         const pathname = typeof data.pathname === 'string' ? data.pathname : '';
         if (!isManagedPdfPath(pathname)) return Promise.resolve(false);
         const bytes = copyPdfBytes(data.buffer);
         if (!bytes) return Promise.resolve(false);
-        return cachesApi.open(PDF_CACHE).then(function (cache) {
-            return installAuthoritativeWholeFilePdf(cache, pathname, bytes);
+        const wanted = typeof data.cacheName === 'string' ? data.cacheName : '';
+        return Promise.resolve(pdfCacheName ? pdfCacheName() : null).then(function (name) {
+            // Only into the signed-in scope's cache, and only the one the page named.
+            if (!name || name !== wanted) return false;
+            return cachesApi.open(name).then(function (cache) {
+                return installAuthoritativeWholeFilePdf(cache, pathname, bytes);
+            });
         }).then(function (ok) {
             return !!ok;
         }, function () {
@@ -379,9 +395,58 @@
     }
 
     function shouldRetireCache(name) {
+        if (name === RETIRED_PDF_CACHE) return true;
         if (CURRENT_CACHES.indexOf(name) !== -1) return false;
         return RETIRE_PREFIXES.some(function (prefix) {
             return name.indexOf(prefix) === 0;
+        });
+    }
+
+    /**
+     * The signed-in scope's PDF cache name from the page's record of the last
+     * confirmed scope, or null. Resolves, never rejects: any failure is null.
+     */
+    function readScopedPdfCacheName(idbFactory) {
+        return new Promise(function (resolve) {
+            if (!idbFactory || typeof idbFactory.open !== 'function') {
+                resolve(null);
+                return;
+            }
+            let req;
+            try {
+                req = idbFactory.open(SCOPE_POINTER_DB, 1);
+            } catch (_e) {
+                resolve(null);
+                return;
+            }
+            req.onupgradeneeded = function () {
+                const db = req.result;
+                if (!db.objectStoreNames.contains(SCOPE_POINTER_STORE)) {
+                    db.createObjectStore(SCOPE_POINTER_STORE, { keyPath: 'key' });
+                }
+            };
+            req.onerror = req.onblocked = function () { resolve(null); };
+            req.onsuccess = function () {
+                const db = req.result;
+                let get;
+                try {
+                    get = db.transaction(SCOPE_POINTER_STORE, 'readonly').objectStore(SCOPE_POINTER_STORE).get(SCOPE_POINTER_KEY);
+                } catch (_e) {
+                    db.close();
+                    resolve(null);
+                    return;
+                }
+                get.onerror = function () { db.close(); resolve(null); };
+                get.onsuccess = function () {
+                    db.close();
+                    const scope = get.result && get.result.scope;
+                    const ids = scope ? [scope.instanceId, scope.libraryId, scope.userId] : [];
+                    const valid = ids.length === 3 && ids.every(function (id) {
+                        return typeof id === 'string' && SCOPE_ID_PATTERN.test(id);
+                    });
+                    resolve(valid ? PDF_CACHE_BASE + ':' + ids.join('.') : null);
+                };
+            };
         });
     }
 
@@ -392,6 +457,7 @@
     function createHandlers(env) {
         const cachesApi = env.caches;
         const fetchImpl = env.fetchImpl;
+        const pdfCacheName = env.pdfCacheName || function () { return Promise.resolve(null); };
 
         async function handleNavigation(request) {
             try {
@@ -454,7 +520,16 @@
             // Snapshot before any await so an install that lands while this
             // GET is still draining is visible at put time.
             const generationAtStart = wholeFilePdfGeneration(pathname);
-            const cache = await cachesApi.open(PDF_CACHE);
+            const cacheName = await pdfCacheName();
+            if (!cacheName) {
+                // No signed-in scope: the network only, no cache read or write.
+                try {
+                    return await fetchImpl(request);
+                } catch (_e) {
+                    return new Response(null, { status: 503, statusText: 'PDF is not available offline.' });
+                }
+            }
+            const cache = await cachesApi.open(cacheName);
             if (hasRangeHeader(request)) {
                 // Range requests never write to the whole-file cache entry -- only a complete
                 // 200 response (below) may do that. Offline, a Range request is instead served
@@ -631,11 +706,15 @@
         if (!scope || typeof scope.addEventListener !== 'function') return;
 
         const origin = (scope.location && scope.location.origin) || '';
+        const pdfCacheName = function () {
+            return readScopedPdfCacheName(scope.indexedDB);
+        };
         const handlers = createHandlers({
             caches: scope.caches,
             fetchImpl: function (request) {
                 return scope.fetch(request);
             },
+            pdfCacheName: pdfCacheName,
         });
 
         scope.addEventListener('install', function (event) {
@@ -683,7 +762,7 @@
 
         scope.addEventListener('message', function (event) {
             if (!scope.caches) return;
-            const done = handlePdfCacheMessage(event.data, scope.caches);
+            const done = handlePdfCacheMessage(event.data, scope.caches, pdfCacheName);
             if (!done) return;
             const port = event.ports && event.ports[0];
             const task = Promise.resolve(done).then(function (ok) {
@@ -724,7 +803,12 @@
         PDF_CACHE_INSTALL_MESSAGE: PDF_CACHE_INSTALL_MESSAGE,
         PRKS_SW_SHELL_CACHE: SHELL_CACHE,
         PRKS_SW_STATIC_CACHE: STATIC_CACHE,
-        PRKS_SW_PDF_CACHE: PDF_CACHE,
+        PRKS_SW_PDF_CACHE_BASE: PDF_CACHE_BASE,
+        PRKS_SW_RETIRED_PDF_CACHE: RETIRED_PDF_CACHE,
+        PRKS_SW_SCOPE_POINTER_DB: SCOPE_POINTER_DB,
+        PRKS_SW_SCOPE_POINTER_STORE: SCOPE_POINTER_STORE,
+        PRKS_SW_SCOPE_POINTER_KEY: SCOPE_POINTER_KEY,
+        readScopedPdfCacheName: readScopedPdfCacheName,
         PRKS_SW_SHELL_STAGING_CACHE: SHELL_STAGING_CACHE,
         PRKS_SW_STATIC_STAGING_CACHE: STATIC_STAGING_CACHE,
         PRKS_SW_SHELL_PRECACHE_PATHS: SHELL_PRECACHE_PATHS,

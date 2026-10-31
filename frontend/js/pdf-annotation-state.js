@@ -250,11 +250,14 @@
     async function hasCachedManagedPdf(filePath) {
         const path = managedPdfPath(filePath);
         if (!path) return false;
-        const cacheName = root.PRKS_OFFLINE_PDF_CACHE_NAME || 'prks-pdf-v1';
         if (typeof root.caches === 'undefined' || !root.caches || typeof root.caches.open !== 'function') {
             return false;
         }
         try {
+            const cacheName = typeof root.prksOfflinePdfCacheName === 'function'
+                ? await root.prksOfflinePdfCacheName()
+                : null;
+            if (!cacheName) return false;
             const cache = await root.caches.open(cacheName);
             const match = await cache.match(path);
             return !!match;

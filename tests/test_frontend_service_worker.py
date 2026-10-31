@@ -88,7 +88,9 @@ class FrontendServiceWorkerTests(unittest.TestCase):
 
     def test_no_indexeddb_or_persistent_domain_storage_in_sw(self):
         src = _read(_SW)
-        self.assertNotIn("indexedDB", src)
+        # IndexedDB only to read the page's scope record (#629), never to store.
+        self.assertEqual(src.count("indexedDB"), 1)
+        self.assertIn("readScopedPdfCacheName(scope.indexedDB)", src)
         self.assertNotIn("localStorage", src)
 
     def test_eligibility_helpers_are_pure_and_exported(self):

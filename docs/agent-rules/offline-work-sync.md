@@ -319,8 +319,8 @@ See `docs/local-first-rollout-status.md` for other families and for surfaces tha
 remain connection-required. The Work-Tag implementation contract is in
 [docs/local-first-sync.md](../local-first-sync.md).
 
-- `local-store.js` owns `prks-local-v1`, physically separate from the disposable
-  `prks-offline-v1`. Clear offline cache must never touch durable operations.
+- `local-store.js` owns `prks-local-v2:<scope>`, physically separate from the disposable
+  `prks-offline-v2:<scope>`. Clear offline cache must never touch durable operations.
   Writes request strict durability, resolve on transaction completion, and reject
   on failure. Never optimistically claim success before that commit.
 - `work-tag-state.js` owns strict Tag catalog/tag-options validators and the pure

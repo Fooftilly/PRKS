@@ -55,7 +55,18 @@
     const PLAYLISTS_LIST_KEY = 'playlists:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PROBE_TIMEOUT_MS = 15000; // Dedicated health check only, not ordinary API requests.
-    const PDF_CACHE_NAME = 'prks-pdf-v1';
+
+    /**
+     * The signed-in scope's PDF cache (`prks-pdf-v2:<scope key>`), or null
+     * without a scope: then no page code reads or writes a PDF cache.
+     */
+    function pdfCacheName(scope) {
+        const source = scope || root.prksBrowserScope;
+        if (!source || typeof source.dbName !== 'function') return Promise.resolve(null);
+        return source.dbName('pdf').catch(function () {
+            return null;
+        });
+    }
 
     function defaultNow() {
         return Date.now();
@@ -104,6 +115,10 @@
             : typeof navigator !== 'undefined'
               ? navigator
               : null;
+
+        function pdfCacheNameFor() {
+            return pdfCacheName(options.scope || null);
+        }
 
         let state = STATE_ONLINE;
         // Monotonic transition token guards cache reads that outlive an
@@ -3132,9 +3147,12 @@
             let pdfCount = 0;
             if (cachesApi) {
                 try {
-                    const c = await cachesApi.open(PDF_CACHE_NAME);
-                    const keys = await c.keys();
-                    pdfCount = keys.length;
+                    const name = await pdfCacheNameFor();
+                    if (name) {
+                        const c = await cachesApi.open(name);
+                        const keys = await c.keys();
+                        pdfCount = keys.length;
+                    }
                 } catch (_e) {
                     pdfCount = 0;
                 }
@@ -3168,7 +3186,8 @@
             }
             if (cachesApi) {
                 try {
-                    await cachesApi.delete(PDF_CACHE_NAME);
+                    const name = await pdfCacheNameFor();
+                    if (name) await cachesApi.delete(name);
                 } catch (_e) {
                     ok = false;
                 }
@@ -3537,7 +3556,9 @@
         PRKS_OFFLINE_STATE_ONLINE: STATE_ONLINE,
         PRKS_OFFLINE_STATE_OFFLINE: STATE_OFFLINE,
         PRKS_OFFLINE_STATE_RECONNECTING: STATE_RECONNECTING,
-        PRKS_OFFLINE_PDF_CACHE_NAME: PDF_CACHE_NAME,
+        prksOfflinePdfCacheName: function () {
+            return pdfCacheName(null);
+        },
         PRKS_OFFLINE_DOMAIN_CONCEPTS: DOMAIN_CONCEPTS,
         PRKS_OFFLINE_CONCEPTS_LIST_KEY: CONCEPTS_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_POSITIONS: DOMAIN_POSITIONS,

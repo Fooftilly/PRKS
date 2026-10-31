@@ -267,7 +267,7 @@ function installWorkMetadataEditorHarness({ workId, fields, observed, store }) {
 
 /* ---- one effective never-sent operation per FIELD ---- */
 async function coalescing() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = resolved(base({ doi: { value: 'A', revision: 4 } }));
 
     const first = await store.saveWorkMetadataFields('W-M', { doi: 'B' }, observed);
@@ -303,7 +303,7 @@ async function coalescing() {
  * breaking the user's second Save / edit-back-to-base.
  */
 async function editorCoalescing() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = resolved(base({ doi: { value: 'A', revision: 4 } }));
     const harness = installWorkMetadataEditorHarness({
         workId: 'W-M',
@@ -345,7 +345,7 @@ async function editorCoalescing() {
 
 /* ---- fields are independent, including when one is busy ---- */
 async function independence() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = resolved(base({ doi: { value: 'D0', revision: 2 }, isbn: { value: 'I0', revision: 5 } }));
 
     await store.saveWorkMetadataFields('W-M', { doi: 'D1', isbn: 'I1', journal: 'J1' }, observed);
@@ -381,14 +381,14 @@ async function independence() {
 /* ---- one Save, one transaction ---- */
 async function atomicity() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     const observed = resolved(base());
     await store.saveWorkMetadataFields('W-M', { doi: 'keep' }, observed);
     assert.equal((await store.listOperations()).length, 1);
 
     /* The user pressed one button. Durably storing two of their three edits
      * and then reporting "Saved locally" is a lie that only surfaces later. */
-    const db = factory.__databases.get('prks-local-v1');
+    const db = factory.__databases.get('prks-local-v2:test');
     db._stores.get('operations').failCommit = true;
     await assert.rejects(
         store.saveWorkMetadataFields('W-M', { journal: 'J', volume: 'V', issue: 'I' }, observed),
@@ -409,7 +409,7 @@ async function atomicity() {
 
 /* ---- overlay and dirty-field diffing ---- */
 async function overlay() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const work = { id: 'W-M', title: 'Paper', doi: 'server-doi', isbn: 'server-isbn' };
     const observed = resolved(base({ doi: { value: 'server-doi', revision: 1 }, isbn: { value: 'server-isbn', revision: 1 } }));
 
@@ -448,7 +448,7 @@ async function overlay() {
     assert.deepEqual(globalThis.prksDirtyWorkMetadataFields({ doi: 'server-doi' }, { fields: observed }, pendingOps),
         { doi: 'server-doi' }, 'editing back to the server value IS a change to record');
     // ...and recording it removes the pending operation rather than adding one.
-    const cancelStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const cancelStore = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     await cancelStore.saveWorkMetadataFields('W-M', { doi: 'local-doi' }, observed);
     assert.equal((await cancelStore.listOperations()).length, 1);
     await cancelStore.saveWorkMetadataFields('W-M', { doi: 'server-doi' }, observed);
@@ -460,8 +460,8 @@ async function overlay() {
 /* ---- acknowledgement reconciles both cached records, then retires ---- */
 async function acknowledgement() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', doi: 'old', isbn: 'keep' });
     await cache.putEntity('work-metadata-state', 'W-M', { work_id: 'W-M', fields: base({ doi: { value: 'old', revision: 3 } }) });
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
@@ -514,7 +514,7 @@ async function acknowledgement() {
  * reused id with a different payload is OP_ID_REUSE.
  */
 async function lostResponse() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = resolved(base({ doi: { value: 'old', revision: 0 } }));
     // work_id must match ack()'s hard-coded W-M so isResult accepts the reply.
     const saved = await store.saveWorkMetadataFields('W-M', { doi: '10.1/once' }, observed);
@@ -554,7 +554,7 @@ async function lostResponse() {
 /* ---- a read that began before the ACK cannot publish over it ---- */
 async function staleReads() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = { id: 'W-M', title: 'Paper', doi: 'old' };
     await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', doi: 'old' });
     await cache.putEntity('work-metadata-state', 'W-M', { work_id: 'W-M', fields: base({ doi: { value: 'old', revision: 1 } }) });
@@ -583,7 +583,7 @@ async function staleReads() {
 
 /* ---- the conflict belongs to the field ---- */
 async function conflicts() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = resolved(base({ doi: { value: 'D0', revision: 1 } }));
     const saved = await store.saveWorkMetadataFields('W-M', { doi: 'mine', journal: 'J' }, observed);
     const doi = saved.find(r => r.payload.field === 'doi');
@@ -675,7 +675,7 @@ async function isolation() {
  * effective rows the user sees and searches carry the pending value.
  */
 async function crossProjection() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
     const acknowledged = [
         { id: 'W-1', title: 'Alpha', publisher: 'Elsevier', created_at: '2026-09-01' },
@@ -728,8 +728,8 @@ async function crossProjection() {
 /* ---- a full Abstract acknowledgement, through the coordinator ---- */
 async function abstractAcknowledgement() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     globalThis.prksSync = { store };
     await cache.putEntity('work', 'W-X', { id: 'W-X', title: 'Paper', abstract: 'old' });
     await cache.putEntity('work-metadata-state', 'W-X', { work_id: 'W-X', fields: base() });
@@ -772,8 +772,8 @@ async function abstractAcknowledgement() {
 /* ---- PHASE L/M/N: acknowledgement reaches the projection too ---- */
 async function projectionReconciliation() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', publisher: 'Elsevier' });
     await cache.putEntity('work-metadata-state', 'W-M',
         { work_id: 'W-M', fields: base({ publisher: { value: 'Elsevier', revision: 2 } }) });
@@ -1394,7 +1394,7 @@ function statusMembership() {
 /* ---- acknowledgement reaches every cached representation ---- */
 async function embeddedReconciliation() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const summary = extra => Object.assign({ id: 'W-Y', title: 'Paper', year: '2020' }, extra || {});
     await cache.putEntity('work', 'W-Y', { id: 'W-Y', title: 'Paper', year: '2020' });
     await cache.putEntity('work-metadata-state', 'W-Y', { work_id: 'W-Y', fields: base() });
@@ -1485,7 +1485,7 @@ async function embeddedReconciliation() {
  * unreadable: the durable operation stays, and the next attempt reconciles. */
 async function unreadableSummariesBlockRetirement() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-Y', { id: 'W-Y', year: '2020' });
     await cache.putEntity('folder', 'F1', { id: 'F1', works: [{ id: 'W-Y', year: '2020' }] });
     const unreadable = Object.assign(Object.create(Object.getPrototypeOf(cache)), cache, {
@@ -1507,7 +1507,7 @@ async function unreadableSummariesBlockRetirement() {
  * cannot publish over it. */
 async function graphReferenceReconciliation() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const snapshot = () => ({ nodes: [
         { id: 'work:W-G', record_id: 'W-G', type: 'work', doc_type: 'article', label: 'Paper' },
         { id: 'work:W-OTHER', record_id: 'W-OTHER', type: 'work', doc_type: 'article' },
@@ -1550,7 +1550,7 @@ async function graphReferenceReconciliation() {
 /* A Title acknowledgement reaches Concept and Argument caches too. */
 async function titleReferenceReconciliation() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-T', { id: 'W-T', title: 'Old' });
     await cache.putEntity('concept', 'C1', { id: 'C1', mentions: [
         { work_id: 'W-T', title: 'Old' }, { work_id: 'W-OTHER', title: 'Other' }] });
@@ -1599,7 +1599,7 @@ async function titleReferenceReconciliation() {
 /* A graph GET that began before the acknowledgement must lose. */
 async function staleGraphRead() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = { nodes: [{ id: 'work:W-G', record_id: 'W-G', type: 'work',
         doc_type: 'article', label: 'Paper' }], edges: [] };
     await cache.putEntity('research-graph-core', 'snapshot', JSON.parse(JSON.stringify(stale)));
@@ -1626,7 +1626,7 @@ async function staleGraphRead() {
 /* An embedded-entity GET that began before the acknowledgement must lose. */
 async function staleEmbeddedRead() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = { id: 'F1', works: [{ id: 'W-Y', title: 'Paper', year: '2020' }] };
     await cache.putEntity('folder', 'F1', JSON.parse(JSON.stringify(stale)));
     await cache.putEntity('work', 'W-Y', { id: 'W-Y', year: '2020' });
@@ -1651,7 +1651,7 @@ async function staleEmbeddedRead() {
 /* A GET that began before the acknowledgement cannot publish over it. */
 async function staleProjectionRead() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = [{ id: 'W-M', title: 'Paper', publisher: 'Elsevier' }];
     await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', publisher: 'Elsevier' });
     await cache.putList('recently-added:index', stale, '');
@@ -1680,7 +1680,7 @@ async function staleProjectionRead() {
  * are not. */
 async function staleReadCannotRestoreTheOldGroup() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = [{ id: 'W-G', title: 'Paper', status: 'Planned' },
                    { id: 'W-OTHER', title: 'Other', status: 'Planned' }];
     await cache.putEntity('work', 'W-G', { id: 'W-G', status: 'Planned' });
@@ -1715,7 +1715,7 @@ async function staleReadCannotRestoreTheOldGroup() {
  * merely fast waits for the one shared hydration.
  */
 async function hydration() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const observed = resolved(base({ publisher: { value: 'Elsevier', revision: 2 } }));
     await store.saveWorkMetadataFields('W-H', { publisher: 'Springer' }, observed);
     const durableRows = await store.listOperations();
@@ -1834,7 +1834,7 @@ async function abstracts() {
     // draft retained, store save never called. A fresh empty store alone would
     // pass even if the editor started enqueueing oversized Abstracts.
     {
-        const refuseStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const refuseStore = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const harness = installWorkMetadataEditorHarness({
             workId: 'W-OVER',
             fields: { abstract: '', doi: '' },
@@ -1875,7 +1875,7 @@ async function abstracts() {
     }
 
     // Pending Abstract overlays the Work, and DERIVES the browse excerpt.
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
     const observed = resolved(base());
     const pendingText = '\u{1F9EA}'.repeat(150);
@@ -2060,7 +2060,7 @@ async function abstracts() {
 
 /* ---- year + published_date: one field, many cached surfaces ---- */
 async function highFanOut() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
     const observed = resolved(base({
         year: { value: '', revision: 0 },
@@ -2092,7 +2092,7 @@ async function highFanOut() {
         'a pending cleared Year falls back to the date');
 
     // A pending date alone moves the displayed year.
-    const store2 = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store2 = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store: store2 };
     await store2.saveWorkMetadataFields('W-Y', { published_date: '2022-09-01' },
         resolved(base({ published_date: { value: '2020-05-01', revision: 1 } })));

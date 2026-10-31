@@ -51,7 +51,7 @@ function loadOfflineStoreModule() {
 }
 
 function withIdb(opts) {
-    return Object.assign({ idb: idbApi }, opts || {});
+    return Object.assign({ idb: idbApi, dbName: 'prks-offline-v2:test' }, opts || {});
 }
 
 async function run() {
@@ -191,7 +191,7 @@ async function run() {
         const dbEntry = idb.__databases;
         // Trigger the db to be created first.
         await store.isAvailable();
-        const db = dbEntry.get(mod.PRKS_OFFLINE_DB_NAME);
+        const db = dbEntry.get('prks-offline-v2:test');
         assert('fake db was created for quota-failure setup', !!db);
         db._stores.get('entities').forceError = true;
 
@@ -221,7 +221,7 @@ async function run() {
         const idb = createFakeIndexedDBFactory();
         const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb }));
         await store.isAvailable();
-        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        const db = idb.__databases.get('prks-offline-v2:test');
         assert('fake db created for unhandled-rejection regression', !!db);
         db._stores.get('entities').forceError = true;
 
@@ -255,7 +255,7 @@ async function run() {
         await store.putEntity('work', 'W-1', { title: 'x' }, '');
         const ok = await store.deleteDatabase();
         assert('deleteDatabase resolves true', ok === true);
-        assertEq('database removed from the fake factory registry', idb.__databases.has(mod.PRKS_OFFLINE_DB_NAME), false);
+        assertEq('database removed from the fake factory registry', idb.__databases.has('prks-offline-v2:test'), false);
     }
 
     /* ---- getEntitiesByKind: every cached row of one kind, and only that kind ---- */
@@ -296,7 +296,7 @@ async function run() {
         const idb = createFakeIndexedDBFactory();
         const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('folder', 'F-1', { id: 'F-1' }, '');
-        idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME)._stores.get('entities').forceError = true;
+        idb.__databases.get('prks-offline-v2:test')._stores.get('entities').forceError = true;
         let threw = false;
         let rows;
         try {
@@ -351,7 +351,7 @@ async function run() {
         const idb = createFakeIndexedDBFactory();
         const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
-        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        const db = idb.__databases.get('prks-offline-v2:test');
         assert('fake db was created for the sweep-failure setup', !!db);
         db._stores.get('entities').forceError = true;
         let threw = false;
@@ -371,7 +371,7 @@ async function run() {
         const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb, idbKeyRange: FakeIDBKeyRange  }));
         await store.putEntity('concept', 'C-1', { id: 'C-1' }, '');
         await store.putEntity('concept', 'C-2', { id: 'C-2' }, '');
-        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        const db = idb.__databases.get('prks-offline-v2:test');
         assert('fake db created for the commit-failure setup', !!db);
         // Every delete request succeeds; the transaction then aborts at commit.
         db._stores.get('entities').failCommit = true;
@@ -391,7 +391,7 @@ async function run() {
         const idb = createFakeIndexedDBFactory();
         const store = mod.createPrksOfflineStore(withIdb({ indexedDB: idb  }));
         await store.putEntity('work', 'W-1', { id: 'W-1' }, '');
-        const db = idb.__databases.get(mod.PRKS_OFFLINE_DB_NAME);
+        const db = idb.__databases.get('prks-offline-v2:test');
         db._stores.get('entities').failCommit = true;
         assertEq('putEntity reports false when its transaction aborts at commit', await store.putEntity('work', 'W-2', { id: 'W-2' }, ''), false);
         assertEq('deleteEntity reports false when its transaction aborts at commit', await store.deleteEntity('work', 'W-1'), false);
