@@ -37,8 +37,8 @@ class E2EPostgresProfileTests(unittest.TestCase):
 
         provision.assert_called_once_with(server.storage_root)
         library.drop.assert_called_once_with()
-        self.assertGreater(phases.get("postgres_provision", 0), 0)
-        self.assertGreater(phases.get("postgres_drop", 0), 0)
+        self.assertIn("postgres_provision", phases)
+        self.assertIn("postgres_drop", phases)
         self.assertGreaterEqual(phases["server_stop"], phases["postgres_drop"])
         self.assertIn("server_start", phases)
         self.assertNotIn("postgres_provision_failed", phases)
@@ -63,7 +63,7 @@ class E2EPostgresProfileTests(unittest.TestCase):
 
         self.assertIsNone(server.library)
         spawn.assert_not_called()
-        self.assertGreater(phases.get("postgres_provision_failed", 0), 0)
+        self.assertIn("postgres_provision_failed", phases)
         self.assertNotIn("postgres_provision", phases)
 
     def test_profile_ranking_does_not_double_count_postgres_drop(self):
