@@ -3,34 +3,18 @@
   "operation": "apply",
   "items": [
     {
-      "number": 509,
+      "number": 637,
       "set": {
-        "Agent": "Cursor Cloud",
+        "Agent": "Claude Code",
         "Status": "Ready",
         "Execution": "Agent"
       },
       "expected_before": {
-        "Agent": "Cursor Cloud",
+        "Agent": "Claude Code",
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Accepted and reverified Work/Folder tag picker keyboard defect; no native blockers; inspected open PR changed paths and found no direct picker overlap. Assign to Cursor for accessible keyboard interaction and E2E regression coverage.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 969,
-      "set": {
-        "Agent": "Cursor Cloud",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": "Cursor Cloud",
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Accepted and reverified Publisher draft-loss on late success; no native blockers; inspected open PR changed paths and found no Publisher overlap. Assign to Cursor for session-aware draft preservation and deferred-response tests.",
+      "reason": "Maintainer-authorized v0.8 critical-path Search implementation: all five native dependencies #627/#628/#632/#633/#635 closed, #647 design correction merged, no dedicated Search PR found, PG backup #639 and cutover gates #640/#641 depend on Search. Maintain current Claude Code ownership; implement cohesive tested Search slice without competing with #629/#630 active files.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
