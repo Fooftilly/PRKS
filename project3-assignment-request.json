@@ -1,12 +1,11 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 275,
+      "number": 1033,
       "set": {
         "Agent": "Cursor Cloud",
-        "Status": "Ready",
         "Execution": "Agent"
       },
       "expected_before": {
@@ -14,7 +13,112 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Maintainer explicitly tracked the unresolved accessibility review finding from merged PR #271 as scoped follow-up #275, with concrete Vue tab-role acceptance/tests. Current master still lacks role=tab on all three buttons. Candidate redesign #407 remains unapproved. Live #275 open, unassigned, native blocked_by empty, and no active PR covers the Arguments route. Previous Cursor #509 and #969 work is closed; assigning one new scoped UI task does not exceed capacity. No code or agent session started.",
+      "reason": "Owner approved Cursor Cloud ownership of the newly accepted post-migration Vue UI consolidation roadmap #1033. Reviewed #179, completed #230/#303, current scope, and open PRs; status stays Inbox rather than authorizing pickup.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1034,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned the Vue Folder hierarchy consolidation issue to Cursor Cloud. Reviewed #1033 and existing folder correctness issues #282/#197/#525; no native blockers and no active PR implementing this migration.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1035,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned the shared Vue modal/dialog host consolidation issue to Cursor Cloud. Reviewed roadmap and existing UX #154/#360/#842; no native blockers. Open PR #883 touches frontend ui.js and must be reconciled before implementation.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1036,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned remaining classic create/edit modal forms migration to Cursor Cloud. Reviewed roadmap and explicit #1035 predecessor in issue body, no native blockers; keep lifecycle Inbox pending dependencies.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1037,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned the Settings Vue presentation migration to Cursor Cloud. Reviewed roadmap and #1035 dependency, #543 and modal/Settings tests; no native blockers, leave Inbox.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1038,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned sidebar/ribbon navigation chrome consolidation to Cursor Cloud. Reviewed #1033, existing #416/#445 UX plans, and current open PRs; no native blockers and no redesign authorized.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1039,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned the command palette Vue presentation migration to Cursor Cloud. Reviewed #1033 and #1035 dependency, existing redesign #439; no native blockers or active same-scope PR.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1040,
+      "set": {
+        "Agent": "Cursor Cloud",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "Owner explicitly assigned narrow Work video viewer HTML-to-Vue migration to Cursor Cloud. Reviewed roadmap and existing Work/PDF ownership; no native blockers or active same-scope PR.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
