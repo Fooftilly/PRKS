@@ -316,7 +316,7 @@ describe('Arguments route bridge', () => {
       const title = el.querySelector(`#${heading}`)
       expect(title).not.toBeNull()
       expect(title?.parentElement?.querySelector('.research-entity__section-count')?.textContent).toBe('0')
-      expect(title?.closest('.research-entity__section')?.textContent).toContain(emptyText)
+      expect(title?.closest('.research-entity__section')?.querySelector(':scope > p.meta-row')?.textContent?.trim()).toBe(emptyText)
     }
   })
 
