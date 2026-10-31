@@ -365,6 +365,21 @@ async function positionApiCancellationAndCreateDeleteContract() {
     assert.deepEqual(await globalThis.deletePosition(created.id), { status: "deleted" });
     assert.deepEqual(await store.listOperations(), [],
         "production create→delete folds without a request to the server");
+    // The deleted E2E also reconnected and checked the canonical DB. Reopen
+    // transport on the empty durable queue: even a successfully running sync
+    // worker must never attempt to send a folded create/delete pair.
+    const sent = [];
+    const runtime = runtimeFor(store, async envelope => {
+        sent.push(envelope);
+        throw new Error("folded create/delete reached transport");
+    });
+    try {
+        await runtime.wake();
+        await settle();
+        assert.deepEqual(sent, [], "reconnect cannot transmit a folded operation");
+    } finally {
+        runtime.stop();
+    }
     delete globalThis.prksSync;
 }
 
