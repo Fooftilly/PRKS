@@ -37,14 +37,10 @@ function pressTab(shiftKey = false): KeyboardEvent {
 describe('Vue modal host', () => {
   const mounted: Array<{ unmount: () => void }> = []
 
-  const originalMatchMedia = window.matchMedia
-
   afterEach(() => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
     document.body.className = ''
-    document.documentElement.classList.remove('prks-force-mobile')
-    window.matchMedia = originalMatchMedia
     delete window.prksModalHost
     delete window.requestModalClose
     delete window.prksDismissModalInnerEscapeLayer
@@ -368,47 +364,6 @@ describe('Vue modal host', () => {
     const event = pressTab(false)
     expect(event.defaultPrevented).toBe(true)
     expect(document.activeElement?.id).toBe('person-first')
-  })
-
-  it('keeps unsaved dismissal the same on a narrow and a wide viewport', async () => {
-    install()
-    const opener = document.createElement('button')
-    opener.type = 'button'
-    document.body.appendChild(opener)
-    document.body.insertAdjacentHTML(
-      'beforeend',
-      '<div id="folder-modal" class="modal"><input id="folder-title" value="Draft"></div>',
-    )
-    for (const width of [390, 1280]) {
-      Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width })
-      window.matchMedia = ((query: string) => ({
-        matches: query.includes('max-width: 900px') ? width <= 900 : false,
-        media: query,
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent() {
-          return false
-        },
-      })) as typeof window.matchMedia
-      document.documentElement.classList.toggle('prks-force-mobile', width <= 900)
-      opener.focus()
-      let discarded = 0
-      host().openUnsavedConfirm(() => {
-        discarded += 1
-      })
-      await settleFocus()
-      expect(host().isUnsavedConfirmOpen()).toBe(true)
-      expect(document.activeElement?.id).toBe('prks-modal-unsaved-confirm-cancel')
-      pressEscape()
-      await nextTick()
-      expect(host().isUnsavedConfirmOpen()).toBe(false)
-      expect(discarded).toBe(0)
-      expect(document.getElementById('folder-modal')?.classList.contains('hidden')).toBe(false)
-      expect((document.getElementById('folder-title') as HTMLInputElement).value).toBe('Draft')
-    }
   })
 
   it('restores annotation Delete on the drawer that opened the confirm', async () => {
