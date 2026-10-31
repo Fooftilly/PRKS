@@ -1524,6 +1524,36 @@ slice of the 146-test `test_offline.py` and 34-test
 matrix is KEEP-heavy and must be audited by complete invariant, not by
 name or execution time. No CI or production changes.
 
+### Argument ACK cache-coherence rationalization (two MOVE contracts, #740)
+
+Two short E2Es that called the public Argument API directly and asserted
+only cache invalidation/generation outcomes had stronger surviving coverage:
+
+| Former E2E (removed) | Preserved browser coverage | Fast contract |
+| --- | --- | --- |
+| `OfflinePositionTests.test_argument_source_change_does_not_invalidate_positions` | `OfflineArgumentCoherenceTests.test_argument_sources_invalidate_arguments_but_not_positions` already proves actual successful source synchronization fences Arguments but preserves Positions and Concepts | Real `prksOfflineReconcileArgumentSources` with unchanged and changed ACK responses; an unchanged ACK retains every cache, changed ACK sweeps Arguments and Graph but leaves Position/Concept/People snapshots and lists eligible |
+| `OfflineArgumentCoherenceTests.test_argument_targets_invalidate_arguments_and_positions_only` | `OfflinePositionTests.test_argument_target_change_invalidates_the_position_domain` verifies server ACK, updated Position verdict, authoritative refetch and real offline reload; the Argument-source coherence E2E retains Argument cache-fencing integration | Real `prksOfflineReconcileArgumentTargets` ACK clears Arguments/Positions/Graph but preserves Concepts and People |
+
+The new `tests/browser/run_argument_ack_coherence_selftest.js` calls the
+**production `frontend/js/offline-runtime.js` singleton's exported
+`prksOfflineReconcileArgumentSources` and `prksOfflineReconcileArgumentTargets`**,
+using its real per-domain sweep and entity-patch logic with a disposable
+store. It checks the source/target distinction, clean unchanged ACK,
+state-revision advancement, cache/list invalidation and unrelated domain
+isolation against exact expected footprints. This is not a hand-rebuilt
+cache-invalidation policy. The Python wrapper
+`tests/test_frontend_argument_ack_coherence.py` runs it in the existing
+unit/API/contract gate.
+
+**Not moved:** actual server ACK and conflict/retry behavior, real offline
+Position reopens and verdict rendering, IndexedDB retention across reload,
+canonical browser cache and Graph integration. Those remain E2E.
+
+Historical calibrated timing weights: 2.451 + 3.575 =
+**6.026s of summed test execution** per full source/package E2E inventory,
+12.052s across two inventories; this is *not* measured CI wall-time
+or billed-minute savings. No runtime or CI selection change.
+
 ## Benchmark protocol
 
 For any optimization:
