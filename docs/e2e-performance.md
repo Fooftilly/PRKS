@@ -1765,6 +1765,37 @@ both). These are not measured critical-path or runner-minute savings.
 No production runtime code, E2E runner, workflow path selection, sharding,
 timeout, retry or packaged-asset coverage changes.
 
+### Position/Argument offline-navigation guard (one MOVE, #740)
+
+`OfflinePositionTests.test_position_code_no_longer_applies_its_own_argument_offline_policy`
+reloaded an already cached Position offline to check that Argument links had
+no disabled/title attributes, no obsolete `__prksPositionArgumentGuardBound`
+expando and that the Graph button was enabled. It did not activate either
+navigation surface. The Position detail is now rendered by
+`frontend-app/src/features/positions/PositionDetailRoute.vue`; the normal
+`session.test.ts` Vue route-bridge fixture now checks the **actual rendered**
+native Argument href, missing disabled/title attributes, absent obsolete
+guard marker, and enabled Graph control. It does so against the production
+component and shared research-row component, without a full server, Chromium
+startup, cache warm-up or offline reload.
+
+**KEEP in Chromium:**
+`test_cached_position_opens_a_cached_argument_offline` verifies the actual
+link remains enabled and opens the cached Argument while offline;
+`test_cached_position_reports_an_uncached_argument_as_unavailable` verifies
+it still navigates to the Argument route rather than being blocked by the
+Position; `test_position_graph_action_navigates_to_uncached_graph_offline`
+checks the enabled Graph action and offline destination after clicking it.
+Those are the browser/runtime boundaries and are not removed. The Vue test
+protects the renderer contract, while those retained E2Es protect the
+service-worker/cache, routing and offline integration contracts.
+
+The removed test had **2.544 historical calibrated test-seconds per full
+source or packaged test inventory** (5.088 seconds summed across the two
+inventories). This is a scheduling weight, not a measured improvement to
+CI runner-minutes or critical-path time. No production files, E2E runner,
+selection, sharding, timeout, retry or packaged-asset policy changed.
+
 ### Work private-reminder committed-handoff guard (one MOVE, #740)
 
 The removed `WorkspaceTabsTests.test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves` case started a full browser and evaluated 11 fabricated JavaScript states against the synchronous `prksWorkPrivateNoteNeedsCommittedHandoff` predicate. It did not click, navigate, fetch, save, reload or exercise service-worker/IndexedDB persistence. Unlike the surrounding WorkspaceTabs tests, its assertion was a pure Boolean guard matrix.

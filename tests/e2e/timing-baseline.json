@@ -557,7 +557,6 @@
   "tests.e2e.test_offline.OfflinePositionTests.test_live_position_pages_stay_usable_on_disconnect": 4.483,
   "tests.e2e.test_offline.OfflinePositionTests.test_offline_position_create_is_durable": 4,
   "tests.e2e.test_offline.OfflinePositionTests.test_position_and_concept_domains_are_independent": 4.331,
-  "tests.e2e.test_offline.OfflinePositionTests.test_position_code_no_longer_applies_its_own_argument_offline_policy": 2.544,
   "tests.e2e.test_offline.OfflinePositionTests.test_position_detail_http_errors_keep_their_normal_meaning": 4.43,
   "tests.e2e.test_offline.OfflinePositionTests.test_position_graph_action_navigates_to_uncached_graph_offline": 3.876,
   "tests.e2e.test_offline.OfflinePositionTests.test_position_mutation_invalidates_the_whole_position_domain": 2.678,

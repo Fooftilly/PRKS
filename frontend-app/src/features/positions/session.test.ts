@@ -157,7 +157,20 @@ describe('Positions route bridge', () => {
     expect(el.querySelector('#prks-position-view-graph')).not.toBeNull()
     expect(el.textContent).toContain('Nine')
     expect(el.textContent).toContain('Pending argument name')
-    expect(el.querySelector('[data-prks-role="position-argument-link"]')).not.toBeNull()
+    // The route paints a native, navigable Argument link; it does not impose
+    // a Position-specific offline gate. Real offline navigation remains E2E.
+    const argumentLink = el.querySelector<HTMLAnchorElement>(
+      '[data-prks-role="position-argument-link"]',
+    )
+    expect(argumentLink).not.toBeNull()
+    expect(argumentLink?.getAttribute('href')).toBe('#/arguments/A1')
+    expect(argumentLink?.getAttribute('aria-disabled')).toBeNull()
+    expect(argumentLink?.getAttribute('title')).toBeNull()
+    expect(argumentLink?.hasAttribute('disabled')).toBe(false)
+    expect(el.querySelector('#prks-position-view-graph')?.hasAttribute('disabled')).toBe(false)
+    expect(Array.from(el.querySelectorAll('*')).some(
+      (node) => '__prksPositionArgumentGuardBound' in node,
+    )).toBe(false)
     expect(el.querySelector('.research-md')?.textContent).toContain('A definition')
     expect(readRouteSurface(pane)?.canonicalHash).toBe('#/positions/P9')
     expect(fetchMock).not.toHaveBeenCalled()
