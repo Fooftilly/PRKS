@@ -1440,10 +1440,13 @@ Playlist stale-hold E2Es (in-flight GET held across a durable membership/delete)
 
 The six E2Es listed below invoked the classic public functions directly via
 `page.evaluate`, then inspected durable pending operations or canonical state.
-They never clicked the Position form, Playlist editor, or drag target. A
-real-browser offline/reload/projection boundary is retained by the other
-Position and Playlist E2Es; these six were **pure queue/API composition** rather
-than independent user-interaction coverage.
+They never clicked the Position form, Playlist editor, or drag target. Four
+were queue-only; two additionally reconnected and checked that a never-sent
+create/delete pair had not produced a database row. Their fast replacements now
+wake the **real sync runtime** with an observed transport and prove that no
+operation is transmitted after the wrapper folds the pair. Other Position and
+Playlist E2Es retain real browser offline/reload/projection and server handoff
+coverage.
 
 | Former E2E (removed) | Fast replacement (production code under test) |
 | --- | --- |
@@ -1457,7 +1460,8 @@ than independent user-interaction coverage.
 Each Node selftest has a **mutation negative-control**: temporarily replace
 the real durable field writer with a no-op during the cancel call, confirm the
 zero-pending assertion *fails*, restore the writer, and prove the genuine wrapper
-cancels the pending operation. The existing local-store Node tests still own
+cancels the pending operation. The folded-create tests also verify that reconnect wakes the sync runtime
+without sending any request. The existing local-store Node tests still own
 coalescing, dependency, and fold behavior; Python backend sync tests own
 ordinary server acceptance and idempotency. The pre-existing
 `tests.test_frontend_position_sync` and `tests.test_frontend_playlist_sync`
