@@ -7,6 +7,7 @@
   <Teleport v-if="recoveryHostReady" to="#prks-settings-recovery-root">
     <EditorRecoveryDiagnostics />
   </Teleport>
+  <CommandPalette />
   <ModalHost />
   <WorkspaceShell />
 </template>
@@ -15,6 +16,7 @@
 import { onMounted, ref } from 'vue'
 import EditorRecoveryDiagnostics from './features/editor-recovery/EditorRecoveryDiagnostics.vue'
 import PerformanceDiagnostics from './features/performance-diagnostics/PerformanceDiagnostics.vue'
+import CommandPalette from './palette/CommandPalette.vue'
 import ModalHost from './modal/ModalHost.vue'
 import WorkspaceShell from './workspace-shell/WorkspaceShell.vue'
 

@@ -10,6 +10,9 @@ _INDEX = os.path.join(_FRONTEND, "index.html")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _NAV = os.path.join(_FRONTEND, "js", "navigation.js")
 _PALETTE = os.path.join(_FRONTEND, "js", "command-palette.js")
+_PALETTE_VUE = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "palette", "CommandPalette.vue"
+)
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_command_palette_selftest.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
@@ -116,18 +119,23 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         # Greptile P2: weak/short queries must not name a blocked destination.
         self.assertIn("score >= 600", src)
         self.assertIn("q.length < 3", src)
-        self.assertIn("'aria-live': 'polite'", src)
-        self.assertIn("prks-command-palette-status", src)
-        # Live region must stay a11y-exposed; empty footprint is CSS :empty, not hidden.
+        self.assertNotIn("innerHTML", src)
         self.assertNotIn("setHidden(parts.status", src)
+        self.assertIn("prksCommandPaletteView", src)
+        self.assertIn("prksCommandPaletteSubscribe", src)
+        vue = _read(_PALETTE_VUE)
+        self.assertIn('id="prks-command-palette"', vue)
+        self.assertIn('id="prks-command-palette-status"', vue)
+        self.assertIn('aria-live="polite"', vue)
+        self.assertIn('role="listbox"', vue)
+        self.assertIn('role="option"', vue)
+        self.assertNotIn("prks-command-palette-launch", vue)
         css = _read(_CSS)
         self.assertIn(".prks-command-palette__status:empty", css)
         self.assertNotIn(".prks-command-palette__status[hidden]", css)
         # Loading must win over split empty guidance while catalog fetch is in flight.
-        loading_idx = src.index("setStatus('Searching library…')")
-        split_empty_idx = src.index(
-            "setStatus(splitPaletteEmptyMessage())"
-        )
+        loading_idx = src.index("return 'Searching library…'")
+        split_empty_idx = src.index("return splitPaletteEmptyMessage()")
         self.assertLess(loading_idx, split_empty_idx)
         self.assertNotIn("emptyGuidanceHtml", src)
         self.assertNotIn("PRKS_TILE_ROUTE_NAMES", src)
