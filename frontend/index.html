@@ -288,47 +288,7 @@
     <!-- Modals -->
     <div id="modal-backdrop" class="modal-backdrop hidden"></div>
 
-    <div
-        id="prks-modal-unsaved-confirm"
-        class="prks-modal-unsaved-confirm hidden"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="prks-modal-unsaved-confirm-title"
-        aria-describedby="prks-modal-unsaved-confirm-desc"
-        aria-hidden="true"
-    >
-        <div class="prks-modal-unsaved-confirm__scrim" id="prks-modal-unsaved-confirm-scrim" aria-hidden="true"></div>
-        <div class="prks-modal-unsaved-confirm__panel">
-            <h3 id="prks-modal-unsaved-confirm-title" class="prks-modal-unsaved-confirm__title">Close without saving?</h3>
-            <p id="prks-modal-unsaved-confirm-desc" class="prks-modal-unsaved-confirm__desc">
-                Are you sure you want to close this window without saving the changes?
-            </p>
-            <div class="prks-modal-unsaved-confirm__actions">
-                <button type="button" class="prks-btn prks-btn--secondary" id="prks-modal-unsaved-confirm-cancel">Cancel</button>
-                <button type="button" class="prks-btn prks-btn--danger" id="prks-modal-unsaved-confirm-discard">Close without saving</button>
-            </div>
-        </div>
-    </div>
-
-    <div
-        id="prks-modal-confirm"
-        class="prks-modal-confirm hidden"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="prks-modal-confirm-title"
-        aria-describedby="prks-modal-confirm-desc"
-        aria-hidden="true"
-    >
-        <div class="prks-modal-confirm__scrim" id="prks-modal-confirm-scrim" aria-hidden="true"></div>
-        <div class="prks-modal-confirm__panel">
-            <h3 id="prks-modal-confirm-title" class="prks-modal-confirm__title">Confirm</h3>
-            <p id="prks-modal-confirm-desc" class="prks-modal-confirm__desc"></p>
-            <div class="prks-modal-confirm__actions">
-                <button type="button" class="prks-btn prks-btn--secondary" id="prks-modal-confirm-cancel">Cancel</button>
-                <button type="button" class="prks-btn prks-btn--primary" id="prks-modal-confirm-ok">OK</button>
-            </div>
-        </div>
-    </div>
+    <!-- Confirm, alert, prompt, and unsaved dismissal are painted by the Vue modal host. -->
 
     <div id="settings-modal" class="modal modal--settings hidden">
         <div class="modal-header">

@@ -117,236 +117,51 @@ function prksResetModalBaselines() {
     window.__prksModalBaselineReady = {};
 }
 
+// Not named prksModalHost: a classic-script function declaration is the
+// window binding, and the Vue host assigns that same property to its API.
+function prksReadModalHost() {
+    const host = window.prksModalHost;
+    return host && typeof host === 'object' ? host : null;
+}
+
 function prksIsModalUnsavedConfirmOpen() {
+    const host = prksReadModalHost();
+    if (host && typeof host.isUnsavedConfirmOpen === 'function') return !!host.isUnsavedConfirmOpen();
     const root = document.getElementById('prks-modal-unsaved-confirm');
     return !!(root && !root.classList.contains('hidden'));
 }
 
 function prksHideModalUnsavedConfirm(options) {
-    const restoreFocus = !options || options.restoreFocus !== false;
-    const root = document.getElementById('prks-modal-unsaved-confirm');
-    const opener = window.__prksModalUnsavedConfirmOpener;
-    window.__prksModalUnsavedConfirmOpener = null;
-    if (root) {
-        root.classList.add('hidden');
-        root.setAttribute('aria-hidden', 'true');
-    }
-    window.__prksModalUnsavedConfirmOnDiscard = null;
-    if (
-        restoreFocus &&
-        opener &&
-        opener !== document.body &&
-        typeof opener.focus === 'function' &&
-        document.contains(opener) &&
-        !(root && root.contains(opener))
-    ) {
-        try {
-            opener.focus({ preventScroll: true });
-        } catch (_e) {}
-    }
+    const host = prksReadModalHost();
+    if (host && typeof host.hideUnsavedConfirm === 'function') host.hideUnsavedConfirm(options);
 }
 
 function prksOpenModalUnsavedConfirm(onDiscard) {
-    window.__prksModalUnsavedConfirmOnDiscard = typeof onDiscard === 'function' ? onDiscard : null;
-    const active = document.activeElement;
-    window.__prksModalUnsavedConfirmOpener =
-        active && active !== document.body ? active : null;
-    const root = document.getElementById('prks-modal-unsaved-confirm');
-    if (!root) {
-        const fn = window.__prksModalUnsavedConfirmOnDiscard;
-        prksHideModalUnsavedConfirm();
-        if (fn) fn();
+    const host = prksReadModalHost();
+    if (!host || typeof host.openUnsavedConfirm !== 'function') {
+        // The feature shell can be open before the Vue dialog host mounts.
+        // Discarding here would drop the draft with no confirmation. Leave
+        // the modal open; the next close request asks once the host exists.
         return;
     }
-    root.classList.remove('hidden');
-    root.setAttribute('aria-hidden', 'false');
-    const discard = document.getElementById('prks-modal-unsaved-confirm-discard');
-    if (discard && typeof discard.focus === 'function') {
-        requestAnimationFrame(() => discard.focus());
-    }
+    host.openUnsavedConfirm(typeof onDiscard === 'function' ? onDiscard : null);
 }
-
-function prksDiscardConfirmedClose() {
-    const fn = window.__prksModalUnsavedConfirmOnDiscard;
-    prksHideModalUnsavedConfirm({ restoreFocus: false });
-    if (fn) fn();
-}
-
-let prksModalConfirmResolve = null;
-let prksModalConfirmAlertOnly = false;
-let prksModalConfirmOpener = null;
-let prksModalConfirmDrawerOwnerTabId = '';
 
 function prksIsModalConfirmOpen() {
+    const host = prksReadModalHost();
+    if (host && typeof host.isConfirmOpen === 'function') return !!host.isConfirmOpen();
     const root = document.getElementById('prks-modal-confirm');
     return !!(root && !root.classList.contains('hidden'));
 }
 
-function prksRestoreModalConfirmCancel() {
-    const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
-    if (cancelBtn) {
-        cancelBtn.classList.remove('hidden');
-        cancelBtn.setAttribute('aria-hidden', 'false');
-    }
-    const actions = document.querySelector('.prks-modal-confirm__actions');
-    if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
-    prksModalConfirmAlertOnly = false;
-}
-
-function prksFocusStaysOnFocusedTile(node) {
-    if (!node || typeof node.closest !== 'function') return true;
-    const tile = node.closest('.prks-tile[data-prks-tab-id]');
-    if (!tile) return true;
-    const tileId = tile.getAttribute('data-prks-tab-id');
-    if (!tileId) return true;
-    const snap = typeof window.prksWorkspaceSnapshot === 'function' ? window.prksWorkspaceSnapshot() : null;
-    const focused = snap && snap.focusedTabId;
-    if (!focused) return true;
-    return String(tileId) === String(focused);
-}
-
-function prksRememberModalConfirmOpener(active) {
-    prksModalConfirmOpener = active && active !== document.body ? active : null;
-    prksModalConfirmDrawerOwnerTabId = '';
-    const opener = prksModalConfirmOpener;
-    if (!opener || typeof opener.closest !== 'function') return;
-    const drawer = opener.closest('[data-prks-role="pdf-annotation-drawer"]');
-    const ownerTabId = drawer && drawer.getAttribute('data-prks-owner-tab-id');
-    if (ownerTabId) prksModalConfirmDrawerOwnerTabId = String(ownerTabId);
-}
-
-function prksReplacementAnnotationDelete(opener, ownerTabId) {
-    const pane = opener && opener.isConnected && typeof opener.closest === 'function'
-        ? opener.closest('.work-pdf-pane')
-        : null;
-    if (pane && pane.isConnected) {
-        const inPane = pane.querySelector('.annotation-row__delete');
-        if (inPane) return inPane;
-    }
-    if (!ownerTabId || typeof document.querySelectorAll !== 'function') return null;
-    const drawers = document.querySelectorAll('[data-prks-role="pdf-annotation-drawer"]');
-    for (let i = 0; i < drawers.length; i += 1) {
-        const drawer = drawers[i];
-        if (!drawer || drawer.getAttribute('data-prks-owner-tab-id') !== String(ownerTabId)) continue;
-        const button = drawer.querySelector('.annotation-row__delete');
-        if (button) return button;
-    }
-    return null;
-}
-
-function prksHideModalConfirm() {
-    const root = document.getElementById('prks-modal-confirm');
-    if (root) {
-        root.classList.add('hidden');
-        root.setAttribute('aria-hidden', 'true');
-    }
-    prksRestoreModalConfirmCancel();
-    prksModalConfirmResolve = null;
-    const opener = prksModalConfirmOpener;
-    const ownerTabId = prksModalConfirmDrawerOwnerTabId;
-    prksModalConfirmOpener = null;
-    prksModalConfirmDrawerOwnerTabId = '';
-    let target = null;
-    if (
-        opener &&
-        typeof opener.focus === 'function' &&
-        document.contains(opener) &&
-        prksFocusStaysOnFocusedTile(opener)
-    ) {
-        target = opener;
-    } else if (
-        opener &&
-        opener.classList &&
-        opener.classList.contains('annotation-row__delete')
-    ) {
-        // The list may have been repainted while the dialog was open.
-        // Focus the replacement Delete in that drawer's owning tab.
-        const replacement = prksReplacementAnnotationDelete(opener, ownerTabId);
-        if (
-            replacement &&
-            typeof replacement.focus === 'function' &&
-            prksFocusStaysOnFocusedTile(replacement)
-        ) {
-            target = replacement;
-        }
-    }
-    if (target) target.focus();
-}
-
-function prksFinishModalConfirm(confirmed) {
-    const resolve = prksModalConfirmResolve;
-    prksHideModalConfirm();
-    if (typeof resolve === 'function') resolve(!!confirmed);
-}
-
 /**
- * In-app confirm dialog (replaces window.confirm for destructive flows).
+ * In-app confirm dialog. The Vue modal host paints it; this is the classic call site.
  * @returns {Promise<boolean>}
  */
 function prksConfirmDialog(options = {}) {
-    return new Promise((resolve) => {
-        const root = document.getElementById('prks-modal-confirm');
-        if (!root) {
-            resolve(false);
-            return;
-        }
-        const titleEl = document.getElementById('prks-modal-confirm-title');
-        const descEl = document.getElementById('prks-modal-confirm-desc');
-        const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
-        const okBtn = document.getElementById('prks-modal-confirm-ok');
-        const title = options.title != null ? String(options.title) : 'Confirm';
-        const message = options.message != null ? String(options.message) : '';
-        const messageHtml = options.messageHtml != null ? String(options.messageHtml) : '';
-        const confirmLabel =
-            options.confirmLabel != null ? String(options.confirmLabel) : 'OK';
-        const cancelLabel =
-            options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
-        const danger = options.danger === true;
-        const alertOnly = options.alertOnly === true;
-        prksModalConfirmAlertOnly = alertOnly;
-        const actions = document.querySelector('.prks-modal-confirm__actions');
-
-        if (titleEl) titleEl.textContent = title;
-        if (descEl) {
-            if (messageHtml) {
-                descEl.classList.add('prks-modal-confirm__desc--rich');
-                descEl.innerHTML = messageHtml;
-            } else {
-                descEl.classList.remove('prks-modal-confirm__desc--rich');
-                descEl.textContent = message;
-            }
-        }
-        if (cancelBtn) {
-            if (alertOnly) {
-                cancelBtn.classList.add('hidden');
-                cancelBtn.setAttribute('aria-hidden', 'true');
-            } else {
-                cancelBtn.classList.remove('hidden');
-                cancelBtn.setAttribute('aria-hidden', 'false');
-                cancelBtn.textContent = cancelLabel;
-            }
-        }
-        if (actions) {
-            actions.classList.toggle('prks-modal-confirm__actions--alertOnly', alertOnly);
-        }
-        if (okBtn) {
-            okBtn.textContent = confirmLabel;
-            okBtn.classList.remove('prks-btn--primary', 'prks-btn--danger');
-            okBtn.classList.add(danger ? 'prks-btn--danger' : 'prks-btn--primary');
-        }
-
-        prksModalConfirmResolve = resolve;
-        prksRememberModalConfirmOpener(document.activeElement);
-        root.classList.remove('hidden');
-        root.setAttribute('aria-hidden', 'false');
-        const focusEl =
-            alertOnly || !(danger && cancelBtn && !cancelBtn.classList.contains('hidden'))
-                ? okBtn || cancelBtn
-                : cancelBtn;
-        if (focusEl && typeof focusEl.focus === 'function') {
-            requestAnimationFrame(() => focusEl.focus());
-        }
-    });
+    const host = prksReadModalHost();
+    if (!host || typeof host.confirm !== 'function') return Promise.resolve(false);
+    return host.confirm(options || {});
 }
 
 /**
@@ -578,82 +393,6 @@ function prksConfirmUnsavedRouteLeave(options) {
         cancelLabel: 'Keep editing',
         danger: true,
     });
-}
-
-function prksBindModalConfirmOnce() {
-    const root = document.getElementById('prks-modal-confirm');
-    if (!root || root.dataset.bound === '1') return;
-    root.dataset.bound = '1';
-    const cancel = document.getElementById('prks-modal-confirm-cancel');
-    const ok = document.getElementById('prks-modal-confirm-ok');
-    const scrim = document.getElementById('prks-modal-confirm-scrim');
-    if (cancel) {
-        cancel.addEventListener('click', () =>
-            prksFinishModalConfirm(prksModalConfirmAlertOnly)
-        );
-    }
-    if (ok) {
-        ok.addEventListener('click', () => prksFinishModalConfirm(true));
-    }
-    if (scrim) {
-        scrim.addEventListener('click', () =>
-            prksFinishModalConfirm(prksModalConfirmAlertOnly)
-        );
-    }
-}
-
-function prksBindModalUnsavedConfirmOnce() {
-    const root = document.getElementById('prks-modal-unsaved-confirm');
-    if (!root || root.dataset.bound === '1') return;
-    root.dataset.bound = '1';
-    const cancel = document.getElementById('prks-modal-unsaved-confirm-cancel');
-    const discard = document.getElementById('prks-modal-unsaved-confirm-discard');
-    const scrim = document.getElementById('prks-modal-unsaved-confirm-scrim');
-    if (cancel) {
-        cancel.addEventListener('click', () => prksHideModalUnsavedConfirm());
-    }
-    if (discard) {
-        discard.addEventListener('click', () => prksDiscardConfirmedClose());
-    }
-    if (scrim) {
-        scrim.addEventListener('click', () => prksHideModalUnsavedConfirm());
-    }
-}
-
-function prksStopModalEscape(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-}
-
-/**
- * One Escape stack for every `.modal`, the unsaved prompt, and the shared
- * confirm/alert. The topmost layer wins. A prompt never dismisses the modal
- * underneath it. An open doc-type menu inside the modal is its own layer.
- * Drag-cancel keeps the pointer gesture's own Escape.
- */
-function prksOnModalLifecycleKeydown(e) {
-    if (!e || e.key !== 'Escape' || e.isComposing) return;
-    if (document.body.classList.contains('prks-workspace-dragging')) return;
-    if (prksIsModalConfirmOpen()) {
-        prksStopModalEscape(e);
-        prksFinishModalConfirm(prksModalConfirmAlertOnly);
-        return;
-    }
-    if (prksIsModalUnsavedConfirmOpen()) {
-        prksStopModalEscape(e);
-        prksHideModalUnsavedConfirm();
-        return;
-    }
-    if (prksDismissModalInnerEscapeLayer()) {
-        prksStopModalEscape(e);
-        return;
-    }
-    const activeModal = document.querySelector('.modal:not(.hidden)');
-    if (!activeModal) return;
-    prksStopModalEscape(e);
-    if (prksCloseStandalonePageModal(activeModal)) return;
-    requestModalClose('escape');
 }
 
 /** Tag and publisher dialogs own a private backdrop and close function. */
@@ -1051,12 +790,8 @@ function prksAnyModalOpen() {
 }
 
 function initModalCloseUi() {
-    prksBindModalUnsavedConfirmOnce();
-    prksBindModalConfirmOnce();
-    if (!window.__prksModalLifecycleKeyBound) {
-        window.__prksModalLifecycleKeyBound = true;
-        document.addEventListener('keydown', prksOnModalLifecycleKeydown, true);
-    }
+    // Escape, confirm, and unsaved presentation belong to the Vue modal host.
+    // This listener is only the feature-modal backdrop, which still lives in the shell.
     const backdrop = document.getElementById('modal-backdrop');
     if (!backdrop || backdrop.dataset.boundClose !== '1') {
         if (!backdrop) return;
@@ -1354,6 +1089,8 @@ function closeModals() {
     prksResetModalBaselines();
 }
 
+window.prksDismissModalInnerEscapeLayer = prksDismissModalInnerEscapeLayer;
+window.prksCloseStandalonePageModal = prksCloseStandalonePageModal;
 window.requestModalClose = requestModalClose;
 window.initModalCloseUi = initModalCloseUi;
 window.prksConfirmDialog = prksConfirmDialog;
@@ -1581,75 +1318,11 @@ function prksFindPersonInCache(personId) {
     return null;
 }
 
-/** Text prompt using confirm shell. Resolves trimmed string on OK, null on cancel. */
+/** Text prompt on the Vue confirm shell. Resolves trimmed string on OK, null on cancel. */
 function prksPromptTextDialog(options = {}) {
-    return new Promise((resolve) => {
-        const root = document.getElementById('prks-modal-confirm');
-        const titleEl = document.getElementById('prks-modal-confirm-title');
-        const descEl = document.getElementById('prks-modal-confirm-desc');
-        const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
-        const okBtn = document.getElementById('prks-modal-confirm-ok');
-        const actions = document.querySelector('.prks-modal-confirm__actions');
-        if (!root || !descEl || !okBtn || !cancelBtn) {
-            resolve(null);
-            return;
-        }
-        const title = options.title != null ? String(options.title) : 'Edit';
-        const message = options.message != null ? String(options.message) : '';
-        const defaultValue = options.defaultValue != null ? String(options.defaultValue) : '';
-        const okLabel = options.okLabel != null ? String(options.okLabel) : 'Save';
-        const cancelLabel = options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
-        const multiline = options.multiline === true;
-
-        if (titleEl) titleEl.textContent = title;
-        descEl.textContent = '';
-        descEl.classList.toggle('prks-modal-confirm__desc--prompt', true);
-        if (message) {
-            const p = document.createElement('span');
-            p.className = 'prks-modal-prompt__hint';
-            p.textContent = message;
-            descEl.appendChild(p);
-        }
-        const input = document.createElement(multiline ? 'textarea' : 'input');
-        if (!multiline) input.type = 'text';
-        else input.rows = options.rows != null ? Number(options.rows) || 8 : 8;
-        input.className =
-            'prks-modal-prompt__input' + (multiline ? ' prks-modal-prompt__input--multiline' : '');
-        input.value = defaultValue;
-        input.setAttribute('aria-label', title);
-        input.setAttribute('autocomplete', 'off');
-        descEl.appendChild(input);
-
-        cancelBtn.classList.remove('hidden');
-        cancelBtn.setAttribute('aria-hidden', 'false');
-        cancelBtn.textContent = cancelLabel;
-        if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
-        okBtn.textContent = okLabel;
-        okBtn.classList.remove('prks-btn--danger');
-        okBtn.classList.add('prks-btn--primary');
-        prksModalConfirmAlertOnly = false;
-
-        if (!multiline) {
-            input.addEventListener('keydown', (e) => {
-                if (e.key !== 'Enter' || e.shiftKey) return;
-                e.preventDefault();
-                prksFinishModalConfirm(true);
-            });
-        }
-
-        prksModalConfirmResolve = (confirmed) => {
-            const val = confirmed ? String(input.value || '').trim() : null;
-            descEl.classList.remove('prks-modal-confirm__desc--prompt');
-            descEl.textContent = '';
-            resolve(val);
-        };
-        root.classList.remove('hidden');
-        root.setAttribute('aria-hidden', 'false');
-        requestAnimationFrame(() => {
-            input.focus();
-            if (typeof input.select === 'function' && !multiline) input.select();
-        });
-    });
+    const host = prksReadModalHost();
+    if (!host || typeof host.prompt !== 'function') return Promise.resolve(null);
+    return host.prompt(options || {});
 }
 
 async function prksEditRoleCreditOnWork(btn) {

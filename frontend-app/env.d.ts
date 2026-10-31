@@ -46,6 +46,11 @@ interface PrksNavigateOptions {
 }
 
 interface Window {
+  prksModalHost?: import('./src/modal/types').PrksModalHostApi
+  requestModalClose?: (reason?: string) => boolean
+  prksDismissModalInnerEscapeLayer?: () => boolean
+  prksCloseStandalonePageModal?: (modal: Element) => boolean
+  prksWorkspaceSnapshot?: () => { focusedTabId?: string | null } | null | undefined
   /** Sanitized `/api/client-errors` reporter from `api.js` (deduped there). */
   prksReportClientError?: (input: { kind: string; source: string; request_id?: string }) => void
   prksVueActivatePerformanceDiagnostics?: () => void
