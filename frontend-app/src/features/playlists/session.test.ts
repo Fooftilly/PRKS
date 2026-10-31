@@ -363,6 +363,69 @@ describe('Playlists route surface', () => {
     expect(el.textContent).not.toContain('No videos found')
   })
 
+  it('opens the add-video results panel for a focused query', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOfflineRuntimeState = () => 'online'
+    window.prksConsumeApiError = () => null
+    window.prksInferWorkSourceKind = () => 'video'
+    window.fetchWorks = vi.fn(async () => [{ id: 'W9', title: 'Extra video' }])
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await vi.waitFor(() => expect(el.textContent).toContain('Extra video'))
+
+    const results = () => el.querySelector<HTMLElement>('#prks-playlist-add-results')
+    expect(results()?.classList.contains('is-open')).toBe(false)
+    expect(results()?.classList.contains('hidden')).toBe(true)
+
+    const search = el.querySelector<HTMLInputElement>('#prks-playlist-add-search')
+    expect(search).not.toBeNull()
+    search!.value = 'Extra'
+    search!.dispatchEvent(new Event('input'))
+    search!.dispatchEvent(new FocusEvent('focus'))
+    await nextTick()
+
+    expect(results()?.classList.contains('is-open')).toBe(true)
+    expect(results()?.classList.contains('hidden')).toBe(false)
+    expect(results()?.textContent).toContain('Extra video')
+    expect(results()?.querySelector('button')?.textContent).toContain('Add')
+
+    search!.value = 'zzzz-no-such-video'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(results()?.classList.contains('is-open')).toBe(true)
+    expect(results()?.classList.contains('hidden')).toBe(false)
+    expect(results()?.textContent).toContain('No videos found')
+    expect(results()?.querySelector('button')).toBeNull()
+
+    search!.dispatchEvent(new FocusEvent('blur'))
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250)
+    })
+    await nextTick()
+    expect(results()?.classList.contains('is-open')).toBe(false)
+    expect(results()?.classList.contains('hidden')).toBe(true)
+  })
+
+  it('opens the unavailable catalogue message in the add-video panel', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.prksOfflineRuntimeState = () => 'offline'
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await vi.waitFor(() => expect(el.textContent).toContain('Videos are not available right now.'))
+
+    el.querySelector<HTMLInputElement>('#prks-playlist-add-search')?.dispatchEvent(new FocusEvent('focus'))
+    await nextTick()
+    const results = el.querySelector('#prks-playlist-add-results')
+    expect(results?.classList.contains('is-open')).toBe(true)
+    expect(results?.classList.contains('hidden')).toBe(false)
+    expect(results?.textContent).toContain('Videos are not available right now.')
+    expect(results?.textContent).not.toContain('No videos found')
+  })
+
   it('reloads addable videos when the runtime comes online and keeps the draft', async () => {
     const listeners = new Set<(state: string) => void>()
     window.prksOfflineRuntimeSubscribe = (fn) => {
