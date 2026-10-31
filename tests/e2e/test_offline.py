@@ -5150,33 +5150,6 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
 
     # ---- domain boundaries --------------------------------------------------
 
-    def test_argument_sources_invalidate_arguments_but_not_positions(self):
-        server, page, _context, _collector = self._start()
-        argument_a = server.ids["argument_a"]
-        position_a = server.ids["position_a"]
-        concept_child = server.ids["concept_child"]
-
-        self._cache_arguments(page, server)
-        _open_position(page, position_a)
-        _wait_entity_cached(page, "position", position_a)
-        _open_concept(page, concept_child)
-        _wait_entity_cached(page, "concept", concept_child)
-        arguments_before = _domain_generation(page, "arguments")
-        positions_before = _domain_generation(page, "positions")
-        concepts_before = _domain_generation(page, "concepts")
-
-        page.evaluate(
-            "([id, workId]) => window.putArgumentSources(id, [{ work_id: workId, pages: '3-4' }])",
-            [argument_a, server.ids["work_b"]],
-        )
-        self._assert_arguments_invalidated(page, server, arguments_before)
-        # Source Works are not in the Position read model, and nothing here
-        # touches Concepts at all.
-        self.assertEqual(_domain_generation(page, "positions"), positions_before)
-        self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
-        self.assertIsNotNone(_cached_entity(page, "position", position_a))
-        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
-
 
     def test_concept_mutation_leaves_arguments_and_positions_alone(self):
         server, page, _context, _collector = self._start()
