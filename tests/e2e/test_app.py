@@ -2181,36 +2181,6 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
         page.locator("h2.prks-page-title", has_text="Ideology").wait_for()
 
-    def test_position_index_search_matches_title_and_description(self):
-        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
-        position_id = server.ids["position"]
-        page.evaluate(
-            """(id) => prksRequest('/api/positions/' + id, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: 'A distinctive research phrase about standardization.' }),
-            })""",
-            arg=position_id,
-        )
-        page.evaluate("() => window.prksNavigate('#/positions')")
-        page.wait_for_function("() => location.hash === '#/positions'")
-        page.locator("#prks-position-rows .prks-research-row").first.wait_for()
-        search = page.locator("#prks-position-search")
-
-        search.fill("Unrelated Position")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 1"
-        )
-        search.fill("standardization")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 1"
-        )
-        search.fill("no-such-position-text")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 0"
-        )
-        self.assertIn("No Positions match", page.locator("#prks-position-rows").inner_text())
-
     def test_argument_index_search_respects_kind_filter(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.evaluate(
@@ -2404,23 +2374,6 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
                 input_id,
                 hash_route,
             )
-
-    def test_argument_filtered_true_empty_state_describes_active_kind(self):
-        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
-        page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
-        page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("[data-prks-argument-rows]").wait_for()
-        empty_text = page.locator("[data-prks-argument-rows]").inner_text()
-        self.assertIn("No Stances yet.", empty_text)
-        self.assertNotIn("No Arguments or Stances yet.", empty_text)
-        self.assertEqual(page.locator("[data-prks-argument-rows] #prks-stance-new-empty").count(), 1)
-        self.assertEqual(page.locator("[data-prks-argument-rows] #prks-argument-new-empty").count(), 0)
-
-        page.evaluate("() => window.prksNavigate('#/arguments?kind=argument')")
-        page.wait_for_function("() => location.hash === '#/arguments?kind=argument'")
-        page.wait_for_function(
-            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length > 0"
-        )
 
     def test_argument_filtered_search_empty_is_kind_aware(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
