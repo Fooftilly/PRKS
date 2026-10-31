@@ -187,7 +187,8 @@ let checks = 0;
   "authorNull": false,
   "authorString": false,
   "authorMissingId": false,
-  "authorMinimalOk": true
+  "authorMinimalOk": true,
+  "optionalDisplayFieldsAbsent": true
 };
   assert.deepStrictEqual(actual, expected, "argument index shapes: production validator regression");
   checks += Object.keys(expected).length;
@@ -249,7 +250,6 @@ let checks = 0;
                 };
             })();
   const expected = {
-  "optionalDisplayFieldsAbsent": true,
   "ok": true,
   "stanceOk": true,
   "wrongId": false,
