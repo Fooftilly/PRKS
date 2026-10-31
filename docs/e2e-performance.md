@@ -1482,6 +1482,48 @@ promise of shorter CI wall time. Both gates must still run their entire
 remaining six-shard inventories on the exact PR head. No change to selection,
 runner deadlines, retries, browser isolation, or packaged policy.
 
+### Offline read-model validator matrix migration (four MOVE contracts, #740)
+
+The larger offline suites contain a distinct category of deterministic tests
+that booted Chromium and a seeded server solely to call **pure payload shape
+predicates** with `page.evaluate`. These did not test cache publication,
+offline render, service-worker behavior, or real IndexedDB persistence:
+
+| Removed Chromium case | Fast replacement |
+| --- | --- |
+| `OfflinePositionTests.test_position_shape_validators_reject_unusable_rows` | Position index/detail shape matrices, 18 asserted outcomes |
+| `OfflineArgumentTests.test_argument_shape_validators_reject_unusable_rows` | Argument/Stance index/detail shape matrices, 45 asserted outcomes |
+| `OfflinePeopleTests.test_people_validator_matches_renderer_scalar_contract` | People index/detail optional-string and Work year/date scalar matrix, 8 contract-wide Boolean assertions |
+| `PlaylistsOfflineTests.test_predicates_protect_every_rendered_field` | Playlist index/detail scalar, embedded Work, position/count matrix, 31 asserted outcomes |
+
+The replacement `tests/browser/run_offline_read_model_shape_selftest.js`
+extracts and executes the **unchanged production validator definitions** and
+People string-field declaration from `frontend/js/app.js`, then executes
+the original table-driven JavaScript inputs and expected outcomes. Missing
+or renamed functions, ambiguous declarations, malformed payloads, and
+invalid expected results fail the test. A separate
+`tests/test_frontend_offline_read_model_shapes.py` invokes the Node suite
+in the ordinary Python Unit/API/contract test gate. **102 individual
+expectations** remain, with no reimplemented test-side predicates or
+new production exports.
+
+Retained Chromium coverage continues to prove that **malformed authoritative
+HTTP responses do not poison a good cache**, malformed persisted rows are
+discarded, genuine cached rows render offline, legitimate empty indexes
+remain distinct from unavailability, and real page navigation, disconnected
+operation, cache fencing and concurrency behave correctly. Existing
+`tests/test_frontend_offline_runtime.py` also pins the app's
+`validate: prksIs...` read-through wiring.
+
+The committed 2026-10-28 weights for the four removed browser IDs sum to
+**7.341s per full E2E inventory** (14.682s combined across source and
+packaged inventories). These are historical *test scheduling weights*, not
+measured runner or wall-time savings. This is intentionally a small first
+slice of the 146-test `test_offline.py` and 34-test
+`test_playlists_offline.py` inventories: the larger cache/invalidation
+matrix is KEEP-heavy and must be audited by complete invariant, not by
+name or execution time. No CI or production changes.
+
 ## Benchmark protocol
 
 For any optimization:
