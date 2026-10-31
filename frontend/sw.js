@@ -26,7 +26,7 @@
     // frontend/js/route-model.js) retires old
     // shell/static caches.
     const DEPENDENCY_REVISION = 'f0157e10197d';
-    const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
+    const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION + '-navguard1';
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
@@ -396,7 +396,13 @@
         async function handleNavigation(request) {
             try {
                 const res = await fetchImpl(request);
-                if (isCacheableStaticResponse(res)) {
+                // Only an actual HTML shell response can refresh the offline shell.
+                // Navigation to API or non-shell paths must not poison '/'.
+                const path = pathnameOf(request.url, env.origin || 'http://localhost/');
+                const type = res && res.headers && typeof res.headers.get === 'function'
+                    ? (res.headers.get('Content-Type') || '') : '';
+                if ((path === '/' || path === '/index.html') &&
+                    /^text\/html(?:\s*;|$)/i.test(type) && isCacheableStaticResponse(res)) {
                     const cache = await cachesApi.open(SHELL_CACHE);
                     cache.put('/', res.clone()).catch(function () {});
                 }
