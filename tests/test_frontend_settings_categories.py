@@ -156,6 +156,20 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         self.assertNotIn("Research notes beside PDF on mobile", reading)
         self.assertNotIn("narrow stacked containers and tiles", reading)
 
+    def test_settings_root_passes_the_modal_height_constraint(self):
+        css = _read(_CSS)
+        self.assertIn("#prks-settings-root {", css)
+        root = css.split("#prks-settings-root {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: flex", root)
+        self.assertIn("flex: 1 1 auto", root)
+        self.assertIn("min-height: 0", root)
+        workspace = css.split(".prks-settings-workspace {", 1)[1].split("}", 1)[0]
+        content = css.split(".prks-settings-content {", 1)[1].split("}", 1)[0]
+        self.assertIn("flex: 1 1 auto", workspace)
+        self.assertIn("min-height: 0", workspace)
+        self.assertIn("min-height: 0", content)
+        self.assertIn("overflow-y: auto", content)
+
     def test_modal_width_scoped_to_settings_only(self):
         css = _read(_CSS)
         self.assertIn(".modal--settings", css)
