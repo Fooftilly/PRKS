@@ -65,6 +65,7 @@ export interface WorkPanelDisplay {
   readonly authorText: string
   readonly thumbPage: string
   readonly sourceUrl: string
+  readonly sourceUrlHref: string
   readonly showOriginalUrl: boolean
   readonly hasBibliographicText: boolean
   readonly people: readonly WorkPanelPerson[]
@@ -198,6 +199,24 @@ function peopleFrom(source: Record<string, unknown> | null): WorkPanelPerson[] {
   return people
 }
 
+/** Only absolute HTTP(S) destinations may become clickable external links. */
+export function safeHttpUrl(value: string): string {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
+/** Values from older backups and sync peers can bypass current write checks. */
+export function safeTagColorCss(value: string): string {
+  const color = String(value || '').trim()
+  return /^#(?:[\da-fA-F]{3,4}|[\da-fA-F]{6}|[\da-fA-F]{8})$/.test(color) ? color : '#6d6cf7'
+}
+
 function tagsFrom(rows: readonly unknown[] | null | undefined): WorkPanelTag[] {
   if (!Array.isArray(rows)) return []
   const tags: WorkPanelTag[] = []
@@ -207,7 +226,7 @@ function tagsFrom(rows: readonly unknown[] | null | undefined): WorkPanelTag[] {
     const name = text(tag.name).trim()
     const id = text(tag.id).trim()
     if (!id && !name) continue
-    tags.push(Object.freeze({ id, name, color: text(tag.color).trim() }))
+    tags.push(Object.freeze({ id, name, color: safeTagColorCss(text(tag.color)) }))
   }
   return tags
 }
@@ -286,6 +305,7 @@ export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadMo
     authorText,
     thumbPage,
     sourceUrl,
+    sourceUrlHref: safeHttpUrl(sourceUrl),
     showOriginalUrl,
     hasBibliographicText,
     people: Object.freeze(people),
