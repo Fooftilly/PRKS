@@ -91,7 +91,11 @@ jobs:
             echo "::endgroup::"
           done
           for trial in 1 2 3; do
-            for MODE in baseline trial; do
+            # Counterbalance ordering; do not attribute a warm-cache effect
+            # from always placing the trial after the baseline.
+            MODES=(baseline trial)
+            if [ "$trial" -eq 2 ]; then MODES=(trial baseline); fi
+            for MODE in "${MODES[@]}"; do
               PROBE=0
               if [ "$MODE" = trial ]; then PROBE=1; fi
               echo "::group::Person $SCENARIO $MODE trial $trial"
