@@ -16,7 +16,7 @@ class ArgumentAckCoherenceContracts(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(
-            "All 3 production Argument ACK coherence scenarios passed",
+            "All 4 production Argument ACK coherence scenarios passed",
             result.stdout,
         )
 
