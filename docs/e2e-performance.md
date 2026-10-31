@@ -3,6 +3,38 @@
 This document tracks per-test E2E cost separately from suite-level sharding.
 
 
+## PostgreSQL identity provisioning attribution (#740)
+
+The current E2E browser harness uses a **fresh harness-owned PostgreSQL
+database and identity/Library bootstrap for each AppServer**, in addition to
+its separate seeded fixture tree. The normal `--profile` diagnostic used to
+measure seed cloning, server spawn/HTTP readiness, browser context creation,
+application readiness, and shutdown, but could not isolate the PostgreSQL
+provisioning step; this matters when comparing recent runner-minutes to the
+pre-PostgreSQL historical baseline.
+
+**Opt-in only:** `python tests/e2e/run.py --profile --jobs 1
+tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation`
+(or the manual **PRKS Full E2E Gate** workflow with `profile: true`) now
+includes two additional per-test phases:
+
+- `postgres_provision`: total time spent assigning the fresh database and
+  bootstrapping the owner/Library before seeded fixtures are copied or the
+  application process is launched. A failed provision is reported separately
+  as `postgres_provision_failed` without masking the original error.
+- `postgres_drop`: the database drop within AppServer teardown; it is a
+  **subset of** `server_stop`, not another additive runtime cost.
+  Failed drops are separately marked and retain the existing retry behavior.
+
+The printed per-phase totals are intentionally inclusive diagnostics, not a
+stack of disjoint wall-clock partitions. Slowest-profiled-test ranking excludes
+the nested `postgres_drop` when `server_stop` is recorded. No extra database,
+worker, browser session, network call, or artifact is created for measurement.
+Normal nonprofiled runs preserve the same setup and teardown order. This
+change **does not itself reduce E2E run time**; measure a bounded manual
+profile before attributing CI slowdown to PostgreSQL or changing fixture
+isolation, retry policy or shard count.
+
 ## Exact E2E feature-selector drift guard (#740)
 
 The Unit/API gate now validates the **exact method IDs** in
