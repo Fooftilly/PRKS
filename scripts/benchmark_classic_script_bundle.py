@@ -25,6 +25,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 HEAD_URL = "/__e2e_classic_head_bundle.js"
 BODY_URL = "/__e2e_classic_body_bundle.js"
+# Reviewed classic inventory for the source checkout. A new or removed
+# classic script must update this and the distribution gate together.
+EXPECTED_CLASSIC_COUNTS = {"head": 5, "body": 80}
 CLASSIC_PREFIX = '<script src="'
 MODULE_PREFIX = '<script type="module" src="'
 SCRIPT_SUFFIX = '"></script>'

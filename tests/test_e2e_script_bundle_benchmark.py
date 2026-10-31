@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from scripts.benchmark_classic_script_bundle import (
     BODY_URL,
+    EXPECTED_CLASSIC_COUNTS,
     HEAD_URL,
     build_candidate,
     run_benchmark,
@@ -74,7 +75,7 @@ class ClassicBundleBenchmarkTests(unittest.TestCase):
     def test_real_repo_candidate_preserves_head_body_and_module(self):
         original = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
         candidate, bundles, counts = build_candidate(ROOT)
-        self.assertEqual(counts["head"] + counts["body"], 84)
+        self.assertEqual(counts, EXPECTED_CLASSIC_COUNTS)
         self.assertEqual(set(bundles), {HEAD_URL, BODY_URL})
         self.assertEqual(candidate.count('<script src="/__e2e_classic_'), 2)
         self.assertEqual(candidate.count('<script type="module"'), 2)

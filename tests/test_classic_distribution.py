@@ -28,7 +28,7 @@ def fixture(root: Path) -> Path:
         originals.append(path)
         lines.append(f'    <script src="{path}"></script>\n')
     lines.append("</head><body>\n")
-    for i in range(79):
+    for i in range(80):
         path = f"/js/body{i}.js"
         (js / f"body{i}.js").write_text(f"window.prksBody{i} = {i};\n", encoding="utf-8")
         originals.append(path)
@@ -60,7 +60,7 @@ class ClassicDistributionTests(unittest.TestCase):
         self.assertEqual(html.count(f'<script src="{BODY_BUNDLE}"></script>'), 1)
         self.assertEqual(html.count('<script type="module" src='), 2)
         self.assertEqual(bundles[HEAD_BUNDLE].count("/* bundled source:"), 5)
-        self.assertEqual(bundles[BODY_BUNDLE].count("/* bundled source:"), 79)
+        self.assertEqual(bundles[BODY_BUNDLE].count("/* bundled source:"), 80)
         self.assertIn(f"'{HEAD_BUNDLE}',", worker)
         self.assertIn(f"'{BODY_BUNDLE}',", worker)
         self.assertIn("const CLASSIC_BUNDLE_REVISION = '", worker)

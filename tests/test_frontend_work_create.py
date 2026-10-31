@@ -195,7 +195,9 @@ class FrontendWorkCreateTests(unittest.TestCase):
         for input_id in ("work-folder-search", "upload-person-search", "upload-tag-search",
                          "work-video-playlist-search"):
             self.assertIn("prksBindWorkModalComboboxKeys('%s'" % input_id, ui)
-        keys = ui.split("function prksBindWorkModalComboboxKeys", 1)[1].split("\n}\n", 1)[0]
+        wrapper = ui.split("function prksBindWorkModalComboboxKeys", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("prksBindComboboxKeys", wrapper)
+        keys = _read(os.path.join(_FRONTEND, "js", "combobox-keys.js"))
         self.assertIn("aria-activedescendant", keys)
         self.assertIn("result-item--create", keys)
         # Typing marks the open rows stale until the list re-renders, so a
@@ -203,6 +205,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("stale = true", keys)
         self.assertIn("stale = false", keys)
         self.assertIn("if (stale)", keys)
+        self.assertIn("Escape", keys)
         tags = ui.split("function initUploadTagCombobox", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("if (seq !== renderSeq) return;", tags)
         escape = ui.split("function prksDismissModalInnerEscapeLayer", 1)[1].split("\n}\n", 1)[0]
