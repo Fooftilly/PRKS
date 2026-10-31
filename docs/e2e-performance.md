@@ -22,6 +22,17 @@ prefix selectors remain valid: they intentionally select more than one case
 and are excluded from exact-method validation. The optional packaged
 coverage audit continues to report other unmatched prefixes separately.
 
+**Follow-up: broaden the source drift guard to all feature-selector prefixes.**
+Module-wide selectors now require an existing E2E Python module; class-wide
+selectors require that the named class still exists; exact method selectors
+continue to require their declared class method. The unit gate parses each
+module once via AST and tests intentional missing module, class and method
+negative controls. This closes the remaining silent stale-prefix gap without
+importing Playwright, running E2E discovery, or changing any runtime selector.
+A source-level guard cannot prove a class has discovered tests via inheritance
+or dynamically generated methods; real runner discovery and the optional
+packaged coverage audit remain separate checks.
+
 ## Packaged smoke critical-defect coverage audit (#993)
 
 The packaged smoke-plus-affected planner remains **inactive**; every automatic
