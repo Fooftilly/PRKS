@@ -1677,6 +1677,42 @@ packaged inventories). This is scheduling-weight accounting, *not*
 measured CI wall time or runner-minute savings. No production/runtime
 changes, retries, shard selection, or packaged policy changes.
 
+### Playlist field/reorder ACK read-model coherence (three MOVE contracts, #740)
+
+Three Playlist Chromium tests booted a browser/server to call the classic
+`updatePlaylist` / `reorderPlaylist` wrappers via `page.evaluate` and inspect
+the resulting *disposable cache* without interacting with the UI or testing
+browser offline/reload behavior:
+
+| Removed E2E | Replacement fast assertion |
+| --- | --- |
+| `test_a_description_edit_keeps_member_work_caches` | Description ACK patches both index and detail, advances the per-field sync base and keeps member Work snapshots |
+| `test_a_title_edit_stales_member_work_snapshots_only` | Title ACK patches the index/detail and invalidates exactly cached member Works, not an unrelated Work |
+| `test_a_reorder_keeps_member_work_caches_and_reorders_the_detail` | Order ACK updates the cached detail's item order and order revision, fences stale index only, keeps member and unrelated Works |
+
+The replacement `run_playlist_ack_dispatch_selftest.js` exercises the
+**production** wrappers from `frontend/js/components/playlists.js`, the actual
+IndexedDB-style local durable queue, the real `createPrksSyncRuntime` protocol
+dispatcher and `playlist-state.js` field/order handlers against deterministic
+server ACK envelopes. It then inspects the real offline-runtime reconciler's
+cache, checking that the index and detail snapshots pass the exact shipped
+`app.js` read validators. It checks real handler registration in the shipped
+sync coordinator, ACK event and queue retirement, per-field/order revisions,
+isolation of unrelated cached data and member Work retention/eviction.
+Registered under existing `tests/test_frontend_playlist_sync.py` Unit/API gate.
+
+**KEEP in Chromium:** live Playlist navigation and item rendering; offline
+refresh/reload and degraded client; real membership operations, actual ACKs,
+conflicts and refusal paths; stale read fencing, Work/Playlist cross-navigation
+and SW behavior in `test_playlists_offline.py` and other Playlist E2Es. No
+production changes or added test-only hooks.
+
+The 2026-10-28 timing baseline weights for these three former E2Es sum to
+**15.629 historical seconds per full test inventory**, or 31.258s across
+source and packaged inventories. This is a *summed historical test weight*,
+not a verified reduction in critical-path wall-clock CI time. No E2E runner,
+selection, shard, packaged, timeout or retry policy changes.
+
 ## Benchmark protocol
 
 For any optimization:
