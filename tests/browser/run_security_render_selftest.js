@@ -69,7 +69,7 @@ assert(!playlistHtml.includes('<a href="javascript:'), 'playlist emitted an unsa
 assert(playlistHtml.includes('javascript:alert(1)'), 'unsafe URL should remain visible as text');
 
 // Guard the two Work metadata source sinks, which share the same helper.
-const workSource = between('function prksWorkPanelViewShellHtml(', 'function prksWorkPanel');
+const workSource = src.slice(src.indexOf('function prksWorkPanelViewShellHtml('));
 assert(workSource.includes("prksExternalUrlRowHtml('Original URL', parts.originalUrlPdf)"));
 assert(src.includes("prksExternalUrlRowHtml('Original URL', originalUrlPdf)"));
 
