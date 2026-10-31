@@ -1,11 +1,8 @@
 <template>
   <!-- Bootstrap fixture only. Not a product surface and not application state. -->
   <span data-prks-vue-bootstrap="ready" hidden></span>
-  <Teleport v-if="perfHostReady" to="#prks-settings-perf-root">
-    <PerformanceDiagnostics />
-  </Teleport>
-  <Teleport v-if="recoveryHostReady" to="#prks-settings-recovery-root">
-    <EditorRecoveryDiagnostics />
+  <Teleport v-if="settingsHostReady" to="#prks-settings-root">
+    <SettingsSurface />
   </Teleport>
   <ModalHost />
   <WorkspaceShell />
@@ -13,20 +10,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import AppChrome from './app-shell/AppChrome.vue'
-import EditorRecoveryDiagnostics from './features/editor-recovery/EditorRecoveryDiagnostics.vue'
-import PerformanceDiagnostics from './features/performance-diagnostics/PerformanceDiagnostics.vue'
+import SettingsSurface from './features/settings/SettingsSurface.vue'
 import ModalHost from './modal/ModalHost.vue'
 import WorkspaceShell from './workspace-shell/WorkspaceShell.vue'
 
-const PERF_HOST_ID = 'prks-settings-perf-root'
-const perfHostReady = ref(false)
-const RECOVERY_HOST_ID = 'prks-settings-recovery-root'
-const recoveryHostReady = ref(false)
-
-onMounted(() => {
-  perfHostReady.value = document.getElementById(PERF_HOST_ID) != null
-  recoveryHostReady.value = document.getElementById(RECOVERY_HOST_ID) != null
-})
+const settingsHostReady = ref(
+  typeof document !== 'undefined' && document.getElementById('prks-settings-root') != null,
+)
 </script>

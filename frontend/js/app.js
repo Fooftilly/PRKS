@@ -108,24 +108,14 @@ const PRKS_BIBTEX_EXPORT_FIELD_DEFS = [
     ['url', 'URL and access date'],
     ['abstract', 'Abstract'],
 ];
+window.PRKS_BIBTEX_EXPORT_FIELD_DEFS = PRKS_BIBTEX_EXPORT_FIELD_DEFS;
 
 document.addEventListener('DOMContentLoaded', () => {
     initPrksGlobalErrorReporting();
-    initTheme();
-    void initAnnotationAuthorSetting();
-    void initBibtexExportFieldsSetting();
-    initPrksBackupRestoreAction();
-    initPrksPdfTextReindexAction();
-    initPrksExistingPdfLinearizeAction();
-    initPrksOfflineCacheSettings();
     initPrksConnectivityIndicator();
-    initPrksSettingsCategoryNav();
-    initPrksPdfRememberPageSetting();
     initPrksPdfLastPageVisibilityFlush();
     initPrksConceptDetailReturnRefresh();
-    initPrksHintsSetting();
-    initForceMobileSetting();
-    initMobileWorkNotesRightSetting();
+    initMobileWorkNotesLayoutSync();
     if (typeof initPrksHintUi === 'function') initPrksHintUi();
     if (typeof initModalCloseUi === 'function') initModalCloseUi();
     if (typeof initMobileShell === 'function') initMobileShell();
@@ -248,32 +238,6 @@ window.prksGetProcessingAttentionCount = prksGetProcessingAttentionCount;
 window.prksRefreshProcessingNavBadge = prksRefreshProcessingNavBadge;
 window.prksRefreshSyncQueueCue = prksRefreshSyncQueueCue;
 
-function prksSyncSwitchUi(btn, on) {
-    btn.setAttribute('aria-checked', on ? 'true' : 'false');
-    btn.classList.toggle('prks-toggle--on', on);
-}
-
-function prksBindSettingSwitch(buttonId, read, write, { onAfter } = {}) {
-    const btn = document.getElementById(buttonId);
-    if (!btn || btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
-    prksSyncSwitchUi(btn, !!read());
-    const apply = (on) => {
-        write(!!on);
-        prksSyncSwitchUi(btn, !!on);
-        if (typeof onAfter === 'function') onAfter(!!on);
-    };
-    btn.addEventListener('click', () => {
-        apply(!read());
-    });
-    btn.addEventListener('keydown', (e) => {
-        if (e.key === ' ' || e.key === 'Enter') {
-            e.preventDefault();
-            apply(!read());
-        }
-    });
-}
-
 const PRKS_LS_PDF_REMEMBER_LAST_PAGE = 'prks.pdf.rememberLastPage';
 
 function prksGetPdfRememberLastPageEnabled() {
@@ -295,6 +259,7 @@ function prksSetPdfRememberLastPageEnabled(enabled) {
 }
 
 window.prksGetPdfRememberLastPageEnabled = prksGetPdfRememberLastPageEnabled;
+window.prksSetPdfRememberLastPageEnabled = prksSetPdfRememberLastPageEnabled;
 
 function prksExtractWorkIdFromHash(h) {
     if (typeof prksParseRoute === 'function') {
@@ -327,14 +292,6 @@ function prksMaybeFlushPdfLastPageOnRouteChange(prevHash, newHash) {
     if (prevWid && prevWid !== newWid) {
         prksFlushPdfLastPageToStorage(prevWid);
     }
-}
-
-function initPrksPdfRememberPageSetting() {
-    prksBindSettingSwitch(
-        'prks-setting-pdf-remember-page',
-        prksGetPdfRememberLastPageEnabled,
-        prksSetPdfRememberLastPageEnabled
-    );
 }
 
 function initPrksPdfLastPageVisibilityFlush() {
@@ -472,31 +429,6 @@ async function prksReloadConceptDetail(ctx) {
     return true;
 }
 
-function initPrksHintsSetting() {
-    prksBindSettingSwitch(
-        'prks-setting-ui-hints',
-        () =>
-            typeof window.prksGetHintsEnabled === 'function'
-                ? window.prksGetHintsEnabled()
-                : true,
-        (on) => {
-            if (typeof window.prksSetHintsEnabled === 'function') {
-                window.prksSetHintsEnabled(on);
-            }
-        },
-        {
-            onAfter() {
-                if (typeof window.prksApplyHintsPreferenceToDocument === 'function') {
-                    window.prksApplyHintsPreferenceToDocument();
-                }
-                if (typeof window.prksCloseHintPopover === 'function') {
-                    window.prksCloseHintPopover();
-                }
-            },
-        }
-    );
-}
-
 const PRKS_LS_FORCE_MOBILE = 'prks.ui.forceMobile';
 
 function prksGetForceMobileEnabled() {
@@ -517,38 +449,34 @@ function prksSetForceMobileEnabled(enabled) {
     } catch (_e) {}
 }
 
-function initForceMobileSetting() {
-    prksBindSettingSwitch(
-        'prks-setting-force-mobile',
-        prksGetForceMobileEnabled,
-        prksSetForceMobileEnabled,
-        {
-            onAfter(on) {
-                document.documentElement.classList.toggle('prks-force-mobile', on);
-                if (typeof prksSyncMobileToggleButtons === 'function') {
-                    prksSyncMobileToggleButtons();
-                }
-                if (
-                    typeof prksSyncDenseWorkspaceShell === 'function' &&
-                    typeof prksWorkspaceVisualTiled === 'function'
-                ) {
-                    prksSyncDenseWorkspaceShell(prksWorkspaceVisualTiled());
-                }
-                if (
-                    !on &&
-                    typeof prksMatchesSmallScreenViewport === 'function' &&
-                    !prksMatchesSmallScreenViewport() &&
-                    typeof prksCloseOverlays === 'function'
-                ) {
-                    prksCloseOverlays();
-                }
-                if (typeof prksSyncWorkNotesMobileSideClass === 'function') {
-                    prksSyncWorkNotesMobileSideClass();
-                }
-            },
-        }
-    );
+function prksApplyForceMobileEnabled(on) {
+    const enabled = !!on;
+    prksSetForceMobileEnabled(enabled);
+    document.documentElement.classList.toggle('prks-force-mobile', enabled);
+    if (typeof prksSyncMobileToggleButtons === 'function') {
+        prksSyncMobileToggleButtons();
+    }
+    if (
+        typeof prksSyncDenseWorkspaceShell === 'function' &&
+        typeof prksWorkspaceVisualTiled === 'function'
+    ) {
+        prksSyncDenseWorkspaceShell(prksWorkspaceVisualTiled());
+    }
+    if (
+        !enabled &&
+        typeof prksMatchesSmallScreenViewport === 'function' &&
+        !prksMatchesSmallScreenViewport() &&
+        typeof prksCloseOverlays === 'function'
+    ) {
+        prksCloseOverlays();
+    }
+    if (typeof prksSyncWorkNotesMobileSideClass === 'function') {
+        prksSyncWorkNotesMobileSideClass();
+    }
 }
+
+window.prksGetForceMobileEnabled = prksGetForceMobileEnabled;
+window.prksApplyForceMobileEnabled = prksApplyForceMobileEnabled;
 
 const PRKS_LS_MOBILE_WORK_NOTES_RIGHT = 'prks.ui.mobileWorkNotesRight';
 
@@ -590,18 +518,10 @@ function prksSyncWorkNotesMobileSideClass() {
 }
 
 window.prksSyncWorkNotesMobileSideClass = prksSyncWorkNotesMobileSideClass;
+window.prksGetMobileWorkNotesRightEnabled = prksGetMobileWorkNotesRightEnabled;
+window.prksSetMobileWorkNotesRightEnabled = prksSetMobileWorkNotesRightEnabled;
 
-function initMobileWorkNotesRightSetting() {
-    prksBindSettingSwitch(
-        'prks-setting-mobile-work-notes-right',
-        prksGetMobileWorkNotesRightEnabled,
-        prksSetMobileWorkNotesRightEnabled,
-        {
-            onAfter() {
-                prksSyncWorkNotesMobileSideClass();
-            },
-        }
-    );
+function initMobileWorkNotesLayoutSync() {
     if (!window.__prksWorkNotesMobileSideResizeBound) {
         window.__prksWorkNotesMobileSideResizeBound = true;
         window.addEventListener('resize', () => {
@@ -611,688 +531,6 @@ function initMobileWorkNotesRightSetting() {
     prksSyncWorkNotesMobileSideClass();
 }
 
-function initTheme() {
-    const picker = document.querySelector('.prks-theme-picker');
-    if (!picker || picker.dataset.bound === '1') return;
-    picker.dataset.bound = '1';
-    const savedTheme = localStorage.getItem('prks-theme') || 'system';
-    const buttons = picker.querySelectorAll('.prks-theme-option[data-prks-theme]');
-
-    function syncThemePickerUi(theme) {
-        buttons.forEach((btn) => {
-            const on = btn.getAttribute('data-prks-theme') === theme;
-            btn.classList.toggle('prks-theme-option--active', on);
-            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        });
-    }
-
-    syncThemePickerUi(savedTheme);
-
-    buttons.forEach((btn) => {
-        btn.addEventListener('click', () => {
-            const newTheme = btn.getAttribute('data-prks-theme') || 'system';
-            if (newTheme === (localStorage.getItem('prks-theme') || 'system')) return;
-            localStorage.setItem('prks-theme', newTheme);
-            applyTheme(newTheme);
-            window.location.reload();
-        });
-    });
-}
-
-async function initAnnotationAuthorSetting() {
-    const input = document.getElementById('annotation-author-input');
-    if (!input || input.dataset.bound === '1') return;
-    input.dataset.bound = '1';
-    try {
-        if (typeof prksLoadAppSettings === 'function') {
-            await prksLoadAppSettings();
-        }
-    } catch (_e) {
-        /* ignore */
-    }
-    input.value =
-        (typeof window.__prksAnnotationAuthor === 'string' ? window.__prksAnnotationAuthor : '') || '';
-
-    let debounceTimer = null;
-    const persist = () => {
-        const v = input.value.trim();
-        if (typeof prksSetAnnotationAuthorCache === 'function') {
-            prksSetAnnotationAuthorCache(v);
-        }
-        window.clearTimeout(debounceTimer);
-        debounceTimer = window.setTimeout(async () => {
-            try {
-                if (typeof prksPatchAppSettings === 'function') {
-                    await prksPatchAppSettings({ annotation_author: v });
-                }
-            } catch (e) {
-                console.warn(e);
-            }
-        }, 450);
-    };
-    input.addEventListener('change', persist);
-    input.addEventListener('input', persist);
-}
-
-function prksUpdateBibtexExportSummary() {
-    const summary = document.getElementById('prks-bibtex-export-summary');
-    if (!summary) return;
-    const host = document.getElementById('prks-bibtex-export-fields');
-    const total = PRKS_BIBTEX_EXPORT_FIELD_DEFS.length;
-    const on = host
-        ? host.querySelectorAll('button[data-bibtex-field].prks-toggle[aria-checked="true"]').length
-        : 0;
-    summary.textContent = on + ' of ' + total + ' fields included';
-}
-
-async function initBibtexExportFieldsSetting() {
-    const host = document.getElementById('prks-bibtex-export-fields');
-    if (!host || host.dataset.bound === '1') return;
-    host.dataset.bound = '1';
-
-    host.innerHTML = '';
-    for (const [id, label] of PRKS_BIBTEX_EXPORT_FIELD_DEFS) {
-        const row = document.createElement('div');
-        row.className = 'prks-setting-row';
-        const text = document.createElement('div');
-        text.className = 'prks-setting-row__text';
-        const lbl = document.createElement('span');
-        lbl.className = 'prks-setting-row__label';
-        lbl.id = 'prks-lbl-bibtex-export-' + id;
-        lbl.textContent = label;
-        text.appendChild(lbl);
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'prks-toggle';
-        btn.setAttribute('role', 'switch');
-        btn.dataset.bibtexField = id;
-        btn.setAttribute('aria-labelledby', lbl.id);
-        btn.setAttribute('aria-checked', 'true');
-        const thumb = document.createElement('span');
-        thumb.className = 'prks-toggle__thumb';
-        thumb.setAttribute('aria-hidden', 'true');
-        btn.appendChild(thumb);
-        row.appendChild(text);
-        row.appendChild(btn);
-        host.appendChild(row);
-    }
-
-    const syncTogglesFromMap = (m) => {
-        const map = m && typeof m === 'object' ? m : {};
-        host.querySelectorAll('button[data-bibtex-field].prks-toggle').forEach((btn) => {
-            const fid = btn.dataset.bibtexField;
-            prksSyncSwitchUi(btn, map[fid] !== false);
-        });
-        prksUpdateBibtexExportSummary();
-    };
-
-    syncTogglesFromMap({});
-
-    try {
-        if (typeof prksLoadAppSettings === 'function') {
-            await prksLoadAppSettings();
-        }
-    } catch (_e) {
-        /* ignore */
-    }
-    syncTogglesFromMap(
-        typeof window.__prksBibtexExportFields === 'object' && window.__prksBibtexExportFields !== null
-            ? window.__prksBibtexExportFields
-            : {},
-    );
-
-    let debounceTimer = null;
-    const persist = () => {
-        const next = {};
-        for (const [id] of PRKS_BIBTEX_EXPORT_FIELD_DEFS) {
-            const btn = host.querySelector(`button[data-bibtex-field="${id}"]`);
-            next[id] = btn && btn.getAttribute('aria-checked') === 'true';
-        }
-        if (typeof prksSetBibtexExportFieldsCache === 'function') {
-            prksSetBibtexExportFieldsCache(next);
-        }
-        window.clearTimeout(debounceTimer);
-        debounceTimer = window.setTimeout(async () => {
-            try {
-                if (typeof prksPatchAppSettings === 'function') {
-                    await prksPatchAppSettings({ bibtex_export_fields: next });
-                }
-            } catch (e) {
-                console.warn(e);
-            }
-        }, 450);
-    };
-
-    host.querySelectorAll('button[data-bibtex-field].prks-toggle').forEach((btn) => {
-        const flip = () => {
-            const on = btn.getAttribute('aria-checked') !== 'true';
-            prksSyncSwitchUi(btn, on);
-            prksUpdateBibtexExportSummary();
-            persist();
-        };
-        btn.addEventListener('click', flip);
-        btn.addEventListener('keydown', (e) => {
-            if (e.key === ' ' || e.key === 'Enter') {
-                e.preventDefault();
-                flip();
-            }
-        });
-    });
-
-    const resetBtn = document.getElementById('prks-bibtex-export-reset');
-    if (resetBtn && resetBtn.dataset.bound !== '1') {
-        resetBtn.dataset.bound = '1';
-        resetBtn.addEventListener('click', async () => {
-            const allTrue = Object.fromEntries(PRKS_BIBTEX_EXPORT_FIELD_DEFS.map(([id]) => [id, true]));
-            if (typeof prksSetBibtexExportFieldsCache === 'function') {
-                prksSetBibtexExportFieldsCache(allTrue);
-            }
-            syncTogglesFromMap(allTrue);
-            try {
-                if (typeof prksPatchAppSettings === 'function') {
-                    await prksPatchAppSettings({ bibtex_export_fields: allTrue });
-                }
-            } catch (e) {
-                console.warn(e);
-            }
-        });
-    }
-}
-
-function initPrksBackupRestoreAction() {
-    const downloadBtn = document.getElementById('prks-backup-download-btn');
-    const cancelBtn = document.getElementById('prks-backup-cancel-btn');
-    const downloadStatus = document.getElementById('prks-backup-download-status');
-    const progressWrap = document.getElementById('prks-backup-progress');
-    const progressBar = document.getElementById('prks-backup-progress-bar');
-    const progressLabel = document.getElementById('prks-backup-progress-label');
-    const fileInput = document.getElementById('prks-backup-file-input');
-    const chooseBtn = document.getElementById('prks-backup-choose-btn');
-    const fileLabel = document.getElementById('prks-backup-file-label');
-    const verifyBtn = document.getElementById('prks-backup-verify-btn');
-    const restoreStatus = document.getElementById('prks-backup-restore-status');
-    const verifiedPanel = document.getElementById('prks-backup-verified-panel');
-    const summaryEl = document.getElementById('prks-backup-summary');
-    const restoreBtn = document.getElementById('prks-backup-restore-btn');
-    const confirmInput = document.getElementById('prks-restore-confirm-input');
-    const confirmSubmit = document.getElementById('prks-restore-confirm-submit');
-    const confirmStatus = document.getElementById('prks-restore-confirm-status');
-    if (!downloadBtn || downloadBtn.dataset.bound === '1') return;
-    downloadBtn.dataset.bound = '1';
-
-    let stagedToken = '';
-    let restoreBusy = false;
-    let backupAbort = null;
-
-    const phaseLabel = (ev) => {
-        const phase = String(ev && ev.phase ? ev.phase : '');
-        const filesDone = Number(ev && ev.files_done) || 0;
-        const filesTotal = Number(ev && ev.files_total) || 0;
-        const filePart = filesTotal > 0 ? ` ${filesDone} of ${filesTotal} files.` : '';
-        if (phase === 'snapshot') return 'Snapshotting database…';
-        if (phase === 'archiving') return 'Packing files…' + filePart;
-        if (phase === 'verifying') return 'Verifying backup…' + filePart;
-        if (phase === 'ready') return 'Download starting…';
-        if (phase === 'cancelled') return 'Backup cancelled.';
-        if (phase === 'failed') return (ev && ev.error) || 'Backup could not be created.';
-        return 'Preparing backup…';
-    };
-
-    const setBackupProgressUi = (ev) => {
-        const pct = Math.max(0, Math.min(100, Number(ev && ev.percent) || 0));
-        if (progressBar) progressBar.value = pct;
-        if (progressLabel) progressLabel.textContent = phaseLabel(ev);
-        if (progressWrap) progressWrap.classList.remove('hidden');
-        progressWrap && progressWrap.setAttribute('aria-busy', ev && ev.phase === 'ready' ? 'false' : 'true');
-    };
-
-    const hideBackupProgress = () => {
-        if (progressWrap) {
-            progressWrap.classList.add('hidden');
-            progressWrap.setAttribute('aria-busy', 'false');
-        }
-        if (progressBar) progressBar.value = 0;
-        if (progressLabel) progressLabel.textContent = '';
-    };
-
-    const setBackupBusy = (busy) => {
-        downloadBtn.disabled = !!busy;
-        if (cancelBtn) {
-            cancelBtn.classList.toggle('hidden', !busy);
-            cancelBtn.disabled = !busy;
-        }
-    };
-
-    const setRestoreBusy = (busy) => {
-        restoreBusy = !!busy;
-        if (chooseBtn) chooseBtn.disabled = restoreBusy;
-        if (fileInput) fileInput.disabled = restoreBusy;
-        if (verifyBtn) verifyBtn.disabled = restoreBusy;
-        if (restoreBtn) restoreBtn.disabled = restoreBusy;
-        if (confirmSubmit) {
-            const typed = confirmInput && confirmInput.value.trim() === 'RESTORE';
-            confirmSubmit.disabled = restoreBusy || !typed;
-        }
-        if (confirmInput) confirmInput.disabled = restoreBusy;
-    };
-
-    const hideVerified = () => {
-        stagedToken = '';
-        if (verifiedPanel) verifiedPanel.classList.add('hidden');
-        if (summaryEl) summaryEl.innerHTML = '';
-    };
-
-    const formatCreated = (iso) => {
-        const raw = String(iso || '').trim();
-        if (!raw) return '';
-        const d = new Date(raw);
-        if (Number.isNaN(d.getTime())) return raw;
-        try {
-            return d.toLocaleString(undefined, {
-                day: 'numeric',
-                month: 'short',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-            });
-        } catch (_e) {
-            return raw;
-        }
-    };
-
-    const startBackupDownload = (token, filename) => {
-        const a = document.createElement('a');
-        const q = new URLSearchParams({ token: String(token || '') });
-        a.href = '/api/backups/download?' + q.toString();
-        if (filename) a.setAttribute('download', filename);
-        else a.setAttribute('download', '');
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-    };
-
-    const readBackupProgress = async (reader) => {
-        const decoder = new TextDecoder();
-        let buf = '';
-        let last = null;
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split('\n');
-            buf = lines.pop() || '';
-            for (const line of lines) {
-                const raw = line.trim();
-                if (!raw) continue;
-                let ev;
-                try {
-                    ev = JSON.parse(raw);
-                } catch (_e) {
-                    continue;
-                }
-                last = ev;
-                setBackupProgressUi(ev);
-                if (ev.phase === 'ready' && ev.token) {
-                    startBackupDownload(ev.token, ev.filename);
-                }
-            }
-        }
-        if (buf.trim()) {
-            try {
-                last = JSON.parse(buf.trim());
-                setBackupProgressUi(last);
-                if (last.phase === 'ready' && last.token) {
-                    startBackupDownload(last.token, last.filename);
-                }
-            } catch (_e) {
-                /* ignore trailing fragment */
-            }
-        }
-        return last;
-    };
-
-    downloadBtn.addEventListener('click', async () => {
-        if (backupAbort) return;
-        setBackupBusy(true);
-        hideBackupProgress();
-        setBackupProgressUi({ phase: 'snapshot', percent: 1 });
-        if (downloadStatus) downloadStatus.textContent = '';
-        backupAbort = new AbortController();
-        try {
-            if (typeof prksStartBackupProgress !== 'function') {
-                throw new Error('Backup API unavailable.');
-            }
-            const reader = await prksStartBackupProgress(backupAbort.signal);
-            const last = await readBackupProgress(reader);
-            if (!last || last.phase === 'cancelled') {
-                if (downloadStatus) downloadStatus.textContent = 'Backup cancelled.';
-                hideBackupProgress();
-                return;
-            }
-            if (last.phase === 'failed') {
-                hideBackupProgress();
-                if (downloadStatus) {
-                    downloadStatus.textContent =
-                        last.error || 'Backup could not be created.';
-                }
-                return;
-            }
-            hideBackupProgress();
-            const extra = Array.isArray(last.warnings) && last.warnings.length ? ` ${last.warnings.join(' ')}` : '';
-            if (downloadStatus) downloadStatus.textContent = 'Download starting…' + extra;
-        } catch (e) {
-            if (e && e.name === 'AbortError') {
-                if (downloadStatus) downloadStatus.textContent = 'Backup cancelled.';
-                hideBackupProgress();
-            } else if (downloadStatus) {
-                downloadStatus.textContent = (e && e.message) || 'Backup could not be created.';
-            }
-        } finally {
-            backupAbort = null;
-            setBackupBusy(false);
-        }
-    });
-
-    if (cancelBtn) {
-        cancelBtn.addEventListener('click', () => {
-            if (!backupAbort) return;
-            backupAbort.abort();
-        });
-    }
-
-    if (chooseBtn && fileInput) {
-        chooseBtn.addEventListener('click', () => {
-            if (restoreBusy) return;
-            fileInput.click();
-        });
-    }
-    if (fileInput) {
-        fileInput.addEventListener('change', () => {
-            hideVerified();
-            const file = fileInput.files && fileInput.files[0];
-            if (fileLabel) fileLabel.textContent = file ? file.name : 'No file selected';
-            if (restoreStatus) restoreStatus.textContent = '';
-        });
-    }
-    if (verifyBtn) {
-        verifyBtn.addEventListener('click', async () => {
-            const file = fileInput && fileInput.files && fileInput.files[0];
-            if (!file) {
-                if (restoreStatus) restoreStatus.textContent = 'Choose a backup file first.';
-                return;
-            }
-            setRestoreBusy(true);
-            hideVerified();
-            if (restoreStatus) restoreStatus.textContent = 'Uploading backup… Verifying backup…';
-            try {
-                if (typeof prksStageBackup !== 'function') {
-                    throw new Error('Backup API unavailable.');
-                }
-                const out = await prksStageBackup(file);
-                stagedToken = String(out.token || '');
-                const summary = out.summary && typeof out.summary === 'object' ? out.summary : {};
-                if (summaryEl) {
-                    summaryEl.innerHTML = '';
-                    const rows = [
-                        ['Created', formatCreated(summary.created_at)],
-                        ['Works', String(summary.works ?? '')],
-                        ['PDFs', String(summary.pdf_files ?? summary.managed_pdfs ?? '')],
-                        ['Persons', String(summary.persons ?? '')],
-                        ['Annotations', String(summary.annotations ?? '')],
-                    ];
-                    for (const [label, value] of rows) {
-                        if (!value && value !== '0') continue;
-                        const li = document.createElement('li');
-                        li.textContent = `${label}: ${value}`;
-                        summaryEl.appendChild(li);
-                    }
-                }
-                if (verifiedPanel) verifiedPanel.classList.remove('hidden');
-                const warnings = Array.isArray(out.warnings) ? out.warnings : [];
-                if (restoreStatus) {
-                    restoreStatus.textContent = warnings.length
-                        ? `Backup verified. ${warnings.join(' ')}`
-                        : 'Backup verified';
-                }
-            } catch (e) {
-                hideVerified();
-                if (restoreStatus) {
-                    restoreStatus.textContent =
-                        (e && e.message) || 'Backup could not be verified. Current PRKS data was not changed.';
-                }
-            } finally {
-                setRestoreBusy(false);
-            }
-        });
-    }
-    if (restoreBtn) {
-        restoreBtn.addEventListener('click', () => {
-            if (!stagedToken || restoreBusy) return;
-            if (confirmInput) confirmInput.value = '';
-            if (confirmStatus) confirmStatus.textContent = '';
-            if (confirmSubmit) confirmSubmit.disabled = true;
-            if (typeof openModal === 'function') openModal('prks-restore-confirm-modal');
-        });
-    }
-    if (confirmInput && confirmSubmit) {
-        const syncConfirm = () => {
-            confirmSubmit.disabled = restoreBusy || confirmInput.value.trim() !== 'RESTORE';
-        };
-        confirmInput.addEventListener('input', syncConfirm);
-        confirmSubmit.addEventListener('click', async () => {
-            if (confirmInput.value.trim() !== 'RESTORE' || !stagedToken || restoreBusy) return;
-            setRestoreBusy(true);
-            if (confirmStatus) confirmStatus.textContent = 'Restoring library… Rebuilding search index…';
-            if (restoreStatus) restoreStatus.textContent = 'Restoring library… Rebuilding search index…';
-            try {
-                if (typeof prksRestoreBackup !== 'function') {
-                    throw new Error('Backup API unavailable.');
-                }
-                const out = await prksRestoreBackup(stagedToken);
-                stagedToken = '';
-                const extra = Array.isArray(out.warnings) && out.warnings.length ? ` ${out.warnings.join(' ')}` : '';
-                if (confirmStatus) confirmStatus.textContent = 'Restore complete — reloading…' + extra;
-                if (restoreStatus) restoreStatus.textContent = 'Restore complete — reloading…' + extra;
-                window.location.reload();
-            } catch (e) {
-                const msg =
-                    (e && e.message) || 'Restore failed. Current PRKS data was not changed.';
-                if (confirmStatus) confirmStatus.textContent = msg;
-                if (restoreStatus) restoreStatus.textContent = msg;
-                setRestoreBusy(false);
-            }
-        });
-    }
-}
-
-function prksFormatTextIndexSummary(out) {
-    const processed = Number(out.processed || 0);
-    const updated = Number(out.updated || 0);
-    const unchanged = Number(out.unchanged || 0);
-    const empty = Number(out.empty || 0);
-    const failed = Number(out.failed || 0);
-    const orphans = Number(out.removed_orphans || 0);
-    const parts = [];
-    if (updated) parts.push(`${updated} rebuilt`);
-    if (unchanged) parts.push(`${unchanged} already current`);
-    if (empty) parts.push(`${empty} contained no text`);
-    if (failed) parts.push(`${failed} failed`);
-    const pdfLabel = processed === 1 ? 'PDF' : 'PDFs';
-    let msg = `Done. ${processed} ${pdfLabel} checked`;
-    if (parts.length) msg += `: ${parts.join(', ')}.`;
-    else msg += '.';
-    if (orphans) {
-        const entryLabel = orphans === 1 ? 'entry was' : 'entries were';
-        msg += ` ${orphans} stale index ${entryLabel} removed.`;
-    }
-    return msg;
-}
-
-function initPrksPdfTextReindexAction() {
-    const btn = document.getElementById('prks-reindex-pdf-text-btn');
-    const statusEl = document.getElementById('prks-reindex-pdf-text-status');
-    if (!btn || btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        const oldText = btn.textContent;
-        btn.textContent = 'Rebuilding…';
-        if (statusEl) statusEl.textContent = '';
-        try {
-            if (typeof prksReindexPdfText !== 'function') {
-                throw new Error('PDF rebuild API unavailable.');
-            }
-            const out = await prksReindexPdfText();
-            if (statusEl) statusEl.textContent = prksFormatTextIndexSummary(out);
-        } catch (e) {
-            if (statusEl) statusEl.textContent = (e && e.message) || 'Could not rebuild PDF text index.';
-        } finally {
-            btn.disabled = false;
-            btn.textContent = oldText;
-        }
-    });
-}
-
-function initPrksExistingPdfLinearizeAction() {
-    const btn = document.getElementById('prks-linearize-existing-pdfs-btn');
-    const statusEl = document.getElementById('prks-linearize-existing-pdfs-status');
-    if (!btn || btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        const oldText = btn.textContent;
-        btn.textContent = 'Linearizing…';
-        if (statusEl) statusEl.textContent = '';
-        try {
-            if (typeof prksLinearizeExistingPdfs !== 'function') {
-                throw new Error('PDF linearization API unavailable.');
-            }
-            const out = await prksLinearizeExistingPdfs(true);
-            if (statusEl) {
-                const processed = Number(out.processed || 0);
-                const changed = Number(out.changed || 0);
-                const already = Number(out.already_linearized || 0);
-                const skipped = Number(out.skipped || 0);
-                const failed = Number(out.failed || 0);
-                statusEl.textContent = `Done. Processed ${processed}, linearized ${changed}, already linearized ${already}, skipped ${skipped}, failed ${failed}.`;
-            }
-        } catch (e) {
-            if (statusEl) statusEl.textContent = (e && e.message) || 'Could not linearize existing PDFs.';
-        } finally {
-            btn.disabled = false;
-            btn.textContent = oldText;
-        }
-    });
-}
-
-// Performance diagnostics rendering and its server reads live in the Vue
-// surface (TanStack Query). This file only signals the first Diagnostics
-// activation. Offline-cache status remains a separate read.
-
-
-// Settings modal category navigation. Presentation state only: never persisted,
-// never routed. See DESIGN.md "Settings" and the storage rule in AGENTS.md.
-const PRKS_SETTINGS_CATEGORIES = ['general', 'reading', 'export', 'backup', 'maintenance', 'diagnostics'];
-// Same breakpoint as the `.prks-settings-nav` responsive rule in style.css.
-const PRKS_SETTINGS_NARROW_MEDIA_QUERY = '(max-width: 640px)';
-let __prksSettingsActiveCategory = 'general';
-let __prksSettingsDiagnosticsLoaded = false;
-
-// Keeps the tablist's aria-orientation in sync with its actual visual layout:
-// vertical on desktop, horizontal once the nav becomes a horizontal strip.
-function prksSyncSettingsNavOrientation() {
-    const nav = document.getElementById('prks-settings-nav');
-    if (!nav) return;
-    const narrow =
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia(PRKS_SETTINGS_NARROW_MEDIA_QUERY).matches;
-    nav.setAttribute('aria-orientation', narrow ? 'horizontal' : 'vertical');
-}
-window.prksSyncSettingsNavOrientation = prksSyncSettingsNavOrientation;
-
-function prksActivateSettingsCategory(categoryId, options) {
-    const opts = options || {};
-    const resolved = PRKS_SETTINGS_CATEGORIES.indexOf(categoryId) !== -1 ? categoryId : 'general';
-    __prksSettingsActiveCategory = resolved;
-    PRKS_SETTINGS_CATEGORIES.forEach((cat) => {
-        const tab = document.getElementById('prks-settings-tab-' + cat);
-        const panel = document.getElementById('prks-settings-panel-' + cat);
-        const active = cat === resolved;
-        if (tab) {
-            tab.classList.toggle('is-active', active);
-            tab.setAttribute('aria-selected', active ? 'true' : 'false');
-            tab.tabIndex = active ? 0 : -1;
-        }
-        if (panel) {
-            panel.hidden = !active;
-            if (active) panel.removeAttribute('inert');
-            else panel.setAttribute('inert', '');
-        }
-    });
-    const activeTab = document.getElementById('prks-settings-tab-' + resolved);
-    if (activeTab) {
-        if (opts.focusTab) activeTab.focus();
-        if (typeof activeTab.scrollIntoView === 'function') {
-            activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        }
-    }
-    if (resolved === 'diagnostics' && !__prksSettingsDiagnosticsLoaded) {
-        __prksSettingsDiagnosticsLoaded = true;
-        window.__prksPerformanceDiagnosticsRequested = true;
-        if (typeof window.prksVueActivatePerformanceDiagnostics === 'function') {
-            window.prksVueActivatePerformanceDiagnostics();
-        }
-        void prksLoadOfflineCacheStatus();
-    }
-}
-window.prksActivateSettingsCategory = prksActivateSettingsCategory;
-
-function prksOpenSettingsToLastCategory() {
-    // matchMedia 'change' may be delivered after a viewport resize; the
-    // Settings modal must expose the orientation matching its current layout
-    // as soon as it opens, not only after the queued change event fires.
-    prksSyncSettingsNavOrientation();
-    prksActivateSettingsCategory(__prksSettingsActiveCategory);
-}
-window.prksOpenSettingsToLastCategory = prksOpenSettingsToLastCategory;
-
-function initPrksSettingsCategoryNav() {
-    const nav = document.getElementById('prks-settings-nav');
-    if (!nav || nav.dataset.bound === '1') return;
-    nav.dataset.bound = '1';
-    const tabs = Array.prototype.slice.call(nav.querySelectorAll('.prks-settings-nav__item'));
-    tabs.forEach((tab) => {
-        tab.addEventListener('click', () => {
-            prksActivateSettingsCategory(tab.dataset.prksSettingsCategory);
-        });
-    });
-    nav.addEventListener('keydown', (e) => {
-        const idx = tabs.indexOf(document.activeElement);
-        if (idx === -1) return;
-        let nextIdx = null;
-        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') nextIdx = (idx + 1) % tabs.length;
-        else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') nextIdx = (idx - 1 + tabs.length) % tabs.length;
-        else if (e.key === 'Home') nextIdx = 0;
-        else if (e.key === 'End') nextIdx = tabs.length - 1;
-        if (nextIdx === null) return;
-        e.preventDefault();
-        const nextTab = tabs[nextIdx];
-        prksActivateSettingsCategory(nextTab.dataset.prksSettingsCategory, { focusTab: true });
-    });
-
-    prksSyncSettingsNavOrientation();
-    if (typeof window.matchMedia === 'function') {
-        const mq = window.matchMedia(PRKS_SETTINGS_NARROW_MEDIA_QUERY);
-        if (typeof mq.addEventListener === 'function') {
-            mq.addEventListener('change', prksSyncSettingsNavOrientation);
-        } else if (typeof mq.addListener === 'function') {
-            mq.addListener(prksSyncSettingsNavOrientation);
-        }
-    }
-}
-window.initPrksSettingsCategoryNav = initPrksSettingsCategoryNav;
-
 function applyTheme(theme) {
     if (theme === 'system') {
         document.documentElement.removeAttribute('data-theme');
@@ -1301,6 +539,27 @@ function applyTheme(theme) {
     }
     prksSyncThemeColor();
 }
+
+function prksReadStoredTheme() {
+    try {
+        return localStorage.getItem('prks-theme') || 'system';
+    } catch (_e) {
+        return 'system';
+    }
+}
+
+function prksCommitTheme(theme) {
+    const next = theme ? String(theme) : 'system';
+    if (next === prksReadStoredTheme()) return;
+    try {
+        localStorage.setItem('prks-theme', next);
+    } catch (_e) {}
+    applyTheme(next);
+    window.location.reload();
+}
+
+window.prksReadStoredTheme = prksReadStoredTheme;
+window.prksCommitTheme = prksCommitTheme;
 
 function prksSyncThemeColor() {
     const meta = document.querySelector('meta[name="theme-color"]');
@@ -2870,43 +2129,6 @@ async function prksLoadOfflineCacheStatus() {
     }
 }
 window.prksLoadOfflineCacheStatus = prksLoadOfflineCacheStatus;
-
-function initPrksOfflineCacheSettings() {
-    const refreshBtn = document.getElementById('prks-offline-cache-refresh-btn');
-    const clearBtn = document.getElementById('prks-offline-cache-clear-btn');
-    if (refreshBtn && refreshBtn.dataset.bound !== '1') {
-        refreshBtn.dataset.bound = '1';
-        refreshBtn.addEventListener('click', () => {
-            void prksLoadOfflineCacheStatus();
-        });
-    }
-    if (clearBtn && clearBtn.dataset.bound !== '1') {
-        clearBtn.dataset.bound = '1';
-        clearBtn.addEventListener('click', async () => {
-            const statusEl = document.getElementById('prks-offline-cache-status');
-            const confirmed =
-                typeof prksConfirmDestructive === 'function'
-                    ? await prksConfirmDestructive({
-                          title: 'Clear offline cache?',
-                          message:
-                              'This removes pages and PDFs cached on this device for offline use. It never changes anything stored on the PRKS server.',
-                          confirmLabel: 'Clear offline cache',
-                      })
-                    : window.confirm('Clear offline cache stored on this device?');
-            if (!confirmed) return;
-            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(clearBtn, true, { busyLabel: 'Clearing…' });
-            try {
-                if (typeof prksOfflineClearCache === 'function') await prksOfflineClearCache();
-                if (statusEl) statusEl.textContent = 'Offline cache cleared.';
-                await prksLoadOfflineCacheStatus();
-            } catch (_e) {
-                if (statusEl) statusEl.textContent = 'Could not clear offline cache.';
-            } finally {
-                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(clearBtn, false);
-            }
-        });
-    }
-}
 
 function initRouter() {
     initSidebarBrandHome();
