@@ -190,6 +190,31 @@ async function verifyCanonicalFolderFieldAcknowledgements() {
 }
 
 
+/* Extract the shipped Folder read validators, not a test-authored parallel
+ * acceptance policy: a patched cache that cannot render is not coherent. */
+function folderReadValidators() {
+    const fs = require('fs');
+    const source = fs.readFileSync(path.join(rootDir, 'frontend/js/app.js'), 'utf8');
+    const names = [
+        'prksHasUsableRowId', 'prksIsOptionalString',
+        'prksIsFolderCount', 'prksIsFolderParentId',
+        'prksIsFolderSummaryShape', 'prksIsFoldersIndexShape',
+        'prksIsWorkCardRowShape', 'prksIsFolderTagRowShape', 'prksIsFolderShape',
+    ];
+    const declarations = names.map(function (name) {
+        const marker = 'function ' + name + '(';
+        const at = source.indexOf(marker);
+        if (at < 0 || source.indexOf(marker, at + marker.length) !== -1) {
+            throw new Error('missing or ambiguous production Folder validator: ' + name);
+        }
+        const end = source.indexOf('\n}', at);
+        if (end < 0) throw new Error('unclosed production Folder validator: ' + name);
+        return source.slice(at, end + 2);
+    });
+    return new Function(declarations.join('\n') +
+        '\nreturn {' + names.join(', ') + '};')();
+}
+
 /* Folder ACK read-model coherence. These deterministic cases previously each
  * started Chromium and a seeded server only to call a canonical Folder
  * wrapper and inspect cache generations/contents. Use the same production
@@ -202,8 +227,13 @@ async function verifyFolderAckCacheFootprint() {
         setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
         window: null, caches: null, navigator: null,
     });
-    const parent = {id: 'F-PARENT', title: 'Reading', description: 'Original', parent_id: null};
-    const child = {id: 'F-CHILD', title: 'Child', description: '', parent_id: 'F-PARENT'};
+    const validators = folderReadValidators();
+    const parent = {id: 'F-PARENT', title: 'Reading', description: 'Original',
+        parent_id: null, work_count: 1, child_count: 1};
+    const child = {id: 'F-CHILD', title: 'Child', description: '',
+        parent_id: 'F-PARENT', work_count: 1, child_count: 0};
+    const detail = (row, owner) => ({...row, private_notes: '',
+        parent: owner || null, children: [], works: [], tags: []});
     const untouchedWork = {id: 'W-CHILD', folder_id: child.id, folder_title: child.title};
     const memberWork = {id: 'W-PARENT', folder_id: parent.id, folder_title: parent.title};
     const control = {id: 'CONTROL', title: 'Do not evict'};
@@ -216,8 +246,8 @@ async function verifyFolderAckCacheFootprint() {
         ['playlists', 'playlist', 'playlists:index'],
     ];
     await store.putList('folders:index', [{...parent}, {...child}], '');
-    await store.putEntity('folder', parent.id, {...parent}, '');
-    await store.putEntity('folder', child.id, {...child}, '');
+    await store.putEntity('folder', parent.id, detail(parent), '');
+    await store.putEntity('folder', child.id, detail(child, {id: parent.id, title: parent.title}), '');
     await store.putEntity('work', memberWork.id, {...memberWork}, '');
     await store.putEntity('work', untouchedWork.id, {...untouchedWork}, '');
     for (const [, kind, listKey] of others) {
@@ -226,6 +256,23 @@ async function verifyFolderAckCacheFootprint() {
     }
     const list = async () => (await store.getList('folders:index')).value;
     const row = async id => (await list()).find(folder => folder.id === id);
+    const validSnapshots = async label => {
+        assertEq(label + ' Folder index passes the real cache validator',
+            validators.prksIsFoldersIndexShape(await list()), true);
+        for (const id of [parent.id, child.id]) {
+            const cached = await store.getEntity('folder', id);
+            if (cached) {
+                assertEq(label + ' Folder detail ' + id + ' is render-safe',
+                    validators.prksIsFolderShape(cached.value, id), true);
+            }
+        }
+    };
+    assertEq('malformed Folder index is rejected by production validator',
+        validators.prksIsFoldersIndexShape([{id: 'F-MISSING', parent_id: null}]), false);
+    assertEq('malformed Folder detail is rejected by production validator',
+        validators.prksIsFolderShape({...parent, private_notes: ''}, parent.id), false);
+    await validSnapshots('seeded');
+
     const baseline = Object.fromEntries(
         others.map(([domain]) => [domain, runtime.currentDomainGeneration(domain)]));
     const preserved = async label => {
@@ -240,12 +287,14 @@ async function verifyFolderAckCacheFootprint() {
         assertEq(label + ' unrelated member Work kept',
             (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
         assertEq(label + ' hierarchy index never discarded', Array.isArray(await list()), true);
+        await validSnapshots(label);
     };
     let foldersGeneration = runtime.currentDomainGeneration('folders');
 
     // A server-accepted new Folder is inserted into the *existing* cached
     // hierarchy; only this domain advances, no unrelated Work is evicted.
-    const added = {id: 'F-NEW', title: 'Coherence New', description: '', parent_id: null};
+    const added = {id: 'F-NEW', title: 'Coherence New', description: '',
+        parent_id: null, work_count: 0, child_count: 0};
     assertEq('create ACK applied', await runtime.reconcileCreatedFolder({
         changed: true, folder_id: added.id, folder: added,
     }), true);
