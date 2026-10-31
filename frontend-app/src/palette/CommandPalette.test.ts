@@ -1,6 +1,7 @@
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import engineSource from '../../../frontend/js/command-palette.js?raw'
 import CommandPalette from './CommandPalette.vue'
 import type { PaletteRowView, PaletteView } from './types'
 
@@ -259,5 +260,67 @@ describe('command palette dialog', () => {
     expect(document.getElementById('prks-command-palette')?.hidden).toBe(false)
     expect(document.querySelector('.prks-command-palette__option-label')?.textContent).toBe('Recent')
     expect(document.activeElement).toBe(document.getElementById('prks-command-palette-input'))
+  })
+})
+
+describe('command palette dialog with the real engine', () => {
+  const mounted: Array<{ unmount: () => void }> = []
+  const engine = window as Window & {
+    prksInitCommandPalette?: () => void
+    prksCommandPaletteResetForTests?: () => void
+    prksCommandPaletteIsOpen?: () => boolean
+  }
+
+  beforeAll(() => {
+    const run = new Function(engineSource) as () => void
+    run()
+    engine.prksInitCommandPalette?.()
+  })
+
+  afterEach(() => {
+    engine.prksCommandPaletteResetForTests?.()
+    for (const wrapper of mounted.splice(0)) wrapper.unmount()
+    document.body.innerHTML = ''
+  })
+
+  async function openFrom(launcher: HTMLButtonElement): Promise<void> {
+    launcher.focus()
+    mounted.push(mount(CommandPalette, { attachTo: document.body }))
+    expect(window.prksOpenCommandPalette?.()).toBe(true)
+    await settleFocus()
+    expect(document.activeElement?.id).toBe('prks-command-palette-input')
+    expect(document.getElementById('prks-command-palette')?.hidden).toBe(false)
+  }
+
+  function launcher(): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.id = 'opener'
+    button.setAttribute('data-palette-bound', '1')
+    document.body.appendChild(button)
+    return button
+  }
+
+  it('Escape on the input closes through the engine and restores the opener', async () => {
+    const opener = launcher()
+    await openFrom(opener)
+    document.getElementById('prks-command-palette-input')?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await nextTick()
+    expect(engine.prksCommandPaletteIsOpen?.()).toBe(false)
+    expect(document.getElementById('prks-command-palette')?.hidden).toBe(true)
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('the scrim dismisses through the engine and restores the opener', async () => {
+    const opener = launcher()
+    await openFrom(opener)
+    document.querySelector('.prks-command-palette__scrim')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    )
+    await nextTick()
+    expect(engine.prksCommandPaletteIsOpen?.()).toBe(false)
+    expect(document.getElementById('prks-command-palette')?.hidden).toBe(true)
+    expect(document.activeElement).toBe(opener)
   })
 })
