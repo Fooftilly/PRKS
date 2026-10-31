@@ -4405,7 +4405,7 @@ function renderPlaylistSummarySidebarHtml(pl, editing) {
     const desc = escapeHtml(pl.description || '').trim();
     const originalUrl = String(pl.original_url || '').trim();
     const originalUrlHtml = originalUrl
-        ? `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> <a href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrl)}</a></p>`
+        ? prksExternalUrlRowHtml('Original playlist URL', originalUrl, true)
         : '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>';
     const count = Array.isArray(pl.items) ? pl.items.length : 0;
     const editLabel = editing ? 'Done' : 'Edit';
@@ -5034,7 +5034,7 @@ function prksWorkPanelViewShellHtml(work, parts) {
         ? `<p class="meta-row"><strong>Published:</strong> ${escapeHtml(typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date)}</p>`
         : '';
     const originalUrl = parts && parts.originalUrlPdf
-        ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(parts.originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(parts.originalUrlPdf)}</a></p>`
+        ? prksExternalUrlRowHtml('Original URL', parts.originalUrlPdf)
         : '';
     const abstractRow = work.abstract
         ? `<p class="meta-row"><strong>Abstract:</strong> ${escapeHtml(work.abstract)}</p>`
@@ -5201,7 +5201,7 @@ function renderWorkMetaTab(work, mode = 'view') {
             <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
             ${
                 originalUrlPdf
-                    ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrlPdf)}</a></p>`
+                    ? prksExternalUrlRowHtml('Original URL', originalUrlPdf)
                     : ''
             }
             ${renderRow('Abstract', work.abstract)}
@@ -5344,7 +5344,7 @@ function renderFolderTagsChipsHtml(folder) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
+                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
                 `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
                 `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
@@ -5365,6 +5365,36 @@ function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* Stored colors are CSS values, not HTML: escaping quotes does not stop
+ * semicolons or url(). Restrict the style attribute to CSS hex colors. */
+function prksSafeTagColorCss(value) {
+    const color = String(value == null ? '' : value).trim();
+    return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color) ? color : '#6d6cf7';
+}
+
+/* Render imported/synced URLs as links only when the destination is absolute
+ * HTTP(S). Invalid/unsafe schemes remain visible as escaped plain text. */
+function prksSafeHttpUrl(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw);
+        return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : '';
+    } catch (_e) {
+        return '';
+    }
+}
+
+function prksExternalUrlRowHtml(label, value, compact = false) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return '';
+    const href = prksSafeHttpUrl(raw);
+    const html = href
+        ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(raw)}</a>`
+        : escapeHtml(raw);
+    return `<p class="meta-row${compact ? ' meta-row--compact' : ''}"><strong>${escapeHtml(label)}:</strong> ${html}</p>`;
 }
 
 function prksEscapeAttr(s) {
@@ -5500,7 +5530,7 @@ function renderWorkTagsChips(work, options = {}) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};">` +
+                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};">` +
                 `<a href="#/search?tag=${encodeURIComponent(t.name)}" class="work-tag-chip__link">${escapeHtml(t.name)}</a>` +
                 (editable ? `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-work-id="${escapeHtml(work.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` : '') +
                 `</span>`
