@@ -63,6 +63,7 @@ global.prksWorkspaceSnapshot = function () {
 global.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 require(path.join(rootDir, 'frontend/js/tab-context.js'));
 require(path.join(rootDir, 'frontend/js/work-role-state.js'));
+require(path.join(rootDir, 'frontend/js/work-notes-state.js'));
 (0, eval)(fs.readFileSync(path.join(rootDir, 'frontend/js/ui.js'), 'utf8'));
 require(path.join(rootDir, 'frontend/js/work-role-editor.js'));
 
