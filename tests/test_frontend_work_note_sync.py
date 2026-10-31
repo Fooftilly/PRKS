@@ -84,8 +84,10 @@ class WorkNoteSyncFrontendTests(unittest.TestCase):
             with self.subTest(fixture=suffix):
                 fixture = (ROOT / 'frontend-app' / 'src' / suffix).read_text()
                 self.assertIn("work-notes-state.js?raw", fixture)
-                self.assertLess(fixture.index('eval(workNotesStateSource)'),
-                                fixture.index('eval(uiSource)'))
+                self.assertIn("workNotesStateSource + '\\n' + uiClassicSource", fixture)
+                self.assertIn('eval(uiSource)', fixture)
+                self.assertNotIn('eval(workNotesStateSource)', fixture,
+                                 'one existing harness evaluation owns both scripts')
 
     def test_production_javascript_parses(self):
         for path in (FRONTEND / 'work-notes-state.js', FRONTEND / 'local-store.js',
