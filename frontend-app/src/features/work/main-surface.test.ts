@@ -2,8 +2,8 @@ import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
-import videoSource from '../../../../frontend/js/components/works-video.js?raw'
 import type { WorkMainSurfaceModel } from './main-surface'
+import { VIDEO_IFRAME_ALLOW, VIDEO_IFRAME_TITLE, type WorkVideoSource } from './video-embed'
 import { presentWorkDetail, resetWorkDetailSessionForTests } from './session'
 import {
   dismissWorkResearchNotes,
@@ -36,7 +36,6 @@ type SurfaceWindow = {
   prksGetTabContext: (tabId: string) => WorkCtx
   prksDestroyAllTabContexts: () => void
   prksDestroyTabContext: (tabId: string) => void
-  renderVideoViewerPane: (work: { source_url?: string; provider?: string; provider_id?: string }) => string
 }
 
 const surfaceWindow = window as unknown as SurfaceWindow
@@ -58,7 +57,7 @@ function surface(ctx: WorkCtx, over: Partial<WorkMainSurfaceModel> = {}): WorkMa
     title: 'Lecture',
     docTypeHtml: '<span class="doc-type-badge">Video</span>',
     relSummaryParts: ['Folder'],
-    viewerHtml: '',
+    video: null,
     editorRegionId: ctx.domId('work-notes-editor-region'),
     ...over,
   }
@@ -80,7 +79,6 @@ function paintSurface(ctx: WorkCtx, model: WorkMainSurfaceModel, attach?: () => 
 beforeAll(() => {
   surfaceWindow.eval(ownerResourceSource)
   surfaceWindow.eval(tabContextSource)
-  surfaceWindow.eval(videoSource)
 })
 
 afterEach(() => {
@@ -91,28 +89,60 @@ afterEach(() => {
 })
 
 describe('work main surface', () => {
-  it('inserts the video pane from renderVideoViewerPane and keeps the header', () => {
+  it('paints a YouTube embed from the typed source and keeps the header', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
-    const viewerHtml = surfaceWindow.renderVideoViewerPane({
-      source_url: 'https://www.youtube.com/watch?v=abcdefghijk',
+    const video: WorkVideoSource = {
       provider: 'youtube',
-      provider_id: 'abcdefghijk',
-    })
+      providerId: 'abcdefghijk',
+      sourceUrl: 'javascript:alert(1)',
+    }
     expect(paintSurface(ctx, surface(ctx, {
       kind: 'video',
       title: 'A & B',
-      viewerHtml,
+      video,
     }))).toBe(true)
     const frame = ctx.root.querySelector('iframe')
-    expect(frame?.getAttribute('src')).toContain('abcdefghijk')
+    expect(frame?.getAttribute('src')).toBe('https://www.youtube.com/embed/abcdefghijk')
+    expect(frame?.getAttribute('allow')).toBe(VIDEO_IFRAME_ALLOW)
+    expect(frame?.getAttribute('title')).toBe(VIDEO_IFRAME_TITLE)
+    expect(frame?.hasAttribute('allowfullscreen')).toBe(true)
+    expect(frame?.hasAttribute('srcdoc')).toBe(false)
     expect(frame?.closest('.work-pdf-pane')).toBeTruthy()
-    expect(ctx.root.querySelector('.work-viewer-host')).toBeInstanceOf(HTMLElement)
+    expect(frame?.closest('.prks-work-video-frame')).toBeTruthy()
+    expect(ctx.root.querySelector('a[href^="javascript:"]')).toBeNull()
+    expect(ctx.root.querySelector('.work-viewer-host')).toBeNull()
     expect(ctx.root.querySelector('.page-header--work-title')?.textContent).toBe('A & B')
     expect(ctx.root.querySelector('[data-prks-role="work-header-doc-type-slot"] .doc-type-badge')?.textContent).toBe('Video')
     expect(ctx.root.querySelector('.prks-rel-summary')?.textContent).toBe('Folder')
     expect(ctx.root.querySelector('[data-prks-role="work-research-notes-anchor"]')).toBeInstanceOf(HTMLElement)
     expect(ctx.root.querySelector('.work-split-handle')).toBeInstanceOf(HTMLElement)
+  })
+
+  it('links an ordinary URL and omits an unsafe one', () => {
+    const linked = mount('linked')
+    linked.setEntity('work', { id: 'work-a' })
+    expect(paintSurface(linked, surface(linked, {
+      kind: 'video',
+      video: { provider: 'youtube', providerId: '', sourceUrl: 'https://example.test/talk' },
+    }))).toBe(true)
+    const link = linked.root.querySelector('a')
+    expect(linked.root.querySelector('iframe')).toBeNull()
+    expect(link?.getAttribute('href')).toBe('https://example.test/talk')
+    expect(link?.getAttribute('target')).toBe('_blank')
+    expect(link?.getAttribute('rel')).toBe('noopener')
+    expect(link?.textContent).toBe('Open link')
+    expect(linked.root.querySelector('.work-pdf-empty')?.textContent).toBe('No embeddable video URL. Open link')
+
+    const unsafe = mount('unsafe')
+    unsafe.setEntity('work', { id: 'work-a' })
+    expect(paintSurface(unsafe, surface(unsafe, {
+      kind: 'video',
+      video: { provider: 'youtube', providerId: 'abc" onload="1', sourceUrl: 'javascript:alert(1)' },
+    }))).toBe(true)
+    expect(unsafe.root.querySelector('iframe')).toBeNull()
+    expect(unsafe.root.querySelector('a')).toBeNull()
+    expect(unsafe.root.querySelector('.work-pdf-empty')?.textContent).toBe('No embeddable video URL.')
   })
 
   it('replaces the route loading placeholder and keeps the PDF host on the next paint', () => {
@@ -175,18 +205,15 @@ describe('work main surface', () => {
     const side = mount('side')
     main.setEntity('work', { id: 'work-a' })
     side.setEntity('work', { id: 'work-b' })
-    const mainHtml = surfaceWindow.renderVideoViewerPane({
-      provider: 'youtube',
-      provider_id: 'mainvideo01',
-      source_url: '',
-    })
-    const sideHtml = '<div class="work-pdf-pane work-pdf-pane--empty"><p class="work-pdf-empty">No file attached.</p></div>'
-    expect(paintSurface(main, surface(main, { kind: 'video', viewerHtml: mainHtml, title: 'Main' }))).toBe(true)
+    expect(paintSurface(main, surface(main, {
+      kind: 'video',
+      title: 'Main',
+      video: { provider: 'youtube', providerId: 'mainvideo01', sourceUrl: '' },
+    }))).toBe(true)
     expect(paintSurface(side, surface(side, {
       workId: 'work-b',
       kind: 'empty',
       title: 'Side',
-      viewerHtml: sideHtml,
     }))).toBe(true)
     expect(main.root.querySelector('iframe')?.getAttribute('src')).toContain('mainvideo01')
     expect(side.root.querySelector('iframe')).toBeNull()
@@ -197,12 +224,10 @@ describe('work main surface', () => {
   it('does not paint after the owner generation changes', () => {
     const ctx = mount('main')
     ctx.setEntity('work', { id: 'work-a' })
-    const html = surfaceWindow.renderVideoViewerPane({
-      provider: 'youtube',
-      provider_id: 'keptvideo01',
-      source_url: '',
-    })
-    expect(paintSurface(ctx, surface(ctx, { kind: 'video', viewerHtml: html }))).toBe(true)
+    expect(paintSurface(ctx, surface(ctx, {
+      kind: 'video',
+      video: { provider: 'youtube', providerId: 'keptvideo01', sourceUrl: '' },
+    }))).toBe(true)
     const opened = ctx.generation
     ctx.beginRoute({ name: 'work', params: { workId: 'work-b' } })
     ctx.setEntity('work', { id: 'work-b' })

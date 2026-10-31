@@ -22,7 +22,7 @@ defineProps<{
     :work-id="surface.workId"
     :kind="surface.kind"
     :has-file="surface.hasFile"
-    :viewer-html="surface.viewerHtml"
+    :video="surface.video"
     :editor-region-id="surface.editorRegionId"
   />
 </template>

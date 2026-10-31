@@ -551,7 +551,12 @@ AFFECTED_RULES = (
         "name": "work-detail",
         "paths": (
             "frontend/js/components/works.js",
-            "frontend/js/components/works-video.js",
+            "frontend-app/src/features/work/video-embed.ts",
+            "frontend-app/src/features/work/WorkVideoPane.vue",
+            "frontend-app/src/features/work/WorkMainSurface.vue",
+            "frontend-app/src/features/work/WorkDetailRoute.vue",
+            "frontend-app/src/features/work/detail-lifecycle.ts",
+            "frontend-app/src/features/work/main-surface.ts",
         ),
         "features": ("work-detail",),
         "note": "Core Work-detail UI → metadata/people/notes/PDF/sync coverage",

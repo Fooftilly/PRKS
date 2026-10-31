@@ -18,7 +18,7 @@
 
     /* Explicit recognized hosts, never substring-matched: that would accept
      * "notyoutube.com" and "youtube.com.example.org". Shared contract with
-     * `backend/work_source_sync.YOUTUBE_HOSTS` and works-video.js. */
+     * `backend/work_source_sync.YOUTUBE_HOSTS` and video-embed.ts. */
     const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 
     /* The canonical provider-id contract. Mirrors

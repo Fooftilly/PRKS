@@ -6870,7 +6870,7 @@ function prksIsWorkModalFolderCommitted() {
 
 // Shared YouTube URL/host contract used by creation validation. Kept in sync
 // with backend _is_youtube_host()/_youtube_video_id() and
-// components/works-video.js's embed-URL parsing.
+// frontend-app/src/features/work/video-embed.ts embed-URL parsing.
 const PRKS_YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 
 function prksIsRecognizedYoutubeHost(hostname) {

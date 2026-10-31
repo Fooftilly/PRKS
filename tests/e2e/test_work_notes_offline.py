@@ -1221,9 +1221,8 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
 
     def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
         server, page, context = self.start()
-        # The video viewer is loaded on first use; a browser that has used it can open one offline.
-        page.evaluate("() => import('/js/components/works-video.js').then(() => true)")
         # Offline, so the creation is never sent and the delete folds it away.
+        # The video player ships in the Vue bundle, which the app shell already loaded.
         self.offline(page, context)
         page.locator('#prks-ribbon-new-file').click()
         page.wait_for_selector('#work-modal:not(.hidden):not([inert])')

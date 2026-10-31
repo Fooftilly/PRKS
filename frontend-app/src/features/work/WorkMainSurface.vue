@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import PrksRelSummary from '../../components/PrksRelSummary.vue'
 import type { RelSummaryPart } from '../../components/relSummary'
+import type { WorkVideoSource } from './video-embed'
+import WorkVideoPane from './WorkVideoPane.vue'
 
 const props = defineProps<{
   showHeader: boolean
@@ -11,7 +13,7 @@ const props = defineProps<{
   workId: string
   kind: 'pdf' | 'video' | 'empty'
   hasFile: boolean
-  viewerHtml: string
+  video: WorkVideoSource | null
   editorRegionId: string
 }>()
 
@@ -37,7 +39,7 @@ const notesEditorId = computed(() => `${props.editorRegionId}-field`)
           <div v-else-if="kind === 'pdf'" class="work-pdf-pane work-pdf-pane--empty">
             <p class="work-pdf-empty">No PDF file attached.</p>
           </div>
-          <div v-else-if="kind === 'video'" class="work-viewer-host" v-html="viewerHtml"></div>
+          <WorkVideoPane v-else-if="kind === 'video'" :source="video" />
           <div v-else class="work-pdf-pane work-pdf-pane--empty">
             <p class="work-pdf-empty">No file attached.</p>
           </div>
