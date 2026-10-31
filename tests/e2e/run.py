@@ -1692,10 +1692,17 @@ def _profile_infrastructure_total(phases: dict) -> float:
     nested = set()
     if "server_start" in phases:
         nested.update(("server_spawn", "server_http_ready"))
+        # The child stages occur before the first ready HTTP response. They
+        # explain startup cost; they are not another additive test duration.
+        nested.update(name for name in phases if name.startswith("startup_"))
     if "server_stop" in phases:
-        # The PostgreSQL drop occurs during AppServer.stop(), and its duration
-        # is a diagnostic subdivision, not additional wall time.
-        nested.update(("postgres_drop", "postgres_drop_failed"))
+        # Process exit, database drop and temp cleanup are subdivisions of
+        # AppServer.stop(), never extra wall time.
+        nested.update((
+            "postgres_drop", "postgres_drop_failed",
+            "server_stop_process", "server_stop_process_failed",
+            "server_stop_temp_cleanup", "server_stop_temp_cleanup_failed",
+        ))
     if "app_ready" in phases:
         nested.update((
             "app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait"

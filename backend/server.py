@@ -1,4 +1,5 @@
 from backend import work_note_sync, work_role_sync, work_source_sync
+from backend.startup_profile import phase as startup_phase
 from backend.sync_protocol import process_operation
 import http.server
 import socketserver
@@ -3896,30 +3897,35 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None):
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
-    try:
-        n = prune_orphan_pdf_thumbnails(db)
-        if n:
-            LOGGER.info("thumbnail_prune_complete pruned=%s", n)
-    except Exception as e:
-        LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
+    with startup_phase("startup_thumbnail_cleanup"):
+        try:
+            n = prune_orphan_pdf_thumbnails(db)
+            if n:
+                LOGGER.info("thumbnail_prune_complete pruned=%s", n)
+        except Exception as e:
+            LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
     # Bounded, and ordered with the other reconcilers: a managed PDF whose
     # removal failed (or was interrupted) before this process started is the
     # one post-delete side effect no rebuild can find on its own, because the
     # Work row that named it is gone.
-    retry_pending_pdf_cleanup_at_startup(db)
-    try:
-        reconcile_at_startup(db, text_index)
-    except Exception as e:
-        LOGGER.warning("text_index_reconcile_failed error_type=%s", safe_error_type(e))
-    try:
-        reconcile_research_index_at_startup(db, research_index)
-    except Exception as e:
-        LOGGER.warning("research_index_reconcile_failed error_type=%s", safe_error_type(e))
-    try:
-        cleanup_stale_staging(_bound_storage)
-        cleanup_expired_backup_jobs(_bound_storage)
-    except Exception as e:
-        LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
+    with startup_phase("startup_pdf_cleanup"):
+        retry_pending_pdf_cleanup_at_startup(db)
+    with startup_phase("startup_text_reconcile"):
+        try:
+            reconcile_at_startup(db, text_index)
+        except Exception as e:
+            LOGGER.warning("text_index_reconcile_failed error_type=%s", safe_error_type(e))
+    with startup_phase("startup_research_reconcile"):
+        try:
+            reconcile_research_index_at_startup(db, research_index)
+        except Exception as e:
+            LOGGER.warning("research_index_reconcile_failed error_type=%s", safe_error_type(e))
+    with startup_phase("startup_staging_cleanup"):
+        try:
+            cleanup_stale_staging(_bound_storage)
+            cleanup_expired_backup_jobs(_bound_storage)
+        except Exception as e:
+            LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
     with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts

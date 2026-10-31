@@ -40,6 +40,7 @@ from tests.e2e.policy import (
     env_flag_enabled,
 )
 from tests.e2e.postgres_identity import provision_library
+from backend.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
 
 REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
@@ -1160,6 +1161,12 @@ class AppServer:
             env.pop(name, None)
         env.update(self.library.server_env())
         env.update(self._extra_env)
+        # The child emits only fixed-name timing records in a disposable E2E
+        # run. Never inherit this diagnostic from the ambient environment.
+        env.pop(CHILD_STARTUP_PROFILE_ENV, None)
+        if _ACTIVE_PROFILE is not None:
+            env[CHILD_STARTUP_PROFILE_ENV] = "1"
+            env["PRKS_E2E"] = "1"
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
             profiled = _ACTIVE_PROFILE is not None
@@ -1203,6 +1210,11 @@ class AppServer:
                 _profile_phase("server_spawn", spawned - started)
                 _profile_phase("server_http_ready", ready - spawned)
             _profile_phase("server_start", ready - started)
+            if profiled:
+                # Read only the successful subprocess's private stderr. Fresh
+                # _spawn() truncates this file on any bind-conflict retry.
+                for name, seconds in parse_records(_read_file(self._stderr_path)).items():
+                    _profile_phase(name, seconds)
             e2e_heartbeat("SERVER_READY")
             return self
         raise RuntimeError("PRKS E2E server could not obtain a free port")
@@ -1260,9 +1272,10 @@ class AppServer:
         started = time.perf_counter()
         try:
             if self.proc is not None:
-                _terminate(self.proc)
-                if self.proc.poll() is None:
-                    raise RuntimeError("PRKS E2E server process did not exit")
+                with profile_e2e_phase("server_stop_process"):
+                    _terminate(self.proc)
+                    if self.proc.poll() is None:
+                        raise RuntimeError("PRKS E2E server process did not exit")
         finally:
             try:
                 for handle in (self._stdout, self._stderr):
@@ -1281,7 +1294,8 @@ class AppServer:
                 try:
                     self._drop_library()
                 finally:
-                    self._tmpdir.cleanup()
+                    with profile_e2e_phase("server_stop_temp_cleanup"):
+                        self._tmpdir.cleanup()
             finally:
                 _profile_phase("server_stop", time.perf_counter() - started)
 
