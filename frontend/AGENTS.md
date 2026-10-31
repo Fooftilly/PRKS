@@ -293,8 +293,7 @@ responsive/narrow-fallback state.
 
 Settings category navigation is presentation state; it must not create another
 settings persistence model. The active category lives only in the Vue settings
-module's in-memory ref, never `localStorage`, never `/api/settings`, never a URL
-hash, and never on a TabContext. Main and Secondary share that one modal.
+module's in-memory ref, never stored or routed, and Main and Secondary share it.
 
 Inactive Settings category panels are hidden and inert, never removed/recreated.
 Switching categories must not reset a running Backup/Maintenance operation, a
