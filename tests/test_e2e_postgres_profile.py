@@ -12,13 +12,6 @@ from tests.e2e.policy import PROFILE_ENV
 
 
 class E2EPostgresProfileTests(unittest.TestCase):
-    @staticmethod
-    def _server_with_fake_postgres(library):
-        """Exercise the real AppServer orchestration, never start an app or DB."""
-        server = harness.AppServer()
-        server.start()
-        return server
-
     def test_profile_distinguishes_postgres_provision_from_server_start_and_drop(self):
         library = mock.Mock()
         library.server_env.return_value = {}
@@ -38,11 +31,9 @@ class E2EPostgresProfileTests(unittest.TestCase):
             try:
                 server.start()
                 self.assertIs(server.library, library)
-                server.stop()
             finally:
+                server.stop()
                 phases = harness.finish_test_profile(test_id)
-                if server.library is not None:
-                    server.stop()
 
         provision.assert_called_once_with(server.storage_root)
         library.drop.assert_called_once_with()
