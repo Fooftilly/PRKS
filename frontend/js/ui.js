@@ -577,8 +577,15 @@ function openModal(id) {
         if (parentSearch && !window.__prksPendingWorkFolderAttach) parentSearch.value = '';
         if (parentId && !window.__prksPendingWorkFolderAttach) parentId.value = '';
         window.prksRefreshFolderModalValidation();
-    } else if (id === 'settings-modal' && typeof window.prksOpenSettingsToLastCategory === 'function') {
-        window.prksOpenSettingsToLastCategory();
+    } else if (id === 'settings-modal') {
+        // Orientation has to be corrected before openModal returns. If the
+        // Vue surface is not installed yet, the next close is unchanged and
+        // the bridge applies this open once it exists.
+        if (typeof window.prksOpenSettingsToLastCategory === 'function') {
+            window.prksOpenSettingsToLastCategory();
+        } else {
+            window.__prksSettingsOpenRequested = true;
+        }
     } else if (id === 'group-modal') {
         if (window.__prksPersonGroupIndexCreateArmed) {
             window.__prksPersonGroupIndexCreateArmed = false;

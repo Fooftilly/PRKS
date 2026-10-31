@@ -1,4 +1,4 @@
-"""Structural regressions for Usability Polish 3 — Settings category reorganization."""
+"""Structural regressions for Settings category organization and the Vue surface."""
 from __future__ import annotations
 
 import os
@@ -13,8 +13,13 @@ _APP = os.path.join(_FRONTEND, "js", "app.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
 _DESIGN = os.path.join(_PROJECT_DIR, "DESIGN.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
+_SETTINGS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "settings")
+_NAV = os.path.join(_SETTINGS, "navigation.ts")
+_CATEGORIES = os.path.join(_SETTINGS, "categories.ts")
+_SURFACE = os.path.join(_SETTINGS, "SettingsSurface.vue")
+_PANEL = os.path.join(_SETTINGS, "SettingsPanel.vue")
 
-_CATEGORIES = ["general", "reading", "export", "backup", "maintenance", "diagnostics"]
+_CATEGORY_IDS = ["general", "reading", "export", "backup", "maintenance", "diagnostics"]
 
 
 def _read(path: str) -> str:
@@ -22,59 +27,69 @@ def _read(path: str) -> str:
         return fh.read()
 
 
-def _settings_modal_html() -> str:
-    html = _read(_INDEX)
-    chunk = html.split('id="settings-modal"', 1)[1]
-    # Settings modal is closed by the next top-level modal div.
-    return chunk.split('id="prks-restore-confirm-modal"', 1)[0]
+def _vue_settings() -> str:
+    parts = []
+    for name in sorted(os.listdir(_SETTINGS)):
+        if name.endswith((".vue", ".ts")):
+            parts.append(_read(os.path.join(_SETTINGS, name)))
+    return "\n".join(parts)
+
+
+def _panel_source(name: str) -> str:
+    return _read(os.path.join(_SETTINGS, name))
 
 
 class SettingsCategoryStructureTests(unittest.TestCase):
-    def test_six_categories_present_as_tabs_and_panels(self):
-        modal = _settings_modal_html()
-        for cat in _CATEGORIES:
-            self.assertIn(f'id="prks-settings-tab-{cat}"', modal)
-            self.assertIn(f'id="prks-settings-panel-{cat}"', modal)
-            self.assertIn(f'data-prks-settings-category="{cat}"', modal)
+    def test_shell_is_a_host_and_vue_owns_the_categories(self):
+        html = _read(_INDEX)
+        shell = html.split('id="settings-modal"', 1)[1].split('id="prks-restore-confirm-modal"', 1)[0]
+        self.assertIn('id="prks-settings-root"', shell)
+        self.assertIn("requestModalClose", shell)
+        self.assertNotIn('id="prks-settings-tab-general"', shell)
+        self.assertNotIn('id="annotation-author-input"', shell)
+        vue = _vue_settings()
+        categories = _read(_CATEGORIES)
+        for cat in _CATEGORY_IDS:
+            self.assertIn(f"id: '{cat}'", categories)
+            self.assertIn(f"prks-settings-tab-${{category.id}}", _read(_SURFACE).replace("`", ""))
+            self.assertIn(f"prks-settings-panel-${{category}}", _read(_PANEL).replace("`", ""))
+        self.assertIn('role="tablist"', vue)
+        self.assertIn('role="tab"', vue)
+        self.assertIn('role="tabpanel"', vue)
+        self.assertIn("data-prks-settings-category", vue)
+        self.assertIn("aria-controls", vue)
+        self.assertIn("aria-labelledby", vue)
 
     def test_category_labels(self):
-        modal = _settings_modal_html()
-        self.assertIn(">General<", modal)
-        self.assertIn("Reading &amp; layout", modal)
-        self.assertIn(">Export<", modal)
-        self.assertIn(">Backup<", modal)
-        self.assertIn(">Maintenance<", modal)
-        self.assertIn(">Diagnostics<", modal)
+        categories = _read(_CATEGORIES)
+        self.assertIn("label: 'General'", categories)
+        self.assertIn("label: 'Reading & layout'", categories)
+        self.assertIn("label: 'Export'", categories)
+        self.assertIn("label: 'Backup'", categories)
+        self.assertIn("label: 'Maintenance'", categories)
+        self.assertIn("label: 'Diagnostics'", categories)
 
-    def test_tablist_accessibility_markup(self):
-        modal = _settings_modal_html()
-        self.assertIn('role="tablist"', modal)
-        # Static markup ships the desktop/default orientation; JS
-        # (prksSyncSettingsNavOrientation) synchronizes it with the actual
-        # responsive layout before interactive use — it is not always vertical.
-        self.assertIn('aria-orientation="vertical"', modal)
-        for cat in _CATEGORIES:
-            self.assertIn(f'aria-controls="prks-settings-panel-{cat}"', modal)
-            self.assertIn(f'role="tab"', modal)
-        self.assertIn('role="tabpanel"', modal)
-        for cat in _CATEGORIES:
-            self.assertIn(f'aria-labelledby="prks-settings-tab-{cat}"', modal)
-
-    def test_all_but_first_panel_hidden_and_inert_by_default(self):
-        modal = _settings_modal_html()
-        for cat in _CATEGORIES:
-            panel_chunk = modal.split(f'id="prks-settings-panel-{cat}"', 1)[1][:400]
-            self.assertIn("hidden", panel_chunk)
-            self.assertIn("inert", panel_chunk)
+    def test_inactive_panels_stay_hidden_and_inert(self):
+        panel = _read(_PANEL)
+        self.assertIn(":hidden=", panel)
+        self.assertIn(":inert=", panel)
+        nav = _read(_NAV)
+        self.assertIn("settingsActiveCategory = ref<SettingsCategoryId>('general')", nav)
+        self.assertNotIn(".remove(", panel)
+        self.assertNotIn("v-if", panel)
 
     def test_no_url_hash_routes_for_settings_categories(self):
         html = _read(_INDEX)
         self.assertNotIn("#/settings", html)
-        for f in (_UI, _APP):
-            self.assertNotIn("#/settings", _read(f))
+        for path in (_UI, _APP, _SETTINGS):
+            if os.path.isdir(path):
+                text = _vue_settings()
+            else:
+                text = _read(path)
+            self.assertNotIn("#/settings", text)
 
     def test_existing_control_ids_preserved(self):
-        modal = _settings_modal_html()
+        vue = _vue_settings()
         preserved_ids = [
             "annotation-author-input",
             "prks-bibtex-export-fields",
@@ -94,13 +109,10 @@ class SettingsCategoryStructureTests(unittest.TestCase):
             "prks-setting-pdf-remember-page",
         ]
         for the_id in preserved_ids:
-            self.assertIn(f'id="{the_id}"', modal, msg=f"missing id={the_id}")
+            self.assertIn(f'id="{the_id}"', vue, msg=f"missing id={the_id}")
 
     def test_general_category_is_calm_first_impression(self):
-        modal = _settings_modal_html()
-        general = modal.split('id="prks-settings-panel-general"', 1)[1].split(
-            'id="prks-settings-panel-reading"', 1
-        )[0]
+        general = _panel_source("SettingsGeneral.vue")
         for noisy in ("Backup", "Restore", "Maintenance", "Diagnostics", "Linearize", "Rebuild"):
             self.assertNotIn(noisy, general)
         self.assertIn("Appearance", general)
@@ -108,50 +120,34 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         self.assertIn("Show help hints", general)
 
     def test_export_has_compact_field_summary_placeholder(self):
-        modal = _settings_modal_html()
-        self.assertIn('id="prks-bibtex-export-summary"', modal)
+        self.assertIn('id="prks-bibtex-export-summary"', _panel_source("SettingsExport.vue"))
 
     def test_backup_separates_create_and_restore_headings(self):
-        modal = _settings_modal_html()
-        backup = modal.split('id="prks-settings-panel-backup"', 1)[1].split(
-            'id="prks-settings-panel-maintenance"', 1
-        )[0]
-        self.assertIn(">Create backup<", backup)
-        self.assertIn(">Restore backup<", backup)
-        self.assertLess(backup.index(">Create backup<"), backup.index(">Restore backup<"))
+        backup = _panel_source("SettingsBackup.vue")
+        self.assertIn("Create backup", backup)
+        self.assertIn("Restore backup", backup)
+        self.assertLess(backup.index("Create backup"), backup.index("Restore backup"))
 
     def test_maintenance_has_non_alarming_intro(self):
-        modal = _settings_modal_html()
-        maintenance = modal.split('id="prks-settings-panel-maintenance"', 1)[1].split(
-            'id="prks-settings-panel-diagnostics"', 1
-        )[0]
+        maintenance = _panel_source("SettingsMaintenance.vue")
         self.assertIn("normally unnecessary", maintenance)
         self.assertNotIn("danger", maintenance.lower())
         self.assertNotIn("delete", maintenance.lower())
 
     def test_no_new_maintenance_tools_added(self):
-        modal = _settings_modal_html()
-        maintenance = modal.split('id="prks-settings-panel-maintenance"', 1)[1].split(
-            'id="prks-settings-panel-diagnostics"', 1
-        )[0]
+        maintenance = _panel_source("SettingsMaintenance.vue")
         for forbidden in ("vacuum", "purge", "cache clear", "reindex-all", "migration"):
             self.assertNotIn(forbidden, maintenance.lower())
 
     def test_scope_badges_present(self):
-        modal = _settings_modal_html()
-        self.assertIn("Library-wide", modal)
-        self.assertIn("This device", modal)
-        # Backup / Maintenance / Diagnostics are actions, not preferences: no scope badge there.
-        backup = modal.split('id="prks-settings-panel-backup"', 1)[1].split(
-            'id="prks-settings-panel-maintenance"', 1
-        )[0]
+        vue = _vue_settings()
+        self.assertIn("Library-wide", vue)
+        self.assertIn("This device", vue)
+        backup = _panel_source("SettingsBackup.vue")
         self.assertNotIn("prks-settings-scope", backup)
 
     def test_reading_layout_clarifies_conditional_setting(self):
-        modal = _settings_modal_html()
-        reading = modal.split('id="prks-settings-panel-reading"', 1)[1].split(
-            'id="prks-settings-panel-export"', 1
-        )[0]
+        reading = _panel_source("SettingsReading.vue")
         self.assertIn("Research notes beside PDF when narrow", reading)
         self.assertIn("notes expand as a drawer by default", reading)
         self.assertIn("side-by-side sidecar", reading)
@@ -165,88 +161,86 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         self.assertIn(".modal--settings", css)
         settings_block = css.split(".modal--settings {", 1)[1].split("}", 1)[0]
         self.assertIn("94vw", settings_block)
-        # Base .modal rule (bare selector, not a feature-specific `.foo.modal`)
-        # must be untouched (still ~500px default dialog width).
         m = re.search(r"(?m)^\.modal \{([^}]*)\}", css)
         self.assertIsNotNone(m, "base .modal rule not found")
         self.assertIn("500px", m.group(1))
 
+    def test_settings_close_is_not_an_unsaved_discard(self):
+        ui = _read(_UI)
+        block = ui.split("const PRKS_MODAL_UNSAVED_CONFIRM_IDS = new Set([", 1)[1].split("]);", 1)[0]
+        self.assertNotIn("settings-modal", block)
+
 
 class SettingsCategoryJsTests(unittest.TestCase):
     def test_shared_activation_helper_exists(self):
-        app = _read(_APP)
-        self.assertIn("function prksActivateSettingsCategory(", app)
-        self.assertIn("window.prksActivateSettingsCategory", app)
-        self.assertIn("function initPrksSettingsCategoryNav(", app)
+        nav = _read(_NAV)
+        self.assertIn("export function activateSettingsCategory(", nav)
+        self.assertIn("target.prksActivateSettingsCategory = activateSettingsCategory", nav)
+        self.assertIn("export function openSettingsToLastCategory(", nav)
+        self.assertIn("export function syncSettingsNavOrientation(", nav)
 
-    def test_activation_helper_uses_hidden_and_inert_not_removal(self):
-        app = _read(_APP)
-        fn = app.split("function prksActivateSettingsCategory(", 1)[1].split(
-            "\nwindow.prksActivateSettingsCategory", 1
-        )[0]
-        self.assertIn("panel.hidden = !active", fn)
-        self.assertIn("setAttribute('inert'", fn)
-        self.assertIn("removeAttribute('inert')", fn)
-        self.assertIn("aria-selected", fn)
+    def test_activation_keeps_panels_mounted(self):
+        panel = _read(_PANEL)
+        self.assertIn(":hidden=", panel)
+        self.assertIn(":inert=", panel)
+        self.assertNotIn("v-if", panel)
 
     def test_orientation_sync_helper_exists_and_shares_css_breakpoint(self):
-        app = _read(_APP)
-        self.assertIn("function prksSyncSettingsNavOrientation(", app)
-        self.assertIn("window.prksSyncSettingsNavOrientation", app)
+        nav = _read(_NAV)
+        categories = _read(_CATEGORIES)
         css = _read(_CSS)
-        self.assertIn("PRKS_SETTINGS_NARROW_MEDIA_QUERY = '(max-width: 640px)'", app)
+        self.assertIn("export function syncSettingsNavOrientation(", nav)
+        self.assertIn("target.prksSyncSettingsNavOrientation = syncSettingsNavOrientation", nav)
+        self.assertIn("export const SETTINGS_NARROW_MEDIA_QUERY = '(max-width: 640px)'", categories)
         self.assertIn("@media (max-width: 640px)", css)
 
     def test_open_settings_synchronizes_orientation_before_category_activation(self):
-        app = _read(_APP)
-        fn = app.split("function prksOpenSettingsToLastCategory()", 1)[1].split(
-            "\nwindow.prksOpenSettingsToLastCategory", 1
+        nav = _read(_NAV)
+        fn = nav.split("export function openSettingsToLastCategory()", 1)[1].split(
+            "export function registerSettingsNavigationBridge", 1
         )[0]
-        self.assertIn("prksSyncSettingsNavOrientation();", fn)
-        self.assertIn("prksActivateSettingsCategory(__prksSettingsActiveCategory);", fn)
+        self.assertIn("syncSettingsNavOrientation()", fn)
+        self.assertIn("activateSettingsCategory(settingsActiveCategory.value)", fn)
         self.assertLess(
-            fn.index("prksSyncSettingsNavOrientation();"),
-            fn.index("prksActivateSettingsCategory(__prksSettingsActiveCategory);"),
+            fn.index("syncSettingsNavOrientation()"),
+            fn.index("activateSettingsCategory(settingsActiveCategory.value)"),
         )
 
     def test_orientation_sync_uses_matchmedia_change_not_raw_resize(self):
-        app = _read(_APP)
-        fn_start = app.index("function initPrksSettingsCategoryNav(")
-        fn_end = app.index("\nwindow.initPrksSettingsCategoryNav", fn_start)
-        fn = app[fn_start:fn_end]
-        self.assertIn("prksSyncSettingsNavOrientation()", fn)
-        self.assertIn("matchMedia(PRKS_SETTINGS_NARROW_MEDIA_QUERY)", fn)
-        self.assertIn("addEventListener('change'", fn)
+        nav = _read(_NAV)
+        fn = nav.split("export function bindSettingsNavOrientation()", 1)[1].split(
+            "export function activateSettingsCategory(", 1
+        )[0]
+        self.assertIn("syncSettingsNavOrientation()", fn)
+        self.assertIn("window.matchMedia(SETTINGS_NARROW_MEDIA_QUERY)", fn)
+        self.assertIn("addEventListener('change', onChange)", fn)
         self.assertNotIn("window.addEventListener('resize'", fn)
 
     def test_keyboard_navigation_supports_arrows_home_end(self):
-        app = _read(_APP)
-        fn = app.split("function initPrksSettingsCategoryNav(", 1)[1].split(
-            "\nwindow.initPrksSettingsCategoryNav", 1
-        )[0]
-        self.assertIn("ArrowDown", fn)
-        self.assertIn("ArrowUp", fn)
-        self.assertIn("Home", fn)
-        self.assertIn("End", fn)
+        surface = _read(_SURFACE)
+        self.assertIn("ArrowDown", surface)
+        self.assertIn("ArrowUp", surface)
+        self.assertIn("Home", surface)
+        self.assertIn("End", surface)
+        self.assertIn("focusTab: true", surface)
 
     def test_diagnostics_not_loaded_on_settings_open(self):
         ui = _read(_UI)
-        # openModal() must no longer eagerly load diagnostics for settings-modal.
-        open_modal_fn = ui.split("function openModal(id)", 1)[1].split(
-            "\nfunction ", 1
-        )[0]
+        open_modal_fn = ui.split("function openModal(id)", 1)[1].split("\nfunction ", 1)[0]
         self.assertNotIn("prksLoadPerformanceDiagnostics()", open_modal_fn)
         self.assertIn("prksOpenSettingsToLastCategory", open_modal_fn)
+        self.assertNotIn("prksLoadOfflineCacheStatus", open_modal_fn)
 
     def test_diagnostics_lazy_load_only_on_first_activation(self):
-        app = _read(_APP)
-        fn = app.split("function prksActivateSettingsCategory(", 1)[1].split(
-            "\nwindow.prksActivateSettingsCategory", 1
+        nav = _read(_NAV)
+        fn = nav.split("export function activateSettingsCategory(", 1)[1].split(
+            "export function openSettingsToLastCategory(", 1
         )[0]
-        self.assertIn("__prksSettingsDiagnosticsLoaded", fn)
-        self.assertIn("prksVueActivatePerformanceDiagnostics", fn)
+        self.assertIn("diagnosticsActivated", fn)
+        self.assertIn("activatePerformanceDiagnostics()", fn)
         self.assertIn("__prksPerformanceDiagnosticsRequested", fn)
-        self.assertNotIn("prksLoadPerformanceDiagnostics", app)
+        self.assertIn("prksLoadOfflineCacheStatus", fn)
+        self.assertNotIn("prksLoadPerformanceDiagnostics", _read(_APP))
         vue = _read(
             os.path.join(
                 _PROJECT_DIR,
@@ -265,21 +259,20 @@ class SettingsCategoryJsTests(unittest.TestCase):
             self.assertIn(f'id="{control_id}"', vue)
 
     def test_settings_category_state_not_persisted_to_localstorage_or_api(self):
-        app = _read(_APP)
-        block = app.split("PRKS_SETTINGS_CATEGORIES", 1)[1].split(
-            "function applyTheme(theme)", 1
-        )[0]
-        self.assertNotIn("localStorage", block)
-        self.assertNotIn("prksPatchAppSettings", block)
+        nav = _read(_NAV)
+        self.assertNotIn("localStorage", nav)
+        self.assertNotIn("prksPatchAppSettings", nav)
+        self.assertNotIn("prksGetFocusedTabContext", nav)
 
-    def test_bibtex_export_summary_derives_from_existing_toggle_state(self):
-        app = _read(_APP)
-        self.assertIn("function prksUpdateBibtexExportSummary(", app)
-        fn = app.split("function prksUpdateBibtexExportSummary(", 1)[1].split(
-            "\nasync function initBibtexExportFieldsSetting", 1
-        )[0]
-        self.assertIn("prks-bibtex-export-fields", fn)
-        self.assertIn('aria-checked="true"', fn)
+    def test_bibtex_export_summary_derives_from_toggle_flags(self):
+        summary = _read(os.path.join(_SETTINGS, "bibtex-summary.ts"))
+        export = _panel_source("SettingsExport.vue")
+        self.assertIn("export function bibtexExportSummary(", summary)
+        self.assertIn("fields included", summary)
+        self.assertIn("bibtexExportSummary(fields.value.map((field) => field.on))", export)
+        self.assertIn(':on="field.on"', export)
+        switch = _panel_source("SettingsSwitch.vue")
+        self.assertIn(":aria-checked=\"on ? 'true' : 'false'\"", switch)
 
 
 class SettingsDesignDocTests(unittest.TestCase):
