@@ -44,6 +44,13 @@ class TagVocabularySyncTests(unittest.TestCase):
         self.assertEqual(result["tag"]["name"], "Epistemology")
         self.assertEqual(self.stored(tid)["name"], "Epistemology")
 
+    def test_direct_tag_create_rejects_css_declarations(self):
+        for color in ("red;position:fixed;inset:0", "x;background:url(https://example.test)",
+                      "#12345", "javascript:alert(1)"):
+            with self.subTest(color=color), self.assertRaises(ValueError):
+                self.db.add_tag("Untrusted", color)
+        self.assertFalse(self.db.execute_query("SELECT id FROM tags WHERE name = ?", ("Untrusted",)))
+
     def test_a_created_tag_is_immediately_usable_by_the_relationship_family(self):
         """The lifecycle row is what every later answer about a Tag is read
         from. A Tag inserted without one comes back UNKNOWN to the very family
@@ -57,6 +64,19 @@ class TagVocabularySyncTests(unittest.TestCase):
                 status, result = self.send(
                     "CREATE_TAG", bad, {"name": "X", "color": "#6d6cf7"})
                 self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+
+    def test_css_declarations_and_invalid_hex_are_rejected_before_persistence(self):
+        for bad in ("red;position:fixed;inset:0", "x;background:url(https://example.test/a)",
+                    "#12345", "javascript:alert(1)", "red", "#fff;"):
+            with self.subTest(color=bad):
+                tid, status, result = self.create("Bad color", color=bad)
+                self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
+                self.assertIsNone(self.stored(tid))
+        for good in ("#abc", "#abcd", "#AABBCC", "#AABBCCdd"):
+            with self.subTest(color=good):
+                tid, status, result = self.create("Hex " + good, color=good)
+                self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
+                self.assertEqual(self.stored(tid)["color"], good)
 
     def test_an_empty_name_never_reaches_the_catalogue(self):
         for bad in ("", "   "):

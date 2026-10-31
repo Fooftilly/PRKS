@@ -265,7 +265,7 @@ async function run() {
         const handlers = sw.createHandlers({
             caches: cacheStorage,
             fetchImpl: function () {
-                return Promise.resolve(new Response('<html>live</html>', { status: 200 }));
+                return Promise.resolve(new Response('<html>live</html>', { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
             },
         });
         const res = await handlers.handleNavigation(fakeRequest({ mode: 'navigate' }));
@@ -296,6 +296,30 @@ async function run() {
         });
         const res = await handlers.handleNavigation(fakeRequest({ mode: 'navigate' }));
         assertEq('handleNavigation offline with no cached shell returns 503', res.status, 503);
+    }
+
+    /* Regression: a successful API navigation or non-HTML shell response cannot
+     * overwrite the real app shell. This must also hold on offline fallback. */
+    {
+        for (const [url, contentType] of [
+            ['https://prks.example/api/app-settings', 'application/json'],
+            ['https://prks.example/', 'application/json'],
+            ['https://prks.example/index.html', 'text/plain'],
+            ['https://prks.example/other-route', 'text/html'],
+        ]) {
+            const caches = makeFakeCacheStorage();
+            const shell = await caches.open(sw.PRKS_SW_SHELL_CACHE);
+            await shell.put('/', new Response('<html>good</html>', { headers: { 'Content-Type': 'text/html' } }));
+            const handlers = sw.createHandlers({
+                caches: caches,
+                fetchImpl: () => Promise.resolve(new Response('poison', { headers: { 'Content-Type': contentType } })),
+            });
+            await handlers.handleNavigation(fakeRequest({ url: url, mode: 'navigate' }));
+            const offline = sw.createHandlers({ caches: caches, fetchImpl: () => Promise.reject(new Error('offline')) });
+            const recovered = await offline.handleNavigation(fakeRequest({ mode: 'navigate' }));
+            assertEq('non-shell response does not poison offline launch: ' + url + ' ' + contentType,
+                await recovered.text(), '<html>good</html>');
+        }
     }
 
     /* ---- handlePdfRequest: whole-file caching + offline Range slicing ---- */
