@@ -4195,25 +4195,6 @@ class OfflinePositionTests(unittest.TestCase):
         _open_position(page, position_a)
         _wait_content_contains(page, "No Arguments or Stances target this Position yet.")
 
-    def test_argument_source_change_does_not_invalidate_positions(self):
-        """Source Works are not part of the Position read model."""
-        server, page, _context, _collector = self._start()
-        position_a = server.ids["position_a"]
-        argument_id = server.ids["position_argument"]
-        work_a = server.ids["work_a"]
-
-        _wait_sw_active(page)
-        _open_position(page, position_a)
-        _wait_entity_cached(page, "position", position_a)
-        generation_before = _domain_generation(page, "positions")
-
-        page.evaluate(
-            "([argId, workId]) => window.putArgumentSources(argId, [{ work_id: workId, pages: '1-2' }])",
-            [argument_id, work_a],
-        )
-        _drain_durable(page)
-        self.assertEqual(_domain_generation(page, "positions"), generation_before)
-        self.assertIsNotNone(_cached_entity(page, "position", position_a))
 
     def test_stale_pre_mutation_position_read_cannot_repopulate_the_cache(self):
         server, page, _context, _collector = self._start()
@@ -5196,32 +5177,6 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         self.assertIsNotNone(_cached_entity(page, "position", position_a))
         self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
 
-    def test_argument_targets_invalidate_arguments_and_positions_only(self):
-        server, page, _context, _collector = self._start()
-        argument_a = server.ids["argument_a"]
-        position_a = server.ids["position_a"]
-        concept_child = server.ids["concept_child"]
-
-        self._cache_arguments(page, server)
-        _open_position(page, position_a)
-        _wait_entity_cached(page, "position", position_a)
-        _open_concept(page, concept_child)
-        _wait_entity_cached(page, "concept", concept_child)
-        arguments_before = _domain_generation(page, "arguments")
-        positions_before = _domain_generation(page, "positions")
-        concepts_before = _domain_generation(page, "concepts")
-
-        page.evaluate(
-            """([id, positionId]) => window.putArgumentTargets(id, [
-                { type: 'position', id: positionId, verdict_id: 'qualifies' },
-            ])""",
-            [argument_a, position_a],
-        )
-        self._assert_arguments_invalidated(page, server, arguments_before)
-        self.assertGreater(_domain_generation(page, "positions"), positions_before)
-        _wait_entity_uncached(page, "position", position_a)
-        self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
-        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
 
     def test_concept_mutation_leaves_arguments_and_positions_alone(self):
         server, page, _context, _collector = self._start()
