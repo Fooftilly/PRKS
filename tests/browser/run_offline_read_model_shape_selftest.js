@@ -272,6 +272,7 @@ let checks = 0;
   "verdictMissingId": false,
   "errorBody": false,
   "arrayBody": false,
+  "optionalDisplayFieldsAbsent": true,
   "authorDisplayFieldsAbsent": true
 };
   assert.deepStrictEqual(actual, expected, "argument detail shapes: production validator regression");
