@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "count": 18,
-  "generated_at": "2026-10-31T13:39:22Z",
+  "count": 13,
+  "generated_at": "2026-10-31T18:33:30Z",
   "issues": [
     {
       "agent": "Claude Code",
@@ -72,18 +72,6 @@
     {
       "agent": "Cursor Cloud",
       "execution": "Agent",
-      "number": 1034,
-      "status": "Ready"
-    },
-    {
-      "agent": "Cursor Cloud",
-      "execution": "Agent",
-      "number": 1035,
-      "status": "Ready"
-    },
-    {
-      "agent": "Cursor Cloud",
-      "execution": "Agent",
       "number": 1036,
       "status": "Ready"
     },
@@ -91,24 +79,6 @@
       "agent": "Cursor Cloud",
       "execution": "Agent",
       "number": 1037,
-      "status": "Ready"
-    },
-    {
-      "agent": "Cursor Cloud",
-      "execution": "Agent",
-      "number": 1038,
-      "status": "Ready"
-    },
-    {
-      "agent": "Cursor Cloud",
-      "execution": "Agent",
-      "number": 1039,
-      "status": "Ready"
-    },
-    {
-      "agent": "Cursor Cloud",
-      "execution": "Agent",
-      "number": 1040,
       "status": "Ready"
     }
   ],
@@ -120,6 +90,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41206497756,
-  "stale_after": "2026-11-01T01:39:22Z"
+  "source_run_id": 41229986637,
+  "stale_after": "2026-11-01T06:33:30Z"
 }
