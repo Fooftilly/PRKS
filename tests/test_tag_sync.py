@@ -44,6 +44,13 @@ class TagVocabularySyncTests(unittest.TestCase):
         self.assertEqual(result["tag"]["name"], "Epistemology")
         self.assertEqual(self.stored(tid)["name"], "Epistemology")
 
+    def test_direct_tag_create_rejects_css_declarations(self):
+        for color in ("red;position:fixed;inset:0", "x;background:url(https://example.test)",
+                      "#12345", "javascript:alert(1)"):
+            with self.subTest(color=color), self.assertRaises(ValueError):
+                self.db.add_tag("Untrusted", color)
+        self.assertFalse(self.db.execute_query("SELECT id FROM tags WHERE name = ?", ("Untrusted",)))
+
     def test_a_created_tag_is_immediately_usable_by_the_relationship_family(self):
         """The lifecycle row is what every later answer about a Tag is read
         from. A Tag inserted without one comes back UNKNOWN to the very family
