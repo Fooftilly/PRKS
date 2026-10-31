@@ -2,6 +2,131 @@
 
 This document tracks per-test E2E cost separately from suite-level sharding.
 
+
+## Packaged smoke critical-defect coverage audit (#993)
+
+The packaged smoke-plus-affected planner remains **inactive**; every automatic
+packaged pull-request gate still runs the full six-shard suite. To get a
+read-only, deterministic coverage-gap report on the **live, complete source**
+unittest discovery:
+
+```bash
+python -m scripts.ci.plan_packaged_e2e --coverage-audit
+```
+
+This audit is distinct from the existing runtime comparator and reuses the
+source E2E runner's full module inventory and the packaged planner's exact
+**nine curated smoke IDs plus five packaged additions**. It does not select
+new tests, change either workflow, or dispatch any browser job. The advisory
+report includes an explicitly versioned set of critical obligations, naming
+concrete browser test IDs (not substring-matched "equivalent" tests).
+It compares which IDs are discovered in the source full selection, therefore
+available to packaged full, and which are in the current dormant smoke floor.
+
+Expected gaps with the existing 14-ID smoke floor include:
+
+- **Offline install/disconnect** and durable offline field reconciliation
+  (the cached-work reload and pending-operation reload cases *are* included).
+- **Pending PDF annotation reconnect** and PDF highlight persistence after
+  handshake/reload/delete (offline PDF reopen and annotation-tool availability
+  *are* included).
+- **Vue Processing route readiness** and interrupted Research Notes draft
+  recovery (basic app-shell navigation and divider network-safety tests
+  *are* included).
+
+There are two **independent guard-only** obligations:
+`Docker classic bundle and rollback build smoke` and
+`Classic bundle SW upgrade and rollback (real Chromium)`. These are not
+source full-suite E2E test IDs and are *not* credited as smoke coverage.
+Their status must be checked as separate passing GitHub Actions jobs for a
+specific run; this read-only inventory cannot establish that any such run
+passed. The source-only unbundled↔bundled transition test is deliberately
+excluded from default source and packaged E2E inventory.
+
+Missing required IDs, new/renamed test IDs, missing declared modules,
+undiscovered smoke IDs, unknown candidate IDs, malformed feature
+selectors, or a feature map with no matches anywhere in discovery cause an
+invalid/fail-closed audit. The report lists missing IDs, unmapped source IDs,
+and individual unmatched feature selectors separately; those last two
+categories are diagnostic (some E2E tests are legitimately ungrouped, and
+some feature selectors may describe optional scenarios). Test-list ordering
+does not affect results. Contract tests use synthetic complete/partial fixtures.
+A real incomplete suite cannot be certified merely by an unchanged total:
+the runner's module list and the explicit obligations are the conservative
+floor, **not** a mathematical proof that all possible regressions were
+exercised.
+
+A valid inventory and even a completely populated critical-class checklist
+do **not** demonstrate defect equivalence with six full shards. No activation,
+skip, CI-runner reduction, or change to required PR gates is authorized.
+A separate maintainer decision with real defect-class and timing evidence
+would be needed.
+
+## Read-only, same-commit full-gate cost breakdown (#992)
+
+To compare a **successful, first-attempt** PR source-checkout six-shard run
+and a successful packaged-distribution six-shard run on the **exact same
+head SHA**, use the existing analyzer (provide a GitHub API token in
+`GH_TOKEN` or `GITHUB_TOKEN`; do not put tokens in command arguments):
+
+```bash
+python scripts/ci/compare_e2e_gates.py \
+  --repo Fooftilly/PRKS \
+  --source-run SOURCE_RUN_ID \
+  --packaged-run PACKAGED_RUN_ID
+```
+
+It fetches GitHub's run/job/step snapshots and verifies the successful
+source planner's **full** mode from its job log. It rejects missing or
+unverified job status/attempt fields, retries, missing or failed guard jobs,
+incomplete six-shard matrices, wrong SHA, stale/incorrect workflow mode,
+missing test-step timestamps and out-of-order/overlapping executed steps.
+The source gate's explicitly non-blocking Mergify reporting step may fail;
+its elapsed time remains in the non-test residual, and a failed browser-test
+step or any other executed step still invalidates the comparison.
+This report is read-only: it does **not** dispatch E2E runs, change required
+checks or modify source/packaged test selection. No benchmark CI runners
+are added.
+
+For each of the six browser shards in each mode, the report shows:
+
+- **Job span:** `started_at → completed_at`, in seconds. Summed across
+  shards this is **runner-span minutes**, *not* GitHub's billed minutes.
+  Concurrent shards intentionally overlap; never treat their sum as elapsed
+  workflow wall time or a billing invoice.
+- **Browser step:** `Run E2E selection shard` or
+  `Run complete E2E shard on the packaged frontend`, measured from the
+  successful step's own timestamps. All executed steps must be within the job
+  and nonoverlapping. The other steps may legitimately be zero seconds in
+  second-resolution GitHub timestamps.
+- **Non-test residual:** job span minus browser step span; this combines
+  checkout, dependency installation, setup, idle gaps, reporting, cleanup and
+  teardown. These categories are **not** inferred or independently timed.
+  Per shard, browser + residual exactly equals the job span.
+- **Created-to-start lag:** `created_at → started_at`, only where GitHub
+  supplies both timestamps consistently. It is a **queue/scheduling proxy**,
+  which can include unmet `needs` dependencies, not verified runner-only
+  queue time. Lag is **not** part of the job span. If any of six job
+  creation timestamps is unavailable, the per-shard observation is marked
+  unavailable and the six-shard lag sum is also unavailable.
+- **Start-time spread:** difference between earliest and latest browser
+  job starts; not total queue delay. **Browser-shard envelope:** earliest
+  browser job start to latest browser job completion, inclusive of parallel
+  execution; not full workflow wall time.
+- **Workflow wall time:** only reported if the workflow-run response includes
+  an explicit, consistent start and completion timestamp. GitHub's
+  `updated_at` can change after completion and is **not** substituted for
+  `completed_at`; unavailable is printed otherwise.
+
+Workflow guards (Docker, SW, planner, pointer) are required to pass, but their
+durations are not added to the six browser-shard totals. Differences can
+reflect runner scheduling, shard imbalance and dependency-install variability
+as well as application execution. One same-SHA pair is only a sample, and
+even equal full-suite behavior does **not** demonstrate defect-class
+equivalence for a reduced smoke policy. A future maintainer decision is
+required before altering the active E2E gate.
+
+
 The runner already has strong suite-level controls: individual-test timing history,
 longest-processing-time-first sharding, per-worker Chromium reuse, targeted feature
 selection, affected-test selection, last-failed runs, and a full-gate deadline. The

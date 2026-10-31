@@ -338,12 +338,18 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         }), 3.0)
 
 
+def _fake_library(_storage_root):
+    """Stands in for the disposable PostgreSQL Library these timing tests never reach."""
+    return mock.Mock(server_env=mock.Mock(return_value={}))
+
+
 class StartupReadinessProfileTests(unittest.TestCase):
     def test_server_subphases_keep_http_readiness_and_inclusive_total(self):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             with (
                 mock.patch.object(harness, "find_free_port", return_value=42002),
                 mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness, "provision_library", _fake_library),
                 mock.patch.object(harness.AppServer, "_spawn") as spawn,
                 mock.patch.object(harness, "wait_http") as wait_http,
             ):
@@ -380,6 +386,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     harness, "find_free_port", side_effect=[42002, 42004]
                 ),
                 mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness, "provision_library", _fake_library),
                 mock.patch.object(harness.AppServer, "_spawn") as spawn,
                 mock.patch.object(
                     harness, "wait_http", side_effect=[RuntimeError("bind"), None]
@@ -637,6 +644,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
             with (
                 mock.patch.object(harness, "find_free_port", return_value=42004),
                 mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness, "provision_library", _fake_library),
                 mock.patch.object(harness.AppServer, "_spawn"),
                 mock.patch.object(harness, "wait_http"),
             ):

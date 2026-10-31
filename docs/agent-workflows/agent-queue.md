@@ -24,7 +24,7 @@ These are aliases **only in the queue command**: GitHub Project #3 keeps its exi
 
 **Concurrent view edits:** GitHub's `updateProjectV2View` mutation does not accept an expected revision. The reconciler checks the view's `updatedAt` before each write and verifies the resulting saved filter, but an overlapping human UI edit inside the mutation window cannot be atomically prevented. Avoid editing view #9's filter during the protected master-push reconciliation; any drift detected later by the scheduled read-only check fails visibly.
 
-The helper reads all Project #3 items once with `gh project item-list` and prints matching PRKS issues with their live Project Status and Execution fields. It rejects incomplete Project item lists, and never updates GitHub. It displays **all** assigned issues, including Inbox, Backlog, Blocked, In Progress and unaccepted candidates. Its output is **not** an actionable queue or authorization to start work.
+The protected queue publisher uses `scripts/project3_agent_queue.py publish-live`, which reads all pages of Project #3 items directly and rechecks the Project identity, field types and public visibility; it does not scan all unrelated repository open issues. The separate full readiness snapshot workflow is unchanged. The helper reads all Project #3 items once with `gh project item-list` and prints matching PRKS issues with their live Project Status and Execution fields. It rejects incomplete Project item lists, and never updates GitHub. It displays **all** assigned issues, including Inbox, Backlog, Blocked, In Progress and unaccepted candidates. Its output is **not** an actionable queue or authorization to start work.
 
 Before starting any issue:
 
@@ -33,7 +33,7 @@ Before starting any issue:
 3. Compare the affected files and behavior against open PRs and the accepted target roadmaps, particularly #310/#614 PostgreSQL and backend cutover, #230/#303 completed frontend migration, and active replacement/design plans. Skip code that is being retired, SQLite-specific fixes during cutover, duplicate PR work, or findings the planned architecture will eliminate.
 4. Take one bounded task, implement with targeted tests, and open a PR for maintainer review. Do not merge without explicit approval. Return to the queue after that task is completed or deliberately parked.
 
-When the maintainer explicitly requests an agent assignment in ChatGPT, use the authenticated GitHub assignment bridge in `docs/agent-workflows/project3-assignment-bridge.md` (issue #982), then confirm the Actions result. Do not claim success from comment submission alone.
+For comment-free Project V2 writes from the maintainer or an agent with GitHub Actions dispatch permission, use `docs/agent-workflows/project3-assignment-dispatch.md` and verify the workflow result plus live Project fields. The ChatGPT GitHub connector cannot directly dispatch workflows or edit Project V2 fields, but it can update the dedicated request file using `docs/agent-workflows/project3-assignment-request.md` after the protected relay is activated and verified. Until that live check and apply acceptance succeeds, retain issue #982 as the compatible fallback; do not treat a request-file commit as proof of field changes. Do not claim success from submitting a command alone.
 
 For a maintainer-reviewed batch update to an existing issue's Agent, Status or Execution, use the dry-run-first tool in `docs/agent-workflows/project3-triage.md` rather than repeated ad hoc field edits. The agent queue itself never changes fields.
 

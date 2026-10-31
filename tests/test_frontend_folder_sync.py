@@ -44,8 +44,13 @@ class FolderSyncFrontendTests(unittest.TestCase):
         runtime = (FRONTEND / 'offline-runtime.js').read_text()
         at = runtime.index('async function reconcileFolderField(')
         body = runtime[at: runtime.index('\n        /**', at)]
-        self.assertIn("field === 'private_notes'", body)
-        self.assertIn('prksCanonicalFolderFieldValue(field, raw)', body)
+        # ACKs for all non-pointer fields use one canonicalizer, not only
+        # private notes; parent IDs retain pointer semantics.
+        self.assertIn("field !== 'parent_id'", body)
+        self.assertIn("field === 'parent_id' ? (raw || null)", body)
+        self.assertIn("typeof root.prksCanonicalFolderFieldValue !== 'function'", body)
+        self.assertIn('root.prksCanonicalFolderFieldValue(field, raw)', body)
+        self.assertNotIn("field === 'private_notes' &&", body)
 
     def test_canonical_form_and_byte_limit_agree_with_the_server_for_every_character(self):
         """The client states what the server stores (an acknowledgement's

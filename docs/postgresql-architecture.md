@@ -595,10 +595,7 @@ def add_work_tag(ctx: RequestContext, work_id: str, tag_id: str,
   reindex) are never run inline after commit by the adapter, as
   `server.py:2645-2681` does today. They are jobs enqueued inside the
   transaction (§12.1), so a crash between commit and side effect cannot lose
-  them. The one exception is an import's removal of its inbox source file
-  (§11.3): it runs inline under the inbox lock so that a backup never sees
-  the import's rows next to its still-present source, and the row's
-  `imported` state makes it recoverable after a crash.
+  them.
 
 ### 5.3 What is deliberately not introduced
 
@@ -841,7 +838,7 @@ is not in the 0.8 schema, and Slice K adds it with its own migration.
 | People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` replaces the `rowid` tiebreak with an explicit identity `seq` (`ORDER BY order_index, seq`); publisher names and aliases share one `UNIQUE (library_id, key)` namespace through a `publisher_keys` table (§8.1); group names unique by identity key |
 | Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders` identity is `UNIQUE NULLS NOT DISTINCT (library_id, parent_id, title_key)`, so root folders (`parent_id IS NULL`) share one scope as today's `COALESCE(parent_id, '')` index makes them; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
 | Research | `concepts` L, `concept_aliases` L, `concept_parents` L, `positions` L, `arguments` L, `argument_verdicts` (global seed), `argument_target_positions` L, `argument_target_arguments` L, `argument_sources` L | Concept name and alias keys share one `UNIQUE (library_id, key)` namespace through a `concept_keys` table, replacing the full Python scan |
-| Processing | `processing_files` L, `processing_file_roles` L, `processing_file_tags` L | `abs_path` removed; `rel_path` relative to the inbox (#311 Phase B intent); nullable `restore_hold` and `restore_sha256` (§11.4); `imported` state between an import's commit and its source removal, with the source's `import_sha256` (§11.3) |
+| Processing | `processing_items` L, `processing_item_drafts` L, `processing_item_roles` L, `processing_item_tags` L | §11.5: a managed upload queue, not the SQLite inbox. No path column: an item references one `asset-objects` key; the draft, its roles and tags are deleted at import, and the item stays as a lightweight imported marker |
 | Settings | `library_settings` L, `instance_settings` | Split by scope (#612): which keys are Library-, instance- or account-scoped is decided with #612's configuration inventory |
 | Sync | `entity_revisions` L, `sync_operations` L | §6.6 |
 | Operations | `object_cleanup_claims`, `jobs`, `backup_runs`, `restore_runs`, `restore_run_objects`, `schema_migrations` | §11.3, §11.4, §12.1 |
@@ -895,7 +892,7 @@ the `applied_at` index makes bounded compaction possible later.
 | Uniqueness decisions outside the peer tables (create or rename a concept, publisher or Person Group) | READ COMMITTED + unique index | The index is the arbiter; `23505` maps to the domain refusal. No check-then-insert race. |
 | Multi-aggregate commands (merge tags, merge Works, bulk edits, delete Person with protections, restore commit) | SERIALIZABLE, retried up to 3 times on `40001`/`40P01` | Correctness across many rows without hand-ordered locks. Retry is safe because a command has no side effects outside its transaction (§5.2). |
 | Queries and projections | REPEATABLE READ READ ONLY | One snapshot per response. |
-| Workers | READ COMMITTED; claim with `FOR UPDATE SKIP LOCKED`; a handler that adds rows to a peer table declares SERIALIZABLE like a command (none does in 0.8; `processing.scan` only deletes from them) | §12.1 |
+| Workers | READ COMMITTED; claim with `FOR UPDATE SKIP LOCKED`; a handler that adds rows to a peer table declares SERIALIZABLE like a command (none does in 0.8) | §12.1 |
 
 The isolation is declared by the command, and a test enumerates commands to
 make sure each one declares it.
@@ -924,16 +921,15 @@ the winner, can ledger the refusal or the convergence.
 
 | Command | Peer tables (sets it reads) | Commands that add rows to them, and so run SERIALIZABLE |
 | --- | --- | --- |
-| Tag merge | `work_tags`, `folder_tags`, `processing_file_tags`, `tag_aliases`, `tag_keys` | Add a tag to a Work (single or bulk), a folder or a processing file; create a tag, rename it (new key), add an alias; tag merge itself |
-| Work merge | `manifestations`, `work_notes`, `work_tags`, `folder_files`, `playlist_items`, `roles`, `argument_sources`, `processing_files` (by `imported_work_id`) | Create or move a Manifestation; create a Research Note; add a tag (as above); add a Work to a folder or playlist, or move it between them; add a role; add an argument source citing a Work or Manifestation (the merge re-points these, `docs/work-identity-model.md` §10.4); finish a processing import, which sets `imported_work_id` (the merge re-points it, or the source's `ON DELETE SET NULL` would drop the import provenance); Work merge itself. Assets and annotations hang off a Manifestation and move with it, so the merge does not read them as a set; `pdf.materialize` and annotation saves keep READ COMMITTED with their Asset row lock (§7.4) |
+| Tag merge | `work_tags`, `folder_tags`, `processing_item_tags`, `tag_aliases`, `tag_keys` | Add a tag to a Work (single or bulk), a folder or a Processing item draft; create a tag, rename it (new key), add an alias; tag merge itself |
+| Work merge | `manifestations`, `work_notes`, `work_tags`, `folder_files`, `playlist_items`, `roles`, `argument_sources`, `processing_items` (by `imported_work_id`) | Create or move a Manifestation; create a Research Note; add a tag (as above); add a Work to a folder or playlist, or move it between them; add a role; add an argument source citing a Work or Manifestation (the merge re-points these, `docs/work-identity-model.md` §10.4); import a Processing item, which sets `imported_work_id` (the merge re-points it, or the source's `ON DELETE SET NULL` would turn the imported marker into one whose Work was deleted, §11.5); Work merge itself. Assets and annotations hang off a Manifestation and move with it, so the merge does not read them as a set; `pdf.materialize` and annotation saves keep READ COMMITTED with their Asset row lock (§7.4) |
 | Protected Person delete | `roles`, `person_group_members` | Add a role; add a Person to a group |
 | Bulk edits | none | Each item locks the revision row it decides on and rewrites only that row |
 | Restore commit (R4) | none | R3's exclusive maintenance lock has drained every writer of the Library, and the committed maintenance flag refuses new ones until R4 commits (§11.4), so no concurrent writer exists |
 
 Commands that only update aggregate rows, or only delete rows (a folder,
 playlist or Person Group delete and the child rows it removes, every
-`processing_files` delete and its `processing_file_tags`, including
-`processing.scan`'s), keep READ COMMITTED: a merge that read one of those
+`processing_items` delete and its draft, roles and tags), keep READ COMMITTED: a merge that read one of those
 rows rewrites or deletes it too, so the two conflict on the row. The
 isolation test fails if a command that inserts into a listed peer table,
 or updates one of its tie columns, declares READ COMMITTED, and a new
@@ -996,7 +992,7 @@ RETURNING op_id;
 | Restore exclusive | gate "restore" mode | Committed `libraries.maintenance = 'restore'` plus the Library maintenance lock: every command takes it shared (try-lock) and re-reads the flag; restore takes it exclusive to drain in-flight writers before its one-transaction commit, which advances `libraries.epoch` to fence everything that started earlier (§11.4) |
 | Reference check + delete of an object | `_PDF_PATH_LOCKS` + one transaction | `pg_advisory_xact_lock(hashtextextended('obj:'||name, 0))` + the same single transaction (`settle_claim_if_referenced`) |
 | Materialization validate → replace → mark | per-Work `threading.Lock` | `SELECT … FROM assets WHERE id = … FOR UPDATE` |
-| Cleanup retry single runner | implicit (one process) | It is a job; one claimed job per Library at a time via a unique `singleton_key` |
+| Cleanup retry single runner | implicit (one process) | It is an instance job (`objects.cleanup`); one claimed at a time via a unique `singleton_key`, each claim settled under its Library's objects lock |
 | Migrations single runner | implicit | `pg_advisory_lock` (§4.4) |
 
 ### 7.5 Process-local state, item by item (PG13)
@@ -1895,7 +1891,9 @@ part of the Assets lane, against the new schema, not against SQLite.
   `content_sha256`. Then one transaction adopts the keys (below) and inserts
   the Asset pointing at the working key (and optionally the source key). A
   crash before COMMIT leaves an unreferenced object, collected by the orphan
-  sweep.
+  sweep. A Processing upload (§11.5) ingests the same way but writes only
+  the source key: it is not linearized, and its key is adopted by the
+  Processing item instead of an Asset.
 - **Rewrite** (annotation materialization, re-linearization, replace): write
   the new bytes to a new key, then one transaction locks the Asset row,
   checks the revision it materialized, adopts the new key (below), switches
@@ -1903,8 +1901,8 @@ part of the Assets lane, against the new schema, not against SQLite.
   `content_sha256`, and records a cleanup claim for the old key in the same
   transaction. No object is ever modified in place.
 - **Adopting a new key.** Every transaction that first references a key it
-  wrote earlier (ingest, rewrite, a person-portrait upload, and any later
-  writer of the same shape) takes the per-object lock that settle takes
+  wrote earlier (ingest, rewrite, a person-portrait upload, a Processing
+  upload, and any later writer of the same shape) takes the per-object lock that settle takes
   (§7.4) for that key, confirms the file still exists with the size it
   wrote, and only then references it. A sweep claim settled before that
   lock fails the write cleanly (the client retries) instead of committing a
@@ -1915,8 +1913,8 @@ part of the Assets lane, against the new schema, not against SQLite.
   `backend/AGENTS.md`, with three changes: the claim table is
   `object_cleanup_claims(namespace, name, library_id, recorded_at,
   last_attempt_at, hold)`; the three-valued reference check counts Asset
-  locators, person portraits and live restore runs' staged keys instead of
-  `works.file_path`; the retry pass
+  locators, person portraits, Processing item locators (§11.5) and live
+  restore runs' staged keys instead of `works.file_path`; the retry pass
   is a job instead of a startup scan.
 - **Staged restore objects** count as referenced. The three-valued
   reference check and the orphan sweep treat a key listed in
@@ -1928,13 +1926,31 @@ part of the Assets lane, against the new schema, not against SQLite.
   it failed), its rows stop protecting anything and unreferenced staged
   objects become ordinary orphans; once it commits, the catalogue references
   them and the rows are deleted.
+- **Processing items** count as referenced, in every place an Asset locator
+  does: the three-valued reference check, the `adopt` refusal of a key
+  another Library names, the release check that keeps a key its own
+  Library still names, the orphan sweep and the backup object inventory.
+  Import moves a key from the item to the new Asset in one transaction, so
+  the key is never unreferenced in between (§11.5).
 - **Orphan sweep** (`objects.sweep`, maintenance job): lists the namespace and
   claims objects that no catalogue row references and that are older than a
   grace period (24 h default), so an ordinary write is not claimed; a write
   that stalls past the grace period is caught by its adoption check above
   rather than by age. It
-  runs on demand and weekly; it never deletes directly, it only records
-  claims, and claims are settled by the usual three-valued check.
+  runs on demand and weekly, in bounded passes that resume after a cursor:
+  each pass reads a namespace with one `list_keys` call that holds at most
+  a page of names. The week counts from the last completed cycle, the
+  succeeded pass that reached the end of the listing; a cycle cut short by
+  a failed pass starts again at the next idle tick. It never deletes directly, it only records claims, and claims are
+  settled by the usual three-valued check. It runs only on a root that
+  holds no SQLite catalogue: until the cutover, a root that also serves
+  SQLite keeps files the PostgreSQL catalogue does not name.
+- **Cleanup scheduling**: the releasing command enqueues `objects.cleanup`
+  (deduplicated); each worker's idle tick enqueues it when a claim is due
+  (never attempted, or attempted at least 10 minutes ago) and no cleanup
+  job is queued or running, which also covers claims left by a restart.
+  Each pass settles a bounded batch and enqueues the next one only while
+  claims are due.
 - **Why immutable**: backup can copy exactly the bytes a snapshot references
   (§11.4); clients can cache by `content_sha256`; object storage later
   (#311 Phase F) needs no special mode; and #60 §9.4's generation protocol and
@@ -1952,39 +1968,10 @@ whole run. The cleanup job takes the same key **exclusively** per batch with
 referenced by the backup's snapshot cannot be deleted before the backup has
 copied it, and backups never block ordinary writes.
 
-**The inbox lock.** Inbox files are outside the database and outside the
-objects lock, so the inbox has its own advisory key `(library, 'inbox')`:
-
-- Every change PRKS makes to inbox files holds it **exclusively** across
-  both its database commit and its filesystem change. The lock is
-  session-level, so it spans the commit, and it is released with
-  `pg_advisory_unlock` in a `finally` (a pooled connection is never
-  returned holding it). R3's inbox publication takes it too.
-- **An import** takes it before its catalogue transaction. That
-  transaction creates the Asset and sets the `processing_files` row to
-  `imported` (pointing at the Asset) with `import_sha256`, the raw-stream
-  `ingest_sha256` of the source (§11.2), instead of deleting the row.
-  Still under the lock, the import then removes the source file and
-  deletes the row; both steps are idempotent. A crash between COMMIT and
-  that cleanup leaves an `imported` row, which `processing.scan` finishes
-  under the same lock. A path does not identify a file, so the scan
-  unlinks the file only when it has `import_sha256`, and then deletes the
-  row; the file is never offered for import again. If the file is absent,
-  it deletes the row. If a different file is at the path (the user or a
-  scanner replaced it), it deletes only the row, since the import is done,
-  and lists that file as a new pending one.
-- A backup takes it **shared** before exporting its snapshot and releases
-  it once the inbox files are copied. So the snapshot and the copied inbox
-  agree: an import either committed and removed its file before the
-  snapshot, or does neither until the copy is done. A crashed import's
-  `imported` row and file are archived together and finished by the scan
-  after restore. Imports wait only for
-  the inbox copy, never for the object copy.
-
-Files the user adds or deletes outside PRKS during a backup are not covered.
-An added file is archived without a row, and the scan after restore lists
-it. A deleted one leaves a row without a file, which restore holds (§11.4,
-"Processing inbox payload") rather than letting a scan delete it.
+Processing items (§11.5) need no lock of their own. Their bytes are
+ordinary immutable objects covered by the objects lock, and their rows are
+in the snapshot, so a backup holds either a queued item and its object or,
+after an import, the Asset that references the same key.
 
 ### 11.4 Library backup format 2 and restore (PG19)
 
@@ -2004,85 +1991,12 @@ identities/devices.csv  device_id, archive_user_id, label, first_seen
 db/<table>.csv       the Library's rows of one canonical table, its stored
                      (non-generated) columns, in dependency order
 objects/<key>        every object referenced by the snapshot (stored, not deflated)
-inbox/<rel_path>     the processing inbox's files, only when the inbox is under
-                     the data root (see "Processing inbox payload")
 ```
 
-**Processing inbox payload.** Unimported inbox files are canonical user data
-when the inbox is under the data root, and today's backup carries them
-(`docs/storage-architecture.md` §4.1). Format 2 keeps that rule. The
-manifest lists them as `inbox: {rel_path: {size, sha256}}` either way,
-recorded while the backup holds the inbox lock, and adds `inbox_bytes:
-"included"` or `"outside-root"`; only an under-root inbox's files are in the
-archive. Inbox files are not
-`StorageBackend` objects, so restore handles them apart from `objects/`:
-
-- R1 extracts them into the run's staging directory (on the same
-  filesystem as the inbox), never into the inbox.
-- R3, after the drain, takes the inbox lock (§11.3) exclusively, in the
-  same short transaction and drain timeout as its other locks. That waits
-  for any import handler that committed before R2 but has not yet removed
-  its source file, so no stale handler can touch the inbox afterwards. Then
-  it publishes the files: each staged file is hard-linked into the inbox with
-  exclusive create. An absent path is written and an identical file is
-  kept. Parent directories are created one component at a time without
-  following links; a component that exists as a symlink or a non-directory
-  counts as a collision. A different file at the same path is never overwritten: the
-  archived copy is linked at `restored-<run>/<rel_path>` instead, and the
-  staged `processing_files` row is rewritten to that path, keeping its ID
-  and so its roles and tags. `restored-<run>/` is created with exclusive
-  `mkdir`; if it exists, the restore aborts.
-- **Durability.** R1 fsyncs every staged inbox file and every staging
-  directory it created, each with its parent, before R3 publishes
-  anything. The staging tree is the undo record (below), so a machine
-  crash must not keep an inbox link while losing the staging entry that
-  proves R3 created it. Before R4 begins, R3
-  fsyncs every inbox directory it added a link to or created, and the
-  parent of each directory it created, through `backend/fs_durability.py`
-  (directory fsync follows that module's policy, as for objects). So R4
-  never commits a row for a link that a machine crash can still lose.
-- R4 then inserts the staged rows. Any row whose file R3 neither published
-  nor found identical in place (because the user had deleted it before the
-  backup, or because the inbox is `outside-root`) is held: `restore_hold =
-  <run>` with `restore_sha256` from the manifest, or `NULL` when the
-  manifest has no entry for that path.
-- **A restore that does not commit removes what R3 published.** The staged
-  file and its published link are one inode, so the staging directory is
-  the record of what R3 created; no journal is needed. Undo walks the
-  staged inbox files and unlinks the file at the inbox path or at
-  `restored-<run>/<rel_path>` only when it is the same inode as the staged
-  file (`os.path.samefile`) and still has the manifest's hash; a file the
-  user put there or changed is kept. Then it removes `restored-<run>/`
-  once empty, the only directory that is unambiguously the restore's. Other
-  directories R3 created are left in place, empty: the staging tree cannot
-  tell whether one existed before R3, and an empty directory holds no data
-  and is ignored by the scan. Before undo reports success it fsyncs every
-  directory it unlinked from and the parent of `restored-<run>/` through
-  `backend/fs_durability.py`. A failed or refused fsync counts as an undo
-  failure, so a machine crash cannot bring back a link whose staging
-  entry is already gone. It runs under the inbox lock exclusively, while
-  the Library is still in maintenance (so no import or scan can see the
-  links), and before the staging directory is deleted:
-  - R5 runs it on an abort after R3 while the restore connection is alive
-    and still holds its locks, after reading on that connection that the
-    run is not committed.
-  - When the restore connection was lost, recovery runs it inside its
-    clearing transaction (below), also holding
-    `pg_try_advisory_xact_lock((L,'inbox'))`; if any unlink fails, the
-    transaction rolls back and the flag stays set for the next attempt.
-  - The stale sweep deletes a failed run's staging directory only after
-    its undo has succeeded.
-- **Held rows.** A held `imported` row follows the `imported` hash rule
-  of §11.3 and is never unlinked on its path alone. For every other held
-  row, `processing.scan` never deletes it. It clears the
-  hold only when the file at that path has the recorded `restore_sha256`.
-  A held row whose file is absent is listed as "file not found after
-  restore"; one whose file differs (another `scan_0001.pdf`, a replaced
-  file) is listed as "a different file is at this path", and its roles and
-  tags are never applied to that file. Both offer a dismiss action that
-  deletes the row; a row without a recorded hash is cleared only that way.
-  Restored metadata is therefore never removed or misattached without the
-  user seeing it.
+**Processing items** are content rows like any other family, and the keys
+they reference are in `objects` like Asset keys. Restore needs no special
+step for them: no inbox payload, path rewrite, collision handling or held
+rows.
 
 **Archive member and path checks.** R0 applies format 1's checks
 (`_normalize_zip_name`, `_zip_entry_kind` and the duplicate checks of
@@ -2101,21 +2015,12 @@ archive. Inbox files are not
   each member's declared size.
 - Every member belongs to the archive layout above (`manifest.json`,
   `identities/*.csv`, `db/<table>.csv` for a content table, `objects/<key>`
-  with a valid key, `inbox/<rel_path>`), and every member is listed in the
+  with a valid key), and every member is listed in the
   manifest. Both `identities` entries and every `tables` and `objects`
-  entry have their member, with the recorded row count and hash. `inbox`
-  entries have members only when `inbox_bytes` is `"included"`, and then
-  all of them must be present. With `"outside-root"` the `inbox` entries
-  are metadata only (their path and hash are still checked), and an
-  `inbox/` member is refused.
-- Every `inbox` key and every archived `processing_files.rel_path` passes
-  the same path check. A path under an earlier run's `restored-<run>/` is
-  an ordinary path: `<run>` is minted when the restore starts, so no
-  archive can name the new run's directory, which R3 creates with
-  exclusive `mkdir`.
+  entry have their member, with the recorded row count and hash.
 
 R1 extracts with exclusive create below the staging directory, so names
-that collide on a case-insensitive filesystem fail closed. R1 and R3 resolve
+that collide on a case-insensitive filesystem fail closed. R1 resolves
 every destination through the containment helper (`resolved_child_path`
 in `backend/storage/paths.py`) and never follow a link.
 
@@ -2276,32 +2181,30 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 
 | Phase | What happens | Visible to others |
 | --- | --- | --- |
-| R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted); before 1.0, `schema_fingerprint` and the `interchange` column lists must match the live database (see "Staging schema"); archive members and inbox paths pass the containment checks of "Archive member and path checks" | Nothing |
+| R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted); before 1.0, `schema_fingerprint` and the `interchange` column lists must match the live database (see "Staging schema"); archive members pass the containment checks of "Archive member and path checks" | Nothing |
 | R1 Stage | Create `restore_<id>` without the migration runner: for each table in `BACKUP_CONTENT_TABLES`, `CREATE TABLE restore_<id>.<t> (LIKE prks.<t> INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING GENERATED)`, plus the mapping tables; `COPY … FROM` with interchange casts, map identities, then check every foreign key of the live tables with generated anti-joins whose parent side is redirected (staged content tables, live plus newly mapped devices, live Libraries and users; see "Staging schema"); for each archive object, under the per-object lock `pg_advisory_xact_lock(hashtextextended('obj:'||key, 0))` that cleanup's settle also takes (§7.4), insert `restore_run_objects(run, key)` and commit; only then look at the file: missing → write it from the archive with exclusive create; present with the archive's hash → reuse; present with another hash → abort (a live object is never overwritten) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
-| R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then the three locks in this order, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) , `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore) and `pg_advisory_lock((L,'inbox'))` exclusive (waits for an import between its commit and its source removal, and for a backup's inbox copy; §11.3). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch. The recheck covers the one race PRKS can cause, cleanup unlinking a reused key, so it checks existence and size and does not rehash: same-size bytes changed outside PRKS or by bit rot could equally change a minute after R4, and detecting that is a data-root integrity check, not part of restore (maintainer decision, 2026-10-13). Then publish the staged inbox files (see "Processing inbox payload") | Commands that slipped in before R2 finish first |
+| R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then the two locks in this order, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch. The recheck covers the one race PRKS can cause, cleanup unlinking a reused key, so it checks existence and size and does not rehash: same-size bytes changed outside PRKS or by bit rot could equally change a minute after R4, and detecting that is a data-root integrity check, not part of restore (maintainer decision, 2026-10-13). | Commands that slipped in before R2 finish first |
 | R4 Commit | One SERIALIZABLE transaction that first locks the `libraries` row `FOR UPDATE` and aborts unless `maintenance = 'restore' AND maintenance_run = <run>` and the `restore_runs` row is still this run's live lease; then: delete the Library's rows of the content tables (the allowlist, never memberships, sessions or operational rows) and its `derived` rows, and set `search_folding = NULL` (§8.6); insert the devices the identity mapping marked as new, then the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry, and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
-| R5 Release | On an abort after R2, finalize the failure (see "Abort finalization"): undo the inbox publication if R3 published anything, then clear the flag in one owner-fenced transaction. Then release all three locks and drop the staging schema, in a `finally` that runs on success and on every abort (`pg_advisory_unlock_all()`, and the dedicated restore connection is closed, never returned to a pool) | Normal operation, immediately after an abort as after a commit |
+| R5 Release | On an abort after R2, finalize the failure (see "Abort finalization"): clear the flag in one owner-fenced transaction. Then release both locks and drop the staging schema, in a `finally` that runs on success and on every abort (`pg_advisory_unlock_all()`, and the dedicated restore connection is closed, never returned to a pool) | Normal operation, immediately after an abort as after a commit |
 
 **Abort finalization.** A restore that fails after R2 but whose process is
 still alive (an R3 lock timeout, an R3 re-verification failure, an R4
 rollback such as `40001`, a constraint error or `53100`) finishes the
 failure itself rather than leaving the Library in maintenance until its
 lease expires. While it still holds whatever locks it took in R3 (the
-exclusive Library and inbox locks, if it got that far), on the restore
+exclusive Library and objects locks, if it got that far), on the restore
 connection:
 
-1. If R3 published inbox files, it undoes them (see "Processing inbox
-   payload").
-2. Only if the undo succeeded (or nothing was published), one transaction
+1. One transaction
    locks the `libraries` row `FOR UPDATE` and, only if `maintenance =
    'restore' AND maintenance_run = <run>`, sets both to `NULL` and marks the
    `restore_runs` row failed with the error. `epoch` is unchanged, because
    nothing was restored. If the run no longer owns the flag (recovery took
    it over), the transaction changes nothing.
-3. Then R5 releases the locks and drops the staging schema.
+2. Then R5 releases the locks and drops the staging schema.
 
-If the undo fails, or the connection is lost before step 2 commits, the
+If the connection is lost before step 1 commits, the
 flag stays set and crash recovery below handles the run when its lease
 expires. A failed restore therefore accepts ordinary commands as soon as
 its process has finalized it.
@@ -2311,8 +2214,7 @@ connection dies. A crash before R2 leaves nothing to undo except the staging
 schema and staged objects (dropped, and swept as orphans). A crash between R2
 and R4 leaves the flag set with the live data untouched: when the run's lease
 expires, startup or the maintenance reaper clears `maintenance` for that
-`maintenance_run` and marks the run failed, first undoing any inbox files R3
-published ("Processing inbox payload").
+`maintenance_run` and marks the run failed.
 
 **Database capacity: an accepted risk.** R0 checks free space on the
 staging filesystem only. The application cannot see free space on the
@@ -2336,7 +2238,7 @@ operator-set restore headroom; the maintainer accepted the residual risk
    free space on the volume first. PRKS does not promise uninterrupted
    service or automatic recovery in that case.
 4. **Safe cleanup after capacity returns.** Dropping a failed run's
-   `restore_<id>` schema, undoing its inbox publication and deleting its
+   `restore_<id>` schema and deleting its
    staging directory are idempotent. Startup and the maintenance reaper
    retry them on every pass, so they complete once there is room, and they
    never touch live tables.
@@ -2451,12 +2353,166 @@ type change.
 a copy of the data root is documented for administrators, but it is not the
 user-facing backup and restoring it does not go through PRKS.
 
-### 11.5 Processing inbox
+### 11.5 Processing queue
 
-`processing_files.abs_path` is removed; the inbox path is configuration, and
-`rel_path` is relative to it. The `/data/for_processing` special case remains
-#311's to retire. Scanning becomes a job (`processing.scan`) that the UI
-triggers and observes, instead of a GET that mutates.
+Files for Processing is a **managed upload queue** (decision 12, §16). The
+SQLite processing inbox, a directory PRKS scans, is not ported: PostgreSQL
+has no inbox directory, scanner, watcher, stored path, claim or recovery
+state, inbox lock or inbox backup payload. The browser uploads PDFs into
+managed objects, the user edits a draft of each Work, and import turns an
+item into a Work in one transaction.
+
+**Tables** (`160_processing.sql`):
+
+- `processing_items`: `id` (`PI-` prefix), `library_id`,
+  `original_filename` (display only: never a path, never unique),
+  `object_locator` (the `asset-objects` key of the uploaded bytes),
+  `sha256` and `byte_size` of those bytes, `status` (`ready`,
+  `imported` or `deleted`), `revision`, `upload_key`, `uploaded_by`,
+  `created_at`, `updated_at`, `imported_at`, `imported_work_id` and
+  `deleted_at`.
+  `UNIQUE (library_id, upload_key)` makes uploads idempotent, and an index
+  on `(library_id, sha256)` serves duplicate warnings. A `ready` item has
+  `object_locator` and neither `imported_at` nor `deleted_at`; an
+  `imported` item has `imported_at` and no `object_locator`; a `deleted`
+  item has `deleted_at` and no `object_locator` (a `CHECK`).
+  `imported_work_id` references the Work `ON DELETE SET NULL`, and Work
+  merge re-points it (§7.1).
+- `processing_item_drafts`: one row per `ready` item, with every Work field
+  the SQLite inbox stages and import carries into the Work: `title`,
+  `status_draft`, `published_date`, `abstract`, `source_url`, `author_text`,
+  `year`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
+  `pages`, `isbn`, `doi`, `doc_type`, `private_notes` and `thumb_page`, plus
+  `target_folder_id` (`ON DELETE SET NULL`, so a deleted folder leaves the
+  item for "Uncategorized").
+- `processing_item_roles` (Person, role type, order; `ON DELETE CASCADE`
+  from the Person) and `processing_item_tags` (no cascade from the Tag: a
+  Tag delete removes these links and a Tag merge moves them, as it does
+  `work_tags`). Both hang off the draft and are deleted with it.
+
+There is no `uploading`, `pending` or `error` state. A row exists only once
+its bytes are durable and adopted, and a failed import changes nothing, so
+`ready` is the only live state. `imported` and `deleted` are terminal
+**markers** (below): the row keeps its `upload_key` reserved forever.
+
+**Upload** (`POST /api/processing-items`): the body is the raw PDF
+(`Content-Type: application/pdf`), with `Content-Length` required, the
+original filename percent-encoded (UTF-8) in `PRKS-Filename`, and a
+client-minted `Idempotency-Key` per file. One request carries one file, so a
+picker selection and a drop share the same call, and each file has its own
+progress, failure and retry. The controller is `backend/api/processing.py`;
+the wire contract is `backend/api_contract/processing_items.py` and
+`docs/api/openapi-processing-items.json`.
+
+1. Authenticate, resolve the Library and check maintenance and the epoch,
+   before reading the body.
+2. Look up `(library_id, upload_key)`. A hit returns that item without
+   reading the body: a `ready` item or an imported marker as it is, and a
+   deleted marker as `PROCESSING_ITEM_DELETED`. A replay never recreates
+   an item the user removed or imported.
+3. Otherwise stream the body into a fresh key through `put_new` with a
+   bounded buffer: the first bytes must be `%PDF-`, the body must match
+   `Content-Length` and stay under the upload cap, and the backend hashes
+   and syncs it before publishing (§11.2). Nothing is linearized.
+4. One Library command adopts the key (§11.2) and inserts the item and its
+   empty draft with `ON CONFLICT (library_id, upload_key) DO NOTHING`. A
+   concurrent upload with the same key that committed first wins: this
+   command releases its own key in the same transaction, reads the
+   winner's row and answers exactly as step 2 does for its current state
+   (so a winner deleted in the meantime answers `PROCESSING_ITEM_DELETED`).
+   The two never both appear.
+5. Respond `201` (or `200` for an existing item) with the item and any
+   **duplicate warning**: other `ready` items or Assets of this Library with
+   the same `sha256`, at most ten of each with a flag when there are more,
+   so the warning stays bounded however often the bytes repeat. A duplicate
+   is never merged, refused or discarded, and filenames may repeat freely.
+
+A response sent before the whole body was read (an idempotent hit, an
+authentication, maintenance, size or type refusal) carries
+`Connection: close` and the server closes the connection, so unread bytes
+can never be parsed as the next request on a persistent connection. The
+upload holds the Library's read gate while the body streams, and a restore
+waits for every read to finish, so the body must arrive within a bound:
+each read waits at most 30 seconds for data, and the whole body must arrive
+within 60 seconds plus its declared length at 256 KiB/s. A stalled or
+trickling upload is answered `408 PROCESSING_UPLOAD_TIMEOUT` with
+`Connection: close`, and nothing is published. A client that disconnects
+mid-upload, a short body or a crash before step 4 leaves only an
+unreferenced object, which the orphan sweep collects; no item appears.
+
+**Edit** (`PATCH /api/processing-items/{id}`): the request carries the
+`revision` it edited. The command locks the item `FOR NO KEY UPDATE`,
+answers `409` with the current item when the revision differs, refuses a
+marker (`PROCESSING_ITEM_IMPORTED` or `PROCESSING_ITEM_DELETED`) whatever
+its revision, then writes the draft, roles and tags and increments
+`revision`, all in one transaction. Folder and Tag references are taken
+`FOR KEY SHARE`. It runs SERIALIZABLE when it adds a tag link, because
+`processing_item_tags` is a peer table of Tag merge (§7.1).
+
+**Import** (`POST /api/processing-items/{id}/import`, and
+`POST /api/processing-items/import` for a list): one command per item, each
+in its own SERIALIZABLE transaction with the usual retry, so one item's
+failure never affects another's and a batch answers with a result per item.
+
+1. Lock the item. If it is `imported`, create nothing: answer with its
+   `imported_work_id`, or with `IMPORTED_WORK_DELETED` when that Work was
+   deleted. A retry, however late, never creates a second Work. If it is
+   `deleted`, refuse with `PROCESSING_ITEM_DELETED`.
+2. Resolve the target folder (key share) or "Uncategorized".
+3. Create the Work, Manifestation and Asset through `create_work` (§6.4) with
+   the item's key as the Asset's `storage_locator` and its `sha256` as
+   `ingest_sha256` and `content_sha256`. The key is already adopted by this
+   Library, so `create_work` takes the per-object lock and re-checks it
+   like any adoption. Then the roles, tags and folder filing, through their
+   own commands.
+4. Delete the draft (with its roles and tags), set `status = 'imported'`,
+   `imported_at` and `imported_work_id`, and clear `object_locator`. The
+   key moves from the item to the Asset inside this transaction, under its
+   per-object lock, so cleanup sees one of the two references at every
+   moment.
+5. Enqueue the follow-up jobs (`text.extract`, search and research
+   indexing) in the same transaction, as Work create does.
+
+No bytes are written or moved, so a serialization retry repeats nothing
+outside the database. A failure rolls back: the item, its object and its
+draft stay as they were, and the error is returned, not stored.
+
+**Delete** (`DELETE /api/processing-items/{id}`): locks a `ready` item,
+deletes its draft (with its roles and tags), sets `status = 'deleted'` and
+`deleted_at`, clears `object_locator` and releases the key
+(`lifecycle.release`), all in one transaction; `objects.cleanup` deletes the
+bytes. Deleting a `deleted` item succeeds again with no change, and an
+`imported` item cannot be deleted. Delete, import and an upload replay
+of the same key serialize on the item row, so a replay racing a delete
+returns either the `ready` item (which the delete then removes) or the
+deleted marker, never a new item.
+
+**Markers** (`imported` and `deleted` items) are kept indefinitely: the
+item ID, state, `upload_key`, `sha256`, `byte_size`, original filename,
+timestamps and, for an import, the Work reference. They make upload,
+import and delete retries idempotent without a time window and keep
+provenance. They are not listed in the queue, and nothing prunes them;
+retention can be revisited if database growth ever requires it.
+
+**Queue** (`GET /api/processing-items?limit=&cursor=`): `ready` items with
+their drafts, oldest upload first, one page (at most 500, default 100) per
+request with an opaque `next_cursor`. `GET /api/processing-items/{id}`
+answers any item, markers included, so a client can learn what became of an
+item it lost track of.
+
+**Preview** (`GET /api/processing-items/{id}/pdf`): streams a `ready`
+item's object with `HEAD` and `Range` support through the same object read
+path as Asset PDFs, for the PRKS viewer in read-only mode. The original
+bytes are served as uploaded. The bundled viewer (EmbedPDF 2.15.1) fetches
+the whole file and opens it from memory, so linearization gives it no
+progressive loading and the queue does not linearize. If a later viewer
+loads progressively, optimizing an imported PDF is an Asset rewrite
+(§11.2), not a queue state.
+
+**Frontend.** The queue page (#40) uses only this API and targets
+PostgreSQL server mode. It lands with the cutover (§15.3, PG-C1), so the
+PostgreSQL server never shows the legacy page against an API it does not
+have; PG-C2 deletes the legacy page with SQLite.
 
 ### 11.6 Pre-0.8 data roots
 
@@ -2594,7 +2650,7 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
   maintenance job; failed rows are kept until dismissed.
 - **0.8 job kinds** (only workloads that exist today): `text.extract`,
   `research.reindex_work`, `objects.cleanup`, `objects.sweep`,
-  `search.rebuild`, `derived.rebuild`, `backup.create`, `processing.scan`,
+  `search.rebuild`, `derived.rebuild`, `backup.create`,
   `pdf.materialize` (if the Assets lane moves materialization off the request
   path), `sessions.prune`, `jobs.prune`. Thumbnails stay on-demand and cached
   as derived files.
@@ -2810,18 +2866,26 @@ the lane that ports the relevant module.
 - Restore archive containment: archives with an absolute, drive, `..`,
   backslash or duplicate member, a symlink entry, too many entries, a
   declared size over the cap or the free space, a member whose compression
-  ratio is over the cap or whose stream is longer than declared, a member outside the
-  layout or missing from the manifest, an `inbox/` member in an
-  `outside-root` archive or a missing one in an `included` archive, or an
-  inbox path that escapes the inbox are refused in R0, an `outside-root`
-  archive with metadata-only `inbox` entries passes R0 and backup
-  self-verification, and nothing is
-  written outside the staging directory; an inbox subdirectory replaced by
-  a symlink is treated as a collision in R3.
-- Restore inbox undo: an R4 failure and a kill between R3 and R4 each leave
-  the inbox's files as they were before the restore (published links and
-  `restored-<run>/` removed, the user's identical and changed files and
-  pre-existing directories kept), and no scan lists the undone files.
+  ratio is over the cap or whose stream is longer than declared, or a member outside the
+  layout or missing from the manifest are refused in R0, and nothing is
+  written outside the staging directory.
+- Processing queue (§11.5): concurrent uploads with one idempotency key
+  create one item and leave the loser's object to cleanup; an idempotent hit
+  and an early refusal close the connection without reading the body, and
+  the next request on a new connection is unaffected; a client disconnect,
+  a short body and a kill before the insert leave no visible item and an
+  object the sweep collects; upload, delete, then a retry with the same
+  key (also racing the delete) returns the deleted marker and creates
+  nothing; two imports of one item, an import racing a
+  delete, an edit or a Tag merge, and a Work merge or delete after import
+  each leave exactly one outcome, and a retry against a deleted Work reports
+  it; cleanup and sweep running through upload, import and delete never
+  remove a referenced key and never keep one after release; a batch with
+  one failing item imports the others; an edit after a delete or an import
+  is refused; a same-key upload whose conflicting winner is deleted before
+  it resolves answers `PROCESSING_ITEM_DELETED`; a backup taken with
+  queued, imported and deleted items restores all three, and a restored
+  marker still reserves its upload key; a non-linearized PDF previews with `Range`.
 - Restore identity side effects: after a crash between R1 and R4,
   `prks.devices` is unchanged; after R4 every new device exists exactly once.
 - Restore staging vs sweep: an orphan sweep run during a stalled R1 older
@@ -2957,7 +3021,7 @@ the lane that ports the relevant module.
 | `backend/concurrency.py` gate, save-token dicts, materialization and path lock dicts, `_ready_backups` | §7.5 |
 | Backup format 1 code paths: `Connection.backup`, PRAGMA checks, sidecar renames, file-rename journal for the DB half | §11.4 |
 | Root adoption by SQLite header | §11.1, §11.6 |
-| `processing_files.abs_path` and its restore rewrite | §11.5 |
+| The SQLite processing inbox: `processing_files` and its scan, `PRKS_FOR_PROCESSING_DIR` and the `/data/for_processing` default, format 1's `files/for_processing/`, the legacy Files for Processing page and API, and the relocation inbox rules of `docs/storage-architecture.md` (§8.2 P3, P4 and P10, `retained_residuals`) | §11.5 |
 | `test_db_migrations.py`, `test_sqlite_connection_lifetime.py`, SQLite parts of `test_backup_restore.py`, `test_restore_durability.py`, `test_text_index.py`, `test_work_identity.py` mirror tests, `test_publisher_catalog_queries.py` ASCII pins | Replaced by §13.2–13.3 tests, not deleted without a replacement for each guarantee they cover |
 | `INV-TESTS-001` schema-version literal rule | Rewritten for migration versions |
 | README/wiki SQLite statements (README, wiki Architecture, Storage-Backup-and-Restore, Configuration-and-Operations, Getting-Started, PDFs-and-Annotations, Research-Network, Offline-and-Sync, Developer-Reference), `backend/AGENTS.md` SQLite rules | Updated in the cutover PR and the docs PR that follows it |
@@ -3027,7 +3091,7 @@ stops for maintainer review. No PR is merged without explicit approval.
 | Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `pg_facade/organization.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
 | Research (L-R) | `backend/domain/research/**`, `130_research.sql`, `derived` mention tables, `pg_facade/research.py`, concept/position/argument/note handlers | |
 | Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `pg_facade/annotations.py` | works projection (calls it) |
-| Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, `pg_facade/processing.py` | |
+| Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, `pg_facade/processing.py`, the Processing API routes, the Processing clause of the reference checks in `backend/domain/objects/lifecycle.py` (§11.5; L-A-1 is closed) | |
 | Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `pg_facade/search.py`, text extraction job | |
 | Jobs (L-J) | `backend/jobs/**`, `030_jobs.sql`, `prks worker` entry point | job handlers (owned by their lanes) |
 | Backup (L-B) | `backend/domain/maintenance/backup*`, `restore*`, `backup_runs` table | |
@@ -3068,10 +3132,10 @@ merged; several run at the same time).
 | **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity, with tests that two root folders of the same title key are refused (`NULLS NOT DISTINCT`), the same title under two different parents is allowed, and two concurrent creates of one root folder leave one row; one-playlist-per-Work |
 | **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution; `research.reindex_work` takes the per-Work reindex lock and holds the note `FOR SHARE` while it writes mentions, tested by a note edit committed while a reindex of the old note is paused (the final mentions match the new note) and by a first note created for a Work while a reindex that found no note is paused (the final mentions match the new note); a Work deleted while a reindex of it (a job's or a rebuild's) is paused, and one deleted before a stale reindex runs, leave no research rows for that Work |
 | **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
-| **L-PR-1** Processing | L-A-1, L-P-1, L-O-1 | `processing_files`, `processing_file_roles` (persons) and `processing_file_tags` (tags), whose composite foreign keys need People and Organization; inbox scan as a job that never deletes a row held by restore, import through the objects lane; imports hold the inbox lock (§11.3) across their commit and source-file removal, with the `imported` row state | Parametrized processing tests; no absolute path stored; an import's lock is released on every success and failure path; a crash between an import's commit and its source removal is finished by the next scan and the file is never offered for import again; when the file at that path was replaced before the scan, the scan deletes only the `imported` row and lists the new file as pending |
+| **L-PR-1** Processing queue | L-A-1, L-P-1, L-O-1 | §11.5: `processing_items`, drafts, roles and tags; Processing references in the object lifecycle (§11.2); streamed upload with idempotency keys, revisioned edit, single and batch import that hands the key to the Asset, delete with release, `Range` preview; the HTTP API and OpenAPI; `processing_items` replaces the `processing_files` entry in the Work merge registry (`DEFERRED` in `backend/domain/works/merge.py` becomes a moved peer relationship on `imported_work_id`). The queue frontend (#40) lands with PG-C1 | The §13.3 Processing queue tests; no stored path and no filesystem scan; imported and deleted markers survive indefinitely and reserve their upload key, so a retry never creates a second Work or recreates a deleted item; a failed import keeps its item, draft and object; duplicates warn and never merge |
 | **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding, at start or seen on a worker's idle tick after the database restarts on a new release, enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again; rebuild concurrency (§8.6), with deterministic pause points: a metadata or note command committed while a rebuild batch holds its locks, and one committed after the batch read began, both leave the command's projection; a Work created during a rebuild keeps its row; a rebuild killed mid-run and run again leaves every row equal to a fresh recompute; running it twice changes nothing; a person rename committed while a role add linking that person to another Work is paused (and the reverse order) leaves both Works' rows with the new name; a Work deleted while a refresh naming it is paused, and a refresh naming a Work after its delete and after a rebuild's final delete, leave no `work_search` row for that Work; an Asset deleted or replaced while a `text.extract` of it is paused, and a rebuild with an `asset_text` row whose Asset is gone or replaced, leave no such row; a text rebuild over a Library with one corrupt PDF completes, records that Asset with a failed `status` and indexes the Assets after it; `--only research` completes only after every Work is reindexed, and a Work whose reindex fails fails the rebuild, which resumes from its stored `work_id` |
 | **L-S-2** Ranking (v0.9.0) | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; a backup with the inbox under the data root restores its pending files into a fresh instance, a file already at the same inbox path is never overwritten (the archived copy lands in `restored-<run>/` and its restored row, roles and tags follow it), a scan right after R4 deletes no restored pending row (a row whose file the user had deleted before the backup is held), and a restored `imported` row whose path holds a different file in the target's inbox loses only its row, never the file; a backup taken after a collision restore, with its `restored-<run>/` rows still pending, restores cleanly; a held `outside-root` row whose path holds a different file stays held and its roles and tags are not applied, an import that commits during a backup leaves the archive with either the pending row and its file or neither, an import handler paused between its commit and its file removal at R2 finishes before R3 publishes, and with an `outside-root` inbox the restored rows are held: a scan that finds no file keeps them and the Processing view offers to dismiss them, while a scan that finds the file with the recorded hash clears the hold; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members and inbox paths stay contained (§13.3 archive containment); a restore that does not commit leaves the inbox's files as they were (§13.3 inbox undo); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry, while an abort whose inbox undo fails keeps the flag set for recovery; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
+| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; queued, imported and deleted Processing items round-trip, queued ones with their objects and markers still reserving their upload keys, and an import that commits during a backup leaves the archive with either the queued item and its object or the imported marker and the Asset referencing that object; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members stay contained (§13.3 archive containment); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
 | **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, and the one-database-per-root rule: a database copy taken while PRKS is serving is never started against this root, only against its own root copy (the §11.4 disaster-recovery pair), retiring the old cluster's data directory after an upgrade or move, reverting the image tag is not a rollback, and rollback is a root copy taken with the old data directory or a format-2 backup restored into a fresh instance, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start; the start generation (§11.1) is bumped database-first by every starting `migrate`, `web` and `worker` under the shared `root.lock`, including an upgrade run while the previous `web` and `worker` still hold it, and an older cluster started after a newer one is refused by `migrate`, `web` and `worker`; a clean `docker compose up` (schema applied, no bump) → bootstrap → restart leaves the database and marker generations equal, and a copy of the database taken before the restart is refused against the root afterwards; `migrate` killed between its database bump and its marker write leaves `web` not ready until the marker is reconciled; after bootstrap and a start, recreating the database volume and running `up` again makes bootstrap refuse the used root with its objects untouched; the README states that two databases running against one root at the same time can permanently delete files and that PRKS cannot detect it, and that the start generation counts starts, not writes, so it does not detect every stale database copy (R20) |
 | **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after the Library epoch changes, a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every Library-scoped mutation carries `PRKS-Library-Epoch` and login and bootstrap work without it; the client's epoch handling is proven against a 409 `LIBRARY_EPOCH_CHANGED` and a changed epoch from `/api/session` without a real restore (a real restore belongs to L-B-1, and the combined scenario to PG-C1); #465/#466 suites green |
 
@@ -3079,7 +3143,7 @@ merged; several run at the same time).
 
 | Slice | Depends on | Content | Acceptance criteria |
 | --- | --- | --- | --- |
-| **PG-C1** Full PostgreSQL E2E leg | all Stage 2 lanes except L-S-2 | Run the full E2E gate with the facade as the backend in CI (not yet default); the combined restore and browser scenario | Full E2E Gate green on PostgreSQL; facade method registry reports 100 % ported; E2E: a real restore to an older snapshot while the browser holds a pending edit, the edit is not applied and its text is offered in review-only recovery |
+| **PG-C1** Full PostgreSQL E2E leg | all Stage 2 lanes except L-S-2 | Run the full E2E gate with the facade as the backend in CI (not yet default); the combined restore and browser scenario; the Processing queue frontend (#40, §11.5), which replaces the legacy page in PostgreSQL server mode | Full E2E Gate green on PostgreSQL; facade method registry reports 100 % ported or retired, where `retired` is allowed only for the legacy processing inbox methods that §11.5 replaces; E2E: upload by picker and by drop, preview, draft edit, single and batch import and remove in the Processing queue; E2E: a real restore to an older snapshot while the browser holds a pending edit, the edit is not applied and its text is offered in review-only recovery |
 | **PG-C2** Switch and delete | PG-C1 | PostgreSQL becomes the only backend; §13.4 retirement in one PR (or a short stack); docs and `AGENTS.md` updated; `--testing` uses the harness database | No `import sqlite3` anywhere in `backend/`; full E2E, Test Gate and static analysis green; README quick start works from a clean machine; #614 release gates checked by the maintainer |
 | **PG-C3** Route extraction follow-up (v0.9.0) | PG-C2 | Move route families from facade to direct domain calls under #67, one family per PR | Facade shrinks; no behavior change |
 
@@ -3165,6 +3229,21 @@ Decision 11 and the last two sentences of decision 10 were added on
     generation cannot distinguish, because the generation counts starts,
     not writes; no continuous marker recheck or write-time fencing is added
     in 0.8.
+
+12. **Files for Processing is a managed upload queue** (2026-10-30). It
+    supersedes the path-based processing inbox this document first
+    specified for L-PR-1 (inbox lock, scan job, `imported` source removal,
+    inbox backup payload, restore holds), which is not ported. Browser
+    upload only; queued PDFs are immutable `asset-objects` keys referenced
+    by `processing_items` and counted by the object lifecycle; import is one
+    database transaction that hands the key to the new Asset. Uploads are
+    not linearized, because the bundled viewer loads whole files; any later
+    optimization is an Asset rewrite after verifying a need. Imported
+    and deleted items stay as markers indefinitely with no pruning, so a
+    retry never creates a duplicate Work, reports a deleted one, and never
+    recreates a deleted item. The queue frontend targets
+    PostgreSQL server mode with no SQLite implementation, and the legacy
+    inbox is removed at cutover with no parallel implementation (§11.5).
 
 The compatibility boundary stays **v1.0.0**: before it, backend APIs,
 schemas and implementations may be replaced without prerelease

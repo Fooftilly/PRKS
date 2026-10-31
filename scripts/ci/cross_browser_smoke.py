@@ -23,10 +23,10 @@ from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer  # noqa: E40
 
 ENGINES = ("firefox", "webkit")
 CHECKS = ("folders", "work_detail", "notes_editor", "notes_save_reload", "settings_focus", "pdf_render", "split_panes", "split_reload")
-INHERITED_DB_SETTINGS = (
-    "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
-    "PRKS_TEST_DATABASE_URL",
-)
+# A live deployment's settings. PRKS_TEST_DATABASE_URL is allowed: the E2E
+# AppServer needs that disposable server and only ever uses databases its own
+# harness created (tests/e2e/postgres_identity.py, tests/pg/harness.py).
+INHERITED_DB_SETTINGS = ("PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE")
 
 _SPLIT_PDF_OWNERS = """({mainTabId, secondaryTabId, mainWorkId, secondaryWorkId}) => {
     const get = window.prksGetTabContext;
@@ -104,7 +104,7 @@ def verify_report(report: dict, requested: tuple[str, ...]) -> None:
     """Fail closed if a browser or any required interaction went unrecorded."""
     if report.get("format") != "prks-cross-browser-smoke-v1":
         raise ValueError("cross-browser report has an unknown format")
-    if report.get("fixture") != "disposable_appserver_synthetic_sqlite":
+    if report.get("fixture") != "disposable_appserver_disposable_postgres":
         raise ValueError("cross-browser smoke fixture is not isolated")
     cases = report.get("browsers")
     if not isinstance(cases, list) or len(cases) != len(requested):
@@ -320,7 +320,7 @@ def run(engines: tuple[str, ...], output: Path | None = None) -> dict:
     server = AppServer(seed_fn=seed_library)
     report = {
         "format": "prks-cross-browser-smoke-v1",
-        "fixture": "disposable_appserver_synthetic_sqlite",
+        "fixture": "disposable_appserver_disposable_postgres",
         "browsers": [],
     }
     engine = "setup"

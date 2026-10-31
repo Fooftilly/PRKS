@@ -42,6 +42,16 @@ from backend.api_contract.processing_files import (
     ProcessingFileTagInput,
     ProcessingFileUpdateRequest,
 )
+from backend.api_contract.processing_items import (
+    ProcessingImportRequest,
+    ProcessingImportResults,
+    ProcessingItem,
+    ProcessingItemImported,
+    ProcessingItemPage,
+    ProcessingItemRefusal,
+    ProcessingItemUpdateRequest,
+    ProcessingItemUploaded,
+)
 from backend.api_contract.publishers import (
     PublisherAliasAdded,
     PublisherAliasRequest,
@@ -992,4 +1002,207 @@ def processing_files_openapi_document() -> dict[str, Any]:
         "components": {
             "schemas": schemas,
         },
+    }
+
+
+PROCESSING_ITEMS_CONTRACT_VERSION = "0.1.0"
+
+
+def processing_items_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the Processing queue (``docs/postgresql-architecture.md`` §11.5).
+
+    Served only by the PostgreSQL (``PRKS_AUTH``) runtime; the SQLite runtime
+    answers 404 on these paths. Every mutation needs the ``PRKS-Library-Epoch``
+    header (admission, ``backend/api/session.py``).
+    """
+    schemas: dict[str, Any] = {}
+    for model in (
+        ProcessingItem,
+        ProcessingItemPage,
+        ProcessingItemUploaded,
+        ProcessingItemUpdateRequest,
+        ProcessingItemImported,
+        ProcessingImportRequest,
+        ProcessingImportResults,
+        ProcessingItemRefusal,
+    ):
+        _merge_defs(schemas, _schema(model))
+
+    def _json(name: str) -> dict[str, Any]:
+        return {"application/json": {"schema": {"$ref": f"#/components/schemas/{name}"}}}
+
+    # Every refusal here is ProcessingItemRefusal: {error[, code, message, item]}.
+    def _error(description: str) -> dict[str, Any]:
+        return {"description": description, "content": _json("ProcessingItemRefusal")}
+
+    def _refusal(description: str) -> dict[str, Any]:
+        return {"description": description, "content": _json("ProcessingItemRefusal")}
+
+    item_id_parameter = {"name": "item_id", "in": "path", "required": True, "schema": {"type": "string"}}
+    not_found = _refusal("No such item in this Library (ENTITY_NOT_FOUND).")
+    pdf = {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}
+
+    paths: dict[str, Any] = {
+        "/api/processing-items": {
+            "get": {
+                "operationId": "listProcessingItems",
+                "summary": "One page of the queue: ready items, oldest upload first",
+                "tags": ["processing-items"],
+                "parameters": [
+                    {"name": "limit", "in": "query", "required": False,
+                     "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}},
+                    {"name": "cursor", "in": "query", "required": False,
+                     "description": "The previous page's `next_cursor`.", "schema": {"type": "string"}},
+                ],
+                "responses": {
+                    "200": {"description": "The page.", "content": _json("ProcessingItemPage")},
+                    "400": _error("A limit out of range or a malformed cursor (VALIDATION_ERROR)."),
+                },
+            },
+            "post": {
+                "operationId": "uploadProcessingItem",
+                "summary": "Upload one PDF into the queue",
+                "description": (
+                    "The body is the PDF. A used `Idempotency-Key` answers with its item without "
+                    "reading the body. Any answer sent before the whole body was read carries "
+                    "`Connection: close`. Duplicates by content are a warning only."
+                ),
+                "tags": ["processing-items"],
+                "parameters": [
+                    {"name": "Idempotency-Key", "in": "header", "required": True,
+                     "description": "Minted by the client per file: 1-128 of `A-Z a-z 0-9 . _ : -`.",
+                     "schema": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"}},
+                    {"name": "PRKS-Filename", "in": "header", "required": False,
+                     "description": "The original filename, percent-encoded UTF-8; display only.",
+                     "schema": {"type": "string"}},
+                    {"name": "Content-Length", "in": "header", "required": True,
+                     "schema": {"type": "integer", "minimum": 5}},
+                ],
+                "requestBody": {"required": True, "content": pdf},
+                "responses": {
+                    "200": {"description": "The key was used: its item.", "content": _json("ProcessingItemUploaded")},
+                    "201": {"description": "The item was created.", "content": _json("ProcessingItemUploaded")},
+                    "400": _error(
+                        "A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a "
+                        "body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE)."
+                    ),
+                    "408": _error(
+                        "The body stalled for 30 seconds, or did not arrive within 60 seconds plus "
+                        "its length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT)."
+                    ),
+                    "409": _refusal("The key's item was deleted (PROCESSING_ITEM_DELETED)."),
+                    "411": _error("No Content-Length (PROCESSING_LENGTH_REQUIRED)."),
+                    "413": _error("Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE)."),
+                    "415": _error(
+                        "Not sent as application/pdf (unsupported_media_type), or the body does not "
+                        "start with %PDF- (PROCESSING_NOT_A_PDF)."
+                    ),
+                },
+            },
+        },
+        "/api/processing-items/{item_id}": {
+            "parameters": [item_id_parameter],
+            "get": {
+                "operationId": "getProcessingItem",
+                "summary": "An item, or the marker an import or delete left",
+                "tags": ["processing-items"],
+                "responses": {
+                    "200": {"description": "The item.", "content": _json("ProcessingItem")},
+                    "404": not_found,
+                },
+            },
+            "patch": {
+                "operationId": "updateProcessingItem",
+                "summary": "Edit a ready item's draft at its revision",
+                "tags": ["processing-items"],
+                "requestBody": {"required": True, "content": _json("ProcessingItemUpdateRequest")},
+                "responses": {
+                    "200": {"description": "The item, one revision on.", "content": _json("ProcessingItem")},
+                    "400": _error(
+                        "No or a bad revision, or a refused draft value, folder, person, tag or role "
+                        "type (VALIDATION_ERROR)."
+                    ),
+                    "404": not_found,
+                    "409": _refusal(
+                        "A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, "
+                        "PROCESSING_ITEM_DELETED); `item` is the item as it now is."
+                    ),
+                },
+            },
+            "delete": {
+                "operationId": "deleteProcessingItem",
+                "summary": "Remove a ready item; deleting it again changes nothing",
+                "tags": ["processing-items"],
+                "responses": {
+                    "200": {"description": "The deleted marker.", "content": _json("ProcessingItem")},
+                    "404": not_found,
+                    "409": _refusal("The item was imported (PROCESSING_ITEM_IMPORTED)."),
+                },
+            },
+        },
+        "/api/processing-items/{item_id}/pdf": {
+            "parameters": [item_id_parameter],
+            "get": {
+                "operationId": "getProcessingItemPdf",
+                "summary": "A ready item's PDF as uploaded, with Range support (also HEAD)",
+                "tags": ["processing-items"],
+                "responses": {
+                    "200": {"description": "The whole file.", "content": pdf},
+                    "206": {"description": "The requested range.", "content": pdf},
+                    "404": _refusal("No ready item with that id (ENTITY_NOT_FOUND)."),
+                    "416": {"description": "The range is outside the file."},
+                },
+            },
+        },
+        "/api/processing-items/{item_id}/import": {
+            "parameters": [item_id_parameter],
+            "post": {
+                "operationId": "importProcessingItem",
+                "summary": "Turn a ready item into a Work, in one transaction",
+                "description": "A retry of a finished import answers with the same Work and creates nothing.",
+                "tags": ["processing-items"],
+                "requestBody": {
+                    "required": True,
+                    "description": "Any JSON value, ignored. Send `{}`.",
+                    "content": {"application/json": {"schema": {}}},
+                },
+                "responses": {
+                    "200": {"description": "Imported before: its Work.", "content": _json("ProcessingItemImported")},
+                    "201": {"description": "Imported.", "content": _json("ProcessingItemImported")},
+                    "400": _error("A refused draft value (VALIDATION_ERROR)."),
+                    "404": not_found,
+                    "409": _refusal(
+                        "A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was "
+                        "deleted (IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING)."
+                    ),
+                },
+            },
+        },
+        "/api/processing-items/import": {
+            "post": {
+                "operationId": "importProcessingItems",
+                "summary": "Import several items, each in its own transaction",
+                "description": "One item's failure never affects another's: each has its own result.",
+                "tags": ["processing-items"],
+                "requestBody": {"required": True, "content": _json("ProcessingImportRequest")},
+                "responses": {
+                    "200": {"description": "A result per item, in order.", "content": _json("ProcessingImportResults")},
+                    "400": _error("item_ids missing, empty, not strings, or more than 500 (VALIDATION_ERROR)."),
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Processing queue slice",
+            "version": PROCESSING_ITEMS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for the Processing queue (§11.5), served by the "
+                "PostgreSQL runtime. Schemas are generated from backend/api_contract."
+            ),
+        },
+        "paths": paths,
+        "components": {"schemas": schemas},
     }

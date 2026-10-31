@@ -77,6 +77,7 @@ class OnSourceDelete(enum.Enum):
     CASCADE = "deleted with it: the merge must move the row first or lose it"
     REFUSED = "the delete fails: a forgotten row aborts the merge"
     NOT_REACHED = "not reached: the row's parent is moved, never deleted"
+    SET_NULL = "kept with its reference cleared: the merge must move the row first or lose the link"
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,9 @@ RELATIONSHIPS: tuple[Relationship, ...] = (
     # Nothing to do: an annotation, and its asset-annotation scope, follow the Asset.
     Relationship("annotations", "annotations_asset_fkey", "assets", Disposition.FOLLOWS,
                  OnSourceDelete.NOT_REACHED, "L-A-1", peer=False),
+    # An import's provenance: the Work a Processing item became (§11.5).
+    Relationship("processing_items", "processing_items_imported_work_fkey", "works", Disposition.MOVED,
+                 OnSourceDelete.SET_NULL, "L-PR-1", peer=True),
 )
 
 
@@ -143,8 +147,6 @@ class Deferred:
 
 
 DEFERRED: tuple[Deferred, ...] = (
-    Deferred("processing_files", "L-PR-1",
-             "re-points imported_work_id, which ON DELETE SET NULL would otherwise drop"),
     Deferred("manifestation_credit_overrides", "#60 Slice K (after 0.8)",
              "freezes the source's spelling of a colliding Work-scoped credit on each moved Version "
              "(§10.4 step 4)"),
@@ -178,6 +180,8 @@ PEER_WRITERS: frozenset[str] = frozenset({
     "CREATE_ARGUMENT",          # argument_sources
     "SET_ARGUMENT_SOURCES",     # argument_sources
 })
+# A Processing import (processing_items.imported_work_id) is no sync
+# operation; its transaction is SERIALIZABLE (``processing.commands``).
 
 
 class MergeRefused(Exception):
@@ -246,6 +250,8 @@ class MergePlan:
     source_scopes: tuple[tuple[str, str], ...]      # tombstoned with the source
     # (low_id, high_id): declined Work pairs naming the source (UNKEYED, §10.5).
     duplicate_decisions: tuple[tuple[str, str], ...]
+    # Processing items whose import made the source, re-pointed to the target.
+    imported_items: tuple[str, ...]
     blocked: tuple[str, ...] = field(default=())
 
     @property
@@ -311,6 +317,11 @@ WHERE library_id = %(library_id)s AND work_id = ANY(ARRAY[%(source)s, %(target)s
 _NOTES: LiteralString = """
 SELECT work_id, kind, body FROM prks.work_notes
 WHERE library_id = %(library_id)s AND work_id = ANY(ARRAY[%(source)s, %(target)s])
+"""
+_IMPORTED_ITEMS: LiteralString = """
+SELECT id FROM prks.processing_items
+WHERE library_id = %(library_id)s AND imported_work_id = %(work_id)s
+ORDER BY id COLLATE "C"
 """
 _DECISIONS: LiteralString = """
 SELECT low_id, high_id FROM prks.duplicate_decisions
@@ -427,5 +438,6 @@ def prepare(scope: LibraryScope, source_id: str, target_id: str) -> MergePlan:
         source_scopes=tuple(source_scopes),
         duplicate_decisions=tuple((str(row["low_id"]), str(row["high_id"]))
                                   for row in scope.execute(_DECISIONS, {"work_id": source_id})),
+        imported_items=tuple(str(row["id"]) for row in scope.execute(_IMPORTED_ITEMS, {"work_id": source_id})),
         blocked=blocked,
     )

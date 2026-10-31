@@ -6,6 +6,7 @@ live API is called and no real Project #3 data is used.
 from __future__ import annotations
 
 import ast
+import copy
 import importlib.util
 import io
 import json
@@ -95,9 +96,16 @@ class FakeGitHub:
         self.calls.append((query, variables))
         if query is pr.PROJECT_QUERY:
             return self.override.get("project") or self.project()
-        if query is pr.ITEMS_QUERY:
+        if query is pr.ITEMS_QUERY or query is pr.QUEUE_ITEMS_QUERY:
             total = self.items_total if self.items_total is not None else sum(map(len, self.items))
             page = self._page(self.items, variables["after"], total)
+            if query is pr.QUEUE_ITEMS_QUERY:
+                # The queue uses a different GraphQL selection and never receives
+                # assignee connections, even if fixtures have them.
+                page = copy.deepcopy(page)
+                for node in page["nodes"]:
+                    if isinstance(node.get("content"), dict):
+                        node["content"].pop("assignees", None)
             return {"user": {"projectV2": {"id": pr.PROJECT_ID, "items": page}}}
         if query is pr.ISSUES_QUERY:
             total = self.issues_total if self.issues_total is not None else sum(map(len, self.issues))
@@ -135,6 +143,34 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snap["generated_at"], "2026-10-12T02:30:00Z")
         self.assertEqual(snap["stale_after"], "2026-10-13T08:30:00Z")
         self.assertEqual(snap["project"]["id"], pr.PROJECT_ID)
+
+    def test_queue_item_reader_omits_assignees_and_preserves_pagination(self) -> None:
+        self.assertNotIn("assignees(", pr.QUEUE_ITEMS_QUERY)
+        self.assertIn("assignees(", pr.ITEMS_QUERY)
+        first = issue_item("I1", 1, agent="Claude Code", assignees=("a",))
+        # A partial assignee connection must still make the full readiness
+        # snapshot fail, but must not affect the ownership-only queue.
+        first["content"]["assignees"]["totalCount"] = 21
+        fake = FakeGitHub(
+            items=[[first], [issue_item("I2", 2, agent="Cursor Cloud")]],
+            issues=[[open_issue(1), open_issue(2)]],
+        )
+        with self.assertRaisesRegex(pr.Malformed, "more assignees"):
+            pr.read_items(pr.ReadOnlyGraphQL(fake))
+        issues, skipped = pr.read_items(
+            pr.ReadOnlyGraphQL(fake), include_assignees=False
+        )
+        self.assertEqual(sorted(issues), [1, 2])
+        self.assertEqual(issues[1]["agent"], "Claude Code")
+        self.assertEqual(issues[1]["assignees"], [])
+        self.assertEqual(skipped, {})
+        self.assertEqual(
+            [vars["after"] for query, vars in fake.calls if query is pr.QUEUE_ITEMS_QUERY],
+            [None, "c-1"],
+        )
+        self.assertFalse(any(query is pr.ISSUES_QUERY for query, _ in fake.calls))
+        with self.assertRaisesRegex(pr.Malformed, "more assignees"):
+            snapshot(fake)
 
     def test_absent_issue_differs_from_present_issue_with_blank_fields(self) -> None:
         fake = FakeGitHub(items=[[issue_item("I1", 10)]], issues=[[open_issue(10), open_issue(11)]])

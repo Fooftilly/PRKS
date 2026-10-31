@@ -1536,12 +1536,14 @@
             if (!root.prksIsSupportedFolderField ||
                 !root.prksIsSupportedFolderField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
-            /* Reminders are cached as the server stores them (trimmed): a
-             * recovery base read from this cache is compared exactly with the
-             * server's body (#534). */
+            /* All Folder text fields use backend/folder_sync.py canonical_wire:
+             * Python str.strip() semantics, and the empty title placeholder.
+             * Applying this on ACK keeps cached list and detail rows consistent
+             * with the server (including the Reminders recovery base). */
+            if (field !== 'parent_id' &&
+                typeof root.prksCanonicalFolderFieldValue !== 'function') return false;
             const value = field === 'parent_id' ? (raw || null)
-                : field === 'private_notes' && typeof root.prksCanonicalFolderFieldValue === 'function'
-                    ? root.prksCanonicalFolderFieldValue(field, raw) : raw;
+                : root.prksCanonicalFolderFieldValue(field, raw);
             await patchEntity('folder-state', id, function (state) {
                 if (typeof root.prksIsFolderStateShape === 'function' &&
                     !root.prksIsFolderStateShape(state, id)) return null;

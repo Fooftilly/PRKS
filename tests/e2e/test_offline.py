@@ -54,6 +54,8 @@ from tests.e2e.test_app import (
     _FOCUSED_VIEWER,
     _FOCUSED_WORK_NOTES,
     _commit_pdf_highlight,
+    _only_viewer_annotation_id,
+    _wait_server_annotation,
     _continue_held_routes,
     _sync_success_at,
     _open_details_drawer_if_tiled,
@@ -1733,10 +1735,21 @@ class OfflineFoundationTests(unittest.TestCase):
         page.route("**/api/**", hold_reachability_gets)
         try:
             context.set_offline(False)
+            # An unrelated API GET may be the first held route. It is not
+            # proof that the actual connectivity probe is blocked, and
+            # releasing the routes before /api/settings arrives can make this
+            # reconnect race test fail or pass for the wrong reason.
+            def settings_probe_held():
+                return any(
+                    route.request.method == "GET"
+                    and urlparse(route.request.url).path == "/api/settings"
+                    for route in held_probe
+                )
+
             deadline = time.time() + 12
-            while time.time() < deadline and not held_probe:
+            while time.time() < deadline and not settings_probe_held():
                 page.wait_for_timeout(50)
-            self.assertTrue(held_probe, "reachability probe did not start")
+            self.assertTrue(settings_probe_held(), "held /api/settings reachability probe did not start")
 
             page.wait_for_timeout(200)
             self.assertNotEqual(_connectivity_state(page), "online")
@@ -2237,6 +2250,11 @@ class OfflineFoundationTests(unittest.TestCase):
             before_ops = page.evaluate(
                 "() => prksSync.store.listOperations().then(r => r.length)"
             )
+            before_viewer_annotations = _viewer_annotation_count(page)
+            self.assertEqual(
+                before_viewer_annotations, 0,
+                "seeded PDF unexpectedly has viewer annotations before hydration",
+            )
             # Attempt a highlight while snapshot is held — must not create
             # durable intent or leave an untracked viewer annotation accepted.
             try:
@@ -2248,6 +2266,10 @@ class OfflineFoundationTests(unittest.TestCase):
                 "() => prksSync.store.listOperations().then(r => r.length)"
             )
             self.assertEqual(before_ops, after_ops)
+            self.assertEqual(
+                _viewer_annotation_count(page), before_viewer_annotations,
+                "a viewer annotation was accepted without a durable bridge",
+            )
             self.assertEqual(_pdf_mode(page), "preview")
 
             _continue_held_routes(held)
@@ -2264,6 +2286,14 @@ class OfflineFoundationTests(unittest.TestCase):
             )
             _wait_pdf_markup_tools_settled(page)
             self.assertTrue(_pdf_markup_tools_available(page))
+            # The same viewer must become *durably* editable after the held
+            # snapshot resolves, rather than merely showing enabled controls.
+            _commit_pdf_highlight(page)
+            self.assertEqual(_viewer_annotation_count(page), 1)
+            _wait_server_annotation(
+                page, work_a, _only_viewer_annotation_id(page)
+            )
+            _drain_durable(page)
         finally:
             _continue_held_routes(held)
             try:

@@ -107,6 +107,19 @@ _E2E_TEST_ID_LINE = re.compile(
     r"^tests\.e2e\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.test_[A-Za-z0-9_]+$"
 )
 _E2E_DIAG_LINE = re.compile(r"^\[e2e-diag\]\s+(\S+)(?:\s+(\S+))?\s*$")
+# Only static harness stages and exception classes may reach CI's early
+# failure markers, regardless of whether the source is a worker or log file.
+_SAFE_E2E_EARLY_STAGES = frozenset({
+    "START", "STOP", "CHROMIUM_CLOSE", "CHROMIUM_LAUNCH",
+    "SERVER_READY", "CONTEXT_READY", "APP_READY",
+})
+_SAFE_E2E_EARLY_EXCEPTIONS = frozenset({
+    "AssertionError", "RuntimeError", "TimeoutError", "Error",
+    "ValueError", "TypeError", "OSError", "KeyError",
+    "AttributeError", "ConnectionError", "PermissionError",
+    "FileNotFoundError", "NotImplementedError",
+})
+
 
 DEFAULT_E2E_MODULES = (
     "tests.e2e.test_app",
@@ -411,6 +424,61 @@ class _TimingResult(JUnitResultMixin, unittest.TextTestResult):
         self.timings = {}
         self.phase_timings = {}
         self._started_at = None
+        self._early_failure_count = 0
+
+    def _print_early_failure(self, kind, test, exc_info):
+        """Emit bounded, content-free failure context before the suite ends.
+
+        unittest normally defers tracebacks until its final summary; an outer
+        E2E hard timeout can kill that summary after dozens of errors. Print
+        only fixed-shape test ids, exception class and a bounded stage, never
+        exception messages, selectors, stack traces or library data.
+        """
+        self._early_failure_count += 1
+        if self._early_failure_count > 3:
+            return
+        test_id = str(test.id())
+        # The test name must be the actual unittest identity from a known
+        # static E2E module; merely matching a filename-shaped private value
+        # is not sufficient to allow it into CI logs.
+        module = type(test).__module__
+        if (
+            not isinstance(test, unittest.TestCase)
+            or (
+                module not in E2E_MODULES
+                and module != "tests.e2e.runner_selfcheck_cases"
+            )
+            or test_id != unittest.TestCase.id(test)
+            or not _E2E_TEST_ID_LINE.fullmatch(test_id)
+        ):
+            test_id = "(unavailable)"
+        exception = getattr(exc_info[0], "__name__", "")
+        # Do not trust an arbitrary dynamic class name just because it fits
+        # the expected character pattern.
+        if exception not in _SAFE_E2E_EARLY_EXCEPTIONS:
+            exception = "unknown"
+        stage = str((get_e2e_heartbeat() or {}).get("stage") or "")
+        # Stages are fixed harness labels, not arbitrary supplied strings.
+        if stage not in _SAFE_E2E_EARLY_STAGES:
+            stage = "unknown"
+        print(
+            "[e2e-early-failure] %s %s exception=%s stage=%s"
+            % (kind, test_id, exception, stage),
+            flush=True,
+        )
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._print_early_failure("ERROR", test, err)
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._print_early_failure("FAIL", test, err)
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            self._print_early_failure("SUBTEST", test, err)
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
@@ -572,9 +640,34 @@ def _install_shutdown_handlers(index: int) -> None:
     threading.Thread(target=_watch_parent, daemon=True).start()
 
 
+def _safe_watchdog_stage(stage) -> str:
+    """Only fixed harness stages may enter timeout logs or artifacts."""
+    if not isinstance(stage, str):
+        return "unknown"
+    # Explicit lifecycle phases emitted by OfflineWorkMetadataTests.start
+    # remain useful when a test hangs in its cleanup stack. Keep this
+    # watchdog-only: early failure markers have a narrower, fixed vocabulary.
+    if stage in _SAFE_E2E_EARLY_STAGES or stage in {
+        "BETWEEN_TESTS", "BODY_DONE", "CONTEXT_CLOSED", "SERVER_STOPPED",
+        "CHROMIUM_RECYCLE",
+    }:
+        return stage
+    if re.fullmatch(r"CHROMIUM_RECYCLE after_[0-9]{1,5}_contexts", stage):
+        return stage
+    return "unknown"
+
+
+def _safe_watchdog_heartbeat(worker, hb: dict) -> dict:
+    """Validate a timeout identity against the worker's assigned test IDs."""
+    return {
+        "test_id": _safe_worker_test_id(hb.get("test_id"), worker.get("shard")),
+        "stage": _safe_watchdog_stage(hb.get("stage")),
+    }
+
+
 def _format_watchdog_detail(hb: dict, threshold_s: int, age_s: float) -> str:
-    tid = (hb or {}).get("test_id") or "(unknown)"
-    stage = (hb or {}).get("stage") or "(none)"
+    tid = _safe_worker_test_id((hb or {}).get("test_id")) or "(unknown)"
+    stage = _safe_watchdog_stage((hb or {}).get("stage"))
     return (
         "per-test watchdog: test=%s stage=%s age=%.0fs threshold=%ds "
         "(no automatic retry)"
@@ -685,11 +778,21 @@ def _persist_failure_diagnostics(payload: dict) -> None:
         pass
 
 
-def _privacy_safe_detail(report: dict | None, *, watchdog: bool) -> str:
+def _privacy_safe_detail(report: dict | None, *, watchdog: bool, shard=None) -> str:
     """Retain only validated runner-authored details, never unittest traces."""
     detail = str((report or {}).get("detail") or "").strip()
-    if watchdog and detail.startswith("per-test watchdog:"):
-        return detail
+    if watchdog:
+        match = re.fullmatch(
+            r"per-test watchdog: test=(\S+) stage=(.+?) "
+            r"age=(\d+)s threshold=(\d+)s \(no automatic retry\)",
+            detail,
+        )
+        if match:
+            tid, stage = match.group(1), match.group(2)
+            if (tid == "(unknown)" or _safe_worker_test_id(tid, shard)) and (
+                _safe_watchdog_stage(stage) == stage
+            ):
+                return detail
     if (report or {}).get("kind") == "execution-count-mismatch":
         if re.fullmatch(r"E2E execution count mismatch: selected=\d+ completed=\d+", detail):
             return detail
@@ -808,14 +911,17 @@ def _install_test_watchdog(
         while True:
             time.sleep(poll_s)
             hb = get_e2e_heartbeat()
-            tid = hb.get("test_id") or ""
+            tid = _safe_worker_test_id(hb.get("test_id"))
+            stage = _safe_watchdog_stage(hb.get("stage"))
             started = float(hb.get("test_started_mono") or 0.0)
             if started <= 0:
                 continue
             age = time.monotonic() - started
             if age < threshold:
                 continue
-            detail = _format_watchdog_detail(hb, threshold, age)
+            detail = _format_watchdog_detail(
+                {"test_id": tid, "stage": stage}, threshold, age
+            )
             print(
                 "[worker %d] %s" % (index, detail),
                 file=sys.stderr,
@@ -829,7 +935,7 @@ def _install_test_watchdog(
                 report_file or "",
                 detail,
                 tid,
-                stage=str(hb.get("stage") or ""),
+                stage=stage,
             )
             if persist_last_failed:
                 try:
@@ -839,7 +945,7 @@ def _install_test_watchdog(
             try:
                 _persist_watchdog_diagnostics(
                     test_id=tid,
-                    stage=str(hb.get("stage") or ""),
+                    stage=stage,
                     detail=detail,
                     worker_index=index,
                 )
@@ -1014,6 +1120,9 @@ def _spawn_worker(index, jobs, shard, workdir, browsers_path, fail_fast=False):
         "handle": handle,
         "report_file": report_file,
         "log_file": log_file,
+        "early_marker_offset": 0,
+        "early_marker_count": 0,
+        "early_marker_skip_overlong": False,
         "heartbeat_file": heartbeat_file,
         "shard": shard,
         "started": time.perf_counter(),
@@ -1035,12 +1144,94 @@ def _read_report(worker):
         return None
 
 
+def _sanitize_worker_report(report, shard):
+    """Never promote unassigned worker-report IDs into last-failed data."""
+    if report is None:
+        return None
+    report["failed_ids"] = [
+        tid for tid in (report.get("failed_ids") or [])
+        if _safe_worker_test_id(tid, shard)
+    ]
+    if report.get("watchdog"):
+        report["stage"] = _safe_watchdog_stage(report.get("stage"))
+        report["detail"] = _privacy_safe_detail(
+            report, watchdog=True, shard=shard
+        )
+    return report
+
+
 def _tail(path, limit=4000):
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read()[-limit:]
     except OSError:
         return ""
+
+
+def _validated_early_failure_marker(line: str, shard) -> str:
+    """Return only a fixed-shape, allowlisted marker from a known shard."""
+    fields = line.rstrip("\r\n").split(" ")
+    if len(fields) != 5 or fields[0] != "[e2e-early-failure]":
+        return ""
+    _, kind, test_id, exc, stage = fields
+    if kind not in ("ERROR", "FAIL", "SUBTEST"):
+        return ""
+    if test_id != "(unavailable)" and (
+        not _E2E_TEST_ID_LINE.fullmatch(test_id) or test_id not in shard
+    ):
+        return ""
+    if not exc.startswith("exception=") or (
+        exc[len("exception="):] not in _SAFE_E2E_EARLY_EXCEPTIONS
+        and exc != "exception=unknown"
+    ):
+        return ""
+    if not stage.startswith("stage=") or (
+        stage[len("stage="):] not in _SAFE_E2E_EARLY_STAGES
+        and stage != "stage=unknown"
+    ):
+        return ""
+    return line.rstrip("\r\n")
+
+
+def _forward_early_failure_markers(worker) -> None:
+    """Stream up to three sanitized worker-log markers before gate timeout.
+
+    Track a seekable cursor instead of rereading accumulated log output. The
+    bounded reader rejects incomplete or oversized lines without echoing any
+    unverified content.
+    """
+    if worker.get("early_marker_count", 0) >= 3:
+        return
+    try:
+        with open(worker["log_file"], encoding="utf-8", errors="replace") as handle:
+            handle.seek(worker.get("early_marker_offset", 0))
+            while worker.get("early_marker_count", 0) < 3:
+                line = handle.readline(512)
+                if not line:
+                    break
+                if not line.endswith("\n") and len(line) < 512:
+                    # This is the writer's incomplete last line; read it later.
+                    break
+                worker["early_marker_offset"] = handle.tell()
+                if worker.get("early_marker_skip_overlong"):
+                    if line.endswith("\n"):
+                        worker["early_marker_skip_overlong"] = False
+                    continue
+                if not line.endswith("\n"):
+                    # Ignore every fragment through the end of a long line.
+                    worker["early_marker_skip_overlong"] = True
+                    continue
+                marker = _validated_early_failure_marker(
+                    line, worker.get("shard", ())
+                )
+                if marker:
+                    worker["early_marker_count"] = (
+                        worker.get("early_marker_count", 0) + 1
+                    )
+                    print("[E2E %d] %s" % (worker["index"] + 1, marker), flush=True)
+    except OSError:
+        # Best-effort telemetry cannot alter E2E verdicts or test isolation.
+        return
 
 
 def _read_heartbeat(path) -> dict | None:
@@ -1056,7 +1247,16 @@ def _read_heartbeat(path) -> dict | None:
     return data
 
 
-def _last_started_test(log_file) -> str:
+def _safe_worker_test_id(test_id, shard=None) -> str:
+    """Only attribute a genuine, complete E2E id from the worker's own shard."""
+    if not isinstance(test_id, str) or not _E2E_TEST_ID_LINE.fullmatch(test_id):
+        return ""
+    if shard is not None and test_id not in shard:
+        return ""
+    return test_id
+
+
+def _last_started_test(log_file, shard=None) -> str:
     """Last test id a worker printed before hanging (see _TimingResult.startTest).
 
     ``startTest`` prints a bare ``test.id()`` line. Diagnostic / recycle /
@@ -1067,8 +1267,11 @@ def _last_started_test(log_file) -> str:
     try:
         with open(log_file, encoding="utf-8", errors="replace") as handle:
             for ln in handle:
-                s = ln.strip()
-                if _E2E_TEST_ID_LINE.match(s):
+                # A prefix match misattributes lines such as
+                # "test_id <arbitrary worker chatter>" to the last test.
+                # startTest emits the bare id plus a newline, not a suffix.
+                s = ln.rstrip("\r\n")
+                if _safe_worker_test_id(s, shard):
                     last = s
     except OSError:
         return ""
@@ -1102,7 +1305,9 @@ def _current_heartbeat_test_id(worker) -> str:
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if not hb:
         return ""
-    return str(hb.get("test_id") or "").strip()
+    return _safe_worker_test_id(
+        hb.get("test_id"), worker.get("shard")
+    )
 
 
 def _hang_attribution(worker) -> tuple[str, str]:
@@ -1113,10 +1318,14 @@ def _hang_attribution(worker) -> tuple[str, str]:
     """
     hb = _read_heartbeat(worker.get("heartbeat_file"))
     if hb and (hb.get("test_id") or hb.get("stage")):
-        return str(hb.get("test_id") or ""), str(hb.get("stage") or "")
-    last = _last_started_test(worker["log_file"])
+        # Do not promote an out-of-shard, malformed or stale heartbeat id.
+        # Stage-only fixture heartbeats intentionally do not use log test ids:
+        # those may belong to the previous *completed* test.
+        return _current_heartbeat_test_id(worker), _safe_watchdog_stage(hb.get("stage"))
+    last = _last_started_test(worker["log_file"], worker.get("shard"))
     stage, diag_tid = _last_diag_stage(worker["log_file"])
-    return last or diag_tid, stage
+    return (last or _safe_worker_test_id(diag_tid, worker.get("shard")),
+            _safe_watchdog_stage(stage))
 
 
 def _worker_exceeded_watchdog(worker, threshold_s: int) -> tuple[bool, dict | None, float]:
@@ -1171,6 +1380,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
             # this with-block unwinds, and hard-timeout SIGTERM is the common
             # path for a single hung shard after its peer finished cleanly.
             for worker in workers:
+                _forward_early_failure_markers(worker)
                 if worker["proc"].poll() is None:
                     _print_hung_worker(worker, jobs)
                 _stop_worker(worker)
@@ -1204,6 +1414,8 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
             watchdog_threshold = per_test_watchdog_s()
             while pending:
                 time.sleep(WORKER_POLL_S)
+                for worker in pending:
+                    _forward_early_failure_markers(worker)
                 if watchdog_threshold > 0:
                     for worker in list(pending):
                         if worker["proc"].poll() is not None:
@@ -1213,8 +1425,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                         )
                         if not exceeded:
                             continue
+                        hb = _safe_watchdog_heartbeat(worker, hb or {})
                         detail = _format_watchdog_detail(
-                            hb or {}, watchdog_threshold, age
+                            hb, watchdog_threshold, age
                         )
                         print(
                             "[E2E %d/%d] %s"
@@ -1244,7 +1457,9 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                     pending.remove(worker)
                     elapsed = time.perf_counter() - worker["started"]
                     rc = worker["proc"].returncode
-                    report = _read_report(worker)
+                    report = _sanitize_worker_report(
+                        _read_report(worker), worker.get("shard", ())
+                    )
                     entry = {
                         "index": worker["index"],
                         "returncode": rc,
@@ -1386,6 +1601,7 @@ def run_parallel(test_ids, jobs, timings, fail_fast) -> tuple[bool, dict, list, 
                 except (ValueError, OSError):
                     pass
             for worker in workers:
+                _forward_early_failure_markers(worker)
                 _stop_worker(worker)
                 try:
                     worker["handle"].close()

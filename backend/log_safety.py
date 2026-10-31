@@ -87,6 +87,8 @@ _STATIC_API_PATHS = frozenset(
         "/api/backups/stage",
         "/api/backups/restore",
         "/api/processing-files",
+        "/api/processing-items",
+        "/api/processing-items/import",
         "/api/saved-views",
         "/api/client-errors",
         "/api/diagnostics/performance",
@@ -104,6 +106,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/openapi/publishers.json",
         "/api/openapi/saved-views.json",
         "/api/openapi/processing-files.json",
+        "/api/openapi/processing-items.json",
         "/api/research-graph",
     }
 )
@@ -117,6 +120,7 @@ _RESOURCE_SLOT = {
     "tags": ":id",
     "publishers": ":id",
     "processing-files": ":id",
+    "processing-items": ":id",
     "saved-views": ":id",
     "concepts": ":id",
     "positions": ":id",
@@ -155,6 +159,7 @@ _NESTED_STATIC = {
     "tags": frozenset({"aliases"}),
     "publishers": frozenset({"aliases"}),
     "processing-files": frozenset({"pdf", "import"}),
+    "processing-items": frozenset({"pdf", "import"}),
     "concepts": frozenset({"parents", "aliases"}),
     "arguments": frozenset({"sources", "targets"}),
 }

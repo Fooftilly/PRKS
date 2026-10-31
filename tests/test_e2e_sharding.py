@@ -855,6 +855,197 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(run_exit_code(False, 0), 1)
 
 
+class EarlyFailureMarkersTests(unittest.TestCase):
+    """Failing unittest cases must log a safe, bounded signal immediately."""
+
+    def test_error_prints_before_suite_finishes_without_exception_details(self):
+        from tests.e2e.runner_selfcheck_cases import FailingCases
+
+        class FlushTrackingStream(io.StringIO):
+            def __init__(self):
+                super().__init__()
+                self.flush_calls = 0
+
+            def flush(self):
+                self.flush_calls += 1
+                super().flush()
+
+        with _import_runner() as runner:
+            case = FailingCases("test_fails")
+            stream, out = io.StringIO(), FlushTrackingStream()
+            result = unittest.TextTestRunner(
+                stream=stream, verbosity=2, resultclass=runner._TimingResult
+            )._makeResult()
+            with mock.patch.object(
+                runner, "get_e2e_heartbeat", return_value={"stage": "APP_READY"}
+            ), contextlib.redirect_stdout(out):
+                try:
+                    raise RuntimeError("PRIVATE_BOOK_TITLE_IN_EXCEPTION")
+                except RuntimeError:
+                    result.addError(case, sys.exc_info())
+                self.assertEqual(len(result.errors), 1)
+                self.assertIn("[e2e-early-failure] ERROR", out.getvalue())
+            printed = out.getvalue()
+            self.assertIn("exception=RuntimeError stage=APP_READY", printed)
+            self.assertGreater(out.flush_calls, 0)
+            self.assertIn(case.id(), printed)
+            self.assertNotIn("PRIVATE_BOOK_TITLE_IN_EXCEPTION", printed)
+
+    def test_module_fixture_error_holder_preserves_original_error(self):
+        # setUpModule/setUpClass failures have an id but are not TestCase objects.
+        # Early reporting must never turn one failure into a worker crash.
+        with _import_runner() as runner:
+            holder = unittest.suite._ErrorHolder(
+                "setUpModule (tests.e2e.test_app)"
+            )
+            result = unittest.TextTestRunner(
+                stream=io.StringIO(), verbosity=2, resultclass=runner._TimingResult
+            )._makeResult()
+            output = io.StringIO()
+            with mock.patch.object(
+                runner, "get_e2e_heartbeat",
+                return_value={"stage": "SERVER_READY"},
+            ), contextlib.redirect_stdout(output):
+                try:
+                    raise RuntimeError("PRIVATE_FIXTURE_SETUP_VALUE")
+                except RuntimeError:
+                    result.addError(holder, sys.exc_info())
+            self.assertEqual(len(result.errors), 1)
+            self.assertIn("PRIVATE_FIXTURE_SETUP_VALUE", result.errors[0][1])
+            self.assertIn(
+                "[e2e-early-failure] ERROR (unavailable) "
+                "exception=RuntimeError stage=SERVER_READY",
+                output.getvalue(),
+            )
+            self.assertNotIn("PRIVATE_FIXTURE_SETUP_VALUE", output.getvalue())
+
+    def test_failure_and_subtest_markers_are_bounded_and_sanitized(self):
+        from tests.e2e.runner_selfcheck_cases import FailingCases
+
+        with _import_runner() as runner:
+            case = FailingCases("test_fails")
+            # A forged ID looks canonical but must never replace the real test.
+            case.id = lambda: "tests.e2e.test_app.SecretPerson.test_private_blob"
+            out = io.StringIO()
+            result = unittest.TextTestRunner(
+                stream=io.StringIO(), verbosity=2, resultclass=runner._TimingResult
+            )._makeResult()
+            with mock.patch.object(
+                runner, "get_e2e_heartbeat",
+                return_value={"stage": "PRIVATE_USER_TOKEN"},
+            ), contextlib.redirect_stdout(out):
+                for index in range(5):
+                    try:
+                        raise AssertionError("PRIVATE_SUBTEST_%s" % index)
+                    except AssertionError:
+                        err = sys.exc_info()
+                        if index == 0:
+                            subtest = unittest.case._SubTest(
+                                case, "PRIVATE_SUBTEST_MESSAGE",
+                                {"private": "PRIVATE_SUBTEST_PARAMETER"},
+                            )
+                            result.addSubTest(case, subtest, err)
+                        else:
+                            result.addFailure(case, err)
+            markers = [
+                line for line in out.getvalue().splitlines()
+                if line.startswith("[e2e-early-failure]")
+            ]
+            self.assertEqual(len(markers), 3)
+            self.assertTrue(markers[0].startswith("[e2e-early-failure] SUBTEST "))
+            self.assertTrue(markers[1].startswith("[e2e-early-failure] FAIL "))
+            for marker in markers:
+                self.assertIn("(unavailable)", marker)
+                self.assertIn("stage=unknown", marker)
+                self.assertNotIn("SecretPerson", marker)
+                self.assertNotIn("PRIVATE_USER_TOKEN", marker)
+                self.assertNotIn("PRIVATE_SUBTEST_PARAMETER", marker)
+                self.assertNotIn("PRIVATE_SUBTEST_MESSAGE", marker)
+                self.assertNotIn("PRIVATE_SUBTEST", marker)
+            self.assertEqual(len(result.failures), 5)
+
+
+class ParallelEarlyFailureMarkerTests(unittest.TestCase):
+    """Early markers must reach the parent without leaking arbitrary log data."""
+
+    def test_worker_markers_forward_incrementally_and_only_once(self):
+        test_id = _ids(_CASES, "FailingCases", "test_fails")[0]
+        marker = (
+            "[e2e-early-failure] FAIL %s exception=AssertionError stage=START"
+            % test_id
+        )
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "worker.log"
+            worker = {
+                "log_file": log,
+                "index": 0,
+                "early_marker_offset": 0,
+                "early_marker_count": 0,
+                "shard": [test_id],
+            }
+            out = io.StringIO()
+            log.write_text(marker[:55], encoding="utf-8")
+            with contextlib.redirect_stdout(out):
+                runner._forward_early_failure_markers(worker)
+                self.assertEqual(out.getvalue(), "")
+                # A partial flush is not duplicated or silently lost.
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write(marker[55:] + "\n")
+                runner._forward_early_failure_markers(worker)
+                runner._forward_early_failure_markers(worker)
+            self.assertEqual(out.getvalue().count(marker), 1)
+            self.assertEqual(worker["early_marker_count"], 1)
+
+    def test_worker_relay_rejects_forged_and_oversized_log_lines(self):
+        test_id = _ids(_CASES, "FailingCases", "test_fails")[0]
+        good = (
+            "[e2e-early-failure] ERROR %s exception=RuntimeError stage=APP_READY"
+            % test_id
+        )
+        forged = good + " SECRET_USER_DOCUMENT"
+        private_stage = good.replace("APP_READY", "PRIVATE_USER_TOKEN")
+        private_class = good.replace("RuntimeError", "PrivateUserName")
+        other_id = _ids(_CASES, "PassingCases", "test_first")[0]
+        private_test_id = good.replace(test_id, other_id)
+        # A marker-like fragment in an oversized line is never a new marker.
+        long_line = "private" * 100 + good
+        with _import_runner() as runner, tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "worker.log"
+            worker = {"log_file": log, "index": 0, "shard": [test_id]}
+            log.write_text(
+                forged + "\n" + private_stage + "\n"
+                + private_class + "\n" + private_test_id + "\n"
+                + long_line + "\n" + good + "\n",
+                encoding="utf-8",
+            )
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                runner._forward_early_failure_markers(worker)
+            self.assertIn(good, out.getvalue())
+            self.assertEqual(out.getvalue().count(good), 1)
+            self.assertNotIn("SECRET_USER_DOCUMENT", out.getvalue())
+            self.assertNotIn("private", out.getvalue())
+
+    def test_parallel_failures_reach_parent_while_sibling_hangs(self):
+        failed_id = _ids(_CASES, "FailingCases", "test_fails")[0]
+        hung_id = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        out = io.StringIO()
+        with _import_runner() as runner, mock.patch.dict(
+            os.environ, {"PRKS_E2E_TEST_WATCHDOG": "2"}
+        ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            ok, _observed, failed, _phases = runner.run_parallel(
+                [failed_id, hung_id], 2, {}, False
+            )
+        self.assertFalse(ok)
+        self.assertIn(failed_id, failed)
+        self.assertIn(hung_id, failed)
+        output = out.getvalue()
+        marker = "[e2e-early-failure] FAIL %s" % failed_id
+        self.assertIn(marker, output)
+        self.assertIn("per-test watchdog", output)
+        self.assertLess(output.index(marker), output.index("per-test watchdog"))
+
+
 class ParallelRunnerProtocolTests(unittest.TestCase):
     """Real worker processes over deliberate pass/fail/crash cases. No browser."""
 
@@ -1202,6 +1393,10 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                     "[e2e-diag] APP_READY tests.e2e.test_work_metadata_offline."
                     "OfflineWorkMetadataTests.test_acknowledgement_keeps_the_work_in_its_new_group\n"
                     "[e2e-diag] CHROMIUM_RECYCLE after_1_contexts\n"
+                    # A test-ID prefix with extra text is not startTest output.
+                    "tests.e2e.test_app.A.test_spoofed PRIVATE_CONTENT\n"
+                    "tests.e2e.test_app.A.test_spoofed(extra)\n"
+                    " tests.e2e.test_app.A.test_spoofed\n"
                     "ok\n"
                     "Ran 1 test in 3.7s\n",
                     encoding="utf-8",
@@ -1247,6 +1442,197 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 stage_only, tid_from_diag = runner._last_diag_stage(log)
                 self.assertEqual(stage_only, "CONTEXT_READY")
                 self.assertTrue(tid_from_diag.endswith("test_old"))
+
+    def test_hang_attribution_rejects_unassigned_and_malformed_ids(self):
+        """Stale heartbeat/log output must not identify a different shard test.
+
+        The heartbeat remains useful for a fixture stage without guessing that
+        the last logged (already completed) test is still running.
+        """
+        with _import_runner() as runner:
+            with tempfile.TemporaryDirectory(prefix="prks-hb-unassigned-") as raw:
+                root = Path(raw)
+                log = root / "worker.log"
+                hb = root / "heartbeat.json"
+                own = "tests.e2e.test_app.A.test_assigned"
+                foreign = "tests.e2e.test_app.B.test_other_shard"
+                worker = {
+                    "log_file": log,
+                    "heartbeat_file": hb,
+                    "shard": [own],
+                }
+                log.write_text(
+                    own + "\n"
+                    + foreign + "\n"
+                    + "[e2e-diag] APP_READY " + foreign + "\n",
+                    encoding="utf-8",
+                )
+                hb.write_text(
+                    json.dumps({"test_id": foreign, "stage": "CONTEXT_READY"}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._current_heartbeat_test_id(worker), "")
+                self.assertEqual(
+                    runner._hang_attribution(worker), ("", "CONTEXT_READY")
+                )
+
+                hb.write_text(
+                    json.dumps({
+                        "test_id": own + " PRIVATE_CONTENT",
+                        "stage": "SERVER_READY",
+                    }),
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._current_heartbeat_test_id(worker), "")
+                self.assertEqual(
+                    runner._hang_attribution(worker), ("", "SERVER_READY")
+                )
+
+                # With no in-flight heartbeat, scan backward in effect:
+                # a foreign line after the assigned ID must not erase it.
+                self.assertEqual(runner._last_started_test(log, [own]), own)
+                hb.write_text("{}", encoding="utf-8")
+                self.assertEqual(
+                    runner._hang_attribution(worker), (own, "APP_READY")
+                )
+                log.write_text(
+                    foreign + "\n"
+                    + "[e2e-diag] APP_READY " + foreign + "\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    runner._hang_attribution(worker), ("", "APP_READY")
+                )
+
+                hb.write_text(
+                    json.dumps({"test_id": own, "stage": "START"}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(runner._current_heartbeat_test_id(worker), own)
+                self.assertEqual(runner._hang_attribution(worker), (own, "START"))
+
+    def test_watchdog_rejects_cross_shard_ids_and_private_stage(self):
+        """Forged heartbeats must not enter CI output or failure history."""
+        own = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        foreign = _ids(_CASES, "PassingCases", "test_first")[0]
+        with _import_runner() as runner:
+            worker = {"shard": [own]}
+            for invalid in (foreign, own + " PRIVATE_PERSON_NAME", None):
+                with self.subTest(invalid=invalid):
+                    clean = runner._safe_watchdog_heartbeat(
+                        worker, {
+                            "test_id": invalid,
+                            "stage": "PRIVATE_PDF_CONTENT\nSECOND_LINE",
+                        },
+                    )
+                    self.assertEqual(clean, {
+                        "test_id": "", "stage": "unknown",
+                    })
+                    detail = runner._format_watchdog_detail(clean, 2, 3.0)
+                    self.assertIn("test=(unknown) stage=unknown", detail)
+                    self.assertNotIn("PRIVATE_", detail)
+                    self.assertNotIn("test_first", detail)
+                    self.assertEqual(
+                        runner._privacy_safe_detail(
+                            {"detail": detail}, watchdog=True
+                        ),
+                        detail,
+                    )
+
+            clean = runner._safe_watchdog_heartbeat(
+                worker, {"test_id": own, "stage": "APP_READY"}
+            )
+            self.assertEqual(clean, {"test_id": own, "stage": "APP_READY"})
+            self.assertEqual(
+                runner._safe_watchdog_stage("CHROMIUM_RECYCLE after_12_contexts"),
+                "CHROMIUM_RECYCLE after_12_contexts",
+            )
+            self.assertEqual(
+                runner._safe_watchdog_stage("BETWEEN_TESTS"), "BETWEEN_TESTS"
+            )
+            # The offline Work metadata fixture emits these before each
+            # cleanup step; a hang there must keep its exact diagnostic stage.
+            for stage in (
+                "BODY_DONE", "CONTEXT_CLOSED", "SERVER_STOPPED",
+                "CHROMIUM_RECYCLE",
+            ):
+                with self.subTest(stage=stage):
+                    self.assertEqual(runner._safe_watchdog_stage(stage), stage)
+                    clean = runner._safe_watchdog_heartbeat(
+                        worker, {"test_id": own, "stage": stage}
+                    )
+                    self.assertEqual(clean["stage"], stage)
+                    detail = runner._format_watchdog_detail(clean, 2, 3.0)
+                    self.assertIn("stage=" + stage + " age=", detail)
+                    self.assertEqual(
+                        runner._privacy_safe_detail(
+                            {"detail": detail}, watchdog=True, shard=[own]
+                        ),
+                        detail,
+                    )
+                    self.assertEqual(
+                        runner._safe_watchdog_stage(stage + " PRIVATE_DATA"),
+                        "unknown",
+                    )
+            self.assertEqual(
+                runner._safe_watchdog_stage("CHROMIUM_RECYCLE after_12_contexts SECRET"),
+                "unknown",
+            )
+
+    def test_watchdog_worker_report_drops_unassigned_ids_and_raw_detail(self):
+        """Even a worker-produced report must not bypass shard validation."""
+        own = _ids(_CASES, "HangingCases", "test_never_finishes")[0]
+        foreign = _ids(_CASES, "PassingCases", "test_first")[0]
+        with _import_runner() as runner:
+            report = runner._sanitize_worker_report(
+                {
+                    "watchdog": True,
+                    "failed_ids": [own, foreign, own + " PRIVATE_COMMENT"],
+                    "stage": "SECRET_DOCUMENT",
+                    "detail": "per-test watchdog: test=" + foreign
+                    + " stage=SECRET_DOCUMENT age=2s threshold=1s (no automatic retry)",
+                },
+                [own],
+            )
+            self.assertEqual(report["failed_ids"], [own])
+            self.assertEqual(report["stage"], "unknown")
+            self.assertEqual(report["detail"], "")
+
+            # A syntactically valid detail is still unsafe when it names an
+            # E2E case belonging to a different worker's assigned shard.
+            foreign_detail = runner._format_watchdog_detail(
+                {"test_id": foreign, "stage": "APP_READY"}, 2, 3.0
+            )
+            forged = runner._sanitize_worker_report(
+                {"watchdog": True, "failed_ids": [foreign],
+                 "stage": "APP_READY", "detail": foreign_detail},
+                [own],
+            )
+            self.assertEqual(forged["failed_ids"], [])
+            self.assertEqual(forged["detail"], "")
+
+            detail = runner._format_watchdog_detail(
+                {"test_id": own, "stage": "START"}, 2, 3.0
+            )
+            clean = runner._sanitize_worker_report(
+                {
+                    "watchdog": True,
+                    "failed_ids": [own],
+                    "stage": "START",
+                    "detail": detail,
+                },
+                [own],
+            )
+            self.assertEqual(clean["failed_ids"], [own])
+            self.assertEqual(clean["stage"], "START")
+            self.assertEqual(clean["detail"], detail)
+            self.assertIsNone(runner._sanitize_worker_report(None, [own]))
+            self.assertEqual(
+                runner._privacy_safe_detail(
+                    {"detail": "per-test watchdog: PRIVATE_DOCUMENT"},
+                    watchdog=True,
+                ), "",
+            )
 
     def test_worker_exceeded_watchdog_without_test_id(self):
         """Module-fixture heartbeats (no unittest id) still trip the parent poll."""

@@ -453,27 +453,118 @@ class FoldersOfflineTests(unittest.TestCase):
         )
         self.assertEqual(posts, [])
 
-    def test_every_canonical_folder_wrapper_issues_no_network_offline(self):
+    def test_canonical_folder_wrappers_enqueue_expected_intents_without_network(self):
+        """A no-HTTP check alone passes when every wrapper throws or does nothing.
+
+        Prepare the acknowledged revision bases online, then exercise five
+        independent durable intents against distinct seeded entities offline.
+        Folder Tag wrappers additionally must either queue or report their
+        explicit unprepared-cache refusal, never an arbitrary exception.
+        """
         server, page, context, _c = self.start()
         ids = server.ids
         self.cache(page, ids)
+        # The wrappers use separate acknowledged revision state snapshots,
+        # not just the visible Folder/Work cache.
+        for fid in (ids['folder_parent'], ids['folder_unvisited']):
+            self.detail(page, fid)
+            o._wait_entity_cached(page, 'folder', fid)
+            page.evaluate(
+                "id => { void prksReadFolderState(id).catch(() => {}); }", fid
+            )
+            o._wait_entity_cached(page, 'folder-state', fid)
+        for wid, title in ((ids['work_a'], WORK_A_TITLE), (ids['work_b'], WORK_B_TITLE)):
+            o._open_work_from_home(page, title)
+            o._wait_entity_cached(page, 'work', wid)
+            page.evaluate(
+                "id => { void prksReadWorkFolderState(id).catch(() => {}); }", wid
+            )
+            o._wait_entity_cached(page, 'work-folder-state', wid)
+        self.detail(page, ids['folder_parent'])
         self.offline(page, context)
         seen = self.watch(page, {'POST', 'PATCH', 'DELETE'})
-        page.evaluate(
-            """async ([fid, wid, tid]) => {
-                const calls = [
-                    () => createFolder('X', ''),
-                    () => patchFolder(fid, { title: 'X' }),
-                    () => deleteFolderCanonical(fid),
-                    () => addWorkToFolder(fid, wid),
-                    () => patchWorkFolder(wid, fid),
-                    () => addTagToFolder(fid, tid),
-                    () => removeTagFromFolder(fid, tid),
-                ];
-                for (const call of calls) { try { await call(); } catch (_) {} }
+
+        results = page.evaluate(
+            """async ([parent, child, empty, workA, workB, tag]) => {
+                const created = await createFolder('Wrapper Offline Create', '');
+                await patchFolder(parent, { description: 'Wrapper offline edit' });
+                await deleteFolderCanonical(empty);
+                await addWorkToFolder(parent, workB);
+                await patchWorkFolder(workA, child);
+                const tagOutcomes = [];
+                for (const [name, action] of [
+                    ['add', () => addTagToFolder(child, tag)],
+                    ['remove', () => removeTagFromFolder(parent, tag)],
+                ]) {
+                    try {
+                        const result = await action();
+                        tagOutcomes.push({ name, status: result?.status });
+                    } catch (error) {
+                        // Unopened Tags panels can legitimately lack the
+                        // offline base; an arbitrary failure is never allowed.
+                        if (!error?.prksFolderTagUnavailable) throw error;
+                        tagOutcomes.push({ name, status: 'unprepared' });
+                    }
+                }
+                return {
+                    created,
+                    tagOutcomes,
+                    operations: await prksSync.store.listOperations(),
+                };
             }""",
-            [ids['folder_parent'], ids['work_a'], ids['folder_tag']],
+            [
+                ids['folder_parent'], ids['folder_child'],
+                ids['folder_unvisited'], ids['work_a'], ids['work_b'],
+                ids['folder_tag'],
+            ],
         )
+        created = results['created']
+        self.assertTrue(created, 'createFolder returned no durable Folder ID')
+        rows = results['operations']
+
+        def queued(operation, entity_id, **payload):
+            return any(
+                op.get('operation') == operation
+                and str(op.get('entity_id')) == str(entity_id)
+                and all(op.get('payload', {}).get(k) == v for k, v in payload.items())
+                for op in rows
+            )
+
+        self.assertTrue(
+            queued('CREATE_FOLDER', created, title='Wrapper Offline Create'),
+            'createFolder succeeded without a queued CREATE_FOLDER',
+        )
+        self.assertTrue(
+            queued('SET_FOLDER_FIELD', ids['folder_parent'],
+                   field='description', value='Wrapper offline edit'),
+            'patchFolder silently lost its SET_FOLDER_FIELD',
+        )
+        self.assertTrue(
+            queued('DELETE_FOLDER', ids['folder_unvisited']),
+            'deleteFolderCanonical silently lost its tombstone',
+        )
+        self.assertTrue(
+            queued('SET_WORK_FOLDER', ids['work_b'], folder_id=ids['folder_parent']),
+            'addWorkToFolder did not queue the move from the child',
+        )
+        self.assertTrue(
+            queued('SET_WORK_FOLDER', ids['work_a'], folder_id=ids['folder_child']),
+            'patchWorkFolder did not queue the move from the parent',
+        )
+        self.assertEqual(
+            [row['name'] for row in results['tagOutcomes']], ['add', 'remove']
+        )
+        for result in results['tagOutcomes']:
+            self.assertIn(result['status'], ('added', 'removed', 'unprepared'))
+            if result['status'] != 'unprepared':
+                operation = 'ADD_FOLDER_TAG' if result['name'] == 'add' else 'REMOVE_FOLDER_TAG'
+                target = ids['folder_child'] if result['name'] == 'add' else ids['folder_parent']
+                self.assertTrue(
+                    queued(operation, target, tag_id=ids['folder_tag']),
+                    '%s Folder Tag wrapper returned success without a queued operation' % result['name'],
+                )
+        # The bounded no-request window is required: a mutation may try
+        # a forbidden request after its local queue write.
         page.wait_for_timeout(600)
         self.assertEqual(seen, [])
 
