@@ -222,7 +222,6 @@ FEATURES = {
             "tests.e2e.test_positions_durable",
             "tests.e2e.test_positions_route_surface",
             "tests.e2e.test_offline.OfflinePositionTests",
-            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_position_index_search_matches_title_and_description",
         ),
     },
     "arguments": {
@@ -233,7 +232,6 @@ FEATURES = {
             "tests.e2e.test_offline.OfflineArgumentTests",
             "tests.e2e.test_offline.OfflineArgumentCoherenceTests",
             "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_index_search_respects_kind_filter",
-            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_filtered_true_empty_state_describes_active_kind",
             "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_filtered_search_empty_is_kind_aware",
         ),
     },
