@@ -309,14 +309,16 @@ console.log('popup-republish-ok');
         self.assertIn("popup-republish-ok", result.stdout)
 
     def test_confirm_delete_focus_stays_on_the_drawer_owner(self):
-        hide = UI[UI.index("function prksHideModalConfirm"):UI.index("function prksFinishModalConfirm")]
+        focus = (ROOT / "frontend-app" / "src" / "modal" / "focus.ts").read_text(encoding="utf-8")
         self.assertNotIn(
             'document.querySelector(\'[data-prks-role="pdf-annotation-drawer"] .annotation-row__delete\')',
-            hide,
+            focus,
         )
-        self.assertIn("prksReplacementAnnotationDelete(opener, ownerTabId)", hide)
+        self.assertIn("replacementAnnotationDelete(opener, ownerTabId)", focus)
+        host = (ROOT / "frontend-app" / "src" / "modal" / "ModalHost.vue").read_text(encoding="utf-8")
+        self.assertIn("rememberConfirmOpener()", host)
         dialog = UI[UI.index("function prksConfirmDialog"):UI.index("function prksAlertDialog")]
-        self.assertIn("prksRememberModalConfirmOpener(document.activeElement);", dialog)
+        self.assertIn("host.confirm(options || {})", dialog)
 
 
 if __name__ == "__main__":

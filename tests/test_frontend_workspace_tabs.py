@@ -439,7 +439,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotIn("prksFlushPendingWorkResearchNotes", commit)
         self.assertIn("function prksConfirmUnsavedRouteLeave(options)", ui)
         confirm = ui.split("function prksConfirmUnsavedRouteLeave(options)", 1)[1].split(
-            "function prksBindModalConfirmOnce", 1
+            "const PRKS_STANDALONE_PAGE_MODAL_CLOSERS", 1
         )[0]
         self.assertIn("cancelLabel: 'Keep editing'", confirm)
         self.assertIn("confirmLabel: 'Discard changes'", confirm)
