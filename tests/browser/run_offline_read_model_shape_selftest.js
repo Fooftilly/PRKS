@@ -427,3 +427,7 @@ let checks = 0;
 
 assert.equal(checks, 102, "all four migrated E2E matrices must remain complete");
 console.log("All " + checks + " offline read-model shape checks passed");
+
+// Reuse the same production predicates in cache-coherence contract tests.
+// The existing negative-control matrices above remain the source of truth.
+module.exports = predicates;
