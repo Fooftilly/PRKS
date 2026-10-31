@@ -1687,7 +1687,7 @@ browser offline/reload behavior:
 | Removed E2E | Replacement fast assertion |
 | --- | --- |
 | `test_a_description_edit_keeps_member_work_caches` | Description ACK patches both index and detail, advances the per-field sync base and keeps member Work snapshots |
-| `test_a_title_edit_stales_member_work_snapshots_only` | Title ACK patches the index/detail and invalidates exactly cached member Works, not an unrelated Work |
+| `test_a_title_edit_stales_member_work_snapshots_only` | One combined title+description wrapper edit yields two field-scoped operations and ACKs, patches the index/detail and invalidates exactly cached member Works, not an unrelated Work |
 | `test_a_reorder_keeps_member_work_caches_and_reorders_the_detail` | Order ACK updates the cached detail's item order and order revision, fences stale index only, keeps member and unrelated Works |
 
 The replacement `run_playlist_ack_dispatch_selftest.js` exercises the
