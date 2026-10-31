@@ -1798,9 +1798,6 @@
         prksCommandPaletteScope: function () {
             return state.scope;
         },
-        prksCommandPaletteNavigationTarget: function () {
-            return state.navigationTarget;
-        },
         prksCommandPaletteSplitPlacement: function () {
             return state.splitPlacement;
         },
