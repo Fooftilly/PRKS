@@ -26,7 +26,7 @@
     // frontend/js/route-model.js) retires old
     // shell/static caches.
     const DEPENDENCY_REVISION = '9ab198671db7';
-    const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION + '-navguard1';
+    const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     const PDF_CACHE = 'prks-pdf-v1';
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
