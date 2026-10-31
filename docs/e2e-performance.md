@@ -3,6 +3,25 @@
 This document tracks per-test E2E cost separately from suite-level sharding.
 
 
+## Exact E2E feature-selector drift guard (#740)
+
+The Unit/API gate now validates the **exact method IDs** in
+`tests/e2e/policy.py::FEATURES` against the actual Python E2E source via
+`ast.parse` in `tests/test_e2e_policy.py`. This closes a real audit gap:
+after moving research-detail E2Es into Vue, stale exact selectors survived
+in the Positions and Arguments feature catalogs (#1060) because normal
+feature selection silently ignored nonmatching entries.
+
+The guard verifies the module file, test class and explicitly named method.
+It parses each referenced module only once without importing Playwright,
+starting a browser or connecting to a database; a deleted or renamed method
+therefore fails the existing fast unit/contract gate. It does **not** change
+the runtime feature selector, affected-file mapping, required smoke IDs,
+packaged policy, retries, sharding, or default E2E workload. Class/module
+prefix selectors remain valid: they intentionally select more than one case
+and are excluded from exact-method validation. The optional packaged
+coverage audit continues to report other unmatched prefixes separately.
+
 ## Packaged smoke critical-defect coverage audit (#993)
 
 The packaged smoke-plus-affected planner remains **inactive**; every automatic
