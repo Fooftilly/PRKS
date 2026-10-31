@@ -105,6 +105,50 @@ describe('Positions route bridge', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('searches Positions by name and description and shows the search-only empty state', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    paintHelpers()
+    const pane = owner('search')
+    const el = host()
+    presentPositionsIndex({
+      owner: pane,
+      host: el,
+      items: [
+        { id: 'P1', name: 'Unrelated Position', description: '' },
+        { id: 'P2', name: 'Other Position', description: 'A distinctive research phrase about standardization.' },
+      ],
+      generation: 1,
+    })
+    const search = el.querySelector<HTMLInputElement>('#prks-position-search')
+    expect(search).not.toBeNull()
+    const visibleRows = () => Array.from(el.querySelectorAll('#prks-position-rows .prks-research-row'))
+    expect(visibleRows()).toHaveLength(2)
+
+    search!.value = 'Unrelated Position'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(visibleRows()).toHaveLength(1)
+    expect(visibleRows()[0]?.textContent).toContain('Unrelated Position')
+
+    search!.value = 'standardization'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(visibleRows()).toHaveLength(1)
+    expect(visibleRows()[0]?.textContent).toContain('Other Position')
+
+    search!.value = 'no-such-position-text'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(visibleRows()).toHaveLength(0)
+    expect(el.querySelector('#prks-position-rows .prks-research-index__empty .meta-row')?.textContent?.trim()).toBe(
+      'No Positions match “no-such-position-text”.',
+    )
+    expect(el.querySelector('#prks-position-new-empty')).toBeNull()
+    expect(el.querySelector('[data-research-search-clear]')).not.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('does not repaint a dismissed generation and drops the tree on unmount', async () => {
     paintHelpers()
     const pane = owner()
