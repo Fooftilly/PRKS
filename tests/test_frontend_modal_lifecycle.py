@@ -62,6 +62,11 @@ class ModalLifecycleContractTests(unittest.TestCase):
         self.assertIn("prksIsModalUnsavedConfirmOpen()", close)
         self.assertIn("return false", close)
         self.assertIn("window.prksModalHost", self.ui)
+        # A classic function declaration is the window property. Naming the
+        # getter prksModalHost lets the Vue host object replace it, and every
+        # later openModal / confirm call throws.
+        self.assertIn("function prksReadModalHost(", self.ui)
+        self.assertNotIn("function prksModalHost(", self.ui)
         unsaved = _between(
             self.ui,
             "function prksOpenModalUnsavedConfirm(onDiscard)",

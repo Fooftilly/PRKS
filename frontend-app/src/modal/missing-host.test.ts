@@ -72,6 +72,29 @@ describe('dirty modal close before the dialog host loads', () => {
     expect((document.getElementById('folder-title') as HTMLInputElement).value).toBe('Draft')
   })
 
+  it('still calls the Vue host after that object occupies window.prksModalHost', async () => {
+    const start = uiSource.indexOf('function prksReadModalHost')
+    const end = uiSource.indexOf('function prksAlertDialog')
+    if (start < 0 || end < start) throw new Error('confirm bridge slice not found')
+    // Indirect eval is global, like a classic script: the getter and
+    // prksConfirmDialog become window properties that the host object must not replace.
+    ;(0, eval)(uiSource.slice(start, end))
+    window.prksModalHost = {
+      confirm: () => Promise.resolve(true),
+      prompt: () => Promise.resolve(null),
+      openUnsavedConfirm: () => {},
+      hideUnsavedConfirm: () => {},
+      isConfirmOpen: () => false,
+      isUnsavedConfirmOpen: () => false,
+      handleEscape: () => {},
+    }
+    const dialog = (window as Window & {
+      prksConfirmDialog?: (options?: { title?: string }) => Promise<boolean>
+    }).prksConfirmDialog
+    expect(typeof dialog).toBe('function')
+    await expect(dialog?.({ title: 'Delete annotation?' })).resolves.toBe(true)
+  })
+
   it('does not run a direct discard callback when the host is absent', () => {
     delete window.prksModalHost
     let discarded = 0

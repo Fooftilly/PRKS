@@ -117,25 +117,27 @@ function prksResetModalBaselines() {
     window.__prksModalBaselineReady = {};
 }
 
-function prksModalHost() {
+// Not named prksModalHost: a classic-script function declaration is the
+// window binding, and the Vue host assigns that same property to its API.
+function prksReadModalHost() {
     const host = window.prksModalHost;
     return host && typeof host === 'object' ? host : null;
 }
 
 function prksIsModalUnsavedConfirmOpen() {
-    const host = prksModalHost();
+    const host = prksReadModalHost();
     if (host && typeof host.isUnsavedConfirmOpen === 'function') return !!host.isUnsavedConfirmOpen();
     const root = document.getElementById('prks-modal-unsaved-confirm');
     return !!(root && !root.classList.contains('hidden'));
 }
 
 function prksHideModalUnsavedConfirm(options) {
-    const host = prksModalHost();
+    const host = prksReadModalHost();
     if (host && typeof host.hideUnsavedConfirm === 'function') host.hideUnsavedConfirm(options);
 }
 
 function prksOpenModalUnsavedConfirm(onDiscard) {
-    const host = prksModalHost();
+    const host = prksReadModalHost();
     if (!host || typeof host.openUnsavedConfirm !== 'function') {
         // The feature shell can be open before the Vue dialog host mounts.
         // Discarding here would drop the draft with no confirmation. Leave
@@ -146,7 +148,7 @@ function prksOpenModalUnsavedConfirm(onDiscard) {
 }
 
 function prksIsModalConfirmOpen() {
-    const host = prksModalHost();
+    const host = prksReadModalHost();
     if (host && typeof host.isConfirmOpen === 'function') return !!host.isConfirmOpen();
     const root = document.getElementById('prks-modal-confirm');
     return !!(root && !root.classList.contains('hidden'));
@@ -157,7 +159,7 @@ function prksIsModalConfirmOpen() {
  * @returns {Promise<boolean>}
  */
 function prksConfirmDialog(options = {}) {
-    const host = prksModalHost();
+    const host = prksReadModalHost();
     if (!host || typeof host.confirm !== 'function') return Promise.resolve(false);
     return host.confirm(options || {});
 }
@@ -1318,7 +1320,7 @@ function prksFindPersonInCache(personId) {
 
 /** Text prompt on the Vue confirm shell. Resolves trimmed string on OK, null on cancel. */
 function prksPromptTextDialog(options = {}) {
-    const host = prksModalHost();
+    const host = prksReadModalHost();
     if (!host || typeof host.prompt !== 'function') return Promise.resolve(null);
     return host.prompt(options || {});
 }
