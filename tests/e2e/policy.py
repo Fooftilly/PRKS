@@ -1363,14 +1363,33 @@ def aggregate_ci_gate_outcome(
     """
     if plan_result != "success":
         return False, "E2E plan job failed"
-    if (not plan_run) or plan_mode == "skip":
+    # Never turn a missing/invalid plan output into an accepted skip. This job
+    # is a required check even when the matrix was not scheduled.
+    if (
+        type(plan_run) is not bool
+        or type(plan_pointer) is not bool
+        or plan_mode not in ("skip", "affected", "full")
+    ):
+        return False, "E2E plan has missing or invalid decision fields"
+    if plan_mode == "skip":
+        if (
+            plan_run
+            or plan_pointer
+            or e2e_result != "skipped"
+            or pointer_result != "skipped"
+        ):
+            return False, "Skipped E2E plan disagrees with scheduled jobs"
         return True, "E2E gate skipped (mode=skip)"
+    if not plan_run:
+        return False, "Runnable E2E plan unexpectedly disabled the matrix"
+    if plan_mode == "full" and not plan_pointer:
+        return False, "Full E2E plan unexpectedly disabled pointer capture"
     if e2e_result != "success":
         return False, "One or more E2E shards failed (mode=%s)" % plan_mode
     if plan_pointer:
         if pointer_result != "success":
             return False, "E2E pointer_capture failed (result=%s)" % pointer_result
-    elif pointer_result not in ("skipped", "success"):
+    elif pointer_result != "skipped":
         return False, "Unexpected pointer job result when not planned: %s" % pointer_result
     return True, "E2E gate passed (mode=%s pointer=%s)" % (
         plan_mode,
