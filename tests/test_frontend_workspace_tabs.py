@@ -267,7 +267,11 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertIn("exact 720px stacked uses drawer", proc.stdout)
         self.assertIn("exact 720px stacked is not side", proc.stdout)
 
-        self.assertIn("Research notes beside PDF when narrow", index)
+        reading = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "settings", "SettingsReading.vue"
+        ))
+        self.assertIn("Research notes beside PDF when narrow", reading)
+        self.assertNotIn("Research notes beside PDF on mobile", reading)
         self.assertNotIn("Research notes beside PDF on mobile", index)
         self.assertIn("Research notes beside PDF when narrow", design)
         self.assertIn("compact save/sync cue", design)

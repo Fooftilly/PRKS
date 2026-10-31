@@ -7,7 +7,6 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX = ROOT / "frontend" / "index.html"
 
 
 class LicensingStructureTests(unittest.TestCase):
@@ -28,13 +27,9 @@ class LicensingStructureTests(unittest.TestCase):
         self.assertIn("Corresponding Source", readme)
 
     def test_about_notice_is_in_diagnostics_not_general(self):
-        index = INDEX.read_text(encoding="utf-8")
-        general = index.split('id="prks-settings-panel-general"', 1)[1].split(
-            'id="prks-settings-panel-reading"', 1
-        )[0]
-        diagnostics = index.split('id="prks-settings-panel-diagnostics"', 1)[1].split(
-            'id="prks-restore-confirm-modal"', 1
-        )[0]
+        settings = ROOT / "frontend-app" / "src" / "features" / "settings"
+        general = (settings / "SettingsGeneral.vue").read_text(encoding="utf-8")
+        diagnostics = (settings / "SettingsDiagnostics.vue").read_text(encoding="utf-8")
         self.assertNotIn('id="prks-source-code-link"', general)
         for token in (
             'id="prks-settings-about-heading"',
