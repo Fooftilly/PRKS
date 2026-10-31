@@ -137,7 +137,7 @@ async function waitForRetirement(store) {
     }
     assert.fail("ACK did not retire the durable Playlist operation");
 }
-async function scenario(name, write) {
+async function scenario(name, write, expectedOperations = 1) {
     await seed();
     const local = createPrksLocalStore({indexedDB: createFakeIndexedDBFactory(), uuid});
     const envelopes = [], events = [];
@@ -182,10 +182,13 @@ async function scenario(name, write) {
         const before = offline.prksOfflineDomainGeneration("playlists");
         await write();
         await waitForRetirement(local);
-        assert.equal(envelopes.length, 1, name + " sends exactly one envelope");
-        assert.equal(events.length, 1, name + " emits real ACK event");
-        assert.equal(events[0].op.op_id, envelopes[0].op_id);
-        assert.equal(reconciled, 1, name + " dispatches through production handler");
+        assert.equal(envelopes.length, expectedOperations,
+            name + " sends exactly the expected durable envelopes");
+        assert.equal(events.length, expectedOperations, name + " emits every ACK");
+        assert.deepEqual(events.map(e => e.op.op_id), envelopes.map(e => e.op_id),
+            name + " emits matching operation identities in order");
+        assert.equal(reconciled, expectedOperations,
+            name + " dispatches each operation through production handlers");
         const state = (await cache.getEntity("playlist-state", ID)).value;
         const detail = (await cache.getEntity("playlist", ID)).value;
         assert(validation.prksIsPlaylistShape(detail, ID), name + " keeps detail renderable");
@@ -194,7 +197,7 @@ async function scenario(name, write) {
             assert(await cache.getList(k), name + " unrelated domain list retained");
         }
         assert(await cache.getEntity("concept", "C-1"), name + " unrelated entity retained");
-        return {before, state, detail, envelope: envelopes[0]};
+        return {before, state, detail, envelope: envelopes[0], envelopes};
     } finally {
         unsubscribe();
         runtime.stop();
@@ -222,15 +225,26 @@ async function main() {
         assert.equal(offline.prksOfflineDomainGeneration("playlists"), before + 1);
     });
     await scenario("title", async () => {
-        await globalThis.updatePlaylist(ID, {title: "Renamed title"});
-    }).then(async ({state, detail, envelope}) => {
-        assert.equal(envelope.operation, "SET_PLAYLIST_FIELD");
-        assert.deepEqual(envelope.payload, {field: "title", value: "Renamed title"});
+        // Original Chromium case changed both title and description in one
+        // wrapper call. Keep the two independent durable operations, ACKs and
+        // revision fences; testing only title would silently lose coverage.
+        await globalThis.updatePlaylist(ID,
+            {title: "Renamed title", description: ""});
+    }, 2).then(async ({state, detail, envelopes}) => {
+        assert.deepEqual(envelopes.map(e => e.operation),
+            ["SET_PLAYLIST_FIELD", "SET_PLAYLIST_FIELD"]);
+        assert.deepEqual(envelopes.map(e => e.payload), [
+            {field: "title", value: "Renamed title"},
+            {field: "description", value: ""},
+        ]);
         assert.equal(detail.title, "Renamed title");
+        assert.equal(detail.description, "");
         assert.equal(state.fields.title.revision, 1);
+        assert.equal(state.fields.description.revision, 1);
         const list = (await cache.getList("playlists:index")).value;
         assert(validation.prksIsPlaylistsIndexShape(list));
         assert.equal(list[0].title, "Renamed title");
+        assert.equal(list[0].description, "");
         assert.equal(await cache.getEntity("work", W1), null, "title evicts first member Work");
         assert.equal(await cache.getEntity("work", W2), null, "title evicts second member Work");
         assert(await cache.getEntity("work", OTHER), "title keeps outside Work");
