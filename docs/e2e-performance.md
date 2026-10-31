@@ -1765,6 +1765,46 @@ both). These are not measured critical-path or runner-minute savings.
 No production runtime code, E2E runner, workflow path selection, sharding,
 timeout, retry or packaged-asset coverage changes.
 
+### Research-index local filtering and filtered-empty presentation (two MOVE, #740)
+
+Two remaining `ResearchIndexAndDetailPolishTests` Chromium checks only inspected
+already-rendered Position and Argument index views after raw fixture requests.
+Neither tested a durable mutation, an API error, offline reload, cache
+invalidation, cross-tab state, or an actual route link activation:
+
+- `test_position_index_search_matches_title_and_description` filled the
+  Position search field for a title, a description phrase, and a missing query.
+  The production `PositionsIndexRoute.vue` is now exercised through its
+  mounted `session.test.ts` route bridge with two distinct fixture rows.
+  The fast test dispatches real input events, verifies the two individual
+  matching rows, checks exact search-only empty wording and its clear action,
+  and ensures no HTTP fetch is issued.
+- `test_argument_filtered_true_empty_state_describes_active_kind` checked
+  only the "No Stances yet." message and correct new-Stance action before
+  navigating to an Argument-filled view. The production
+  `ArgumentsIndexRoute.vue` is now mounted twice via `session.test.ts`
+  with explicit filtered projections: Stances are genuinely empty, Arguments
+  contain one row, and the respective native canonical route keys and action
+  states are asserted.
+
+**KEEP in Chromium:** `test_clear_search_across_indexes_targets_current_input`
+tests real search input, clear-button clicks and focus across all three
+indexes; `test_argument_filtered_search_empty_is_kind_aware` tests a
+search-empty Stances view, clearing and preserved route; and
+`test_argument_index_search_respects_kind_filter` exercises the live
+kind-filter route and search on server data. `test_concept_index_search_matches_name_alias_and_parent`
+retains live client filtering and an explicit no-extra-requests check.
+The Position durable, offline and actual Position/Argument route-navigation
+tests remain untouched. These are separate browser behaviors not replicated
+by the new Vue presentation assertions.
+
+Retired historical calibrated weights: **1.550 + 1.592 = 3.142 test-seconds**
+per independent full source or packaged inventory, **6.284 summed** across
+both inventories. Scheduling weights only, not measured runner-minute or
+critical-path savings. Both exact E2E feature selectors and timing keys were
+removed with their methods. No production application code, shard policy,
+CI workflow selection, timeout, retry or offline gate is changed.
+
 ### Research detail presentation contracts (two MOVE, #740)
 
 Two `ResearchIndexAndDetailPolishTests` cases created fixture records by
