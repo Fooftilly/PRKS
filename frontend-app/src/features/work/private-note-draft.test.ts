@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
+import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
 
 type WorkRecord = {
@@ -48,6 +49,7 @@ const panelWindow = window as unknown as PanelWindow
 beforeAll(() => {
   panelWindow.eval(ownerResourceSource)
   panelWindow.eval(tabContextSource)
+  panelWindow.eval(workNotesStateSource)
   panelWindow.eval(uiSource)
 })
 
