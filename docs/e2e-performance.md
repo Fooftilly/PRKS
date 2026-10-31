@@ -1570,10 +1570,23 @@ interaction, disconnect, or IndexedDB lifecycle):
 The existing `tests/browser/run_offline_runtime_selftest.js` now runs
 `verifyFolderAckCacheFootprint`, **directly invoking the shipped
 `createPrksOfflineRuntime` reconcilers with a disposable store**.
-Its 101 exact assertions include each domain-generation change, cached list
+The cache-footprint matrix checks domain-generation changes, cached list
 retention, Work snapshot preservation, and a rename-ACK negative comparator
-that evicts *only* the server-listed member Work. This extends the
-existing fast Node test already exercised by
+that evicts *only* the server-listed member Work. Every seeded and surviving
+Folder index/detail snapshot is additionally checked by the **shipped**
+`app.js` Folder read validators (including required counts, parent pointers,
+children, Works and tags), not a test-authored schema.
+
+`verifyFolderFieldAckDispatch` closes the dispatch-layer gap: it calls the
+**production** `patchFolder` API wrapper for both description and reparent,
+queues a real `SET_FOLDER_FIELD` operation through the fake-IndexedDB local
+store, runs the real sync coordinator and `prksFolderFieldSyncHandler`
+validation/dispatch against a deterministic ACK transport, and then checks
+both the reconciled cache and retired operation. A missing handler dispatch,
+invalid response, or broken wrapper now fails the fast gate rather than being
+hidden behind a fabricated direct reconciler call. The accepted Folder base
+is read through the shipped Folder-state read logic from disposable cache.
+This extends the existing Node test registered by
 `tests/test_frontend_offline_runtime.py`; no new production test hooks.
 
 **KEEP in Chromium:** `test_folder_rename_invalidates_exactly_its_member_work_snapshots`
