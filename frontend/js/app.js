@@ -6035,6 +6035,10 @@ function initForms() {
 
 
 
+    // Vue owns these submits when prksCreateForms is installed (before
+    // DOMContentLoaded). This fallback is only for the Node membership
+    // harness, which drives onclick without the Vue bundle.
+    if (!window.prksCreateForms) {
     const folderTitleInput = document.getElementById('folder-title');
     const folderTitleError = document.getElementById('folder-title-error');
     const folderBtn = document.getElementById('save-folder-btn');
@@ -6355,129 +6359,6 @@ function initForms() {
             }
         };
     }
-
-    const personFname = document.getElementById('person-fname');
-    const personLname = document.getElementById('person-lname');
-    const personAliases = document.getElementById('person-aliases');
-    if (personFname && personLname && personAliases) {
-        personAliases.addEventListener('input', () => {
-            window._personAliasesManual = true;
-        });
-        personFname.addEventListener('input', () => syncPersonAliasesFromNames());
-        personLname.addEventListener('input', () => syncPersonAliasesFromNames());
-    }
-
-    const personBtn = document.getElementById('save-person-btn');
-    if (personBtn) {
-        personBtn.onclick = async () => {
-            const birthIso = parsePersonBirthDeathField(document.getElementById('person-birth-date').value);
-            if (birthIso === null) {
-                await prksAlertMessage(`Birth:\n${PERSON_DATE_HELP}`, 'Validation');
-                return;
-            }
-            const deathIso = parsePersonBirthDeathField(document.getElementById('person-death-date').value);
-            if (deathIso === null) {
-                await prksAlertMessage(`Date of death:\n${PERSON_DATE_HELP}`, 'Validation');
-                return;
-            }
-            const payload = {
-                first_name: document.getElementById('person-fname').value,
-                last_name: document.getElementById('person-lname').value,
-                aliases: document.getElementById('person-aliases').value,
-                about: document.getElementById('person-about').value,
-                image_url: document.getElementById('person-image-url').value,
-                link_wikipedia: document.getElementById('person-link-wikipedia').value,
-                link_stanford_encyclopedia: document.getElementById('person-link-stanford').value,
-                link_iep: document.getElementById('person-link-iep').value,
-                links_other: document.getElementById('person-links-other').value,
-                birth_date: birthIso,
-                death_date: deathIso,
-            };
-            if (!payload.last_name) {
-                await prksAlertMessage('Last name is required.', 'Validation');
-                return;
-            }
-            /* Durable-first, with or without the server. No connectivity
-             * guard: the identity is chosen HERE, so the creation is complete
-             * the moment it is written locally and the server never renames it.
-             * A direct POST would have been a second mutation boundary for the
-             * same decision -- online through one path, offline through
-             * another, with only one of them producing an operation. */
-            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, true, { busyLabel: 'Saving…' });
-            let created;
-            try {
-                created = await prksCreatePersonDurably(payload);
-            } catch (e) {
-                await prksAlertMessage(
-                    'Could not save this person locally. Please retry.', 'Could not save');
-                return;
-            } finally {
-                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(personBtn, false);
-            }
-            closeModals();
-            /* Navigate to the Person that now exists. No reload: a reload
-             * would throw away every other pending change on the page and, at
-             * this point, there is nothing to fetch -- the record is local.
-             * A People-index origin navigates that pane. Ribbon and command
-             * palette opens do not record one, so they keep the unscoped path. */
-            const createTabId = typeof window.prksTakePersonIndexCreateTabId === 'function'
-                ? window.prksTakePersonIndexCreateTabId()
-                : '';
-            if (created && created.entity_id && typeof prksNavigate === 'function') {
-                const hash = '#/people/' + encodeURIComponent(created.entity_id);
-                if (createTabId) void prksNavigate(hash, { tabId: createTabId });
-                else void prksNavigate(hash);
-            }
-        };
-    }
-
-    const saveGroupBtn = document.getElementById('save-group-btn');
-    if (saveGroupBtn) {
-        saveGroupBtn.onclick = async () => {
-            /* No offline guard: a Group is created durably, under an id this
-             * device mints, so it exists and is usable the moment it is saved. */
-            const name = document.getElementById('group-name')?.value || '';
-            const parentHid = document.getElementById('group-parent-id')?.value?.trim() || '';
-            const parentSearch = document.getElementById('group-parent-search')?.value?.trim() || '';
-            const description = document.getElementById('group-description')?.value || '';
-            if (!name.trim()) {
-                await prksAlertMessage('Group name is required.', 'Validation');
-                return;
-            }
-            if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, true, { busyLabel: 'Creating…' });
-            try {
-                const parentId = await prksResolvePersonGroupParent(parentHid, parentSearch, null);
-                if (parentId === undefined) return;
-                const created = await prksCreatePersonGroupDurably({
-                    name: name.trim(), description: description.trim(), parent_id: parentId,
-                });
-                closeModals();
-                /* No reload and no refetch: the record is local, and a reload
-                 * would throw away every other pending change on the page.
-                 * A Groups-index origin navigates that pane. A stale origin
-                 * does not navigate a replaced owner. Ribbon and command
-                 * palette opens do not record one, so they stay unscoped. */
-                const groupNav = typeof window.prksTakePersonGroupCreateNavigation === 'function'
-                    ? window.prksTakePersonGroupCreateNavigation()
-                    : { mode: 'unscoped' };
-                if (groupNav && groupNav.mode === 'stale') return;
-                if (created && created.entity_id && typeof prksNavigate === 'function') {
-                    const hash = '#/people/groups/' + encodeURIComponent(created.entity_id);
-                    if (groupNav && groupNav.mode === 'owner' && groupNav.tabId) {
-                        prksNavigate(hash, { tabId: groupNav.tabId });
-                    } else {
-                        prksNavigate(hash);
-                    }
-                }
-            } catch (e) {
-                await prksAlertMessage(
-                    typeof prksPersonGroupSaveMessage === 'function'
-                        ? prksPersonGroupSaveMessage(e, 'create this group')
-                        : 'Could not create group.', 'Could not save');
-            } finally {
-                if (typeof prksSetButtonBusy === 'function') prksSetButtonBusy(saveGroupBtn, false);
-            }
-        };
     }
 
     const saveRoleBtn = document.getElementById('save-role-btn');

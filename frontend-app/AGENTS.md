@@ -8,7 +8,7 @@ These rules apply to `frontend-app/` work in addition to the repository-root `AG
 
 The route/component migration under #230/#303 is complete; controller verification and closure follow the final bridge correction. `docs/frontend-migration-boundaries.md` is the audited inventory of every remaining classic/Vue crossing, its owner on each side, and why it stays. A new crossing must be added there with its owner, or it is migration debt.
 
-- New migrated UI belongs in `frontend-app/src/`.
+- New migrated UI belongs in `frontend-app/src/`. Folder, Person, Person Group, and Playlist create forms live in `src/features/create-forms/` and teleport into the classic modal shells. That teleport is a temporary adapter: retire it when `ModalHost` mounts those shells. Work, Saved View, role link, the person template, and Settings stay on their current shells.
 - Do not create a second canonical route, workspace, durable-operation, offline, or server-state model.
 - Delete obsolete compatibility code when the final consumer has crossed and the owning migration slice allows it.
 - Do not add Vue Router, Pinia, another QueryClient, or another workspace snapshot merely because Vue supports them.

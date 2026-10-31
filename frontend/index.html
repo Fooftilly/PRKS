@@ -616,27 +616,8 @@
             <h3>Add New Folder</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="form-pane">
-                <p class="modal-helper">Folders can nest. Pick a parent to create a subfolder, or leave blank for top-level.</p>
-                <label for="folder-title">Title</label>
-                <input type="text" id="folder-title" placeholder="Folder title" autocomplete="off">
-                <p id="folder-title-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
-                <label for="folder-parent-search">Parent folder (optional)</label>
-                <p class="modal-helper meta-row--hint meta-row--compact">Search and choose a parent folder to create this one as a subfolder.</p>
-                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                    <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
-                        <input type="text" id="folder-parent-search" class="tag-add-shell__input" placeholder="Search parent folder…" autocomplete="off" aria-label="Search parent folder">
-                    </div>
-                    <input type="hidden" id="folder-parent-id" value="">
-                    <div id="folder-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                </div>
-                <label for="folder-description">Description</label>
-                <textarea id="folder-description" placeholder="Optional description…"></textarea>
-                <button id="save-folder-btn" class="prks-btn prks-btn--primary">Save Folder</button>
-            </div>
-        </div>
+        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
+        <div id="folder-modal-vue" class="modal-body"></div>
     </div>
 
     <div id="playlist-modal" class="modal hidden">
@@ -644,17 +625,8 @@
             <h3>New playlist</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="form-pane">
-                <p class="modal-helper">Playlists group related videos (e.g. course lectures) and keep an ordered sequence.</p>
-                <label for="playlist-title">Title</label>
-                <input type="text" id="playlist-title" placeholder="e.g. Philosophy Lectures" autocomplete="off">
-                <label for="playlist-description">Description</label>
-                <textarea id="playlist-description" class="textarea-sm" placeholder="Optional description…"></textarea>
-                <button id="save-playlist-btn" class="prks-btn prks-btn--primary">Create playlist</button>
-                <p id="playlist-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
-            </div>
-        </div>
+        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
+        <div id="playlist-modal-vue" class="modal-body"></div>
     </div>
 
     <div id="saved-view-modal" class="modal hidden">
@@ -700,26 +672,8 @@
             <h3>New people group</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="form-pane">
-                <p class="modal-helper">Groups can nest (e.g. Philosophy → Frankfurt School). People can belong to multiple groups.</p>
-                <label for="group-name">Name</label>
-                <input type="text" id="group-name" placeholder="e.g. Frankfurt School" autocomplete="off">
-                <label for="group-parent-search">Parent group (optional)</label>
-                <p class="modal-helper meta-row--hint meta-row--compact">Search for an existing group or type a new name — it will be created as a top-level group when you save.</p>
-                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                    <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
-                        <input type="text" id="group-parent-search" class="tag-add-shell__input" placeholder="Search or type new parent name…" autocomplete="off" aria-label="Search or type parent group">
-                    </div>
-                    <input type="hidden" id="group-parent-id" value="">
-                    <div id="group-parent-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                </div>
-                <label for="group-description">Description</label>
-                <textarea id="group-description" placeholder="Optional"></textarea>
-                <button type="button" id="save-group-btn" class="prks-btn prks-btn--primary">Create group</button>
-            </div>
-        </div>
+        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
+        <div id="group-modal-vue" class="modal-body"></div>
     </div>
 
     <div id="person-modal" class="modal hidden">
@@ -727,39 +681,8 @@
             <h3>Add New Person</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="form-pane">
-                <label for="person-fname">First name</label>
-                <input type="text" id="person-fname" placeholder="First name">
-                <label for="person-lname">Last name</label>
-                <input type="text" id="person-lname" placeholder="Required">
-                <label for="person-aliases">Aliases</label>
-                <input type="text" id="person-aliases" placeholder="Filled from names as you type; edit anytime">
-                <label for="person-about">About / expertise</label>
-                <textarea id="person-about" placeholder="Optional…"></textarea>
-                <div class="form-grid-2">
-                    <div>
-                        <label for="person-birth-date">Birth date</label>
-                        <input type="text" id="person-birth-date" placeholder="dd/mm/yyyy, yyyy, or -428" autocomplete="off">
-                    </div>
-                    <div>
-                        <label for="person-death-date">Date of death</label>
-                        <input type="text" id="person-death-date" placeholder="dd/mm/yyyy, yyyy, or -428" autocomplete="off">
-                    </div>
-                </div>
-                <label for="person-image-url">Portrait image URL</label>
-                <input type="url" id="person-image-url" placeholder="https://…">
-                <label for="person-link-wikipedia">Wikipedia</label>
-                <input type="url" id="person-link-wikipedia" placeholder="https://en.wikipedia.org/wiki/…">
-                <label for="person-link-stanford">Stanford Encyclopedia of Philosophy</label>
-                <input type="url" id="person-link-stanford" placeholder="https://plato.stanford.edu/entries/…">
-                <label for="person-link-iep">Internet Encyclopedia of Philosophy</label>
-                <input type="url" id="person-link-iep" placeholder="https://iep.utm.edu/…">
-                <label for="person-links-other">Other links</label>
-                <textarea id="person-links-other" class="textarea-sm" placeholder="One URL per line, or [Title](https://...)"></textarea>
-                <button id="save-person-btn" class="prks-btn prks-btn--primary">Save Person</button>
-            </div>
-        </div>
+        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
+        <div id="person-modal-vue" class="modal-body"></div>
     </div>
     <div id="person-template-modal" class="modal hidden">
         <div class="modal-header">

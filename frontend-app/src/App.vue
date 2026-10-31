@@ -8,6 +8,7 @@
     <EditorRecoveryDiagnostics />
   </Teleport>
   <ModalHost />
+  <CreateFormsHost />
   <WorkspaceShell />
   <AppChrome />
 </template>
@@ -16,6 +17,7 @@
 import { onMounted, ref } from 'vue'
 import AppChrome from './app-shell/AppChrome.vue'
 import EditorRecoveryDiagnostics from './features/editor-recovery/EditorRecoveryDiagnostics.vue'
+import CreateFormsHost from './features/create-forms/CreateFormsHost.vue'
 import PerformanceDiagnostics from './features/performance-diagnostics/PerformanceDiagnostics.vue'
 import ModalHost from './modal/ModalHost.vue'
 import WorkspaceShell from './workspace-shell/WorkspaceShell.vue'
