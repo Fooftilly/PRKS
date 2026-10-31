@@ -110,7 +110,10 @@ describe('work main surface', () => {
     expect(frame?.hasAttribute('srcdoc')).toBe(false)
     expect(frame?.closest('.work-pdf-pane')).toBeTruthy()
     expect(frame?.closest('.prks-work-video-frame')).toBeTruthy()
-    expect(ctx.root.querySelector('a[href^="javascript:"]')).toBeNull()
+    for (const anchor of ctx.root.querySelectorAll('a')) {
+      const protocol = new URL(anchor.getAttribute('href') || '', 'https://prks.invalid').protocol
+      expect(protocol === 'http:' || protocol === 'https:').toBe(true)
+    }
     expect(ctx.root.querySelector('.work-viewer-host')).toBeNull()
     expect(ctx.root.querySelector('.page-header--work-title')?.textContent).toBe('A & B')
     expect(ctx.root.querySelector('[data-prks-role="work-header-doc-type-slot"] .doc-type-badge')?.textContent).toBe('Video')

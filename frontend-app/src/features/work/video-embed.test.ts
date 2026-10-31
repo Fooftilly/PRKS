@@ -197,7 +197,6 @@ describe('resolveWorkVideoEmbed', () => {
         if (result.state === 'link') {
           const url = new URL(result.href)
           expect(url.protocol === 'http:' || url.protocol === 'https:').toBe(true)
-          expect(result.href.toLowerCase().startsWith('javascript:')).toBe(false)
         }
       }),
       { numRuns: 80 },
