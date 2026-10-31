@@ -15,6 +15,41 @@ const { createPrksLocalStore } = require("../../frontend/js/local-store.js");
 require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/position-state.js");
 
+
+/* The removed Chromium cases invoked api.js functions, not store methods.
+ * Evaluate those exact production wrappers so a broken dirty/base/writer
+ * connection fails the fast test even if local-store coalescing still works.
+ * This follows run_concept_sync_selftest.js; no reconstructed wrapper logic.
+ */
+globalThis.window = globalThis;
+function loadTopLevelFunction(source, name) {
+    const marker = "function " + name + "(";
+    let at = source.indexOf("async " + marker);
+    if (at < 0) at = source.indexOf(marker);
+    if (at < 0) throw new Error("missing production wrapper " + name);
+    const brace = source.indexOf("{", at);
+    let depth = 0;
+    for (let i = brace; i < source.length; i++) {
+        if (source[i] === "{") depth++;
+        if (source[i] === "}" && --depth === 0) {
+            (0, eval)(source.slice(at, i + 1));
+            return;
+        }
+    }
+    throw new Error("unclosed production wrapper " + name);
+}
+{
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const app = fs.readFileSync(path.join(__dirname, "../../frontend/js/app.js"), "utf8");
+    const api = fs.readFileSync(path.join(__dirname, "../../frontend/js/api.js"), "utf8");
+    loadTopLevelFunction(app, "prksDurableOperationsOrNone");
+    for (const name of ["prksPositionSaveMessage", "prksPositionBaseUnavailable",
+                        "createPosition", "updatePosition", "deletePosition"]) {
+        loadTopLevelFunction(api, name);
+    }
+}
+
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
@@ -282,6 +317,72 @@ function positionDetailUsesGuardedOfflineRead() {
         "Position index must retain server-first and cache-warming behavior");
 }
 
+
+/* Contract transfer: these former E2Es called production updatePosition,
+ * createPosition and deletePosition (not DOM controls). The real wrappers
+ * run against the same fake-IndexedDB store the other fast tests use. */
+async function positionApiCancellationAndCreateDeleteContract() {
+    const store = newStore();
+    globalThis.prksSync = { store };
+    const existing = "P-" + "E".repeat(32);
+    const state = globalThis.prksNewPositionState(existing);
+    state.fields.name.revision = 3;
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (id !== existing) return { value: null, source: "unavailable" };
+        if (kind === "position-state") return { value: state, source: "cache" };
+        if (kind === "position") return {
+            value: { id: existing, name: "Original", description: "" }, source: "cache"
+        };
+        return { value: null, source: "unavailable" };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+
+    await globalThis.updatePosition(existing, { name: "Temporary" });
+    let rows = await rowsFor(store, "SET_POSITION_FIELD");
+    assert.equal(rows.length, 1, "real API enqueues a Position rename");
+    assert.equal(rows[0].payload.field, "name");
+    assert.equal(rows[0].payload.value, "Temporary");
+    assert.equal(rows[0].base_revision, 3);
+
+    // Mutation negative-control: if the production wrapper stops forwarding
+    // the second save, the same zero-pending assertion must catch it.
+    const write = globalThis.prksSavePositionFieldsDurably;
+    try {
+        globalThis.prksSavePositionFieldsDurably = async () => null;
+        await globalThis.updatePosition(existing, { name: "Original" });
+        rows = await rowsFor(store, "SET_POSITION_FIELD");
+        assert.throws(() => assert.deepEqual(rows, []), /AssertionError|Expected values/);
+    } finally {
+        globalThis.prksSavePositionFieldsDurably = write;
+    }
+    await globalThis.updatePosition(existing, { name: "Original" });
+    assert.deepEqual(await rowsFor(store, "SET_POSITION_FIELD"), [],
+        "production updatePosition A→B→A has no remaining durable intent");
+
+    const created = await globalThis.createPosition({ name: "Never sent" });
+    assert.match(created.id, /^P-[0-9A-F]{32}$/);
+    assert.equal((await rowsFor(store, "CREATE_POSITION")).length, 1);
+    assert.deepEqual(await globalThis.deletePosition(created.id), { status: "deleted" });
+    assert.deepEqual(await store.listOperations(), [],
+        "production create→delete folds without a request to the server");
+    // The deleted E2E also reconnected and checked the canonical DB. Reopen
+    // transport on the empty durable queue: even a successfully running sync
+    // worker must never attempt to send a folded create/delete pair.
+    const sent = [];
+    const runtime = runtimeFor(store, async envelope => {
+        sent.push(envelope);
+        throw new Error("folded create/delete reached transport");
+    });
+    try {
+        await runtime.wake();
+        await settle();
+        assert.deepEqual(sent, [], "reconnect cannot transmit a folded operation");
+    } finally {
+        runtime.stop();
+    }
+    delete globalThis.prksSync;
+}
+
 async function main() {
     positionDetailUsesGuardedOfflineRead();
     await aPositionIsRealImmediately();
@@ -295,6 +396,7 @@ async function main() {
     await deletingAPositionCreatedHereFoldsItAway();
     await aPendingDeletionIsATombstoneUntilItIsRefused();
     await theBaseIsAcknowledgedAndNeverGuessed();
+    await positionApiCancellationAndCreateDeleteContract();
     console.log("All " + checks + " position checks passed");
 }
 

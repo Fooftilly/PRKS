@@ -18,6 +18,42 @@ const { createPrksLocalStore } = require("../../frontend/js/local-store.js");
 require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/playlist-state.js");
 
+
+/* Exercise the shipped classic-frontend API entrypoints rather than only
+ * local-store coalescing. The removed E2Es likewise invoked these wrappers
+ * directly, without clicking the playlist editor or drag controls. */
+globalThis.window = globalThis;
+function loadTopLevelFunction(source, name) {
+    const marker = "function " + name + "(";
+    let at = source.indexOf("async " + marker);
+    if (at < 0) at = source.indexOf(marker);
+    if (at < 0) throw new Error("missing production wrapper " + name);
+    const brace = source.indexOf("{", at);
+    let depth = 0;
+    for (let i = brace; i < source.length; i++) {
+        if (source[i] === "{") depth++;
+        if (source[i] === "}" && --depth === 0) {
+            (0, eval)(source.slice(at, i + 1));
+            return;
+        }
+    }
+    throw new Error("unclosed production wrapper " + name);
+}
+{
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const app = fs.readFileSync(path.join(__dirname, "../../frontend/js/app.js"), "utf8");
+    const playlist = fs.readFileSync(path.join(__dirname, "../../frontend/js/components/playlists.js"), "utf8");
+    loadTopLevelFunction(app, "prksDurableOperationsOrNone");
+    for (const name of [
+        "prksPlaylistSaveMessage", "prksPlaylistBaseUnavailable",
+        "createPlaylist", "updatePlaylist", "prksSetWorkPlaylist",
+        "addWorkToPlaylist", "reorderPlaylist", "deletePlaylistCanonical"
+    ]) {
+        loadTopLevelFunction(playlist, name);
+    }
+}
+
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
@@ -356,6 +392,99 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.equal(await globalThis.prksAcknowledgedPlaylistOrder("PL-UNKNOWN", ops), null);
 }
 
+
+/* The four relocated E2Es called these public wrappers with page.evaluate;
+ * retain their observable queue/revision contract here with no browser/server. */
+async function playlistApiCancellationOrderMembershipAndDeleteContract() {
+    const store = newStore();
+    globalThis.prksSync = { store };
+    const existing = "PL-" + "E".repeat(32);
+    const other = "PL-" + "F".repeat(32);
+    const work = "W-1";
+    const state = globalThis.prksNewPlaylistState(existing);
+    state.fields.title.revision = 3;
+    state.order_revision = 2;
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "work-playlist-state" && id === work) return {
+            value: { work_id: work, playlist_id: existing, revision: 4 }, source: "cache"
+        };
+        if (id !== existing) return { value: null, source: "unavailable" };
+        if (kind === "playlist-state") return { value: state, source: "cache" };
+        if (kind === "playlist") return {
+            value: {
+                id: existing, title: "Lectures", description: "",
+                original_url: "", items: [item("W-1"), item("W-2")]
+            }, source: "cache"
+        };
+        return { value: null, source: "unavailable" };
+    };
+    globalThis.prksOfflineInvalidateEntity = async () => true;
+
+    await globalThis.updatePlaylist(existing, { title: "Temporary" });
+    let rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].payload.field, "title");
+    assert.equal(rows[0].payload.value, "Temporary");
+    assert.equal(rows[0].base_revision, 3);
+
+    // Mutation negative-control: disable the actual durable writer. The
+    // contract must detect that a nominally successful wrapper call failed
+    // to cancel its previously queued operation.
+    const write = globalThis.prksSavePlaylistFieldsDurably;
+    try {
+        globalThis.prksSavePlaylistFieldsDurably = async () => null;
+        await globalThis.updatePlaylist(existing, { title: "Lectures" });
+        rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        assert.throws(() => assert.deepEqual(rows, []), /AssertionError|Expected values/);
+    } finally {
+        globalThis.prksSavePlaylistFieldsDurably = write;
+    }
+    await globalThis.updatePlaylist(existing, { title: "Lectures" });
+    assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
+        "real updatePlaylist A→B→A leaves no intent");
+
+    await globalThis.reorderPlaylist(existing, ["W-2", "W-1"]);
+    rows = await rowsFor(store, "REORDER_PLAYLIST_ITEMS");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 2);
+    assert.deepEqual(rows[0].payload.work_ids, ["W-2", "W-1"]);
+    await globalThis.reorderPlaylist(existing, ["W-1", "W-2"]);
+    assert.deepEqual(await rowsFor(store, "REORDER_PLAYLIST_ITEMS"), [],
+        "real reorderPlaylist second order supersedes first and cancels");
+
+    await globalThis.addWorkToPlaylist(other, work);
+    rows = await rowsFor(store, "SET_WORK_PLAYLIST");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].payload.playlist_id, other);
+    assert.equal(rows[0].base_revision, 4);
+    await globalThis.addWorkToPlaylist(existing, work);
+    assert.deepEqual(await rowsFor(store, "SET_WORK_PLAYLIST"), [],
+        "real membership wrapper returns to server-known base with no request");
+
+    const created = await globalThis.createPlaylist("Never sent", "Draft");
+    assert.match(created, /^PL-[0-9A-F]{32}$/);
+    assert.equal((await rowsFor(store, "CREATE_PLAYLIST")).length, 1);
+    assert.deepEqual(await globalThis.deletePlaylistCanonical(created), { status: "deleted" });
+    assert.deepEqual(await store.listOperations(), [],
+        "real createPlaylist→deletePlaylistCanonical folds every unsent intent");
+    // The deleted E2E also reconnected and checked the canonical DB. Reopen
+    // transport on the empty durable queue: even a successfully running sync
+    // worker must never attempt to send a folded create/delete pair.
+    const sent = [];
+    const runtime = runtimeFor(store, async envelope => {
+        sent.push(envelope);
+        throw new Error("folded create/delete reached transport");
+    });
+    try {
+        await runtime.wake();
+        await settle();
+        assert.deepEqual(sent, [], "reconnect cannot transmit a folded operation");
+    } finally {
+        runtime.stop();
+    }
+    delete globalThis.prksSync;
+}
+
 async function main() {
     await aPlaylistIsAValidDestinationImmediately();
     await anEmptyTitleBecomesThePlaceholder();
@@ -372,6 +501,7 @@ async function main() {
     await deletingAPlaylistCreatedHereFoldsItAway();
     await aPendingDeletionIsATombstone();
     await theBaseIsAcknowledgedAndNeverGuessed();
+    await playlistApiCancellationOrderMembershipAndDeleteContract();
     console.log("All " + checks + " playlist checks passed");
 }
 

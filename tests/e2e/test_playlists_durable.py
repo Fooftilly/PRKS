@@ -207,20 +207,6 @@ class DurablePlaylistTests(unittest.TestCase):
         self.settled(page)
         self.assertIn('Renamed Offline', self.playlists_in_db(server))
 
-    def test_a_rename_taken_back_before_it_is_sent_leaves_no_intent(self):
-        server, page, context = self.start()
-        playlist = server.ids['playlist']
-        self.prepare_playlist(page, playlist)
-        self.offline(page, context)
-
-        page.evaluate("id => updatePlaylist(id, { title: 'Temporarily Renamed' })", playlist)
-        self.wait_for_family(page, 'SET_PLAYLIST_FIELD')
-        page.evaluate("id => updatePlaylist(id, { title: 'Durable Playlist' })", playlist)
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=60000,
-            message='reverting an unsent rename must leave no operation behind')
 
     # ---- membership ---------------------------------------------------------
 
@@ -252,24 +238,6 @@ class DurablePlaylistTests(unittest.TestCase):
         self.settled(page)
         self.assertEqual(self.order_in_db(server, destination), [server.ids['video_a']])
 
-    def test_putting_a_video_back_where_it_started_leaves_no_intent(self):
-        server, page, context = self.start()
-        playlist = server.ids['playlist']
-        self.prepare_work(page, server.ids['video_a'])
-        destination = page.evaluate("() => createPlaylist('Destination', '')")
-        self.settled(page)
-        self.offline(page, context)
-
-        page.evaluate("([wid, pid]) => addWorkToPlaylist(pid, wid)",
-                      [server.ids['video_a'], destination])
-        self.wait_for_family(page, 'SET_WORK_PLAYLIST')
-        page.evaluate("([wid, pid]) => addWorkToPlaylist(pid, wid)",
-                      [server.ids['video_a'], playlist])
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=60000,
-            message='put back where it started is not two changes, it is none')
 
     def test_removing_a_video_offline_is_the_same_scalar(self):
         server, page, context = self.start()
@@ -335,24 +303,6 @@ class DurablePlaylistTests(unittest.TestCase):
         self.assertEqual(self.order_in_db(server, playlist),
                          [server.ids['video_b'], server.ids['video_a']])
 
-    def test_a_second_drag_replaces_the_first_rather_than_racing_it(self):
-        server, page, context = self.start()
-        playlist = server.ids['playlist']
-        self.prepare_playlist(page, playlist)
-        self.offline(page, context)
-
-        page.evaluate("([pid, ids]) => reorderPlaylist(pid, ids)",
-                      [playlist, [server.ids['video_b'], server.ids['video_a']]])
-        self.wait_for_family(page, 'REORDER_PLAYLIST_ITEMS')
-        page.evaluate("([pid, ids]) => reorderPlaylist(pid, ids)",
-                      [playlist, [server.ids['video_a'], server.ids['video_b']]])
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=60000,
-            message='dragging back to the acknowledged order leaves no intent at all')
-
-    # ---- deletion -----------------------------------------------------------
 
     def test_deleting_a_playlist_offline_is_a_tombstone(self):
         server, page, context = self.start()
@@ -395,23 +345,6 @@ class DurablePlaylistTests(unittest.TestCase):
             message='a playlist holding videos is deleted, not refused')
         self.assertNotIn('Durable Playlist', self.playlists_in_db(server))
         self.assertIsNotNone(self.db_for(server).get_work(server.ids['video_a']))
-
-    def test_deleting_a_playlist_created_offline_folds_the_whole_case_away(self):
-        server, page, context = self.start()
-        self.offline(page, context)
-        playlist = page.evaluate(
-            "() => createPlaylist('Offline Mistake', 'Typed by accident')")
-        self.wait_for_family(page, 'CREATE_PLAYLIST')
-        page.evaluate("id => deletePlaylistCanonical(id)", playlist)
-        wait_for_async(
-            page,
-            "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
-            timeout=60000,
-            message='nothing about this playlist should ever reach the server')
-
-        self.reconnect(page, context)
-        self.settled(page)
-        self.assertNotIn('Offline Mistake', self.playlists_in_db(server))
 
 
 if __name__ == '__main__':
