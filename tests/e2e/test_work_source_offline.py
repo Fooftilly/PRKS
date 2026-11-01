@@ -19,8 +19,6 @@ import json
 import os
 import unittest
 
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-
 from backend import work_source_sync
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
@@ -112,6 +110,10 @@ class OfflineWorkSourceTests(unittest.TestCase):
 
     def wait_source_editable(self, page, selector):
         """Require real editability; report why it is blocked if it persists."""
+        # E2E modules are discovered by the Playwright-free unit gate too.
+        # Import only when Chromium executes this helper.
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
         try:
             page.wait_for_function(
                 """selector => {
