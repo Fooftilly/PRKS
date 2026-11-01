@@ -5761,16 +5761,12 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Compare the immutable panel owner/content; sync-status
-                    // labels are live progress UI, not content. Include video
-                    // source: its status can settle independently of tab focus.
+                    // Compare panel content without live status regions: any
+                    // Work's sync notices can settle asynchronously after a
+                    // focus switch and are not part of the panel's data.
                     const stable = panel && panel.cloneNode(true);
-                    if (stable) stable.querySelectorAll(
-                        '[data-prks-role="work-bib-sync"], ' +
-                        '[data-prks-role="work-status-sync"], ' +
-                        '[data-prks-role="work-identity-sync"], ' +
-                        '[data-prks-role="work-source-sync"]'
-                    ).forEach(node => node.replaceChildren());
+                    if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
+                        .forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
@@ -5801,16 +5797,12 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Compare the immutable panel owner/content; sync-status
-                    // labels are live progress UI, not content. Include video
-                    // source: its status can settle independently of tab focus.
+                    // Compare panel content without live status regions: any
+                    // Work's sync notices can settle asynchronously after a
+                    // focus switch and are not part of the panel's data.
                     const stable = panel && panel.cloneNode(true);
-                    if (stable) stable.querySelectorAll(
-                        '[data-prks-role="work-bib-sync"], ' +
-                        '[data-prks-role="work-status-sync"], ' +
-                        '[data-prks-role="work-identity-sync"], ' +
-                        '[data-prks-role="work-source-sync"]'
-                    ).forEach(node => node.replaceChildren());
+                    if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
+                        .forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
