@@ -207,6 +207,20 @@
                 if (!deps.online()) break;
                 const op = await store.claimOperation(candidate.op_id);
                 if (!op) continue;
+                // The IDB claim may finish after connectivity closes. At this
+                // boundary NO transport has started, so restoring the exact
+                // previous row retains the right to coalesce never-sent edits.
+                // Never undo a claim after request() begins: the server might
+                // already have recorded this operation ID.
+                if (!deps.online()) {
+                    const restored = await store.releaseClaimBeforeDispatch(op, candidate);
+                    if (restored) emit();
+                    // A rapid reconnect may have notified a running wake().
+                    // One reschedule closes that lost notification without
+                    // spinning or attempting a send while disconnected.
+                    schedule(0);
+                    break;
+                }
                 const family = handlers[op.operation];
                 emit();
                 try {
