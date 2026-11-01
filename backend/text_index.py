@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.db_manager import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.performance import span as perf_span
+from backend.startup_profile import phase as startup_phase
 from backend.storage.config import StorageConfig
 
 
@@ -977,12 +978,12 @@ class PRKSTextIndex:
         _recovered: bool = False,
     ) -> Dict[str, Any]:
         summary = _empty_summary()
-        with perf_span("text_index_load_state"):
+        with perf_span("text_index_load_state"), startup_phase("startup_text_load_state"):
             index_state = self._load_sync_state()
         pending: List[
             Tuple[str, str, TextIndexRowState | None, SourceFingerprint | None]
         ] = []
-        with perf_span("text_index_source_scan"):
+        with perf_span("text_index_source_scan"), startup_phase("startup_text_source_scan"):
             expected = self._canonical_managed_works(db)
             summary["processed"] = len(expected)
             for work_id, file_path in expected.items():
@@ -1005,28 +1006,31 @@ class PRKSTextIndex:
                     continue
                 pending.append((work_id, file_path, row_state, current_fp))
             orphan_ids = [wid for wid in index_state if wid not in expected]
-        can_extract = True
-        if pending:
-            can_extract = extractor_available()
-            if not can_extract:
-                summary["extractor_unavailable"] = True
-        for work_id, file_path, row_state, known_fp in pending:
-            result = self.sync_work(
-                work_id,
-                file_path,
-                force=force,
-                allow_extract=can_extract,
-                known_row=row_state,
-                known_fingerprint=known_fp,
-            )
-            self._account_sync_result(summary, result)
-        summary["removed_orphans"] = self._remove_orphan_ids(orphan_ids)
+        with startup_phase("startup_text_sync"):
+            can_extract = True
+            if pending:
+                can_extract = extractor_available()
+                if not can_extract:
+                    summary["extractor_unavailable"] = True
+            for work_id, file_path, row_state, known_fp in pending:
+                result = self.sync_work(
+                    work_id,
+                    file_path,
+                    force=force,
+                    allow_extract=can_extract,
+                    known_row=row_state,
+                    known_fingerprint=known_fp,
+                )
+                self._account_sync_result(summary, result)
+        with startup_phase("startup_text_orphan_cleanup"):
+            summary["removed_orphans"] = self._remove_orphan_ids(orphan_ids)
         need_fts = bool(force or self._fts_suspect)
         if not need_fts:
             summary["fts_rebuilt"] = False
             return summary
         try:
-            summary["fts_rebuilt"] = self._verify_or_rebuild_fts()
+            with startup_phase("startup_text_fts_verify"):
+                summary["fts_rebuilt"] = self._verify_or_rebuild_fts()
         except sqlite3.Error:
             if _recovered:
                 LOGGER.warning(

@@ -64,6 +64,24 @@ do not claim per-test or end-to-end savings without a controlled
 same-runner A/B. Do not lower stop timeouts or skip worker grace to meet
 a performance target.
 
+## Text-index startup reconciliation subphase attribution (#740)
+
+The accepted [six-shard cold-start profile #41251873500](https://github.com/Fooftilly/PRKS/actions/runs/41251873500) measured **442.92 seconds** of `startup_text_reconcile` across 819 independent source Chromium tests. This is the largest measured child startup stage, but does not identify whether source reads, stale-PDF synchronization or derived-index maintenance dominate. Skipping startup reconciliation, caching index state across tests or omitting crash/restore checks is **not** justified by that result.
+
+The existing per-test **manual-only** `profile: true` report now exposes these five nested stages (in seconds) under `startup_text_reconcile`:
+
+- `startup_text_load_state` — read the existing derived index's sync/fingerprint state
+- `startup_text_source_scan` — load canonical managed-PDF Work rows, resolve paths and check fingerprints
+- `startup_text_sync` — decide extractor availability when needed and sync changed/missing/failed PDFs
+- `startup_text_orphan_cleanup` — remove derived-only rows for deleted/unlinked PDFs
+- `startup_text_fts_verify` — verify/rebuild suspect FTS only when required (normally absent)
+
+For partial profiles, the additive infrastructure ranking excludes the five `startup_text_*` details whenever an inclusive `startup_text_reconcile` or `startup_text_reconcile_failed` is present, even if `server_start` is missing. When neither inclusive reconciliation nor server parent exists, individually observed child phases remain countable. This affects only the ranking, not the phase report or startup execution.
+
+These phases reuse the child-only, triple-gated `PRKS_E2E_STARTUP_PROFILE=1` + `PRKS_E2E=1` + `PRKS_TESTING=1` fixed-name duration recorder. They are emitted to the E2E subprocess's private stderr only, with no PDF content, Work IDs, paths, URLs or database identifiers. A raised exception emits the corresponding `_failed` marker and retains the original error. The FTS stage is absent if the existing early-return path skips it; **absence is not zero**. In a rare recursive recovery, the parser preserves the first instance of a repeated stage name rather than treating retries as additive. Normal application operation and unprofiled CI add no clocks, no new database/browser/process, and no changed index or FTS policy.
+
+**Next evidence:** run the same manual, fixed-`master`, six-shard `profile: true` gate after this PR merges. Inspect the five nested stage totals together with `startup_text_reconcile` (not added to it), `server_start` and `server_stop_process`. Only propose a targeted change after the dominant stage is demonstrated; if performance is claimed, use a controlled same-runner A/B. Preserve fresh per-test storage, Library/database, browser and subprocess boundaries and full PDF/restore assertions.
+
 ## Cold E2E process startup and shutdown attribution (#740)
 
 [Manual full E2E profile #41248967692](https://github.com/Fooftilly/PRKS/actions/runs/41248967692)

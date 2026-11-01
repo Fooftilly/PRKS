@@ -1695,6 +1695,17 @@ def _profile_infrastructure_total(phases: dict) -> float:
         # The child stages occur before the first ready HTTP response. They
         # explain startup cost; they are not another additive test duration.
         nested.update(name for name in phases if name.startswith("startup_"))
+    # A partial profile may contain the reconciler's inclusive stage but no
+    # server_start (for example, after an interrupted startup). The new
+    # startup_text_* details are nested in that stage even without the outer
+    # server timing. Keep their values visible in the report, not additive in
+    # the ranking. When both parents are absent, retain the observed fragments.
+    if "startup_text_reconcile" in phases or "startup_text_reconcile_failed" in phases:
+        nested.update(
+            name for name in phases
+            if name.startswith("startup_text_")
+            and name not in ("startup_text_reconcile", "startup_text_reconcile_failed")
+        )
     if "server_stop" in phases:
         # Process exit, database drop and temp cleanup are subdivisions of
         # AppServer.stop(), never extra wall time.
