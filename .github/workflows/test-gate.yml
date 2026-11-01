@@ -17,7 +17,12 @@ on:
 concurrency:
   # Never let the nightly scan cancel an in-progress master push gate.
   # Isolate scheduled runs so master pushes cannot cancel the scan either.
-  group: test-gate-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event.pull_request.number || github.ref }}
+  # Mergify may re-run a previous PR Test Gate after a new commit. Without
+  # isolating re-runs, that OLD SHA's retry cancels the current required gate,
+  # leaving its check contexts pending forever (observed PR #1082 on Nov 1).
+  # First attempts still cancel stale first attempts for runner efficiency.
+  # Re-runs use their unique run ID and cannot cancel a fresh-head gate.
+  group: test-gate-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event.pull_request.number || github.ref }}-${{ github.run_attempt > 1 && github.run_id || 'first' }}
   cancel-in-progress: true
 
 jobs:

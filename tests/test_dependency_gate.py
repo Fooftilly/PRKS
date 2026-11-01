@@ -1407,6 +1407,19 @@ class RepoGateLiveTests(unittest.TestCase):
                 )
             )
 
+    def test_test_gate_reruns_cannot_cancel_new_head(self):
+        """Keep Mergify's old-SHA rerun separate from the latest required gate.
+
+        A normal first attempt must still cancel superseded first attempts;
+        a rerun receives its own run-id suffix and cannot evict a newer SHA.
+        This is a workflow configuration contract, not a disabled CI check.
+        """
+        workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn("github.run_attempt > 1 && github.run_id || 'first'", workflow)
+        self.assertIn("  cancel-in-progress: true", workflow)
+
     def test_test_gate_postgres_run_step_is_exactly_the_script(self):
         for run in ("scripts/test-postgres && pip install requests", "bash -c 'pip install x'"):
             with self.subTest(run=run):
