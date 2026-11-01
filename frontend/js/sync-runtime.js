@@ -199,12 +199,6 @@
                 const backoff = Math.min(60000, 1000 * 2 ** Math.min(candidate.attempt_count, 6));
                 const elapsed = Date.now() - Date.parse(candidate.last_attempt_at || '1970-01-01');
                 if (candidate.attempt_count && elapsed < backoff) { schedule(backoff - elapsed + Math.random() * 500); break; }
-                // The async IndexedDB inventory above may have begun while
-                // online and finished after a disconnection. Do not claim a
-                // never-sent row after reachability was lost: claimOperation
-                // increments attempt_count and irrevocably prevents safe
-                // local coalescing even when no request left this browser.
-                if (!deps.online()) break;
                 const op = await store.claimOperation(candidate.op_id);
                 if (!op) continue;
                 const family = handlers[op.operation];

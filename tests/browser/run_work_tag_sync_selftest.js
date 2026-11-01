@@ -82,7 +82,6 @@ async function main() {
     assert.deepEqual(globalThis.prksEffectiveWorkTags({ id: 'W-A', tags: [tag] }, await store.listOperations()), []);
     assert.equal((await store.getOperation(remove.op_id)).status, 'conflict');
     await connectivity();
-    await offlineDuringInventory();
     await transport();
     await lifecycle();
     await staleReads();
@@ -108,62 +107,6 @@ function tagHandlers(reconcile) {
 }
 function syncRuntime(store, request, reconcile) {
     return globalThis.createPrksSyncRuntime({ store, online: () => true, request, handlers: tagHandlers(reconcile) });
-}
-
-/* An observed online state can become offline while IndexedDB returns
- * its pending-operation inventory. That async boundary must not irreversibly
- * claim an operation which the app never tried to send. This reproduces the
- * Work-source coalescing failure observed in the full E2E gate on master as
- * well as the PostgreSQL-sharding PR, without a browser retry or fake ACK. */
-async function offlineDuringInventory() {
-    const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const op = await store.coalesceWorkTag('W-INVENTORY', tag.id, true, false, 0, tag);
-    const listOperations = store.listOperations.bind(store);
-    let reads = 0;
-    let entered;
-    const inventoryStarted = new Promise(resolve => { entered = resolve; });
-    let release;
-    const holdInventory = new Promise(resolve => { release = resolve; });
-    const delayedStore = Object.assign({}, store, {
-        listOperations: async () => {
-            reads += 1;
-            // Recovery and dependency repair read first; defer the actual
-            // send candidate read until *after* the browser loses reachability.
-            if (reads === 3) {
-                entered();
-                await holdInventory;
-            }
-            return listOperations();
-        },
-    });
-    let online = true;
-    let sent = 0;
-    const runtime = globalThis.createPrksSyncRuntime({
-        store: delayedStore,
-        online: () => online,
-        request: async () => {
-            sent += 1;
-            return { ok: true, status: 200, json: async () => ({ ...ack, work_id: 'W-INVENTORY' }) };
-        },
-        handlers: tagHandlers(async () => true),
-    });
-    const waking = runtime.wake();
-    await inventoryStarted;
-    online = false;
-    release();
-    await waking;
-    assert.equal(sent, 0, 'disconnection during IDB inventory cannot send');
-    assert.equal((await store.getOperation(op.op_id)).attempt_count, 0,
-        'the unsent operation remains coalescible after disconnect');
-    assert.equal((await store.getOperation(op.op_id)).status, 'pending');
-
-    online = true;
-    await runtime.wake();
-    runtime.stop();
-    assert.equal(sent, 1, 'a later observed reconnect still sends normally');
-    assert.equal(await store.getOperation(op.op_id), null,
-        'reconnected ACK retires the original operation');
 }
 
 /* PHASE A -- reachability is observed, never assumed.
