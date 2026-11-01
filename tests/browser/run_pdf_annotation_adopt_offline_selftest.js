@@ -119,7 +119,9 @@ async function adoptionAbortAfterQueue() {
         () => strict.fail('unexpected projection'),
         () => state === 'online'
     );
-    for (let i = 0; i < 8 && !signal; i++) await Promise.resolve();
+    // Allow async adoption setup (including the pending-ops microtask) to
+    // reach dispatch without polling mutable state or waiting on a timer.
+    await new Promise((resolve) => setImmediate(resolve));
     strict.ok(signal, 'adoption dispatched with an AbortSignal');
     strict.equal(listeners.size, 1);
     strict.equal(policy.cancellableMutation, true);
