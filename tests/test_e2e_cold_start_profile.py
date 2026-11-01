@@ -248,8 +248,22 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
                     }), 0.9,
                 )
 
+        # Partial samples can lose reconciliation/server_start but keep the
+        # inclusive sync stage. Its extractor and work children are still
+        # nested, including when the parent or one of the stages failed.
+        for parent in ("startup_text_sync", "startup_text_sync_failed"):
+            with self.subTest(sync_parent=parent):
+                self.assertAlmostEqual(
+                    run._profile_infrastructure_total({
+                        parent: 0.5,
+                        "startup_text_extractor_probe": 0.3,
+                        "startup_text_work_sync_failed": 0.2,
+                        "startup_imports": 0.1,
+                    }), 0.6,
+                )
+
         # Parentless fragments still count; nested phases must not vanish
-        # when the inclusive measurements are absent from a partial report.
+        # when their inclusive measurements are absent from a partial report.
         self.assertAlmostEqual(
             run._profile_infrastructure_total({
                 "startup_imports": 0.3,
@@ -261,6 +275,13 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
                 "startup_imports": 0.3,
                 "startup_text_source_scan": 0.4,
                 "startup_text_sync_failed": 0.1,
+            }), 0.8,
+        )
+        self.assertAlmostEqual(
+            run._profile_infrastructure_total({
+                "startup_imports": 0.3,
+                "startup_text_extractor_probe": 0.4,
+                "startup_text_work_sync_failed": 0.1,
             }), 0.8,
         )
 

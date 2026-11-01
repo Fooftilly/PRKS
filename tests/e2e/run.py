@@ -1706,6 +1706,14 @@ def _profile_infrastructure_total(phases: dict) -> float:
             if name.startswith("startup_text_")
             and name not in ("startup_text_reconcile", "startup_text_reconcile_failed")
         )
+    # The sync stage can also survive a truncated profile without the outer
+    # reconciliation or server_start markers. Its extractor/work timings are
+    # subdivisions, not additional runtime, even when a stage failed.
+    if "startup_text_sync" in phases or "startup_text_sync_failed" in phases:
+        nested.update((
+            "startup_text_extractor_probe", "startup_text_extractor_probe_failed",
+            "startup_text_work_sync", "startup_text_work_sync_failed",
+        ))
     if "server_stop" in phases:
         # Process exit, database drop and temp cleanup are subdivisions of
         # AppServer.stop(), never extra wall time.
