@@ -92,6 +92,14 @@ class E2ESeedCacheTests(unittest.TestCase):
             cfg = StorageConfig.for_testing(root)
             pdf = Path(cfg.pdfs_dir, ids["pdf_name"])
             before = pdf.stat()
+            import pymupdf
+
+            changed = pymupdf.open()
+            try:
+                changed.new_page().insert_text((72, 72), "E2E Mutated Search Term")
+                pdf.write_bytes(changed.tobytes())
+            finally:
+                changed.close()
             os.utime(pdf, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
             db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
             index = PRKSTextIndex(storage=cfg)
@@ -103,7 +111,9 @@ class E2ESeedCacheTests(unittest.TestCase):
             self.assertEqual(summary["updated"], 1)
             self.assertEqual(summary["unchanged"], 1)
             self.assertEqual(summary["failed"], 0)
-            self.assertIn(ids["work_a"], index.search_work_ids("Hello"))
+            self.assertIn(ids["work_a"], index.search_work_ids("Mutated"))
+            self.assertNotIn(ids["work_a"], index.search_work_ids("Hello"))
+            self.assertIn(ids["work_b"], index.search_work_ids("Hello"))
 
     def test_deleted_seed_index_rebuilds_from_canonical_pdfs(self):
         """Removing a derived index must still exercise genuine cold extraction."""
@@ -128,6 +138,20 @@ class E2ESeedCacheTests(unittest.TestCase):
             self.assertEqual(summary["indexed"], 2)
             self.assertIn(ids["work_a"], index.search_work_ids("Hello"))
             self.assertIn(ids["work_b"], index.search_work_ids("Hello"))
+
+    def test_seed_index_unavailable_extractor_fails_closed(self):
+        """Do not publish an indexless fixture as a reusable E2E snapshot."""
+        from tests.e2e.fixtures import seed_library
+
+        with tempfile.TemporaryDirectory(prefix="prks-index-fail-") as root:
+            with mock.patch(
+                "backend.text_index.extractor_available", return_value=False,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "E2E seed PDF text index did not synchronize",
+                ):
+                    harness._materialize_seed(seed_library, root)
+        self.assertNotIn(seed_library, harness._SEED_SNAPSHOTS)
 
     def test_cache_can_be_disabled_for_clean_ab_benchmark(self):
         os.environ["PRKS_E2E_SEED_CACHE"] = "0"
