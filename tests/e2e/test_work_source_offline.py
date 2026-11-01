@@ -120,10 +120,10 @@ class OfflineWorkSourceTests(unittest.TestCase):
                 }""",
                 arg=selector, timeout=10000,
             )
-        except PlaywrightTimeoutError as exc:
+        except PlaywrightTimeoutError:
             self.fail(
-                'Video source editor did not become editable at %s: %s; %s'
-                % (selector, json.dumps(self.source_debug_state(page), sort_keys=True), exc)
+                'Video source editor did not become editable at %s: %s'
+                % (selector, json.dumps(self.source_debug_state(page), sort_keys=True))
             )
 
     def edit(self, page):
