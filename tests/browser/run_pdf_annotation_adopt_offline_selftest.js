@@ -92,6 +92,7 @@ async function adoptionAbortAfterQueue() {
     let resolveRequest;
     let signal = null;
     let policy = null;
+    let requestCount = 0;
     const window = {
         prksOfflineRuntimeState: () => state,
         prksOfflineRuntimeSubscribe: (listener) => {
@@ -110,6 +111,7 @@ async function adoptionAbortAfterQueue() {
         () => true, () => strict.fail('unexpected abandon'),
         () => [], () => true,
         async (_url, init, requestPolicy) => {
+            requestCount += 1;
             signal = init.signal;
             policy = requestPolicy;
             return new Promise((resolve) => { resolveRequest = resolve; });
@@ -124,10 +126,11 @@ async function adoptionAbortAfterQueue() {
     state = 'offline';
     listeners.forEach((listener) => listener('offline'));
     strict.equal(signal.aborted, true, 'offline transition cancels the queued adoption');
-    resolveRequest({ ok: true, json: async () => ({ adopted_count: 0 }) });
+    resolveRequest({ ok: true, json: async () => ({ adopted_count: 1 }) });
     await working;
+    strict.equal(requestCount, 1, 'late aborted response must not fetch a new snapshot');
     strict.equal(listeners.size, 0, 'subscription is cleaned up after cancellation');
-    checks += 5;
+    checks += 6;
 }
 
 (async () => {

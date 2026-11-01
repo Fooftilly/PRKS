@@ -1877,7 +1877,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     },
                     { dedupe: false, retry: false, freshForMs: 0, cancellableMutation: true }
                 );
-                if (setupEligible() && adoptRes && adoptRes.ok) {
+                if (!controller.signal.aborted && setupEligible() && adoptRes && adoptRes.ok) {
                     const adoptBody = await adoptRes.json().catch(function () { return null; });
                     if (
                         adoptBody &&
