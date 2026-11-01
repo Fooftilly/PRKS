@@ -82,7 +82,56 @@ async function runCase(initialState, stateAfterPending, hasUnresolvedOps = false
     return requests;
 }
 
+/* Suspend the real adoption branch at request dispatch and then signal an
+ * offline transition. Browser network cancellation is asserted separately by
+ * the coordinator tests; here the shipped caller must own a live signal and
+ * retire its subscription when the request settles. */
+async function adoptionAbortAfterQueue() {
+    let state = 'online';
+    const listeners = new Set();
+    let resolveRequest;
+    let signal = null;
+    let policy = null;
+    const window = {
+        prksOfflineRuntimeState: () => state,
+        prksOfflineRuntimeSubscribe: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        prksWorkHasUnresolvedPdfAnnotationOps: async () => false,
+    };
+    const viewer = { getAnnotations: () => [] };
+    const runtime = {
+        acknowledgedAnnotationSetRevision: 0,
+        materializedPdfAnnotationRevision: 0,
+    };
+    const working = actualAdoptionBranch(
+        window, viewer, runtime, 'W-ADOPT',
+        () => true, () => strict.fail('unexpected abandon'),
+        () => [], () => true,
+        async (_url, init, requestPolicy) => {
+            signal = init.signal;
+            policy = requestPolicy;
+            return new Promise((resolve) => { resolveRequest = resolve; });
+        },
+        () => strict.fail('unexpected projection'),
+        () => state === 'online'
+    );
+    for (let i = 0; i < 8 && !signal; i++) await Promise.resolve();
+    strict.ok(signal, 'adoption dispatched with an AbortSignal');
+    strict.equal(listeners.size, 1);
+    strict.equal(policy.cancellableMutation, true);
+    state = 'offline';
+    listeners.forEach((listener) => listener('offline'));
+    strict.equal(signal.aborted, true, 'offline transition cancels the queued adoption');
+    resolveRequest({ ok: true, json: async () => ({ adopted_count: 0 }) });
+    await working;
+    strict.equal(listeners.size, 0, 'subscription is cleaned up after cancellation');
+    checks += 5;
+}
+
 (async () => {
+    await adoptionAbortAfterQueue();
     let calls = await runCase('online', 'online');
     strict.equal(calls.length, 1);
     strict.equal(calls[0].method, 'POST');
