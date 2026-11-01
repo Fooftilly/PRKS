@@ -2173,7 +2173,7 @@ function backgroundSaveBaselineCommit() {
     ]) {
         const start = source.indexOf('function ' + name + '(');
         assert.notEqual(start, -1, 'shipped Work metadata helper ' + name + ' exists');
-        const end = source.indexOf('\\n}', start);
+        const end = source.indexOf('\n}', start);
         assert.notEqual(end, -1, 'shipped Work metadata helper ' + name + ' terminates');
         (0, eval)(source.slice(start, end + 2));
     }
