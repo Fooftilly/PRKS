@@ -1634,6 +1634,10 @@ class OfflineFoundationTests(unittest.TestCase):
             self.assertEqual(_viewer_annotation_count(page), annotation_count_before)
             self.assertTrue(page.evaluate("() => !!%s" % _FOCUSED_VIEWER))
             self.assertEqual(_pdf_mode(page), "work")
+            # The offline capability flag may settle after the connectivity
+            # runtime switches state. Wait for the actual enabled markup
+            # controls; a genuinely read-only viewer still fails this check.
+            _wait_pdf_markup_tools_settled(page)
             self.assertTrue(_pdf_markup_tools_available(page))
 
             page.wait_for_timeout(1500)
@@ -2247,9 +2251,17 @@ class OfflineFoundationTests(unittest.TestCase):
                     }""" % _FOCUSED_PDF
                 )
             )
-            before_ops = page.evaluate(
-                "() => prksSync.store.listOperations().then(r => r.length)"
-            )
+            annotation_op_ids = """id => prksSync.store.listOperations().then(rows => {
+                const types = new Set(window.PRKS_PDF_ANNOTATION_OPERATION_TYPES ||
+                    ['CREATE_PDF_ANNOTATION', 'SET_PDF_ANNOTATION', 'DELETE_PDF_ANNOTATION']);
+                return rows.filter(op => op.entity_type === 'work'
+                        && String(op.entity_id) === String(id)
+                        && types.has(op.operation))
+                    .map(op => op.op_id).sort();
+            })"""
+            # Queue retirement from unrelated domains is allowed; compare
+            # exact PDF annotation intent IDs for this Work only.
+            before_ops = page.evaluate(annotation_op_ids, work_a)
             before_viewer_annotations = _viewer_annotation_count(page)
             self.assertEqual(
                 before_viewer_annotations, 0,
@@ -2262,9 +2274,7 @@ class OfflineFoundationTests(unittest.TestCase):
             except Exception:
                 pass
             page.wait_for_timeout(400)
-            after_ops = page.evaluate(
-                "() => prksSync.store.listOperations().then(r => r.length)"
-            )
+            after_ops = page.evaluate(annotation_op_ids, work_a)
             self.assertEqual(before_ops, after_ops)
             self.assertEqual(
                 _viewer_annotation_count(page), before_viewer_annotations,

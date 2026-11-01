@@ -452,6 +452,88 @@ async function testMutationFifo() {
     record('mutation peak never exceeds 1', peakMut === 1, 'peak=' + peakMut);
 }
 
+async function testOptInCancellableMutation() {
+    // A queued PDF adoption is dropped if its network state changes while a
+    // different mutation owns the single FIFO slot. The durable foreground
+    // mutation is never cancelled or reordered.
+    const box = makeDeferredFetch();
+    const coord = makeCoordinator({ fetchBundle: box });
+    const first = coord.prksRequest('/api/normal', { method: 'POST' });
+    const controller = new AbortController();
+    const adopted = coord.prksRequest('/api/works/W/annotations/adopt',
+        { method: 'POST', signal: controller.signal },
+        { cancellableMutation: true });
+    controller.abort();
+    box.calls[0].resolve(jsonResponse({ ok: true }));
+    await first;
+    record('aborted queued adoption rejects without transport',
+        await expectAbort(adopted) && box.calls.length === 1
+        && coord.snapshot().counts.aborted >= 1, String(box.calls.length));
+
+    // Cancellation after transport starts must also be classified as abort,
+    // not as a reachability failure that could trigger a reconnect loop.
+    try {
+        const reports = installReachabilitySpies();
+        const held = makeDeferredFetch();
+        const running = makeCoordinator({ fetchBundle: held });
+        const abortRunning = new AbortController();
+        const started = running.prksRequest('/api/works/W/annotations/adopt',
+            { method: 'POST', signal: abortRunning.signal },
+            { cancellableMutation: true });
+        await waitUntil(() => held.calls.length === 1);
+        abortRunning.abort();
+        record('cancelling in-flight adoption is not a reachability failure',
+            await expectAbort(started) && reports.success === 0
+            && reports.failure === 0 && running.snapshot().counts.aborted === 1,
+            'success=' + reports.success + ' failure=' + reports.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    // Even the first mutation may be waiting on the async Library epoch
+    // lookup. Cancellation must propagate through that adapter before fetch.
+    let sessionStarted = false;
+    let finishSession;
+    const dispatched = [];
+    const epoch = createPrksLibraryEpoch({
+        sessionTimeoutMs: 60000,
+        fetchImpl: function (url, init) {
+            if (url === '/api/session') {
+                sessionStarted = true;
+                return new Promise(function (resolve) { finishSession = resolve; });
+            }
+            dispatched.push({ url, init });
+            return Promise.resolve(jsonResponse({ ok: true }));
+        },
+    });
+    const gated = makeCoordinator({ fetchImpl: epoch.fetch });
+    const abortEpoch = new AbortController();
+    const pending = gated.prksRequest('/api/works/W/annotations/adopt',
+        { method: 'POST', signal: abortEpoch.signal },
+        { cancellableMutation: true });
+    await waitUntil(() => sessionStarted);
+    abortEpoch.abort();
+    const didAbort = await expectAbort(pending);
+    record('epoch-header wait cannot dispatch an aborted adoption',
+        didAbort && dispatched.length === 0, JSON.stringify(dispatched));
+    finishSession(jsonResponse({ library: { epoch: '3' } }));
+    await flush();
+    record('late epoch read cannot re-dispatch cancelled adoption',
+        dispatched.length === 0, String(dispatched.length));
+
+    // Default durable mutations intentionally ignore post-enqueue cancellation.
+    const durable = makeDeferredFetch();
+    const defaultCoord = makeCoordinator({ fetchBundle: durable });
+    const defaultSignal = new AbortController();
+    const normal = defaultCoord.prksRequest('/api/sync/operations',
+        { method: 'POST', signal: defaultSignal.signal });
+    defaultSignal.abort();
+    record('durable mutation signal remains unmanaged by default',
+        durable.calls.length === 1 && !durable.calls[0].init.signal, '');
+    durable.calls[0].resolve(jsonResponse({ ok: true }));
+    await normal;
+}
+
 async function testDedupe() {
     const box = makeDeferredFetch();
     const coord = makeCoordinator({ fetchBundle: box });
@@ -1467,6 +1549,7 @@ async function main() {
     await testBackgroundBoundAndPreferFg();
     await testReadMutationOverlap();
     await testMutationFifo();
+    await testOptInCancellableMutation();
     await testDedupe();
     await testSubscriberAbort();
     await testRetry();

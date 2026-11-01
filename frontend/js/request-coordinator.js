@@ -803,12 +803,18 @@
             let error = null;
             let networkFailed = false;
             try {
-                response = await fetchImpl(job.href, networkInit(job.fetchOptions, undefined));
+                // Only explicitly cancellable, non-durable background writes
+                // honor a caller's signal. Durable sync operations retain their
+                // existing cannot-cancel-on-navigation semantics.
+                const signal = job.cancellable ? job.fetchOptions.signal : undefined;
+                if (signal && signal.aborted) throw makeAbortError();
+                response = await fetchImpl(job.href, networkInit(job.fetchOptions, signal));
+                if (signal && signal.aborted) throw makeAbortError();
                 if (!isManagedPdfHref(job.href)) reportPrksReachable();
             } catch (err) {
                 error = err;
                 networkFailed = !prksIsAbortError(err);
-                if (!isManagedPdfHref(job.href)) reportPrksUnreachable(err);
+                if (networkFailed && !isManagedPdfHref(job.href)) reportPrksUnreachable(err);
             }
             if (response && response.ok) {
                 bumpEpochAndClearCache();
@@ -818,7 +824,8 @@
             const waiters = job.waiters.splice(0, job.waiters.length);
             waiters.forEach(function (waiter) {
                 if (error) {
-                    counts.failed += 1;
+                    if (prksIsAbortError(error)) counts.aborted += 1;
+                    else counts.failed += 1;
                     waiter.reject(error);
                 } else {
                     try {
@@ -865,6 +872,9 @@
                     enqueueMutation({
                         href: href,
                         fetchOptions: opts,
+                        // Opt in only for best-effort writes such as PDF-byte
+                        // adoption. Never abort durable queue submissions.
+                        cancellable: pol.cancellableMutation === true,
                         waiters: [{ resolve: resolve, reject: reject }],
                     });
                 });
