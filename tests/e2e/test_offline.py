@@ -2247,18 +2247,9 @@ class OfflineFoundationTests(unittest.TestCase):
                     }""" % _FOCUSED_PDF
                 )
             )
-            annotation_op_ids = """id => prksSync.store.listOperations().then(rows => {
-                const types = new Set(window.PRKS_PDF_ANNOTATION_OPERATION_TYPES ||
-                    ['CREATE_PDF_ANNOTATION', 'SET_PDF_ANNOTATION', 'DELETE_PDF_ANNOTATION']);
-                return rows.filter(op => op.entity_type === 'work'
-                        && String(op.entity_id) === String(id)
-                        && types.has(op.operation))
-                    .map(op => op.op_id).sort();
-            })"""
-            # Other sync families can retire unrelated ops while the PDF
-            # snapshot is held. Check this Work's annotation intents, not the
-            # global queue length, and compare identities rather than counts.
-            before_ops = page.evaluate(annotation_op_ids, work_a)
+            before_ops = page.evaluate(
+                "() => prksSync.store.listOperations().then(r => r.length)"
+            )
             before_viewer_annotations = _viewer_annotation_count(page)
             self.assertEqual(
                 before_viewer_annotations, 0,
@@ -2271,7 +2262,9 @@ class OfflineFoundationTests(unittest.TestCase):
             except Exception:
                 pass
             page.wait_for_timeout(400)
-            after_ops = page.evaluate(annotation_op_ids, work_a)
+            after_ops = page.evaluate(
+                "() => prksSync.store.listOperations().then(r => r.length)"
+            )
             self.assertEqual(before_ops, after_ops)
             self.assertEqual(
                 _viewer_annotation_count(page), before_viewer_annotations,
