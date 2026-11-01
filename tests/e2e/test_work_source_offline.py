@@ -15,6 +15,7 @@ conflict arithmetic, and aggregate atomics live in
 `tests/browser/run_work_source_sync_selftest.js`. Store-layer Node coverage
 does not replace those editor paths.
 """
+import json
 import os
 import unittest
 
@@ -66,17 +67,78 @@ class OfflineWorkSourceTests(unittest.TestCase):
         o._wait_entity_cached(page, 'work', server.ids[key])
         return server, page, context
 
+    def source_debug_state(self, page):
+        """Bounded, content-free snapshot for a blocked editor action.
+
+        Log queue status/attempt counters and session ownership, never source
+        URLs, field values, operation payloads or PDF/user content.
+        """
+        return page.evaluate("""async () => {
+            const ctx = window.prksGetFocusedTabContext?.();
+            const editor = ctx?.getResource?.('workSourceEditor');
+            const workId = ctx?.getEntity?.('work')?.id;
+            const operations = await prksSync.store.listOperations();
+            const brief = op => ({
+                status: op.status,
+                attempts: op.attempt_count,
+                lastError: !!op.last_error,
+                conflictCode: op.server_result?.code || null,
+            });
+            const sourceRows = operations
+                .filter(op => op.operation === 'SET_WORK_SOURCE'
+                    && (!workId || String(op.entity_id) === String(workId)))
+                .map(brief);
+            const input = document.getElementById('meta-video-url');
+            const button = document.getElementById('save-work-source-btn');
+            const panel = document.getElementById('panel-content');
+            return {
+                connectivity: window.prksOfflineRuntimeState?.() || null,
+                navigatorOnline: navigator.onLine,
+                tabId: ctx?.tabId || null,
+                panelOwner: panel?.dataset.prksOwnerTabId || null,
+                editorPresent: !!editor,
+                editorHasBase: !!editor?.observed,
+                editorSameWork: !!(editor && workId
+                    && String(editor.workId) === String(workId)),
+                editSession: ctx?.ui?.workMetaEditSession ?? null,
+                sourceRows,
+                editorRows: (editor?.operations || []).map(brief),
+                input: { present: !!input, disabled: input?.disabled ?? null },
+                save: { present: !!button, disabled: button?.disabled ?? null },
+            };
+        }""")
+
+    def wait_source_editable(self, page, selector):
+        """Require real editability; report why it is blocked if it persists."""
+        # E2E modules are discovered by the Playwright-free unit gate too.
+        # Import only when Chromium executes this helper.
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+        try:
+            page.wait_for_function(
+                """selector => {
+                    const control = document.querySelector(selector);
+                    return !!control && !control.disabled;
+                }""",
+                arg=selector, timeout=10000,
+            )
+        except PlaywrightTimeoutError:
+            self.fail(
+                'Video source editor did not become editable at %s: %s'
+                % (selector, json.dumps(self.source_debug_state(page), sort_keys=True))
+            )
+
     def edit(self, page):
         """Open Edit metadata and wait for the source group to be usable."""
         page.locator('#panel-content button', has_text='Edit metadata').click()
-        page.wait_for_function(
-            "() => { const b = document.getElementById('save-work-source-btn');"
-            "        return !!b && !b.disabled; }")
+        self.wait_source_editable(page, '#save-work-source-btn')
 
     def url(self, page, value):
+        self.wait_source_editable(page, '#meta-video-url')
         page.locator('#meta-video-url').fill(value)
 
     def save(self, page):
+        self.wait_source_editable(page, '#save-work-source-btn')
         page.locator('#save-work-source-btn').click()
 
     def pending(self, page, count):
@@ -91,6 +153,18 @@ class OfflineWorkSourceTests(unittest.TestCase):
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
         }""", count)
+
+    def never_sent_source(self, page):
+        """The edit can only be coalesced if its source row was never claimed."""
+        state = self.source_debug_state(page)
+        self.assertEqual(
+            state['sourceRows'], [
+                {'status': 'pending', 'attempts': 0,
+                 'lastError': False, 'conflictCode': None}
+            ],
+            'A first offline source edit was claimed or became stale before '
+            'the user could change it: %s' % json.dumps(state, sort_keys=True),
+        )
 
     def settled_conflicts(self, page, count):
         page.evaluate("""async n => {
@@ -107,7 +181,9 @@ class OfflineWorkSourceTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate('() => prksOfflineNoteRequestFailure()')
-        page.wait_for_function("() => prksOfflineRuntimeState() !== 'online'")
+        # A reconnecting probe is not yet proof of an offline-ready editor.
+        # Require the runtime's offline state before enqueuing a second edit.
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def reconnect(self, page, context):
         context.set_offline(False)
@@ -313,6 +389,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         self.url(page, WATCH_TWO)
         self.save(page)
         self.pending(page, 1)
+        self.never_sent_source(page)
         self.url(page, THIRD_VIDEO)
         self.save(page)
         self.pending(page, 1)
@@ -339,6 +416,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         self.url(page, WATCH_TWO)
         self.save(page)
         self.pending(page, 1)
+        self.never_sent_source(page)
         # The share-link spelling of the video it already has: a different URL,
         # the same video.
         self.url(page, SHORT_ONE)
