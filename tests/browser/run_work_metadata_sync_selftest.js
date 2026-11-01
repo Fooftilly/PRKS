@@ -2211,10 +2211,6 @@ function backgroundSaveBaselineCommit() {
         assert.equal(ui.workMetaBaseline.title, 'Old',
             'stale sessions/routes/destroyed tabs must never be committed');
     }
-    } finally {
-    if (previousDocument === undefined) delete globalThis.document;
-    else globalThis.document = previousDocument;
-    }
 }
 
 async function main() {
