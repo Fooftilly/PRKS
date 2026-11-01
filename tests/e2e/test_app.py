@@ -5761,7 +5761,18 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    return { title: work && work.title, panel: panel ? panel.innerHTML : '' };
+                    // Compare the immutable panel owner/content; the three
+                    // sync-status labels are live progress UI, not content.
+                    const stable = panel && panel.cloneNode(true);
+                    if (stable) stable.querySelectorAll(
+                        '[data-prks-role="work-bib-sync"], ' +
+                        '[data-prks-role="work-status-sync"], ' +
+                        '[data-prks-role="work-identity-sync"]'
+                    ).forEach(node => node.replaceChildren());
+                    return {
+                        title: work && work.title,
+                        panel: stable ? stable.innerHTML : '',
+                    };
                 }""",
                 arg=work_b_tab_id,
             )
@@ -5780,9 +5791,17 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
+                    // Compare the immutable panel owner/content; the three
+                    // sync-status labels are live progress UI, not content.
+                    const stable = panel && panel.cloneNode(true);
+                    if (stable) stable.querySelectorAll(
+                        '[data-prks-role="work-bib-sync"], ' +
+                        '[data-prks-role="work-status-sync"], ' +
+                        '[data-prks-role="work-identity-sync"]'
+                    ).forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
-                        panel: panel ? panel.innerHTML : '',
+                        panel: stable ? stable.innerHTML : '',
                         ownerTabId: panel ? panel.dataset.prksOwnerTabId : '',
                     };
                 }""",
