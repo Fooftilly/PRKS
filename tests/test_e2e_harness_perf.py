@@ -45,6 +45,114 @@ class E2ESeedCacheTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
 
+    def test_seeded_pdf_index_survives_real_snapshot_clone_without_import(self):
+        """Normal fresh E2E servers should reconcile fingerprints, not reimport PDFs."""
+        from backend.db_manager import PRKSDatabase
+        from backend.storage.config import StorageConfig
+        from backend.text_index import PRKSTextIndex
+        from tests.e2e.fixtures import SCHEMA, seed_library
+
+        with tempfile.TemporaryDirectory(prefix="prks-index-seed-a-") as a:
+            ids_a, hit_a = harness._materialize_seed(seed_library, a)
+            self.assertFalse(hit_a)
+            cfg_a = StorageConfig.for_testing(a)
+            idx_a = PRKSTextIndex(storage=cfg_a)
+            self.assertIn(ids_a["work_a"], idx_a.search_work_ids("Hello"))
+            self.assertIn(ids_a["work_b"], idx_a.search_work_ids("Hello"))
+
+        with tempfile.TemporaryDirectory(prefix="prks-index-seed-b-") as b:
+            ids_b, hit_b = harness._materialize_seed(seed_library, b)
+            self.assertTrue(hit_b)
+            self.assertEqual(ids_a, ids_b)
+            cfg = StorageConfig.for_testing(b)
+            db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+            index = PRKSTextIndex(storage=cfg)
+            with mock.patch(
+                "backend.text_index.extractor_available",
+                side_effect=AssertionError("unchanged snapshot must not load PyMuPDF"),
+            ) as probe:
+                summary = index.reconcile_all(db)
+            probe.assert_not_called()
+            self.assertEqual(summary["processed"], 2)
+            self.assertEqual(summary["unchanged"], 2)
+            self.assertEqual(summary["updated"], 0)
+            self.assertEqual(summary["failed"], 0)
+            self.assertIn(ids_b["work_a"], index.search_work_ids("Hello"))
+            self.assertIn(ids_b["work_b"], index.search_work_ids("Hello"))
+
+    def test_seeded_index_detects_mutated_pdf_and_reextracts(self):
+        """Snapshot prewarming cannot conceal a changed managed PDF fingerprint."""
+        from backend.db_manager import PRKSDatabase
+        from backend.storage.config import StorageConfig
+        from backend.text_index import PRKSTextIndex
+        from tests.e2e.fixtures import SCHEMA, seed_library
+
+        with tempfile.TemporaryDirectory(prefix="prks-index-mutation-") as root:
+            ids, _ = harness._materialize_seed(seed_library, root)
+            cfg = StorageConfig.for_testing(root)
+            pdf = Path(cfg.pdfs_dir, ids["pdf_name"])
+            before = pdf.stat()
+            import pymupdf
+
+            changed = pymupdf.open()
+            try:
+                changed.new_page().insert_text((72, 72), "E2E Mutated Search Term")
+                pdf.write_bytes(changed.tobytes())
+            finally:
+                changed.close()
+            os.utime(pdf, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+            index = PRKSTextIndex(storage=cfg)
+            with mock.patch(
+                "backend.text_index.extractor_available", return_value=True,
+            ) as probe:
+                summary = index.reconcile_all(db)
+            probe.assert_called_once_with()
+            self.assertEqual(summary["updated"], 1)
+            self.assertEqual(summary["unchanged"], 1)
+            self.assertEqual(summary["failed"], 0)
+            self.assertIn(ids["work_a"], index.search_work_ids("Mutated"))
+            self.assertNotIn(ids["work_a"], index.search_work_ids("Hello"))
+            self.assertIn(ids["work_b"], index.search_work_ids("Hello"))
+
+    def test_deleted_seed_index_rebuilds_from_canonical_pdfs(self):
+        """Removing a derived index must still exercise genuine cold extraction."""
+        from backend.db_manager import PRKSDatabase
+        from backend.storage.config import StorageConfig
+        from backend.text_index import PRKSTextIndex
+        from tests.e2e.fixtures import SCHEMA, seed_library
+
+        with tempfile.TemporaryDirectory(prefix="prks-index-cold-") as root:
+            ids, _ = harness._materialize_seed(seed_library, root)
+            cfg = StorageConfig.for_testing(root)
+            Path(cfg.index_db_path).unlink()
+            db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+            index = PRKSTextIndex(storage=cfg)
+            with mock.patch(
+                "backend.text_index.extractor_available", return_value=True,
+            ) as probe:
+                summary = index.reconcile_all(db)
+            probe.assert_called_once_with()
+            self.assertEqual(summary["updated"], 2)
+            self.assertEqual(summary["unchanged"], 0)
+            self.assertEqual(summary["indexed"], 2)
+            self.assertIn(ids["work_a"], index.search_work_ids("Hello"))
+            self.assertIn(ids["work_b"], index.search_work_ids("Hello"))
+
+    def test_seed_index_unavailable_extractor_fails_closed(self):
+        """Do not publish an indexless fixture as a reusable E2E snapshot."""
+        from tests.e2e.fixtures import seed_library
+
+        with tempfile.TemporaryDirectory(prefix="prks-index-fail-") as root:
+            with mock.patch(
+                "backend.text_index.extractor_available", return_value=False,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "E2E seed PDF text index did not synchronize",
+                ):
+                    harness._materialize_seed(seed_library, root)
+        self.assertNotIn(seed_library, harness._SEED_SNAPSHOTS)
+
     def test_cache_can_be_disabled_for_clean_ab_benchmark(self):
         os.environ["PRKS_E2E_SEED_CACHE"] = "0"
         calls = []
