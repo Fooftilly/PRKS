@@ -21,6 +21,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decide once, before provisioning PostgreSQL containers. Any failure
+  # leaves the required database jobs running their full tests.
+  docs-only-plan:
+    name: PostgreSQL docs-only scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.docs-scope.outputs.docs_only }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Classify docs-only scope for PostgreSQL jobs (fail closed)
+        id: docs-scope
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
+              # The PR checkout is untrusted: use the reviewed classifier from
+              # the immutable base, not the PR's possibly modified selector.
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
+                fi
+                rm -f "$base_classifier"
+              else
+                echo "::warning::Failed to allocate classifier file; running full tests."
+              fi
+            else
+              echo "::warning::Could not fetch immutable PR base; running full tests."
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+
   unit-api-contract:
     permissions:
       contents: read
@@ -136,7 +184,13 @@ jobs:
 
   postgres-helpers:
     # Nightly detection only repeats the unit suite, not PostgreSQL jobs.
-    if: github.event_name != 'schedule'
+    needs: docs-only-plan
+    # A missing/failed classifier must NEVER skip code/database validation.
+    # GitHub considers deliberately skipped required jobs successful checks.
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.docs-only-plan.result != 'success' ||
+       needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
       contents: read
     name: PostgreSQL helper tests
@@ -184,7 +238,13 @@ jobs:
         run: scripts/test-postgres
 
   backend-parity:
-    if: github.event_name != 'schedule'
+    needs: docs-only-plan
+    # A missing/failed classifier must NEVER skip code/database validation.
+    # GitHub considers deliberately skipped required jobs successful checks.
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.docs-only-plan.result != 'success' ||
+       needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
       contents: read
     name: Backend parity (SQLite + PostgreSQL)

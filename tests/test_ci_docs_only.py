@@ -154,6 +154,66 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("run: python run_tests.py", unit)
 
 
+    def test_postgresql_jobs_keep_required_names_and_fail_closed_on_docs_plan(self):
+        # These PostgreSQL services used to start even for the two approved
+        # wiki-only paths. A separate cheap plan lets them skip provisioning
+        # while an unknown/failed plan still executes the full database gate.
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/test-gate.yml"
+        ).read_text(encoding="utf-8")
+        plan = workflow.split("  docs-only-plan:\n", 1)[1].split(
+            "  unit-api-contract:\n", 1
+        )[0]
+        unit = workflow.split("  unit-api-contract:\n", 1)[1].split(
+            "  postgres-helpers:\n", 1
+        )[0]
+        self.assertIn("name: PostgreSQL docs-only scope", plan)
+        self.assertIn("persist-credentials: false", plan)
+        self.assertIn("docs_only: ${{ steps.docs-scope.outputs.docs_only }}", plan)
+        self.assertIn(
+            "Classify docs-only scope for PostgreSQL jobs (fail closed)", plan
+        )
+        self.assertIn('git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py"', plan)
+        self.assertIn('if base_classifier="$(mktemp)"; then', plan)
+        self.assertIn('echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"', plan)
+        # The exact script must match the immutable-base unit classifier;
+        # otherwise a second looser skip policy could silently grow.
+        def script(block: str, title: str) -> str:
+            start = block.index("      - name: " + title + "\n")
+            end = block.find("\n      - name: ", start + 1)
+            return block[start:end if end >= 0 else len(block)].split(
+                "\n", 1
+            )[1].rstrip()
+
+        self.assertEqual(
+            script(plan, "Classify docs-only scope for PostgreSQL jobs (fail closed)"),
+            script(unit, "Classify documentation-only PR (fail closed)"),
+        )
+        for job_id, required_name in (
+            ("postgres-helpers", "PostgreSQL helper tests"),
+            ("backend-parity", "Backend parity (SQLite + PostgreSQL)"),
+        ):
+            with self.subTest(job_id=job_id):
+                match = re.search(
+                    r"(?ms)^  " + re.escape(job_id)
+                    + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
+                    workflow,
+                )
+                self.assertIsNotNone(match)
+                job = match.group(1)
+                self.assertIn("name: " + required_name, job)
+                self.assertIn("needs: docs-only-plan", job)
+                self.assertIn("!cancelled() && github.event_name != 'schedule'", job)
+                self.assertIn("needs.docs-only-plan.result != 'success'", job)
+                self.assertIn("needs.docs-only-plan.outputs.docs_only != 'true'", job)
+                self.assertIn("services:\n      postgres:", job)
+        # The event triggers themselves must NOT filter paths: required
+        # contexts need to keep reporting on docs-only pull requests.
+        triggers = workflow.split("on:\n", 1)[1].split("\nconcurrency:", 1)[0]
+        self.assertNotIn("paths:", triggers)
+        self.assertNotIn("paths-ignore:", triggers)
+
+
 class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_valid_links_headings_references_and_fences(self):
         with tempfile.TemporaryDirectory() as folder:
