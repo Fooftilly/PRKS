@@ -5785,7 +5785,15 @@ class TabContextHostRootTests(_BrowserE2E):
                 "(id) => { const w = window.prksGetTabContext(id).getEntity('work'); return w && w.title === 'Saved While Unfocused'; }",
                 arg=main_id,
             )
-            page.wait_for_timeout(300)
+            # Entity title updates before the durable ACK is completely retired.
+            # A fixed sleep can resume mid-finalization and yield a false
+            # unsaved-leave refusal; wait for the actual sync invariant.
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+                timeout=20000,
+                message="Work A's saved operation never retired before route leave",
+            )
 
             # B's panel/entity are completely untouched by A's background acknowledgement.
             after = page.evaluate(
