@@ -182,22 +182,13 @@ jobs:
         # The approved installer selects the exact runtime package pins.
         run: python scripts/ci/install_pinned_python.py postgres
 
-      - name: Run assigned PostgreSQL helper and harness tests
+      - name: Run PostgreSQL helper and harness tests
         env:
           PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
           PRKS_PG_SHARD: ${{ matrix.shard }}/2
-        shell: bash
-        run: |
-          set -euo pipefail
-          modules_file="$(mktemp)"
-          python scripts/ci/pg_test_shards.py --shard "$PRKS_PG_SHARD" > "$modules_file"
-          mapfile -t modules < "$modules_file"
-          rm -f "$modules_file"
-          if [[ "${#modules[@]}" -eq 0 ]]; then
-            echo "::error::Empty PostgreSQL helper shard"
-            exit 1
-          fi
-          scripts/test-postgres "${modules[@]}"
+        # Keep the existing command allowlist exact. The approved wrapper
+        # enumerates all modules and fail-closed partitions by PRKS_PG_SHARD.
+        run: scripts/test-postgres
 
   postgres-helpers:
     # Keep the existing required check name; fail if any shard fails, is
