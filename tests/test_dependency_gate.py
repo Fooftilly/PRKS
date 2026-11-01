@@ -429,26 +429,26 @@ def assert_test_gate_no_pip_inject_env(workflow: str) -> None:
 
 def assert_test_gate_pg_shards_guarded(workflow: str, pairs: list) -> bool:
     """Enforce reviewed shard layout and aggregator without changing policy."""
-# Only the explicitly reviewed two-shard form can have an aggregator.
-# Guard the matrix cardinality, wrapper command and dependency so a
-# successful required check cannot hide a missing/failed helper shard.
-sharded = "  postgres-helpers-shards:" in workflow
-aggregator = count_test_gate_steps_named(workflow, _TEST_GATE_PG_AGG_STEP)
-if sharded:
-    requirements = (
-        "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
-        "        shard: [1, 2]",
-        "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
-        "    needs: postgres-helpers-shards",
-        "    if: ${{ always() && github.event_name != 'schedule' }}",
-        "    name: PostgreSQL helper tests",
-    )
-    if not all(text in workflow for text in requirements):
-        raise ValueError("PostgreSQL helper shards require the reviewed matrix and aggregator")
-    if pairs[0] is None or aggregator != 1:
-        raise ValueError("PostgreSQL helper shards require one approved aggregator")
-elif aggregator:
-    raise ValueError("Unexpected PostgreSQL helper aggregator without shards")
+    # Only the explicitly reviewed two-shard form can have an aggregator.
+    # Guard the matrix cardinality, wrapper command and dependency so a
+    # successful required check cannot hide a missing/failed helper shard.
+    sharded = "  postgres-helpers-shards:" in workflow
+    aggregator = count_test_gate_steps_named(workflow, _TEST_GATE_PG_AGG_STEP)
+    if sharded:
+        requirements = (
+            "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
+            "        shard: [1, 2]",
+            "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
+            "    needs: postgres-helpers-shards",
+            "    if: ${{ always() && github.event_name != 'schedule' }}",
+            "    name: PostgreSQL helper tests",
+        )
+        if not all(text in workflow for text in requirements):
+            raise ValueError("PostgreSQL helper shards require the reviewed matrix and aggregator")
+        if pairs[0] is None or aggregator != 1:
+            raise ValueError("PostgreSQL helper shards require one approved aggregator")
+    elif aggregator:
+        raise ValueError("Unexpected PostgreSQL helper aggregator without shards")
     return sharded
 
 
