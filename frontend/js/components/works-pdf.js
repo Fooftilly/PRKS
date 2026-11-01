@@ -1826,10 +1826,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // widgets stay out of the annotations table. Offline skips (server needed).
     // Never adopt from known-stale PDF bytes, and never while unresolved PDF
     // annotation ops exist (pending local intent is not adoption authority).
-    const onlineForAdopt =
-        typeof window.prksOfflineRuntimeState !== 'function' ||
-        window.prksOfflineRuntimeState() === 'online';
-    if (onlineForAdopt && typeof viewer.getAnnotations === 'function') {
+    if (isOnlineRuntime() && typeof viewer.getAnnotations === 'function') {
         try {
             let adoptBlocked = false;
             const canon = runtime.acknowledgedAnnotationSetRevision;
@@ -1851,7 +1848,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 abandonSetup();
                 return;
             }
-            if (!adoptBlocked) {
+            // The unresolved-op read above yields to IndexedDB: connectivity
+            // can change while it is pending. Never send a byte-adoption write
+            // after transitioning offline/reconnecting, even when this viewer
+            // was initially opened online and its setup identity remains live.
+            if (!adoptBlocked && isOnlineRuntime()) {
                 const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
                 const adoptRes = await prksRequest(
                     `/api/works/${workId}/annotations/adopt`,

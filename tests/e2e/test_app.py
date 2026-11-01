@@ -1262,10 +1262,23 @@ class WorkDetailsPolishTests(_BrowserE2E):
             )
             page.wait_for_timeout(200)
             self.assertEqual(patches, [])
+            # Other independent operations (notably MARK_WORK_OPENED)
+            # can still be queued while this viewer finishes mounting. The
+            # forbidden mutation is a Work metadata *field* operation, not
+            # a global prohibition on every unrelated durable operation.
+            # Count every metadata-field write for this Work, not just the
+            # invalid date's field, so a partially applied form still fails.
+            field_ops = page.evaluate(
+                """work => prksSync.store.listOperations().then(rows =>
+                    rows.filter(op => op.entity_type === 'work' &&
+                        String(op.entity_id) === String(work) &&
+                        op.operation === 'SET_WORK_METADATA_FIELD')
+                )""",
+                work_a,
+            )
             self.assertEqual(
-                page.evaluate("() => prksSync.store.listOperations().then(r => r.length)"),
-                0,
-                "a date PRKS would have to guess at is never enqueued either",
+                field_ops, [],
+                "invalid date cannot enqueue any Work metadata field",
             )
         finally:
             try:
@@ -5748,7 +5761,18 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    return { title: work && work.title, panel: panel ? panel.innerHTML : '' };
+                    // Compare the immutable panel owner/content; the three
+                    // sync-status labels are live progress UI, not content.
+                    const stable = panel && panel.cloneNode(true);
+                    if (stable) stable.querySelectorAll(
+                        '[data-prks-role="work-bib-sync"], ' +
+                        '[data-prks-role="work-status-sync"], ' +
+                        '[data-prks-role="work-identity-sync"]'
+                    ).forEach(node => node.replaceChildren());
+                    return {
+                        title: work && work.title,
+                        panel: stable ? stable.innerHTML : '',
+                    };
                 }""",
                 arg=work_b_tab_id,
             )
@@ -5767,9 +5791,17 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
+                    // Compare the immutable panel owner/content; the three
+                    // sync-status labels are live progress UI, not content.
+                    const stable = panel && panel.cloneNode(true);
+                    if (stable) stable.querySelectorAll(
+                        '[data-prks-role="work-bib-sync"], ' +
+                        '[data-prks-role="work-status-sync"], ' +
+                        '[data-prks-role="work-identity-sync"]'
+                    ).forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
-                        panel: panel ? panel.innerHTML : '',
+                        panel: stable ? stable.innerHTML : '',
                         ownerTabId: panel ? panel.dataset.prksOwnerTabId : '',
                     };
                 }""",

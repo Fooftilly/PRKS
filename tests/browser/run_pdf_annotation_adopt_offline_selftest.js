@@ -1,0 +1,99 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * Execute the real PDF byte-adoption branch from works-pdf.js with a paused
+ * unresolved-annotation-ops query. The test intentionally holds setupEligible
+ * true so the connectivity guard itself, not an unrelated setup lifecycle
+ * guard, must prevent a POST after an online -> offline transition.
+ */
+const fs = require('node:fs');
+const path = require('node:path');
+const strict = require('node:assert/strict');
+
+const source = fs.readFileSync(
+    path.resolve(__dirname, '../../frontend/js/components/works-pdf.js'), 'utf8'
+);
+const startMarker = '    // Slice G: adopt byte-only user markup from PDF bytes into canonical';
+const endMarker = '    // Project acknowledged (+ pending durable) annotations into the';
+const start = source.indexOf(startMarker);
+const end = source.indexOf(endMarker, start);
+strict.ok(start !== -1 && end > start, 'source adoption boundaries are present');
+strict.equal(source.indexOf(startMarker, start + 1), -1, 'unique adoption branch');
+
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const actualAdoptionBranch = new AsyncFunction(
+    'window', 'viewer', 'runtime', 'workId', 'setupEligible', 'abandonSetup',
+    'prksViewerAnnotationObjects', 'isLikelyAnnotationObject', 'prksRequest',
+    'applyAnnotationSnapshotToRuntime', 'isOnlineRuntime',
+    source.slice(start, end)
+);
+
+let checks = 0;
+
+async function runCase(initialState, stateAfterPending, hasUnresolvedOps = false) {
+    let state = initialState;
+    let pendingReadCount = 0;
+    const requests = [];
+    let releasePending;
+    const pendingRead = new Promise((resolve) => { releasePending = resolve; });
+    const window = {
+        prksOfflineRuntimeState: () => state,
+        prksWorkHasUnresolvedPdfAnnotationOps: () => {
+            pendingReadCount += 1;
+            return pendingRead;
+        },
+    };
+    const viewer = { getAnnotations: () => [] };
+    const runtime = {
+        acknowledgedAnnotationSetRevision: 0,
+        materializedPdfAnnotationRevision: 0,
+    };
+    const working = actualAdoptionBranch(
+        window, viewer, runtime, 'W-ADOPT',
+        () => true, () => strict.fail('unexpected setup abandonment'),
+        () => [], () => true,
+        async (url, init) => {
+            requests.push({ url, method: init.method, stateAtRequest: state });
+            return { ok: true, json: async () => ({ adopted_count: 0 }) };
+        },
+        () => strict.fail('unexpected projection'),
+        () => state === 'online'
+    );
+    // A real async pending-ops query suspends this branch after the initial
+    // online check. Switch network state while that Promise is unsettled.
+    checks += 1;
+    strict.equal(pendingReadCount, initialState === 'online' ? 1 : 0);
+    state = stateAfterPending;
+    releasePending(hasUnresolvedOps);
+    await working;
+    return requests;
+}
+
+(async () => {
+    let calls = await runCase('online', 'online');
+    strict.equal(calls.length, 1);
+    strict.equal(calls[0].method, 'POST');
+    strict.equal(calls[0].url, '/api/works/W-ADOPT/annotations/adopt');
+    strict.equal(calls[0].stateAtRequest, 'online');
+    checks += 4;
+
+    for (const destination of ['offline', 'reconnecting']) {
+        calls = await runCase('online', destination);
+        strict.deepEqual(calls, [], destination + ' must never emit adoption POST');
+        checks += 1;
+    }
+
+    calls = await runCase('offline', 'offline');
+    strict.deepEqual(calls, [], 'an initially offline viewer must not adopt');
+    checks += 1;
+
+    calls = await runCase('online', 'online', true);
+    strict.deepEqual(calls, [], 'unresolved durable ops must still block adoption');
+    checks += 1;
+
+    process.stdout.write(`${checks} checks passed (PDF adoption offline race)\n`);
+})().catch((err) => {
+    process.stderr.write(String(err.stack || err) + '\n');
+    process.exitCode = 1;
+});
