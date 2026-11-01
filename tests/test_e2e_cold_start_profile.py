@@ -91,11 +91,63 @@ class ChildStartupPhaseTests(unittest.TestCase):
                 "startup_text_load_state",
                 "startup_text_source_scan",
                 "startup_text_sync",
+                "startup_text_work_sync",
                 "startup_text_orphan_cleanup",
                 "startup_text_fts_verify",
             },
         )
+        # No pending PDF means no extractor availability probe: absence is
+        # intentional and must not be mistaken for an observed zero.
+        self.assertNotIn("startup_text_extractor_probe", output.getvalue())
         self.assertNotIn("object at", output.getvalue())
+
+    def test_pending_pdf_records_extractor_probe_and_work_sync_once(self):
+        from backend.text_index import PRKSTextIndex, TextIndexSyncResult
+
+        index = object.__new__(PRKSTextIndex)
+        index._fts_suspect = False
+        env = {
+            "PRKS_E2E_STARTUP_PROFILE": "1",
+            "PRKS_E2E": "1",
+            "PRKS_TESTING": "1",
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(index, "_load_sync_state", return_value={}),
+            mock.patch.object(index, "_canonical_managed_works",
+                              return_value={
+                                  "fixture-a": "/api/pdfs/fixture-a.pdf",
+                                  "fixture-b": "/api/pdfs/fixture-b.pdf",
+                              }),
+            mock.patch.object(index, "_resolve_managed_source",
+                              return_value=("missing", None, "/api/pdfs/fixture.pdf")),
+            mock.patch("backend.text_index.extractor_available",
+                       return_value=False) as availability,
+            mock.patch.object(index, "sync_work",
+                              return_value=TextIndexSyncResult(action="missing")) as sync,
+            mock.patch.object(index, "_remove_orphan_ids", return_value=0),
+            contextlib.redirect_stderr(output),
+        ):
+            summary = index._reconcile_all_inner(object())
+        self.assertEqual(summary["processed"], 2)
+        self.assertEqual(summary["missing"], 2)
+        self.assertTrue(summary["extractor_unavailable"])
+        availability.assert_called_once_with()
+        self.assertEqual(sync.call_count, 2)
+        for call, work_id in zip(sync.call_args_list, ("fixture-a", "fixture-b")):
+            self.assertEqual(call.args, (work_id, f"/api/pdfs/{work_id}.pdf"))
+            self.assertEqual(call.kwargs, {
+                "force": False, "allow_extract": False,
+                "known_row": None, "known_fingerprint": None,
+            })
+        phases = startup_profile.parse_records(output.getvalue())
+        self.assertTrue({
+            "startup_text_sync", "startup_text_extractor_probe",
+            "startup_text_work_sync",
+        }.issubset(phases))
+        for name in ("startup_text_extractor_probe", "startup_text_work_sync"):
+            self.assertEqual(output.getvalue().count("STARTUP_PHASE " + name + " "), 1)
 
     def test_parser_refuses_unknown_injected_duplicate_nonfinite_and_bad_lines(self):
         log = "\n".join([
@@ -196,8 +248,22 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
                     }), 0.9,
                 )
 
+        # Partial samples can lose reconciliation/server_start but keep the
+        # inclusive sync stage. Its extractor and work children are still
+        # nested, including when the parent or one of the stages failed.
+        for parent in ("startup_text_sync", "startup_text_sync_failed"):
+            with self.subTest(sync_parent=parent):
+                self.assertAlmostEqual(
+                    run._profile_infrastructure_total({
+                        parent: 0.5,
+                        "startup_text_extractor_probe": 0.3,
+                        "startup_text_work_sync_failed": 0.2,
+                        "startup_imports": 0.1,
+                    }), 0.6,
+                )
+
         # Parentless fragments still count; nested phases must not vanish
-        # when the inclusive measurements are absent from a partial report.
+        # when their inclusive measurements are absent from a partial report.
         self.assertAlmostEqual(
             run._profile_infrastructure_total({
                 "startup_imports": 0.3,
@@ -209,6 +275,13 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
                 "startup_imports": 0.3,
                 "startup_text_source_scan": 0.4,
                 "startup_text_sync_failed": 0.1,
+            }), 0.8,
+        )
+        self.assertAlmostEqual(
+            run._profile_infrastructure_total({
+                "startup_imports": 0.3,
+                "startup_text_extractor_probe": 0.4,
+                "startup_text_work_sync_failed": 0.1,
             }), 0.8,
         )
 
@@ -264,7 +337,8 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
         }.issubset(phases(server)))
         self.assertTrue({
             "startup_text_load_state", "startup_text_source_scan",
-            "startup_text_sync", "startup_text_orphan_cleanup",
+            "startup_text_sync", "startup_text_extractor_probe",
+            "startup_text_work_sync", "startup_text_orphan_cleanup",
             "startup_text_fts_verify",
         }.issubset(phases(text_index)))
         self.assertTrue(
