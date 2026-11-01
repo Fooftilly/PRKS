@@ -8,6 +8,7 @@ const { createPrksLocalStore } = require('../../frontend/js/local-store.js');
 const { createPrksOfflineStore } = require('../../frontend/js/offline-store.js');
 const { createPrksOfflineRuntime } = require('../../frontend/js/offline-runtime.js');
 require('../../frontend/js/work-source-state.js');
+require('../../frontend/js/sync-runtime.js');
 
 let sequence = 0;
 const uuid = () => '00000000-0000-4000-8000-' + (++sequence).toString(16).padStart(12, '0');
@@ -512,11 +513,94 @@ async function staleRead() {
     assert.equal(row.source_url, WATCH('BBB'));
 }
 
+/* Disconnect after the IDB claim commits but before any HTTP request.
+ * The original row must stay coalescible when never sent; a previous actual
+ * attempt and its timestamp must remain immutable even if the next claim
+ * did not reach transport. */
+async function offlineDuringClaim() {
+    const identity = url => globalThis.prksWorkSourceIdentity(
+        globalThis.prksCanonicalWorkSource(url));
+    for (const priorAttempt of [false, true]) {
+        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const save = url => store.saveWorkSource('W-1',
+            { kind: 'video', url, identity: identity(url) },
+            { identity: identity(WATCH('AAA')), revision: 0 });
+        const original = await save(WATCH('BBB'));
+        if (priorAttempt) {
+            await store.claimOperation(original.op_id);
+            await store.updateOperationSyncState(original.op_id,
+                { status: 'pending', last_error: 'Previous attempt failed' });
+        }
+        const before = await store.getOperation(original.op_id);
+        let online = true;
+        let transmitted = 0;
+        let finishRestore;
+        const restored = new Promise(resolve => { finishRestore = resolve; });
+        const wrapper = Object.assign({}, store, {
+            claimOperation: async id => {
+                const claimed = await store.claimOperation(id);
+                online = false;
+                return claimed;
+            },
+            releaseClaimBeforeDispatch: async (claimed, snapshot) => {
+                const result = await store.releaseClaimBeforeDispatch(claimed, snapshot);
+                finishRestore(result);
+                return result;
+            },
+        });
+        const runtime = globalThis.createPrksSyncRuntime({
+            store: wrapper,
+            online: () => online,
+            handlers: { SET_WORK_SOURCE: {
+                isResult: () => true, reconcile: async () => true,
+                terminal: () => ({ discard: 'test' }),
+            } },
+            request: async () => { transmitted++; throw Error('unexpected transport'); },
+        });
+        runtime.changed();
+        assert.equal(await Promise.race([
+            restored,
+            new Promise((_, reject) => setTimeout(() => reject(
+                Error('offline claim never reached release boundary')), 2000)),
+        ]), true, 'the exact claimed row was restored before transport');
+        const row = await store.getOperation(original.op_id);
+        assert.equal(transmitted, 0, 'no wire request after disconnect');
+        assert.equal(row.status, 'pending', 'row returned to its pending state');
+        assert.equal(row.attempt_count, before.attempt_count,
+            'a non-transmitted claim must not alter actual attempt history');
+        assert.equal(row.last_attempt_at, before.last_attempt_at,
+            'a non-transmitted claim must not falsify the previous send time');
+        if (priorAttempt) {
+            await assert.rejects(() => save(WATCH('CCC')),
+                e => e.prksLocalStoreCode === 'scope_busy',
+                'a previously attempted row stays immutable after an unsent retry');
+        } else {
+            await save(WATCH('CCC'));
+            const next = (await store.listOperations())[0];
+            assert.equal(next.payload.source.url, WATCH('CCC'),
+                'a never-sent source remains coalescible after disconnect');
+            assert.equal(next.attempt_count, 0);
+        }
+        runtime.stop();
+    }
+    // Releasing a stale claim must never overwrite a newer store state.
+    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const prior = await store.saveWorkSource('W-2',
+        { kind: 'video', url: WATCH('BBB'), identity: identity(WATCH('BBB')) },
+        { identity: identity(WATCH('AAA')), revision: 0 });
+    const claimed = await store.claimOperation(prior.op_id);
+    await store.updateOperationSyncState(prior.op_id, { status: 'pending' });
+    assert.equal(await store.releaseClaimBeforeDispatch(claimed, prior), false,
+        'a stale claimant cannot rewrite a different operation state');
+    assert.equal((await store.getOperation(prior.op_id)).attempt_count, 1);
+}
+
 async function main() {
     canonicalIdentity();
     effectiveSourceOverlay();
     handlerContract();
     await coalescing();
+    await offlineDuringClaim();
     await conflictResolution();
     await payloadAllowance();
     await reconciliation();

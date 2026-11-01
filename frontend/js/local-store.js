@@ -4235,6 +4235,40 @@
             });
         }
 
+        /* Connectivity can disappear while claimOperation commits its IDB
+         * transaction. Before any HTTP dispatch, and only while this caller
+         * still owns the exact claimed revision, restore the operation's
+         * original attempt count and timestamp. Never release a sent claim. */
+        function releaseClaimBeforeDispatch(claimed, before) {
+            if (!claimed || !before || typeof claimed.op_id !== 'string' ||
+                claimed.op_id !== before.op_id || claimed.status !== STATUS_SYNCING ||
+                before.status !== STATUS_PENDING ||
+                !Number.isInteger(before.attempt_count) || before.attempt_count < 0 ||
+                claimed.attempt_count !== before.attempt_count + 1 ||
+                typeof claimed.last_attempt_at !== 'string' ||
+                claimed.sequence !== before.sequence ||
+                claimed.created_at !== before.created_at) {
+                return Promise.resolve(false);
+            }
+            return runTransaction(STORE_OPERATIONS, 'readwrite', async (request, setResult) => {
+                const row = await request(STORE_OPERATIONS, s => s.get(claimed.op_id));
+                if (!row || row.status !== STATUS_SYNCING ||
+                    row.attempt_count !== claimed.attempt_count ||
+                    row.last_attempt_at !== claimed.last_attempt_at ||
+                    row.sequence !== before.sequence ||
+                    row.created_at !== before.created_at) {
+                    setResult(false);
+                    return;
+                }
+                await request(STORE_OPERATIONS, s => s.put(Object.assign({}, row, {
+                    status: STATUS_PENDING,
+                    attempt_count: before.attempt_count,
+                    last_attempt_at: before.last_attempt_at,
+                })));
+                setResult(true);
+            });
+        }
+
         function getOperation(opId) {
             return runTransaction(STORE_OPERATIONS, 'readonly', function (request, setResult) {
                 return request(STORE_OPERATIONS, function (store) {
@@ -4530,7 +4564,7 @@
             savePersonGroupFields: savePersonGroupFields,
             setPersonGroupMember: setPersonGroupMember,
             deletePersonGroup: deletePersonGroup,
-            resolveConflict, claimOperation,
+            resolveConflict, claimOperation, releaseClaimBeforeDispatch,
             markDependentsFailed: markDependentsFailed,
             getOperation: getOperation,
             listOperations: listOperations,
