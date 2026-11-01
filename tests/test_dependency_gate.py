@@ -68,6 +68,15 @@ _TEST_GATE_RUN_TESTS_STEP = "Run PRKS unit, API, structural, and Node tests"
 # ``scripts/test-postgres``. Both steps or neither.
 _TEST_GATE_PG_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies"
 _TEST_GATE_PG_RUN_STEP = "Run PostgreSQL helper and harness tests"
+_TEST_GATE_PG_AGG_STEP = "Require both PostgreSQL helper shards"
+_TEST_GATE_PG_AGG_BODY = (
+    'set -euo pipefail\n'
+    'if [[ "$SHARD_RESULT" != "success" ]]; then\n'
+    'echo "::error::PostgreSQL helper shards did not all pass: $SHARD_RESULT"\n'
+    'exit 1\n'
+    'fi\n'
+    'echo "All PostgreSQL helper shards passed."'
+)
 # PostgreSQL is a production runtime dependency from #630 onward.
 # The backend parity job (#625): the same pinned install and exactly
 # ``scripts/test-postgres --parity``. Both steps or neither.
@@ -96,6 +105,7 @@ _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
     {
         _TEST_GATE_APPROVED_INSTALL_STEP,
         _TEST_GATE_RUN_TESTS_STEP,
+        _TEST_GATE_PG_AGG_STEP,
         *_TEST_GATE_DOCS_RUNS,
         *(name for pair in _TEST_GATE_PG_PAIRS for name in pair[:2]),
     }
@@ -433,6 +443,27 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     assert_test_gate_run_tests_body(style, body)
     pairs = [unique_test_gate_pg_pair(workflow, *pair) for pair in _TEST_GATE_PG_PAIRS]
     run_steps = iter_test_gate_step_run_bodies(workflow)
+
+    # Only the explicitly reviewed two-shard form can have an aggregator.
+    # Guard the matrix cardinality, wrapper command and dependency so a
+    # successful required check cannot hide a missing/failed helper shard.
+    sharded = "  postgres-helpers-shards:" in workflow
+    aggregator = count_test_gate_steps_named(workflow, _TEST_GATE_PG_AGG_STEP)
+    if sharded:
+        requirements = (
+            "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
+            "        shard: [1, 2]",
+            "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
+            "    needs: postgres-helpers-shards",
+            "    if: ${{ always() && github.event_name != 'schedule' }}",
+            "    name: PostgreSQL helper tests",
+        )
+        if not all(text in workflow for text in requirements):
+            raise ValueError("PostgreSQL helper shards require the reviewed matrix and aggregator")
+        if pairs[0] is None or aggregator != 1:
+            raise ValueError("PostgreSQL helper shards require one approved aggregator")
+    elif aggregator:
+        raise ValueError("Unexpected PostgreSQL helper aggregator without shards")
     docs_present = {
         name for name, _style, _body in run_steps if name in _TEST_GATE_DOCS_RUNS
     }
@@ -444,6 +475,9 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
         if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
             label = name if name else "<unnamed step>"
             raise ValueError(f"disallowed run step: {label}")
+        if name == _TEST_GATE_PG_AGG_STEP:
+            if style != "|" or _test_gate_run_body_without_shell_comments(body) != _TEST_GATE_PG_AGG_BODY:
+                raise ValueError("unreviewed PostgreSQL helper shard aggregator command")
         if name in _TEST_GATE_DOCS_RUNS:
             expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
             normalized = (
@@ -452,7 +486,7 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
             )
             if style != expected_style or normalized != expected_body:
                 raise ValueError(f"unreviewed docs-only CI command: {name}")
-    expected = 2 + 2 * sum(pair is not None for pair in pairs) + len(docs_present)
+    expected = 2 + 2 * sum(pair is not None for pair in pairs) + len(docs_present) + int(sharded)
     if len(run_steps) != expected:
         raise ValueError(
             f"test-gate must have exactly {expected} approved run steps; "
@@ -1338,6 +1372,29 @@ class RepoGateLiveTests(unittest.TestCase):
         assert_test_gate_run_steps_allowlisted(
             self._minimal_allowlisted_workflow(self._pg_steps())
         )
+
+    def test_live_sharded_postgres_gate_is_explicitly_allowlisted(self):
+        workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn("  postgres-helpers-shards:", workflow)
+        assert_test_gate_run_steps_allowlisted(workflow)
+        # Removing any part of the fail-closed aggregator must fail the guard.
+        with self.assertRaisesRegex(ValueError, "reviewed matrix"):
+            assert_test_gate_run_steps_allowlisted(
+                workflow.replace("        shard: [1, 2]", "        shard: [1]")
+            )
+        with self.assertRaisesRegex(ValueError, "aggregator"):
+            assert_test_gate_run_steps_allowlisted(
+                workflow.replace("    needs: postgres-helpers-shards", "    needs: []")
+            )
+        with self.assertRaisesRegex(ValueError, "aggregator command"):
+            assert_test_gate_run_steps_allowlisted(
+                workflow.replace(
+                    'if [[ "$SHARD_RESULT" != "success" ]]; then',
+                    'if [[ "$SHARD_RESULT" == "success" ]]; then',
+                )
+            )
 
     def test_test_gate_postgres_run_step_is_exactly_the_script(self):
         for run in ("scripts/test-postgres && pip install requests", "bash -c 'pip install x'"):
