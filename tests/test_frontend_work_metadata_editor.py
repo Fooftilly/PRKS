@@ -6,6 +6,7 @@ _PROJECT = Path(__file__).resolve().parents[1]
 _UI = (_PROJECT / "frontend" / "js" / "ui.js").read_text(encoding="utf-8")
 _APP = (_PROJECT / "frontend" / "js" / "app.js").read_text(encoding="utf-8")
 _META = (_PROJECT / "frontend" / "js" / "work-metadata-editor.js").read_text(encoding="utf-8")
+_META_STATE = (_PROJECT / "frontend" / "js" / "work-metadata-state.js").read_text(encoding="utf-8")
 _SOURCE = (_PROJECT / "frontend" / "js" / "work-source-editor.js").read_text(encoding="utf-8")
 _DRAFT = (_PROJECT / "frontend-app" / "src" / "features" / "work" / "metadata-draft.ts").read_text(encoding="utf-8")
 _SESSION = (_PROJECT / "frontend-app" / "src" / "features" / "work" / "metadata-session.ts").read_text(encoding="utf-8")
@@ -43,14 +44,15 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         self.assertLess(
             written.index("prksCommitWorkMetaBaseline"),
             written.index("if (!sessionOwned()) return;"),
-            "saved session bookkeeping must precede focus-dependent UI guards",
+            "durable save baseline updates precede panel-dependent UI checks",
         )
-        guard = _UI[_UI.index("function prksWorkMetaDurableSaveSessionStill"):_UI.index("function prksWorkMetaRetainWorkId")]
-        self.assertIn("workMetaEditSession", guard)
-        self.assertIn("workMetaDraftWorkId", guard)
-        self.assertIn("route.params.workId", guard)
-        self.assertNotIn("prksWorkMetaSessionStill(ctx, workId, session)", guard)
-        self.assertNotIn("panel.dataset.prksOwnerTabId", guard)
+        state = _META_STATE[_META_STATE.index("function durableSaveSessionStill"):_META_STATE.index("Object.assign(root, {")]
+        self.assertIn("workMetaEditSession", state)
+        self.assertIn("workMetaDraftWorkId", state)
+        self.assertIn("route.params.workId", state)
+        self.assertNotIn("panel.dataset.prksOwnerTabId", state)
+        self.assertIn("function commitDurableWorkMetaBaseline", state)
+        self.assertIn("prksCommitDurableWorkMetaBaseline(ctx, workId, session, snapshot, fields)", _UI)
 
     def test_vue_session_does_not_read_the_queue(self):
         for source in (_DRAFT, _SESSION):
