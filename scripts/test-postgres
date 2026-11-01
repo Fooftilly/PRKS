@@ -184,6 +184,26 @@ if [[ "$PROFILE" == true ]]; then
 elif [[ "${1:-}" == "--parity" ]]; then
   shift
   "$PY" scripts/run_backend_parity.py "$@"
+elif [[ -n "${PRKS_PG_SHARD:-}" ]]; then
+  # Preserve the exact reviewed CI entrypoint while splitting only helper
+  # modules between independent disposable PostgreSQL containers. Never
+  # silently ignore explicit unittest selectors when sharding is requested.
+  if [[ "$#" -ne 0 ]]; then
+    echo "test-postgres: shard cannot be combined with test selectors" >&2
+    exit 2
+  fi
+  module_file="$(mktemp)"
+  if ! "$PY" scripts/ci/pg_test_shards.py --shard "$PRKS_PG_SHARD" > "$module_file"; then
+    rm -f "$module_file"
+    exit 2
+  fi
+  mapfile -t modules < "$module_file"
+  rm -f "$module_file"
+  if [[ "${#modules[@]}" -eq 0 ]]; then
+    echo "test-postgres: PostgreSQL helper shard is empty" >&2
+    exit 2
+  fi
+  "$PY" -m unittest -v "${modules[@]}"
 elif [[ $# -gt 0 ]]; then
   "$PY" -m unittest -v "$@"
 else
