@@ -4507,15 +4507,13 @@ function prksWorkMetaSessionStill(ctx, workId, session) {
     return true;
 }
 
+/* The shared state helper is intentionally panel-independent: the original
+ * Work's editor baseline must retire after durable save even if B is focused.
+ * The visible panel remains protected by prksWorkMetaSessionStill. */
 function prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, fields) {
-    if (!prksWorkMetaSessionStill(ctx, workId, session)) return;
-    const draft = ctx.ui && ctx.ui.workMetaDraft;
-    const baseline = ctx.ui && ctx.ui.workMetaBaseline;
-    if (!draft || !baseline || !snapshot) return;
-    (fields || []).forEach((field) => {
-        const saved = snapshot[field] == null ? '' : String(snapshot[field]);
-        if (String(draft[field] == null ? '' : draft[field]) === saved) baseline[field] = saved;
-    });
+    if (typeof prksCommitDurableWorkMetaBaseline === 'function') {
+        prksCommitDurableWorkMetaBaseline(ctx, workId, session, snapshot, fields);
+    }
 }
 
 function prksWorkMetaRetainWorkId(ctx) {

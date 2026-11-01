@@ -382,7 +382,6 @@ AFFECTED_RULES = (
             "tests/e2e/__init__.py",
             "tests/browser/pointer_capture.py",
             "scripts/e2e",
-            ".github/workflows/test-gate.yml",
             ".github/workflows/e2e-gate.yml",
         ),
         "features": ("smoke", "wait-async"),
@@ -896,6 +895,17 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # This workflow controls only the independent Unit/API/PostgreSQL gate.
+    # It neither builds nor runs the E2E harness and is already validated by
+    # its required Unit/API command-allowlist contract and workflow lint.
+    # Keep e2e-gate.yml and the shared Python installer on the full-E2E path.
+    {
+        "name": "test-gate-workflow-only",
+        "paths": (".github/workflows/test-gate.yml",),
+        "features": (),
+        "skip": True,
+        "note": "Test Gate orchestration only → PostgreSQL/unit checks, no Chromium E2E",
     },
     # The schema files and the snapshot tooling aren't imported by the served
     # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool

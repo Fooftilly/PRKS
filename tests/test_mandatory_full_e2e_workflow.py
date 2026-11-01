@@ -38,6 +38,7 @@ class FrontendCISelectionTests(unittest.TestCase):
             "README.md",
             "docs/wiki/testing.md",
             ".github/workflows/codeql.yml",
+            ".github/workflows/test-gate.yml",
             ".github/dependabot.yml",
             "backend/db/schema/snapshot.json",
             "requirements.txt",
@@ -98,7 +99,11 @@ class FrontendCISelectionTests(unittest.TestCase):
         self.assertIn("frontend-affecting", plan["reason"])
 
     def test_docs_and_unrelated_workflows_can_still_skip(self):
-        for changed in ("docs/wiki/testing.md", ".github/workflows/codeql.yml"):
+        for changed in (
+            "docs/wiki/testing.md",
+            ".github/workflows/codeql.yml",
+            ".github/workflows/test-gate.yml",
+        ):
             with self.subTest(changed=changed):
                 plan = self._plan([changed])
                 self.assertEqual(plan["mode"], "skip")

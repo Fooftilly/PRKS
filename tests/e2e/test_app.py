@@ -5761,14 +5761,12 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Compare the immutable panel owner/content; the three
-                    // sync-status labels are live progress UI, not content.
+                    // Compare panel content without live status regions: any
+                    // Work's sync notices can settle asynchronously after a
+                    // focus switch and are not part of the panel's data.
                     const stable = panel && panel.cloneNode(true);
-                    if (stable) stable.querySelectorAll(
-                        '[data-prks-role="work-bib-sync"], ' +
-                        '[data-prks-role="work-status-sync"], ' +
-                        '[data-prks-role="work-identity-sync"]'
-                    ).forEach(node => node.replaceChildren());
+                    if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
+                        .forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
@@ -5783,7 +5781,15 @@ class TabContextHostRootTests(_BrowserE2E):
                 "(id) => { const w = window.prksGetTabContext(id).getEntity('work'); return w && w.title === 'Saved While Unfocused'; }",
                 arg=main_id,
             )
-            page.wait_for_timeout(300)
+            # Entity title updates before the durable ACK is completely retired.
+            # A fixed sleep can resume mid-finalization and yield a false
+            # unsaved-leave refusal; wait for the actual sync invariant.
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+                timeout=20000,
+                message="Work A's saved operation never retired before route leave",
+            )
 
             # B's panel/entity are completely untouched by A's background acknowledgement.
             after = page.evaluate(
@@ -5791,14 +5797,12 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Compare the immutable panel owner/content; the three
-                    // sync-status labels are live progress UI, not content.
+                    // Compare panel content without live status regions: any
+                    // Work's sync notices can settle asynchronously after a
+                    // focus switch and are not part of the panel's data.
                     const stable = panel && panel.cloneNode(true);
-                    if (stable) stable.querySelectorAll(
-                        '[data-prks-role="work-bib-sync"], ' +
-                        '[data-prks-role="work-status-sync"], ' +
-                        '[data-prks-role="work-identity-sync"]'
-                    ).forEach(node => node.replaceChildren());
+                    if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
+                        .forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
