@@ -72,11 +72,15 @@ The existing per-test **manual-only** `profile: true` report now exposes these f
 
 - `startup_text_load_state` — read the existing derived index's sync/fingerprint state
 - `startup_text_source_scan` — load canonical managed-PDF Work rows, resolve paths and check fingerprints
-- `startup_text_sync` — decide extractor availability when needed and sync changed/missing/failed PDFs
+- `startup_text_sync` — inclusive cost of extractor availability and synchronizing changed/missing/failed PDFs
+- `startup_text_extractor_probe` — one-time extractor availability/import when pending PDF rows exist
+- `startup_text_work_sync` — inclusive processing of all pending PDF works, including extraction and index writes; one record per startup, not one per PDF
 - `startup_text_orphan_cleanup` — remove derived-only rows for deleted/unlinked PDFs
 - `startup_text_fts_verify` — verify/rebuild suspect FTS only when required (normally absent)
 
-For partial profiles, the additive infrastructure ranking excludes the five `startup_text_*` details whenever an inclusive `startup_text_reconcile` or `startup_text_reconcile_failed` is present, even if `server_start` is missing. When neither inclusive reconciliation nor server parent exists, individually observed child phases remain countable. This affects only the ranking, not the phase report or startup execution.
+The [post-#1075 manual run #41297081864](https://github.com/Fooftilly/PRKS/actions/runs/41297081864) passed 819/819 Chromium cases on `master@cce2561` and attributed **398.19s of 399.98s** total text reconciliation to `startup_text_sync` (six-shard sums); state loading and source scanning were 0.25s and 1.34s, and orphan cleanup rounded to 0.00s. This shows where the time goes, but not yet whether the PyMuPDF availability/import check or the per-work sync loop dominates. The two new nested markers answer that question with no change to extraction, FTS, or recovery behavior. `startup_text_extractor_probe` is absent when there are no pending works, not a measured zero. The two child stages must not be added to their inclusive `startup_text_sync` parent.
+
+For partial profiles, the additive infrastructure ranking excludes the seven `startup_text_*` details whenever an inclusive `startup_text_reconcile` or `startup_text_reconcile_failed` is present, even if `server_start` is missing. When neither inclusive reconciliation nor server parent exists, individually observed child phases remain countable. This affects only the ranking, not the phase report or startup execution.
 
 These phases reuse the child-only, triple-gated `PRKS_E2E_STARTUP_PROFILE=1` + `PRKS_E2E=1` + `PRKS_TESTING=1` fixed-name duration recorder. They are emitted to the E2E subprocess's private stderr only, with no PDF content, Work IDs, paths, URLs or database identifiers. A raised exception emits the corresponding `_failed` marker and retains the original error. The FTS stage is absent if the existing early-return path skips it; **absence is not zero**. In a rare recursive recovery, the parser preserves the first instance of a repeated stage name rather than treating retries as additive. Normal application operation and unprofiled CI add no clocks, no new database/browser/process, and no changed index or FTS policy.
 

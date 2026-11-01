@@ -1009,19 +1009,25 @@ class PRKSTextIndex:
         with startup_phase("startup_text_sync"):
             can_extract = True
             if pending:
-                can_extract = extractor_available()
+                # PyMuPDF import/availability is one-time per process. Keep its
+                # cost separate from processing the canonical PDF work queue.
+                with startup_phase("startup_text_extractor_probe"):
+                    can_extract = extractor_available()
                 if not can_extract:
                     summary["extractor_unavailable"] = True
-            for work_id, file_path, row_state, known_fp in pending:
-                result = self.sync_work(
-                    work_id,
-                    file_path,
-                    force=force,
-                    allow_extract=can_extract,
-                    known_row=row_state,
-                    known_fingerprint=known_fp,
-                )
-                self._account_sync_result(summary, result)
+            # One inclusive duration across all pending works: the child
+            # profile parser deliberately rejects duplicate phase labels.
+            with startup_phase("startup_text_work_sync"):
+                for work_id, file_path, row_state, known_fp in pending:
+                    result = self.sync_work(
+                        work_id,
+                        file_path,
+                        force=force,
+                        allow_extract=can_extract,
+                        known_row=row_state,
+                        known_fingerprint=known_fp,
+                    )
+                    self._account_sync_result(summary, result)
         with startup_phase("startup_text_orphan_cleanup"):
             summary["removed_orphans"] = self._remove_orphan_ids(orphan_ids)
         need_fts = bool(force or self._fts_suspect)

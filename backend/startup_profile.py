@@ -33,6 +33,8 @@ PHASES = frozenset({
     "startup_text_load_state",
     "startup_text_source_scan",
     "startup_text_sync",
+    "startup_text_extractor_probe",
+    "startup_text_work_sync",
     "startup_text_orphan_cleanup",
     "startup_text_fts_verify",
     "startup_research_reconcile",
