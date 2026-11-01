@@ -470,6 +470,26 @@ async function testOptInCancellableMutation() {
         await expectAbort(adopted) && box.calls.length === 1
         && coord.snapshot().counts.aborted >= 1, String(box.calls.length));
 
+    // Cancellation after transport starts must also be classified as abort,
+    // not as a reachability failure that could trigger a reconnect loop.
+    try {
+        const reports = installReachabilitySpies();
+        const held = makeDeferredFetch();
+        const running = makeCoordinator({ fetchBundle: held });
+        const abortRunning = new AbortController();
+        const started = running.prksRequest('/api/works/W/annotations/adopt',
+            { method: 'POST', signal: abortRunning.signal },
+            { cancellableMutation: true });
+        await waitUntil(() => held.calls.length === 1);
+        abortRunning.abort();
+        record('cancelling in-flight adoption is not a reachability failure',
+            await expectAbort(started) && reports.success === 0
+            && reports.failure === 0 && running.snapshot().counts.aborted === 1,
+            'success=' + reports.success + ' failure=' + reports.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
     // Even the first mutation may be waiting on the async Library epoch
     // lookup. Cancellation must propagate through that adapter before fetch.
     let sessionStarted = false;

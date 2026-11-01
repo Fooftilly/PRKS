@@ -814,7 +814,7 @@
             } catch (err) {
                 error = err;
                 networkFailed = !prksIsAbortError(err);
-                if (!isManagedPdfHref(job.href)) reportPrksUnreachable(err);
+                if (networkFailed && !isManagedPdfHref(job.href)) reportPrksUnreachable(err);
             }
             if (response && response.ok) {
                 bumpEpochAndClearCache();
