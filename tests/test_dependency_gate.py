@@ -427,6 +427,49 @@ def assert_test_gate_no_pip_inject_env(workflow: str) -> None:
         raise ValueError(f"disallowed pip inject env: {match.group(1)}")
 
 
+def assert_test_gate_pg_shards_guarded(workflow: str, pairs: list) -> bool:
+    """Enforce reviewed shard layout and aggregator without changing policy."""
+# Only the explicitly reviewed two-shard form can have an aggregator.
+# Guard the matrix cardinality, wrapper command and dependency so a
+# successful required check cannot hide a missing/failed helper shard.
+sharded = "  postgres-helpers-shards:" in workflow
+aggregator = count_test_gate_steps_named(workflow, _TEST_GATE_PG_AGG_STEP)
+if sharded:
+    requirements = (
+        "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
+        "        shard: [1, 2]",
+        "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
+        "    needs: postgres-helpers-shards",
+        "    if: ${{ always() && github.event_name != 'schedule' }}",
+        "    name: PostgreSQL helper tests",
+    )
+    if not all(text in workflow for text in requirements):
+        raise ValueError("PostgreSQL helper shards require the reviewed matrix and aggregator")
+    if pairs[0] is None or aggregator != 1:
+        raise ValueError("PostgreSQL helper shards require one approved aggregator")
+elif aggregator:
+    raise ValueError("Unexpected PostgreSQL helper aggregator without shards")
+    return sharded
+
+
+def assert_test_gate_single_run_step_allowed(name: str, style: str, body: str) -> None:
+    """Allow only the explicitly reviewed run step name and command."""
+    if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
+        label = name if name else "<unnamed step>"
+        raise ValueError(f"disallowed run step: {label}")
+    if name == _TEST_GATE_PG_AGG_STEP:
+        if style != "|" or _test_gate_run_body_without_shell_comments(body) != _TEST_GATE_PG_AGG_BODY:
+            raise ValueError("unreviewed PostgreSQL helper shard aggregator command")
+    if name in _TEST_GATE_DOCS_RUNS:
+        expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
+        normalized = (
+            _test_gate_run_body_without_shell_comments(body)
+            if style == "|" else body.strip()
+        )
+        if style != expected_style or normalized != expected_body:
+            raise ValueError(f"unreviewed docs-only CI command: {name}")
+
+
 def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     """Invert policy: only Install + run_tests (plus the PostgreSQL helper and
     backend parity jobs' install + ``scripts/test-postgres`` pairs) may have
@@ -444,26 +487,7 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     pairs = [unique_test_gate_pg_pair(workflow, *pair) for pair in _TEST_GATE_PG_PAIRS]
     run_steps = iter_test_gate_step_run_bodies(workflow)
 
-    # Only the explicitly reviewed two-shard form can have an aggregator.
-    # Guard the matrix cardinality, wrapper command and dependency so a
-    # successful required check cannot hide a missing/failed helper shard.
-    sharded = "  postgres-helpers-shards:" in workflow
-    aggregator = count_test_gate_steps_named(workflow, _TEST_GATE_PG_AGG_STEP)
-    if sharded:
-        requirements = (
-            "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
-            "        shard: [1, 2]",
-            "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
-            "    needs: postgres-helpers-shards",
-            "    if: ${{ always() && github.event_name != 'schedule' }}",
-            "    name: PostgreSQL helper tests",
-        )
-        if not all(text in workflow for text in requirements):
-            raise ValueError("PostgreSQL helper shards require the reviewed matrix and aggregator")
-        if pairs[0] is None or aggregator != 1:
-            raise ValueError("PostgreSQL helper shards require one approved aggregator")
-    elif aggregator:
-        raise ValueError("Unexpected PostgreSQL helper aggregator without shards")
+    sharded = assert_test_gate_pg_shards_guarded(workflow, pairs)
     docs_present = {
         name for name, _style, _body in run_steps if name in _TEST_GATE_DOCS_RUNS
     }
@@ -472,20 +496,7 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
         raise ValueError("incomplete required docs-only CI step set")
     for name, style, body in run_steps:
-        if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
-            label = name if name else "<unnamed step>"
-            raise ValueError(f"disallowed run step: {label}")
-        if name == _TEST_GATE_PG_AGG_STEP:
-            if style != "|" or _test_gate_run_body_without_shell_comments(body) != _TEST_GATE_PG_AGG_BODY:
-                raise ValueError("unreviewed PostgreSQL helper shard aggregator command")
-        if name in _TEST_GATE_DOCS_RUNS:
-            expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
-            normalized = (
-                _test_gate_run_body_without_shell_comments(body)
-                if style == "|" else body.strip()
-            )
-            if style != expected_style or normalized != expected_body:
-                raise ValueError(f"unreviewed docs-only CI command: {name}")
+        assert_test_gate_single_run_step_allowed(name, style, body)
     expected = 2 + 2 * sum(pair is not None for pair in pairs) + len(docs_present) + int(sharded)
     if len(run_steps) != expected:
         raise ValueError(
