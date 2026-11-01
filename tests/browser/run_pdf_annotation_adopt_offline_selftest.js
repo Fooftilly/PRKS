@@ -34,11 +34,17 @@ let checks = 0;
 async function runCase(initialState, stateAfterPending, hasUnresolvedOps = false) {
     let state = initialState;
     let pendingReadCount = 0;
+    let subscriptionCount = 0;
+    const listeners = new Set();
     const requests = [];
     let releasePending;
     const pendingRead = new Promise((resolve) => { releasePending = resolve; });
     const window = {
         prksOfflineRuntimeState: () => state,
+        prksOfflineRuntimeSubscribe: (fn) => {
+            listeners.add(fn);
+            return () => { listeners.delete(fn); subscriptionCount += 1; };
+        },
         prksWorkHasUnresolvedPdfAnnotationOps: () => {
             pendingReadCount += 1;
             return pendingRead;
@@ -53,8 +59,10 @@ async function runCase(initialState, stateAfterPending, hasUnresolvedOps = false
         window, viewer, runtime, 'W-ADOPT',
         () => true, () => strict.fail('unexpected setup abandonment'),
         () => [], () => true,
-        async (url, init) => {
-            requests.push({ url, method: init.method, stateAtRequest: state });
+        async (url, init, policy) => {
+            requests.push({ url, method: init.method, stateAtRequest: state,
+                hasAbortSignal: !!init.signal,
+                cancellable: policy && policy.cancellableMutation === true });
             return { ok: true, json: async () => ({ adopted_count: 0 }) };
         },
         () => strict.fail('unexpected projection'),
@@ -67,6 +75,10 @@ async function runCase(initialState, stateAfterPending, hasUnresolvedOps = false
     state = stateAfterPending;
     releasePending(hasUnresolvedOps);
     await working;
+    if (requests.length) {
+        strict.equal(subscriptionCount, 1, 'adoption must unsubscribe from offline runtime');
+    }
+    strict.equal(listeners.size, 0, 'adoption never leaks an offline listener');
     return requests;
 }
 
@@ -76,7 +88,9 @@ async function runCase(initialState, stateAfterPending, hasUnresolvedOps = false
     strict.equal(calls[0].method, 'POST');
     strict.equal(calls[0].url, '/api/works/W-ADOPT/annotations/adopt');
     strict.equal(calls[0].stateAtRequest, 'online');
-    checks += 4;
+    strict.equal(calls[0].cancellable, true, 'adoption opts in to cancellation');
+    strict.equal(calls[0].hasAbortSignal, true, 'adoption provides abort signal');
+    checks += 6;
 
     for (const destination of ['offline', 'reconnecting']) {
         calls = await runCase('online', destination);

@@ -1853,15 +1853,29 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             // after transitioning offline/reconnecting, even when this viewer
             // was initially opened online and its setup identity remains live.
             if (!adoptBlocked && isOnlineRuntime()) {
-                const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
-                const adoptRes = await prksRequest(
+                // The request coordinator serializes mutations, and the Library
+                // epoch adapter may await /api/session before transport. A
+                // synchronous online check alone cannot protect that later
+                // dispatch. Abort this *non-durable* adoption if reachability
+                // changes while either queue is waiting.
+                const controller = new AbortController();
+                const unsubscribe = typeof window.prksOfflineRuntimeSubscribe === 'function'
+                    ? window.prksOfflineRuntimeSubscribe(function () {
+                        if (!isOnlineRuntime()) controller.abort();
+                    }) : null;
+                try {
+                    if (!isOnlineRuntime()) controller.abort();
+                    if (!controller.signal.aborted) {
+                        const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+                        const adoptRes = await prksRequest(
                     `/api/works/${workId}/annotations/adopt`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ viewer_annotations: viewerItems }),
+                        signal: controller.signal,
                     },
-                    { dedupe: false, retry: false, freshForMs: 0 }
+                    { dedupe: false, retry: false, freshForMs: 0, cancellableMutation: true }
                 );
                 if (setupEligible() && adoptRes && adoptRes.ok) {
                     const adoptBody = await adoptRes.json().catch(function () { return null; });
@@ -1886,6 +1900,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             }
                         }
                     }
+                }
+                    }
+                } finally {
+                    if (typeof unsubscribe === 'function') unsubscribe();
                 }
             }
         } catch (_eAdopt) {
