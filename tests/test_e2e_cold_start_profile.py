@@ -59,6 +59,44 @@ class ChildStartupPhaseTests(unittest.TestCase):
         self.assertNotIn("synthetic", output.getvalue())
         self.assertNotIn("secret", output.getvalue())
 
+    def test_text_reconcile_subphases_record_bounded_durations(self):
+        # Exercise the actual reconciler's stage boundaries without a browser,
+        # database, PDF extraction or modifying canonical storage.
+        from backend.text_index import PRKSTextIndex
+
+        index = object.__new__(PRKSTextIndex)
+        index._fts_suspect = True
+        env = {
+            "PRKS_E2E_STARTUP_PROFILE": "1",
+            "PRKS_E2E": "1",
+            "PRKS_TESTING": "1",
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(index, "_load_sync_state", return_value={}),
+            mock.patch.object(index, "_canonical_managed_works", return_value={}),
+            mock.patch.object(index, "_remove_orphan_ids", return_value=0) as orphans,
+            mock.patch.object(index, "_verify_or_rebuild_fts", return_value=False) as fts,
+            contextlib.redirect_stderr(output),
+        ):
+            result = index._reconcile_all_inner(object())
+        self.assertEqual(result["processed"], 0)
+        self.assertFalse(result["fts_rebuilt"])
+        orphans.assert_called_once_with([])
+        fts.assert_called_once_with()
+        self.assertEqual(
+            set(startup_profile.parse_records(output.getvalue())),
+            {
+                "startup_text_load_state",
+                "startup_text_source_scan",
+                "startup_text_sync",
+                "startup_text_orphan_cleanup",
+                "startup_text_fts_verify",
+            },
+        )
+        self.assertNotIn("object at", output.getvalue())
+
     def test_parser_refuses_unknown_injected_duplicate_nonfinite_and_bad_lines(self):
         log = "\n".join([
             "PRKS_E2E_STARTUP_PHASE startup_imports 1.250000",
@@ -131,6 +169,10 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
             "startup_imports": 0.3,
             "startup_dependency_gate": 0.5,
             "startup_dependency_gate_failed": 0.1,
+            # These are inside startup_text_reconcile and server_start.
+            "startup_text_reconcile": 0.6,
+            "startup_text_source_scan": 0.4,
+            "startup_text_sync": 0.1,
             "server_stop": 0.7,
             "server_stop_process": 0.5,
             "server_stop_temp_cleanup": 0.1,
@@ -170,6 +212,9 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         app = ast.parse((root / "prks_app.py").read_text(encoding="utf-8"))
         server = ast.parse((root / "backend/server.py").read_text(encoding="utf-8"))
+        text_index = ast.parse(
+            (root / "backend/text_index.py").read_text(encoding="utf-8")
+        )
 
         def phases(tree):
             return {
@@ -193,7 +238,14 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
             "startup_text_reconcile", "startup_research_reconcile",
             "startup_pdf_cleanup", "startup_staging_cleanup",
         }.issubset(phases(server)))
-        self.assertTrue(phases(app) | phases(server) <= startup_profile.PHASES)
+        self.assertTrue({
+            "startup_text_load_state", "startup_text_source_scan",
+            "startup_text_sync", "startup_text_orphan_cleanup",
+            "startup_text_fts_verify",
+        }.issubset(phases(text_index)))
+        self.assertTrue(
+            phases(app) | phases(server) | phases(text_index) <= startup_profile.PHASES
+        )
 
 
 if __name__ == "__main__":
