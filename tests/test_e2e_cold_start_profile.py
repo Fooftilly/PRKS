@@ -179,12 +179,36 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
             "postgres_drop": 0.04,
         }
         self.assertAlmostEqual(run._profile_infrastructure_total(phases), 2.0)
+        # A successful or failed text-reconcile parent must win over its
+        # child stages even if the outer server_start sample is unavailable.
+        # No phase is removed from the detailed metrics; only ranking excludes
+        # values that would otherwise be counted twice.
+        for parent in ("startup_text_reconcile", "startup_text_reconcile_failed"):
+            with self.subTest(parent=parent):
+                self.assertAlmostEqual(
+                    run._profile_infrastructure_total({
+                        parent: 0.6,
+                        "startup_text_load_state": 0.1,
+                        "startup_text_source_scan": 0.4,
+                        "startup_text_sync_failed": 0.1,
+                        "startup_text_orphan_cleanup": 0.02,
+                        "startup_imports": 0.3,
+                    }), 0.9,
+                )
+
         # Parentless fragments still count; nested phases must not vanish
         # when the inclusive measurements are absent from a partial report.
         self.assertAlmostEqual(
             run._profile_infrastructure_total({
                 "startup_imports": 0.3,
                 "server_stop_process": 0.5,
+            }), 0.8,
+        )
+        self.assertAlmostEqual(
+            run._profile_infrastructure_total({
+                "startup_imports": 0.3,
+                "startup_text_source_scan": 0.4,
+                "startup_text_sync_failed": 0.1,
             }), 0.8,
         )
 
