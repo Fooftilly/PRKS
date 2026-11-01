@@ -1592,11 +1592,17 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             o._open_work_from_home(page, WORK_A_TITLE)
             self.edit(page)
             self.field(page, 'thumb_page', '')
-            self.save(page)
-            # The FIELD operation, not the whole queue: opening the Work
-            # enqueued a MARK_WORK_OPENED that this same blocked send is also
-            # holding, and counting both would be counting the wrong thing.
-            self.pending(page, 1)
+            # Request routing is async: a durably saved operation need not
+            # have reached Playwright's abort gate by the time pending() sees
+            # it. Wait for the *observed request* rather than treating a
+            # scheduler timing difference as an absence of synchronization.
+            # The context fails if no send is ever attempted; no retries or
+            # relaxed 'server still page 5' safety assertion.
+            with page.expect_request('**/api/sync/operations'):
+                self.save(page)
+                # The FIELD operation, not the whole queue: opening the Work
+                # enqueued a MARK_WORK_OPENED which this gate also holds.
+                self.pending(page, 1)
 
             self.navigate(page, self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
