@@ -4507,8 +4507,23 @@ function prksWorkMetaSessionStill(ctx, workId, session) {
     return true;
 }
 
+/* A durable Save belongs to the editor session that enqueued it, even
+ * after focus moves to another tiled Work. The visible panel must NOT govern
+ * baseline bookkeeping; it must still guard rendering and form writes. */
+function prksWorkMetaDurableSaveSessionStill(ctx, workId, session) {
+    if (!ctx || ctx.destroyed || !ctx.ui || ctx.ui.workDetailsMode !== 'metadata') return false;
+    if (ctx.ui.workMetaEditSession !== session ||
+        String(ctx.ui.workMetaDraftWorkId || '') !== String(workId)) return false;
+    const route = ctx.lastResolvedRoute || ctx.route;
+    if (!route || route.name !== 'work' || !route.params ||
+        String(route.params.workId || '') !== String(workId)) return false;
+    const work = ctx.getEntity ? ctx.getEntity('work') : null;
+    if (work && String(work.id) !== String(workId)) return false;
+    return true;
+}
+
 function prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, fields) {
-    if (!prksWorkMetaSessionStill(ctx, workId, session)) return;
+    if (!prksWorkMetaDurableSaveSessionStill(ctx, workId, session)) return;
     const draft = ctx.ui && ctx.ui.workMetaDraft;
     const baseline = ctx.ui && ctx.ui.workMetaBaseline;
     if (!draft || !baseline || !snapshot) return;

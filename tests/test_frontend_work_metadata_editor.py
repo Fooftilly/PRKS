@@ -37,6 +37,21 @@ class WorkMetadataEditorContractTests(unittest.TestCase):
         source_changed = source.index("prksSync.changed()", source_write)
         self.assertLess(source_changed, source.index("if (!still()) return;", source_changed))
 
+    def test_background_save_keeps_its_own_baseline_without_panel_ownership(self):
+        save = _META[_META.index("async function save(workId, groupName)"):_META.index("function resolveFieldConflict")]
+        written = save[save.index("store.saveWorkMetadataFields"):]
+        self.assertLess(
+            written.index("prksCommitWorkMetaBaseline"),
+            written.index("if (!sessionOwned()) return;"),
+            "saved session bookkeeping must precede focus-dependent UI guards",
+        )
+        guard = _UI[_UI.index("function prksWorkMetaDurableSaveSessionStill"):_UI.index("function prksWorkMetaRetainWorkId")]
+        self.assertIn("workMetaEditSession", guard)
+        self.assertIn("workMetaDraftWorkId", guard)
+        self.assertIn("route.params.workId", guard)
+        self.assertNotIn("prksWorkMetaSessionStill(ctx, workId, session)", guard)
+        self.assertNotIn("panel.dataset.prksOwnerTabId", guard)
+
     def test_vue_session_does_not_read_the_queue(self):
         for source in (_DRAFT, _SESSION):
             self.assertNotIn("listOperations", source)

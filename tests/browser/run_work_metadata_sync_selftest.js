@@ -2160,7 +2160,79 @@ async function highFanOut() {
     delete globalThis.prksSync;
 }
 
+/* Execute the shipped UI guard and baseline functions in a minimal tab
+ * context. Ownership of the visible panel changes while a queued Save is
+ * settling; this must never make the original Work appear unsaved again. */
+function backgroundSaveBaselineCommit() {
+    const source = require('fs').readFileSync(
+        require('path').join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    for (const name of [
+        'prksWorkMetaSessionStill',
+        'prksWorkMetaDurableSaveSessionStill',
+        'prksCommitWorkMetaBaseline',
+    ]) {
+        const start = source.indexOf('function ' + name + '(');
+        assert.notEqual(start, -1, 'shipped Work metadata helper ' + name + ' exists');
+        const end = source.indexOf('\\n}', start);
+        assert.notEqual(end, -1, 'shipped Work metadata helper ' + name + ' terminates');
+        (0, eval)(source.slice(start, end + 2));
+    }
+    const previousDocument = globalThis.document;
+    try {
+        // The shared right panel now belongs to B. Rendering A is forbidden.
+        globalThis.document = {
+            getElementById: () => ({ dataset: { prksOwnerTabId: 'B' } }),
+        };
+        const ui = {
+            workDetailsMode: 'metadata',
+            workMetaEditSession: 7,
+            workMetaDraftWorkId: 'W-A',
+            workMetaDraft: { title: 'Saved in A' },
+            workMetaBaseline: { title: 'Old title' },
+        };
+        const ctx = {
+            tabId: 'A', destroyed: false, ui,
+            lastResolvedRoute: { name: 'work', params: { workId: 'W-A' } },
+            getEntity: () => ({ id: 'W-A' }),
+        };
+        assert.equal(globalThis.prksWorkMetaSessionStill(ctx, 'W-A', 7), false,
+            'the visible panel still rejects writes from unfocused A');
+        globalThis.prksCommitWorkMetaBaseline(ctx, 'W-A', 7,
+            { title: 'Saved in A' }, ['title']);
+        assert.equal(ui.workMetaBaseline.title, 'Saved in A',
+            'A commits its own persisted edit without owning the visible B panel');
+
+        ui.workMetaDraft.title = 'New unsaved edit';
+        globalThis.prksCommitWorkMetaBaseline(ctx, 'W-A', 7,
+            { title: 'Saved in A' }, ['title']);
+        assert.equal(ui.workMetaBaseline.title, 'Saved in A',
+            'a later draft is never incorrectly marked saved');
+
+        for (const mutate of [
+            () => { ui.workMetaEditSession = 8; },
+            () => { ui.workMetaDraftWorkId = 'W-B'; },
+            () => { ctx.lastResolvedRoute = { name: 'work', params: { workId: 'W-B' } }; },
+            () => { ctx.destroyed = true; },
+        ]) {
+            ui.workMetaEditSession = 7;
+            ui.workMetaDraftWorkId = 'W-A';
+            ctx.lastResolvedRoute = { name: 'work', params: { workId: 'W-A' } };
+            ctx.destroyed = false;
+            ui.workMetaBaseline.title = 'Old';
+            mutate();
+            globalThis.prksCommitWorkMetaBaseline(ctx, 'W-A', 7,
+                { title: 'New unsaved edit' }, ['title']);
+            assert.equal(ui.workMetaBaseline.title, 'Old',
+                'stale sessions/routes/destroyed tabs must never be committed');
+        }
+    } finally {
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+    }
+}
+
 async function main() {
+    backgroundSaveBaselineCommit();
     await coalescing();
     await editorCoalescing();
     await independence();
