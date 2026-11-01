@@ -178,13 +178,28 @@ class FoldersOfflineTests(unittest.TestCase):
         seen = self.all_paths(page)
 
         page.locator('#prks-folder-library-search').fill('Child')
-        page.wait_for_timeout(400)
+        # This input debounces the tree query. Observe the actual rendered
+        # rows instead of guessing that 400ms was enough for Vue to repaint.
+        page.wait_for_function(
+            """([shown, hidden]) => {
+                const tree = document.querySelector('[data-prks-folder-tree-host]');
+                const text = tree && tree.textContent || '';
+                return text.includes(shown) && !text.includes(hidden);
+            }""",
+            arg=[FOLDER_CHILD_TITLE, FOLDER_UNVISITED_TITLE],
+        )
         text = o._content_text(page)
         self.assertIn(FOLDER_CHILD_TITLE, text)
         self.assertNotIn(FOLDER_UNVISITED_TITLE, text)
 
         page.locator('#prks-folder-library-search').fill('')
-        page.wait_for_timeout(400)
+        page.wait_for_function(
+            """title => {
+                const tree = document.querySelector('[data-prks-folder-tree-host]');
+                return !!tree && tree.textContent.includes(title);
+            }""",
+            arg=FOLDER_UNVISITED_TITLE,
+        )
         self.assertIn(FOLDER_UNVISITED_TITLE, o._content_text(page))
 
         # The seeded parent has a child, so a missing expand/collapse
