@@ -1468,18 +1468,44 @@ class AffectedMappingTests(unittest.TestCase):
         )
         self.assertFalse(early_ptr_fail)
 
-    def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
-        for path in (
-            ".github/workflows/test-gate.yml",
-            ".github/workflows/e2e-gate.yml",
+    def test_ci_workflow_selection_preserves_full_e2e_boundary(self):
+        # Changes to E2E orchestration or its shared Python installer still
+        # require the full browser suite; the independent Test Gate does not.
+        e2e_gate = ".github/workflows/e2e-gate.yml"
+        rule, feats, skip, _note = policy.match_affected_path(e2e_gate)
+        self.assertEqual(rule, "e2e-framework")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("smoke", "wait-async"))
+        self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+        self.assertEqual(policy.plan_ci_e2e([e2e_gate])["mode"], "full")
+
+        test_gate = ".github/workflows/test-gate.yml"
+        rule, feats, skip, _note = policy.match_affected_path(test_gate)
+        self.assertEqual(rule, "test-gate-workflow-only")
+        self.assertTrue(skip)
+        self.assertEqual(feats, ())
+        only_pg_ci = [
+            test_gate,
+            "scripts/test-postgres",
+            "scripts/ci/pg_test_shards.py",
+            "tests/test_dependency_gate.py",
+        ]
+        plan = policy.plan_ci_e2e(only_pg_ci)
+        self.assertEqual(plan["mode"], "skip")
+        self.assertFalse(plan["run"])
+
+        # A mixed PR cannot hide a production, E2E runner, or shared installer
+        # change behind the Test Gate exemption.
+        for risky in (
+            e2e_gate,
+            "tests/e2e/run.py",
+            "scripts/ci/install_pinned_python.py",
+            "frontend/js/app.js",
         ):
-            with self.subTest(path=path):
-                rule, feats, skip, _note = policy.match_affected_path(path)
-                self.assertEqual(rule, "e2e-framework")
-                self.assertFalse(skip)
-                # wait-async rides with the shared e2e-framework rule (#222).
-                self.assertEqual(feats, ("smoke", "wait-async"))
-                self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+            with self.subTest(risky=risky):
+                mixed = policy.plan_ci_e2e(only_pg_ci + [risky])
+                self.assertEqual(mixed["mode"], "full")
+                self.assertTrue(mixed["run"])
 
     def test_ci_dependency_installer_requires_full_e2e(self):
         plan = policy.plan_ci_e2e(["scripts/ci/install_pinned_python.py"])
