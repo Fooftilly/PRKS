@@ -68,7 +68,7 @@ a performance target.
 
 The accepted [six-shard cold-start profile #41251873500](https://github.com/Fooftilly/PRKS/actions/runs/41251873500) measured **442.92 seconds** of `startup_text_reconcile` across 819 independent source Chromium tests. This is the largest measured child startup stage, but does not identify whether source reads, stale-PDF synchronization or derived-index maintenance dominate. Skipping startup reconciliation, caching index state across tests or omitting crash/restore checks is **not** justified by that result.
 
-The existing per-test **manual-only** `profile: true` report now exposes these five nested stages (in seconds) under `startup_text_reconcile`:
+The existing per-test **manual-only** `profile: true` report now exposes seven nested stages (in seconds) under `startup_text_reconcile`:
 
 - `startup_text_load_state` — read the existing derived index's sync/fingerprint state
 - `startup_text_source_scan` — load canonical managed-PDF Work rows, resolve paths and check fingerprints

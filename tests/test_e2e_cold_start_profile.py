@@ -116,7 +116,10 @@ class ChildStartupPhaseTests(unittest.TestCase):
             mock.patch.dict(os.environ, env, clear=True),
             mock.patch.object(index, "_load_sync_state", return_value={}),
             mock.patch.object(index, "_canonical_managed_works",
-                              return_value={"fixture": "/api/pdfs/fixture.pdf"}),
+                              return_value={
+                                  "fixture-a": "/api/pdfs/fixture-a.pdf",
+                                  "fixture-b": "/api/pdfs/fixture-b.pdf",
+                              }),
             mock.patch.object(index, "_resolve_managed_source",
                               return_value=("missing", None, "/api/pdfs/fixture.pdf")),
             mock.patch("backend.text_index.extractor_available",
@@ -127,14 +130,17 @@ class ChildStartupPhaseTests(unittest.TestCase):
             contextlib.redirect_stderr(output),
         ):
             summary = index._reconcile_all_inner(object())
-        self.assertEqual(summary["processed"], 1)
-        self.assertEqual(summary["missing"], 1)
+        self.assertEqual(summary["processed"], 2)
+        self.assertEqual(summary["missing"], 2)
         self.assertTrue(summary["extractor_unavailable"])
         availability.assert_called_once_with()
-        sync.assert_called_once_with(
-            "fixture", "/api/pdfs/fixture.pdf", force=False,
-            allow_extract=False, known_row=None, known_fingerprint=None,
-        )
+        self.assertEqual(sync.call_count, 2)
+        for call, work_id in zip(sync.call_args_list, ("fixture-a", "fixture-b")):
+            self.assertEqual(call.args, (work_id, f"/api/pdfs/{work_id}.pdf"))
+            self.assertEqual(call.kwargs, {
+                "force": False, "allow_extract": False,
+                "known_row": None, "known_fingerprint": None,
+            })
         phases = startup_profile.parse_records(output.getvalue())
         self.assertTrue({
             "startup_text_sync", "startup_text_extractor_probe",
