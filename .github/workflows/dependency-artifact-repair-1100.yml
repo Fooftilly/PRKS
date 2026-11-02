@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF_NAME}" = "dependabot/npm_and_yarn/frontend-app/vite-toolchain-e6386c2419"
-          test "$(git rev-parse HEAD^)" = "68db53c13bf060be11d981a0e49aeedd5d39f9b7"
+          test "$(git rev-parse HEAD^)" = "04609dbef314b70025c6c5bc9da6e16dccd712f0"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/refresh_dependency_artifacts.sh frontend-app
-          git diff --quiet -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md && { echo "No generated frontend changes"; exit 1; }
+          if git diff --quiet -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md; then echo "No generated frontend changes"; exit 1; fi
       - name: Commit verified build artifacts and remove temporary workflow
         shell: bash
         run: |
