@@ -521,7 +521,13 @@ async function offlineDuringClaim() {
     const identity = url => globalThis.prksWorkSourceIdentity(
         globalThis.prksCanonicalWorkSource(url));
     for (const priorAttempt of [false, true]) {
-        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        // An attempted row has a real retry backoff. Timestamp fixture
+        // history well in the past so this test exercises the next claim,
+        // not the backoff scheduler. Production retry timing is unchanged.
+        const store = createPrksLocalStore({
+            indexedDB: createFakeIndexedDBFactory(), uuid,
+            now: () => Date.now() - 120000,
+        });
         const save = url => store.saveWorkSource('W-1',
             { kind: 'video', url, identity: identity(url) },
             { identity: identity(WATCH('AAA')), revision: 0 });
