@@ -24,11 +24,13 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF_NAME}" = "dependabot/npm_and_yarn/tools/frontend-vendor/frontend-vendor-routine-57aafb71d5"
-          test "$(git rev-parse HEAD^)" = "cce28d4c91652370642b2eb33b243866a82767a3"
+          test "$(git rev-parse HEAD^)" = "707f6f548ae89e76bd17cce1d35270a6ef86dad0"
       - name: Merge current master with guarded generated-asset conflict resolution
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "PRKS dependency maintainer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --no-tags origin master
           if ! git merge --no-commit --no-ff origin/master; then
             mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
