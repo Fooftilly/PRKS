@@ -410,6 +410,10 @@
                 }
             }
 
+            // Capture reachability at real network start, after optional
+            // IndexedDB cache lookup. The earlier connectionToken still
+            // guards a stale cached result across offline transitions.
+            const networkToken = connectivityGeneration;
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -417,7 +421,7 @@
                 const kindOfError = classifyError(err);
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
-                    noteRequestSuccess(connectionToken);
+                    noteRequestSuccess(networkToken);
                     if (err.status === 404) {
                         return { value: null, source: 'server', cachedAt: null };
                     }
@@ -450,7 +454,7 @@
                 }
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
-            noteRequestSuccess(connectionToken);
+            noteRequestSuccess(networkToken);
             // Validate before publishing: a malformed 200 must never replace a
             // good cached entity.
             assertAcceptableShape(options2.validate, raw);
@@ -3066,6 +3070,10 @@
                 }
             }
 
+            // Capture reachability at real network start, after optional
+            // IndexedDB cache lookup. The earlier connectionToken still
+            // guards a stale cached result across offline transitions.
+            const networkToken = connectivityGeneration;
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -3073,7 +3081,7 @@
                 const kindOfError = classifyError(err);
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
-                    noteRequestSuccess(connectionToken);
+                    noteRequestSuccess(networkToken);
                     if (err.status === 404) {
                         return { value: null, source: 'server', cachedAt: null };
                     }
@@ -3101,7 +3109,7 @@
                 }
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
-            noteRequestSuccess(connectionToken);
+            noteRequestSuccess(networkToken);
             // Validate before publishing: a malformed 200 must never replace a
             // good cached list snapshot.
             assertAcceptableShape(options2.validate, raw);

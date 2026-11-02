@@ -27,6 +27,7 @@ export function isAbortError(error: unknown): boolean {
 type PrksReachabilityRoot = typeof globalThis & {
   prksOfflineNoteRequestSuccess?: unknown
   prksOfflineNoteRequestFailure?: unknown
+  prksOfflineRuntimeGeneration?: unknown
 }
 
 /** The classic request coordinator's Library epoch (frontend/js/request-coordinator.js). */
@@ -56,9 +57,15 @@ function isManagedPdfPath(path: string): boolean {
 
 function callReachabilityHook(
   name: 'prksOfflineNoteRequestSuccess' | 'prksOfflineNoteRequestFailure',
+  issuedAtGeneration?: number,
 ): void {
   const hook = (globalThis as PrksReachabilityRoot)[name]
-  if (typeof hook === 'function') hook()
+  if (typeof hook === 'function') hook(issuedAtGeneration)
+}
+
+function reachabilityGeneration(): number | undefined {
+  const read = (globalThis as PrksReachabilityRoot).prksOfflineRuntimeGeneration
+  return typeof read === 'function' ? (read as () => number)() : undefined
 }
 
 /** Caches call this after retries stop. Only a marked transport error is a reachability failure. */
@@ -108,8 +115,11 @@ export async function prksApiRequest(
   const search = init.query ? new URLSearchParams(init.query).toString() : ''
   const method = (init.method ?? 'GET').toUpperCase()
   let response: Response
+  let issuedAtGeneration: number | undefined
   try {
     const epoch = await libraryEpochHeaders(method)
+    // Read the generation after asynchronous Library epoch preflight.
+    issuedAtGeneration = reachabilityGeneration()
     response = await fetch(search ? `${apiPath}?${search}` : apiPath, {
       method,
       body: init.body,
@@ -127,7 +137,7 @@ export async function prksApiRequest(
     if (!isManagedPdfPath(apiPath)) reportableTransportFailures.add(transport)
     throw transport
   }
-  if (!isManagedPdfPath(apiPath)) callReachabilityHook('prksOfflineNoteRequestSuccess')
+  if (!isManagedPdfPath(apiPath)) callReachabilityHook('prksOfflineNoteRequestSuccess', issuedAtGeneration)
   noteLibraryEpoch(response)
 
   const text = await response.text()

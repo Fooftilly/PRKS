@@ -226,7 +226,7 @@
             });
         }
 
-        async function epochFetch(url, init) {
+        async function epochFetch(url, init, onTransportStart) {
             let sent = init;
             if (isLibraryMutation(url, init) && !hasHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER)) {
                 // A caller that gives up while the session is read is answered at once.
@@ -239,6 +239,8 @@
                     });
                 }
             }
+            // Library epoch preflight may have awaited /api/session.
+            if (typeof onTransportStart === 'function') onTransportStart();
             const response = await fetchImpl(url, sent);
             note(response);
             return response;
@@ -662,8 +664,9 @@
                 try {
                     // Snapshot immediately before the real transport attempt.
                     // Old successful responses cannot undo a newer disconnect.
-                    const issuedAtGeneration = reachabilityGeneration();
-                    const response = await fetchImpl(href, networkInit(fetchOptions, signal));
+                    let issuedAtGeneration = reachabilityGeneration();
+                    const response = await fetchImpl(href, networkInit(fetchOptions, signal),
+                        () => { issuedAtGeneration = reachabilityGeneration(); });
                     // A transport that ignores abort may resolve after a
                     // flight's header deadline. Do not publish late responses
                     // or let them incorrectly mark the server reachable.
@@ -816,8 +819,9 @@
                 // existing cannot-cancel-on-navigation semantics.
                 const signal = job.cancellable ? job.fetchOptions.signal : undefined;
                 if (signal && signal.aborted) throw makeAbortError();
-                const issuedAtGeneration = reachabilityGeneration();
-                response = await fetchImpl(job.href, networkInit(job.fetchOptions, signal));
+                let issuedAtGeneration = reachabilityGeneration();
+                response = await fetchImpl(job.href, networkInit(job.fetchOptions, signal),
+                    () => { issuedAtGeneration = reachabilityGeneration(); });
                 if (signal && signal.aborted) throw makeAbortError();
                 if (!isManagedPdfHref(job.href)) reportPrksReachable(issuedAtGeneration);
             } catch (err) {

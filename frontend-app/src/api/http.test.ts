@@ -52,6 +52,26 @@ describe('prksApiRequest', () => {
     expect(failure).not.toHaveBeenCalled()
   })
 
+  it('captures Vue reachability after asynchronous Library epoch preflight', async () => {
+    let releaseEpoch: ((headers: Record<string, string>) => void) | undefined
+    vi.stubGlobal('prksLibraryEpochHeaders', () => new Promise<Record<string, string>>(resolve => {
+      releaseEpoch = resolve
+    }))
+    let generation = 10
+    const success = vi.fn()
+    vi.stubGlobal('prksOfflineRuntimeGeneration', () => generation)
+    vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
+    const pending = prksApiRequest('/api/works/W-1', { method: 'POST', body: '{}' })
+    await vi.waitFor(() => expect(releaseEpoch).toBeDefined())
+    generation = 11
+    if (!releaseEpoch) throw new Error('Library epoch preflight was not called')
+    releaseEpoch({ 'PRKS-Library-Epoch': '7' })
+    await expect(pending).resolves.toEqual({})
+    expect(success).toHaveBeenCalledWith(11)
+    expect(success).toHaveBeenCalledTimes(1)
+  })
+
   it('reports any resolved HTTP response as reachable and defers transport failure', async () => {
     const success = vi.fn()
     const failure = vi.fn()
