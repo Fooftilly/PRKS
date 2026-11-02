@@ -5761,12 +5761,12 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Compare panel content without live status regions: any
-                    // Work's sync notices can settle asynchronously after a
-                    // focus switch and are not part of the panel's data.
+                    // Ignore whole live-status regions, not just their text:
+                    // Work sync notices can be inserted asynchronously after
+                    // a focus switch and are not part of the panel's data.
                     const stable = panel && panel.cloneNode(true);
                     if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
-                        .forEach(node => node.replaceChildren());
+                        .forEach(node => node.remove());
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
@@ -5797,12 +5797,12 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Compare panel content without live status regions: any
-                    // Work's sync notices can settle asynchronously after a
-                    // focus switch and are not part of the panel's data.
+                    // Ignore whole live-status regions, not just their text:
+                    // Work sync notices can be inserted asynchronously after
+                    // a focus switch and are not part of the panel's data.
                     const stable = panel && panel.cloneNode(true);
                     if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
-                        .forEach(node => node.replaceChildren());
+                        .forEach(node => node.remove());
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
