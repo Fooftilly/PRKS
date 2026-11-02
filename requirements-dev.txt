@@ -6,7 +6,7 @@ playwright==1.64.0
 openapi-core==0.23.1
 # Bounded property/state-machine tests for revision and sync invariants (#854).
 # Unit Test Gate installs this; not included in PRKS production runtime.
-hypothesis==6.170.9
+hypothesis==6.170.10
 # CommonMark parser for verified docs-only PR links, anchors and references.
 # CI docs profile loads only these wheels; no production runtime dependency.
 markdown-it-py==4.2.0
