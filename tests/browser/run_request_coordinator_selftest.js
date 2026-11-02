@@ -1390,6 +1390,76 @@ async function testReachabilitySignalling() {
     } finally {
         clearReachabilitySpies();
     }
+    // A late response from an earlier reachability generation must identify
+    // WHEN its fetch began, for both GET and durable POST. The runtime can
+    // therefore ignore it after a newer confirmed disconnect.
+    try {
+        const oldGeneration = global.prksOfflineRuntimeGeneration;
+        const oldSuccess = global.prksOfflineNoteRequestSuccess;
+        let generation = 7;
+        const observed = [];
+        global.prksOfflineRuntimeGeneration = () => generation;
+        global.prksOfflineNoteRequestSuccess = token => { observed.push(token); };
+        try {
+            const box = makeDeferredFetch();
+            const coord = makeCoordinator({ fetchBundle: box });
+            const read = coord.prksRequest('/api/works', {}, { dedupe: false, retry: false });
+            await waitUntil(() => box.calls.length === 1);
+            generation = 8;
+            box.calls[0].resolve(jsonResponse([]));
+            await read;
+            record('late read carries transport start generation',
+                observed.length === 1 && observed[0] === 7, JSON.stringify(observed));
+
+            const write = coord.prksRequest('/api/works/1', { method: 'POST', body: '{}' });
+            await waitUntil(() => box.calls.length === 2);
+            generation = 9;
+            box.calls[1].resolve(jsonResponse({ ok: true }));
+            await write;
+            record('late mutation carries transport start generation',
+                observed.length === 2 && observed[1] === 8, JSON.stringify(observed));
+        } finally {
+            if (oldGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+            else global.prksOfflineRuntimeGeneration = oldGeneration;
+            if (oldSuccess === undefined) delete global.prksOfflineNoteRequestSuccess;
+            else global.prksOfflineNoteRequestSuccess = oldSuccess;
+        }
+    } catch (err) {
+        record('reachability generation regression ran', false, String(err));
+    }
+
+    // Library epoch preflight can outlast an offline transition. The HTTP
+    // POST carries the generation at the true transport boundary, not the
+    // earlier queue/dependency stage.
+    {
+        const previousGeneration = global.prksOfflineRuntimeGeneration;
+        const previousSuccess = global.prksOfflineNoteRequestSuccess;
+        const box = makeDeferredFetch();
+        const epoch = createPrksLibraryEpoch({ fetchImpl: box.fetchImpl });
+        const coord = makeCoordinator({ fetchImpl: epoch.fetch, fetchBundle: box });
+        const tokens = [];
+        let generation = 14;
+        global.prksOfflineRuntimeGeneration = () => generation;
+        global.prksOfflineNoteRequestSuccess = token => tokens.push(token);
+        try {
+            const request = coord.prksRequest('/api/works/W-1', { method: 'POST', body: '{}' });
+            await waitUntil(() => box.calls.length === 1);
+            record('first Library mutation waits on session', box.calls[0].url === '/api/session',
+                box.calls[0].url);
+            generation = 15;
+            box.calls[0].resolve(jsonResponse({ library: { epoch: '7' } }));
+            await waitUntil(() => box.calls.length === 2);
+            box.calls[1].resolve(jsonResponse({ ok: true }));
+            await request;
+            record('epoch preflight does not stale actual HTTP reachability',
+                tokens.length === 1 && tokens[0] === 15, JSON.stringify(tokens));
+        } finally {
+            if (previousGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+            else global.prksOfflineRuntimeGeneration = previousGeneration;
+            if (previousSuccess === undefined) delete global.prksOfflineNoteRequestSuccess;
+            else global.prksOfflineNoteRequestSuccess = previousSuccess;
+        }
+    }
 }
 
 async function testApiWarningOwnership() {

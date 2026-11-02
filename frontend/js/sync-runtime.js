@@ -205,8 +205,35 @@
                 // increments attempt_count and irrevocably prevents safe
                 // local coalescing even when no request left this browser.
                 if (!deps.online()) break;
+                // listOperations() may return references to mutable row objects
+                // (notably in the in-memory IDB harness). claimOperation()
+                // changes status and attempt_count: retain an immutable
+                // pre-claim snapshot BEFORE awaiting that transaction, rather
+                // than relying on candidate to retain its original values.
+                const beforeClaim = {
+                    op_id: candidate.op_id,
+                    status: candidate.status,
+                    attempt_count: candidate.attempt_count,
+                    last_attempt_at: candidate.last_attempt_at,
+                    sequence: candidate.sequence,
+                    created_at: candidate.created_at,
+                };
                 const op = await store.claimOperation(candidate.op_id);
                 if (!op) continue;
+                // The IDB claim may finish after connectivity closes. At this
+                // boundary NO transport has started, so restoring the exact
+                // previous row retains the right to coalesce never-sent edits.
+                // Never undo a claim after request() begins: the server might
+                // already have recorded this operation ID.
+                if (!deps.online()) {
+                    const restored = await store.releaseClaimBeforeDispatch(op, beforeClaim);
+                    if (restored) emit();
+                    // A rapid reconnect may have notified a running wake().
+                    // One reschedule closes that lost notification without
+                    // spinning or attempting a send while disconnected.
+                    schedule(0);
+                    break;
+                }
                 const family = handlers[op.operation];
                 emit();
                 try {
