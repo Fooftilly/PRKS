@@ -135,11 +135,23 @@ class OfflineWorkSourceTests(unittest.TestCase):
 
     def url(self, page, value):
         self.wait_source_editable(page, '#meta-video-url')
-        page.locator('#meta-video-url').fill(value)
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        try:
+            page.locator('#meta-video-url').fill(value, timeout=10000)
+        except PlaywrightTimeoutError:
+            self.fail('Video source input lost editability during fill: %s'
+                      % json.dumps(self.source_debug_state(page), sort_keys=True))
 
     def save(self, page):
         self.wait_source_editable(page, '#save-work-source-btn')
-        page.locator('#save-work-source-btn').click()
+        # The control can become disabled AFTER the readiness predicate and
+        # BEFORE the click. Capture the same bounded state on that boundary.
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        try:
+            page.locator('#save-work-source-btn').click(timeout=10000)
+        except PlaywrightTimeoutError:
+            self.fail('Video source Save lost editability during click: %s'
+                      % json.dumps(self.source_debug_state(page), sort_keys=True))
 
     def pending(self, page, count):
         """Exactly `count` source operations, none mid-flight."""

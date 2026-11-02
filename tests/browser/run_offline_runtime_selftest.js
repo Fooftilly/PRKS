@@ -3707,6 +3707,25 @@ async function run() {
         }
     }
 
+    // A response started before a confirmed disconnect is stale evidence.
+    // Fresh results are still permitted, and an unversioned explicit
+    // success retains its legacy behavior for callers without a token.
+    {
+        const runtime = mod.createPrksOfflineRuntime({
+            store: makeFakeStore(), prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const before = runtime.getConnectivityGeneration();
+        runtime.noteRequestFailure();
+        assert('confirmed failure advances reachability generation',
+            runtime.getConnectivityGeneration() !== before);
+        runtime.noteRequestSuccess(before);
+        assertEq('old successful response cannot reopen offline sync gate', runtime.getState(), 'offline');
+        runtime.noteRequestSuccess(runtime.getConnectivityGeneration());
+        assertEq('new successful response can reopen sync gate', runtime.getState(), 'online');
+    }
+
     if (failed) {
         console.log(failed + ' failed, ' + passed + ' passed');
         process.exit(1);
