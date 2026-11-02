@@ -1115,8 +1115,12 @@ async function run() {
             });
             const originalSuccess = global.prksOfflineNoteRequestSuccess;
             const originalFailure = global.prksOfflineNoteRequestFailure;
+            const originalGeneration = global.prksOfflineRuntimeGeneration;
             global.prksOfflineNoteRequestSuccess = runtime.noteRequestSuccess;
             global.prksOfflineNoteRequestFailure = runtime.noteRequestFailure;
+            // This integration uses the real coordinator with a synthetic root:
+            // wire the same generation hook as the browser bootstrap.
+            global.prksOfflineRuntimeGeneration = runtime.getConnectivityGeneration;
             try {
                 runtime.noteRequestFailure();
                 timers.flushAll();
@@ -1157,6 +1161,8 @@ async function run() {
                 else global.prksOfflineNoteRequestSuccess = originalSuccess;
                 if (originalFailure === undefined) delete global.prksOfflineNoteRequestFailure;
                 else global.prksOfflineNoteRequestFailure = originalFailure;
+                if (originalGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+                else global.prksOfflineRuntimeGeneration = originalGeneration;
             }
         }
         await integratedProbeCase(false);
