@@ -1,0 +1,74 @@
+# One-shot branch-scoped master reconciliation. This workflow removes itself on success.
+name: One-shot combined frontend dependency master sync 1109
+on:
+  push:
+    branches:
+      - dependabot/npm_and_yarn/frontend-app/frontend-routine-af3f5266ba
+    paths:
+      - .github/workflows/dependency-artifact-sync-1109.yml
+permissions:
+  contents: write
+jobs:
+  sync:
+    if: github.repository == 'Fooftilly/PRKS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout reviewed dependency branch with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Validate exact reviewed head and git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "dependabot/npm_and_yarn/frontend-app/frontend-routine-af3f5266ba"
+          test "$(git rev-parse HEAD^)" = "52c7af0316c53f1d744f826250ade6fc6a83e5a1"
+          git config user.name "PRKS dependency maintainer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Integrate master with guarded generated-artifact resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master
+          if ! git merge --no-commit --no-ff origin/master; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            test "${#conflicts[@]}" -gt 0
+            for f in "${conflicts[@]}"; do
+              case "$f" in
+                frontend/sw.js|frontend/vendor/DEPENDENCY-MANIFEST.json) ;;
+                *) echo "Unexpected source or lock conflict: $f" >&2; exit 1 ;;
+              esac
+            done
+            git checkout --theirs -- "${conflicts[@]}"
+            git add -- "${conflicts[@]}"
+          fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pkg = json.loads(Path("frontend-app/package.json").read_text())
+          assert pkg["dependencies"]["@tanstack/vue-query"] == "5.105.0"
+          assert pkg["devDependencies"]["vite"] == "8.3.5"
+          assert pkg["devDependencies"]["eslint-plugin-vue"] == "10.12.0"
+          assert pkg["devDependencies"]["typescript-eslint"] == "8.72.1"
+          vendor = json.loads(Path("tools/frontend-vendor/package.json").read_text())
+          assert vendor["dependencies"]["lucide"] == "1.61.0"
+          PY
+      - name: Set up pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Regenerate combined frontend manifest, bundles and SW revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/refresh_dependency_artifacts.sh frontend-app
+      - name: Commit rebuilt integration and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md frontend-app/package-lock.json
+          git rm -- .github/workflows/dependency-artifact-sync-1109.yml
+          git commit -m "build(deps): integrate Lucide and Vue generated asset revisions"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
