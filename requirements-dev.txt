@@ -16,4 +16,4 @@ requests==2.34.2
 
 # Read-only, manual/path-scoped synthetic OpenAPI fuzz pilot (#855).
 # Installed only by the dedicated Schemathesis workflow.
-schemathesis==4.32.4
+schemathesis==4.32.5
