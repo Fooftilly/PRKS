@@ -1,0 +1,53 @@
+# Temporary branch-scoped maintenance step; removed by its own generated-assets commit.
+name: One-shot frontend build repair 1100
+on:
+  push:
+    branches:
+      - dependabot/npm_and_yarn/frontend-app/vite-toolchain-e6386c2419
+    paths:
+      - .github/workflows/dependency-artifact-repair-1100.yml
+permissions:
+  contents: write
+jobs:
+  rebuild:
+    if: github.repository == 'Fooftilly/PRKS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the reviewed branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+      - name: Verify branch, exact parent SHA and pinned package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "dependabot/npm_and_yarn/frontend-app/vite-toolchain-e6386c2419"
+          test "$(git rev-parse HEAD^)" = "68db53c13bf060be11d981a0e49aeedd5d39f9b7"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pkg = json.loads(Path("frontend-app/package.json").read_text())
+          assert pkg["devDependencies"]["vite"] == "8.3.5"
+          PY
+      - name: Set up pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Regenerate and validate frontend production artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/refresh_dependency_artifacts.sh frontend-app
+          git diff --quiet -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md && { echo "No generated frontend changes"; exit 1; }
+      - name: Commit verified build artifacts and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "PRKS dependency maintainer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md
+          git rm -- .github/workflows/dependency-artifact-repair-1100.yml
+          git commit -m "build(deps): regenerate Vue production assets for 1100"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
