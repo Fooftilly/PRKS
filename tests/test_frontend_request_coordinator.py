@@ -125,7 +125,8 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
 
     def test_reachability_reporters_are_transport_only_dynamic_lookups(self):
         src = _read(_COORD)
-        self.assertIn("function reportPrksReachable()", src)
+        self.assertIn("function reportPrksReachable(issuedAtGeneration)", src)
+        self.assertIn("onTransportStart", src)
         self.assertIn("function reportPrksUnreachable(error)", src)
         self.assertIn("root.prksOfflineNoteRequestSuccess", src)
         self.assertIn("root.prksOfflineNoteRequestFailure", src)
@@ -135,7 +136,7 @@ class FrontendRequestCoordinatorTests(unittest.TestCase):
         # ordinary request still reports at the transport boundary.
         self.assertIn("const reportReachability = pol.reportReachability !== false;", src)
         self.assertIn(
-            "if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable();",
+            "if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable(issuedAtGeneration);",
             src,
         )
         self.assertIn(

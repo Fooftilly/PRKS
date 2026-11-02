@@ -1115,8 +1115,12 @@ async function run() {
             });
             const originalSuccess = global.prksOfflineNoteRequestSuccess;
             const originalFailure = global.prksOfflineNoteRequestFailure;
+            const originalGeneration = global.prksOfflineRuntimeGeneration;
             global.prksOfflineNoteRequestSuccess = runtime.noteRequestSuccess;
             global.prksOfflineNoteRequestFailure = runtime.noteRequestFailure;
+            // This integration uses the real coordinator with a synthetic root:
+            // wire the same generation hook as the browser bootstrap.
+            global.prksOfflineRuntimeGeneration = runtime.getConnectivityGeneration;
             try {
                 runtime.noteRequestFailure();
                 timers.flushAll();
@@ -1157,6 +1161,8 @@ async function run() {
                 else global.prksOfflineNoteRequestSuccess = originalSuccess;
                 if (originalFailure === undefined) delete global.prksOfflineNoteRequestFailure;
                 else global.prksOfflineNoteRequestFailure = originalFailure;
+                if (originalGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+                else global.prksOfflineRuntimeGeneration = originalGeneration;
             }
         }
         await integratedProbeCase(false);
@@ -3705,6 +3711,25 @@ async function run() {
             assertEq('pre-aborted reconnecting Person read rejects AbortError', error && error.name, 'AbortError');
             assertEq('pre-aborted Person request causes zero fetches', c.attempts.length, 0);
         }
+    }
+
+    // A response started before a confirmed disconnect is stale evidence.
+    // Fresh results are still permitted, and an unversioned explicit
+    // success retains its legacy behavior for callers without a token.
+    {
+        const runtime = mod.createPrksOfflineRuntime({
+            store: makeFakeStore(), prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const before = runtime.getConnectivityGeneration();
+        runtime.noteRequestFailure();
+        assert('confirmed failure advances reachability generation',
+            runtime.getConnectivityGeneration() !== before);
+        runtime.noteRequestSuccess(before);
+        assertEq('old successful response cannot reopen offline sync gate', runtime.getState(), 'offline');
+        runtime.noteRequestSuccess(runtime.getConnectivityGeneration());
+        assertEq('new successful response can reopen sync gate', runtime.getState(), 'online');
     }
 
     if (failed) {
