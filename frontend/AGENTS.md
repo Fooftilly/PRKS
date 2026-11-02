@@ -57,6 +57,8 @@ Storybook MCP is not committed. `@storybook/addon-mcp@10.6.0` is preview, peers 
 
 The Vue HTTP transport is a real `fetch` boundary for PRKS reachability. A resolved response, of any HTTP status, calls `prksOfflineNoteRequestSuccess`. A non-abort transport failure calls `prksOfflineNoteRequestFailure` only after that query's retries are exhausted; mutations are not retried, so their transport failure is final. Managed PDF GETs (`/api/pdfs/...`) are not a reachability signal. Abort, HTTP error envelopes, and JSON/domain failures are not connectivity changes.
 
+Reachability is a generation-fenced transport signal: capture `prksOfflineRuntimeGeneration()` **immediately before the actual fetch**, after any asynchronous Library-epoch or offline-cache preflight. Pass that token to `prksOfflineNoteRequestSuccess(token)` on resolved responses; a response from an earlier generation must not reopen a gate after a later disconnect. The classic request coordinator, offline read-through and Vue HTTP transport all follow this contract. Explicit health probes retain their own settlement fence. Never drop the attempt history of an operation whose HTTP send may have started.
+
 ## Cross-boundary bulk mutations
 
 Frontend bulk operations must use a transactional backend bulk operation when one exists. Do not implement bulk UI behavior as one HTTP mutation per selected Work; preserve server-side validation and atomicity across the selection.
