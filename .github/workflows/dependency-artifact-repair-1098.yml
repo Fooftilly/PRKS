@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF_NAME}" = "dependabot/npm_and_yarn/tools/frontend-vendor/frontend-vendor-routine-57aafb71d5"
-          test "$(git rev-parse HEAD^)" = "c35979cb18d85b36757b68bf30508774b3e7a485"
+          test "$(git rev-parse HEAD^)" = "232003b8f35b36d54f9f6bde692b04ca0ace313d"
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/refresh_dependency_artifacts.sh frontend-vendor
-          git diff --quiet -- frontend/ && { echo "No generated frontend changes"; exit 1; }
+          if git diff --quiet -- frontend/; then echo "No generated frontend changes"; exit 1; fi
       - name: Commit generated assets and remove one-shot workflow
         shell: bash
         run: |
