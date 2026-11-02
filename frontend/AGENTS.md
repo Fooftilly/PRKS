@@ -60,10 +60,8 @@ The Vue HTTP transport is a real `fetch` boundary for PRKS reachability. A resol
 Reachability is generation-fenced: after async preflight, capture `prksOfflineRuntimeGeneration()` at actual fetch start and pass it to `prksOfflineNoteRequestSuccess(token)` on the response. Older responses cannot reopen a newer disconnect. Classic, offline and Vue transports share this rule; health probes have a separate fence. Never erase attempt history after HTTP dispatch.
 
 ## Cross-boundary bulk mutations
-Frontend bulk operations must use a transactional backend bulk operation when one exists. Do not implement bulk UI behavior as one HTTP mutation per selected Work; preserve server-side validation and atomicity across the selection.
-
+Use a transactional backend bulk mutation wherever available; do not substitute individual Work HTTP writes or sacrifice atomic validation.
 ## Command palette
-
 Command palette commands must use explicit allowlisted actions. Never execute
 user query text as JavaScript or dynamic method names.
 
