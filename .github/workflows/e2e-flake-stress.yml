@@ -1,7 +1,7 @@
 name: E2E Flake Acceptance Stress
 
 # Opt-in 20x acceptance for #456, #457, #458 and current flaky
-# candidates #1007, #1008, #1009. One automatic validation when this
+# candidates #1007, #1008, #1009, #1091. One automatic validation when this
 # workflow or its negative-control helper changes; no extra matrix on ordinary PRs/master.
 on:
   workflow_dispatch:
@@ -65,6 +65,10 @@ jobs:
             test_id: tests.e2e.test_offline.OfflineFoundationTests.test_reconnect_probe_race_settles_pdf_to_online_work_capable_state
           - case: person-membership-1009
             test_id: tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
+          - case: work-source-coalesce-1091
+            test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_changing_the_video_twice_before_it_sends_is_one_operation
+          - case: work-source-return-to-base-1091
+            test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_returning_to_the_acknowledged_video_leaves_no_intent
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
