@@ -531,7 +531,8 @@ async function offlineDuringClaim() {
             await store.updateOperationSyncState(original.op_id,
                 { status: 'pending', last_error: 'Previous attempt failed' });
         }
-        const before = await store.getOperation(original.op_id);
+        // Keep the expected row independent of the fake IDB's mutable get() object.
+        const before = Object.assign({}, await store.getOperation(original.op_id));
         let online = true;
         let transmitted = 0;
         let finishRestore;
@@ -588,9 +589,10 @@ async function offlineDuringClaim() {
     const prior = await store.saveWorkSource('W-2',
         { kind: 'video', url: WATCH('BBB'), identity: identity(WATCH('BBB')) },
         { identity: identity(WATCH('AAA')), revision: 0 });
+    const originalSnapshot = Object.assign({}, prior);
     const claimed = await store.claimOperation(prior.op_id);
     await store.updateOperationSyncState(prior.op_id, { status: 'pending' });
-    assert.equal(await store.releaseClaimBeforeDispatch(claimed, prior), false,
+    assert.equal(await store.releaseClaimBeforeDispatch(claimed, originalSnapshot), false,
         'a stale claimant cannot rewrite a different operation state');
     assert.equal((await store.getOperation(prior.op_id)).attempt_count, 1);
 }
