@@ -518,9 +518,9 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         )
         self.assertIn("from '/js/pdf-cache-install.js'", works_pdf)
         self.assertIn("PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install'", sw)
-        self.assertIn("advanceWholeFilePdfGeneration(path)", sw)
-        self.assertIn("wholeFilePdfGeneration(path) !== snapshot", sw)
-        self.assertIn("generationAtStart = wholeFilePdfGeneration(pathname)", sw)
+        self.assertIn("advanceWholeFilePdfGeneration(path, cacheName)", sw)
+        self.assertIn("wholeFilePdfGeneration(path, cacheName) !== snapshot", sw)
+        self.assertIn("generationAtStart = wholeFilePdfGeneration(pathname, cacheName)", sw)
 
 
 if __name__ == "__main__":

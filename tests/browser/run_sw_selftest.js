@@ -440,10 +440,13 @@ async function run() {
         const pathname = '/api/pdfs/race-inflight.pdf';
         let releaseFetch;
         const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
+        let fetchStarted;
+        const inFlight = new Promise(function (resolve) { fetchStarted = resolve; });
         const handlers = sw.createHandlers({
             pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
+                fetchStarted();
                 return fetchGate.then(function () {
                     return new Response(Buffer.from('OLD-BYTES'), {
                         status: 200,
@@ -456,16 +459,18 @@ async function run() {
             fakeRequest({ url: 'https://prks.example' + pathname }),
             pathname
         );
+        await inFlight;
         const pdfCache = await cacheStorage.open(PDF_CACHE);
         const installed = await sw.installAuthoritativeWholeFilePdf(
             pdfCache,
             pathname,
-            Buffer.from('NEW-BYTES')
+            Buffer.from('NEW-BYTES'),
+            PDF_CACHE
         );
         assert('authoritative install during in-flight GET commits', installed === true);
         releaseFetch();
         await pending;
-        await sw.settleWholeFilePdfWrites(pathname);
+        await sw.settleWholeFilePdfWrites(pathname, PDF_CACHE);
         const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
         assert(
             'stale in-flight whole-file GET does not overwrite post-save bytes',
@@ -473,9 +478,57 @@ async function run() {
         );
         assertEq(
             'post-save install advanced the per-path generation',
-            sw.wholeFilePdfGeneration(pathname) > 0,
+            sw.wholeFilePdfGeneration(pathname, PDF_CACHE) > 0,
             true
         );
+    }
+    {
+        // Each account has its own PDF cache. An install into account B's
+        // cache at the same path must not cancel account A's in-flight
+        // whole-file write, or A cannot reopen that PDF offline.
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/race-other-account.pdf';
+        const otherCache = sw.PRKS_SW_PDF_CACHE_BASE + ':I1.L1.U2';
+        let releaseFetch;
+        const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
+        let fetchStarted;
+        const inFlight = new Promise(function (resolve) { fetchStarted = resolve; });
+        const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
+            caches: cacheStorage,
+            fetchImpl: function () {
+                fetchStarted();
+                return fetchGate.then(function () {
+                    return new Response(Buffer.from('A-BYTES'), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/pdf' },
+                    });
+                });
+            },
+        });
+        const pending = handlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + pathname }),
+            pathname
+        );
+        await inFlight;
+        const bCache = await cacheStorage.open(otherCache);
+        const installed = await sw.installAuthoritativeWholeFilePdf(
+            bCache, pathname, Buffer.from('B-BYTES'), otherCache
+        );
+        assert('install into another account cache commits', installed === true);
+        releaseFetch();
+        await pending;
+        await sw.settleWholeFilePdfWrites(pathname, PDF_CACHE);
+        const aCache = await cacheStorage.open(PDF_CACHE);
+        const aCached = await aCache.match(pathname);
+        assert('another account install does not cancel this account whole-file write', !!aCached);
+        assert('this account cache holds its own bytes',
+            !!aCached && Buffer.from(await aCached.arrayBuffer()).equals(Buffer.from('A-BYTES')));
+        const bCached = Buffer.from(await (await bCache.match(pathname)).arrayBuffer());
+        assert('the other account cache keeps its installed bytes', bCached.equals(Buffer.from('B-BYTES')));
+        assertEq('generations are counted per cache',
+            [sw.wholeFilePdfGeneration(pathname, PDF_CACHE), sw.wholeFilePdfGeneration(pathname, otherCache)],
+            [0, 1]);
     }
     {
         // A network put already queued on the path still loses to a later
@@ -519,11 +572,12 @@ async function run() {
         const installPromise = sw.installAuthoritativeWholeFilePdf(
             pdfCache,
             pathname,
-            Buffer.from('NEW-QUEUED')
+            Buffer.from('NEW-QUEUED'),
+            PDF_CACHE
         );
         releasePut();
         assert('queued network put then install still commits', (await installPromise) === true);
-        await sw.settleWholeFilePdfWrites(pathname);
+        await sw.settleWholeFilePdfWrites(pathname, PDF_CACHE);
         const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
         assert(
             'authoritative install replaces a whole-file put that was already queued',

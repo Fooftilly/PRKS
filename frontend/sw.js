@@ -279,28 +279,35 @@
         return true;
     }
 
-    // Per-path generation for whole-file writes into a scoped PDF cache. The page and the
-    // network GET do not share a heap, so every whole-file put goes through
-    // this worker: a post-save install advances the generation before its
-    // put, and a network GET that snapshotted an older generation skips its
-    // put. A per-path chain keeps those puts from interleaving.
+    // Per-cache, per-path generation for whole-file writes into a scoped PDF
+    // cache. The page and the network GET do not share a heap, so every
+    // whole-file put goes through this worker: a post-save install advances
+    // the generation before its put, and a network GET that snapshotted an
+    // older generation skips its put. A chain per cache and path keeps those
+    // puts from interleaving. Each account has its own cache, so one
+    // account's install never cancels another account's write at the same
+    // path.
     const PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install';
     const pdfWholeFileGeneration = Object.create(null);
     const pdfWholeFileWriteChain = Object.create(null);
 
-    function wholeFilePdfGeneration(pathname) {
-        const n = pdfWholeFileGeneration[pathname];
+    function wholeFilePdfKey(cacheName, pathname) {
+        return String(cacheName || '') + '\n' + String(pathname || '');
+    }
+
+    function wholeFilePdfGeneration(pathname, cacheName) {
+        const n = pdfWholeFileGeneration[wholeFilePdfKey(cacheName, pathname)];
         return Number.isSafeInteger(n) && n >= 0 ? n : 0;
     }
 
-    function advanceWholeFilePdfGeneration(pathname) {
-        const next = wholeFilePdfGeneration(pathname) + 1;
-        pdfWholeFileGeneration[pathname] = next;
+    function advanceWholeFilePdfGeneration(pathname, cacheName) {
+        const next = wholeFilePdfGeneration(pathname, cacheName) + 1;
+        pdfWholeFileGeneration[wholeFilePdfKey(cacheName, pathname)] = next;
         return next;
     }
 
-    function enqueueWholeFilePdfWrite(pathname, task) {
-        const key = String(pathname || '');
+    function enqueueWholeFilePdfWrite(pathname, cacheName, task) {
+        const key = wholeFilePdfKey(cacheName, pathname);
         const prev = pdfWholeFileWriteChain[key] || Promise.resolve();
         const run = prev.then(task, task);
         pdfWholeFileWriteChain[key] = run.then(function () {
@@ -311,8 +318,8 @@
         return run;
     }
 
-    function settleWholeFilePdfWrites(pathname) {
-        return pdfWholeFileWriteChain[String(pathname || '')] || Promise.resolve();
+    function settleWholeFilePdfWrites(pathname, cacheName) {
+        return pdfWholeFileWriteChain[wholeFilePdfKey(cacheName, pathname)] || Promise.resolve();
     }
 
     function copyPdfBytes(buffer) {
@@ -339,12 +346,12 @@
     }
 
     /** Post-save bytes. Generation advances before the put, on the path's chain. */
-    function installAuthoritativeWholeFilePdf(cache, pathname, bytes) {
+    function installAuthoritativeWholeFilePdf(cache, pathname, bytes, cacheName) {
         const path = String(pathname || '');
         const body = copyPdfBytes(bytes);
         if (!cache || !isManagedPdfPath(path) || !body) return Promise.resolve(false);
-        return enqueueWholeFilePdfWrite(path, function () {
-            advanceWholeFilePdfGeneration(path);
+        return enqueueWholeFilePdfWrite(path, cacheName, function () {
+            advanceWholeFilePdfGeneration(path, cacheName);
             return cache.put(path, wholeFilePdfResponse(body)).then(function () {
                 return true;
             });
@@ -355,11 +362,11 @@
      * Network whole-file GET. `generationAtStart` is the value observed before
      * the fetch. A newer post-save install skips this put.
      */
-    function commitNetworkWholeFilePdf(cache, pathname, response, generationAtStart) {
+    function commitNetworkWholeFilePdf(cache, pathname, response, generationAtStart, cacheName) {
         const path = String(pathname || '');
         const snapshot = generationAtStart;
-        return enqueueWholeFilePdfWrite(path, function () {
-            if (wholeFilePdfGeneration(path) !== snapshot) return false;
+        return enqueueWholeFilePdfWrite(path, cacheName, function () {
+            if (wholeFilePdfGeneration(path, cacheName) !== snapshot) return false;
             return cache.put(path, response).then(function () {
                 return true;
             });
@@ -382,7 +389,7 @@
             // Only into the sending page's own scope cache, and only the one it named.
             if (!name || name !== wanted) return false;
             return cachesApi.open(name).then(function (cache) {
-                return installAuthoritativeWholeFilePdf(cache, pathname, bytes);
+                return installAuthoritativeWholeFilePdf(cache, pathname, bytes, name);
             });
         }).then(function (ok) {
             return !!ok;
@@ -611,10 +618,12 @@
         }
 
         async function handlePdfRequest(request, pathname, clientId) {
-            // Snapshot before any await so an install that lands while this
-            // GET is still draining is visible at put time.
-            const generationAtStart = wholeFilePdfGeneration(pathname);
             const cacheName = await pdfCacheName(clientId || '', false);
+            // Snapshot this cache's generation before the fetch starts, so an
+            // install into the same cache that lands while this GET is still
+            // draining is visible at put time. Installs into another
+            // account's cache do not touch it.
+            const generationAtStart = wholeFilePdfGeneration(pathname, cacheName);
             if (!cacheName) {
                 // No signed-in scope: the network only, no cache read or write.
                 try {
@@ -654,7 +663,7 @@
                     }
                     if (cloned) {
                         commitNetworkWholeFilePdf(
-                            cache, pathname, cloned, generationAtStart
+                            cache, pathname, cloned, generationAtStart, cacheName
                         ).catch(function () {});
                     }
                 }
