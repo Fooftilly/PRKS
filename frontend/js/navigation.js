@@ -286,111 +286,41 @@
         return prksNavFamilyForcesOpen(which, route);
     }
 
-    function prksSetDisclosureVisual(which, expanded, containsCurrent) {
-        if (typeof document === 'undefined' || !document.getElementById) return;
-        const spec = PRKS_NAV_DISCLOSURES[which];
-        if (!spec) return;
-        const list = document.getElementById(spec.listId);
-        const btn =
-            document.querySelector &&
-            document.querySelector('[data-nav-disclosure-toggle="' + which + '"]');
-        const wrap =
-            document.querySelector && document.querySelector('[data-nav-disclosure="' + which + '"]');
-        if (btn) {
-            btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            if (spec.show && spec.hide) {
-                btn.setAttribute('aria-label', expanded ? spec.hide : spec.show);
-            }
-        }
-        if (list) {
-            list.hidden = !expanded;
-            if (expanded) list.removeAttribute('hidden');
-            else list.setAttribute('hidden', '');
-        }
-        if (wrap) {
-            wrap.classList.toggle('nav-disclosure--open', !!expanded);
-            wrap.classList.toggle('nav-disclosure--contains-current', !!containsCurrent);
-        }
+    /**
+     * One shell snapshot for Vue app chrome. Merges so a connectivity or
+     * drawer update does not drop the Main route's active href.
+     */
+    function prksNoteShellChrome(patch) {
+        const prev = root.__prksShellChrome && typeof root.__prksShellChrome === 'object' ? root.__prksShellChrome : {};
+        const next = Object.assign({}, prev, patch || {});
+        root.__prksShellChrome = next;
+        if (typeof root.prksVueApplyShellChrome === 'function') root.prksVueApplyShellChrome(next);
     }
 
-    function prksSyncNavDisclosures(route) {
-        if (typeof document === 'undefined') return;
-        Object.keys(PRKS_NAV_DISCLOSURES).forEach(function (which) {
-            const expanded = prksNavDisclosureExpanded(which, route);
-            const containsCurrent = prksNavFamilyForcesOpen(which, route);
-            prksSetDisclosureVisual(which, expanded, containsCurrent);
+    /** Ask Vue to re-read disclosure preferences. Does not paint DOM. */
+    function prksSyncNavDisclosures() {
+        const prev = root.__prksShellChrome && typeof root.__prksShellChrome === 'object' ? root.__prksShellChrome : {};
+        prksNoteShellChrome({
+            disclosureRevision: (Number(prev.disclosureRevision) || 0) + 1,
         });
     }
 
-    function prksInitNavDisclosures() {
-        if (typeof document === 'undefined' || !document.querySelectorAll) return;
-        const buttons = document.querySelectorAll('[data-nav-disclosure-toggle]');
-        for (let i = 0; i < buttons.length; i++) {
-            const btn = buttons[i];
-            if (!btn || btn.dataset.bound === '1') continue;
-            btn.dataset.bound = '1';
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const which = btn.getAttribute('data-nav-disclosure-toggle');
-                const spec = PRKS_NAV_DISCLOSURES[which];
-                if (!spec) return;
-                const route = prksParseRoute(root.location ? root.location.hash : '');
-                const app = document.getElementById && document.getElementById('app-container');
-                const body = document.body;
-                const opensRailNavigation = !!(
-                    btn.classList &&
-                    btn.classList.contains('nav-disclosure__toggle--full') &&
-                    app &&
-                    app.classList &&
-                    app.classList.contains('app-container--tiled') &&
-                    body &&
-                    body.classList &&
-                    !body.classList.contains('prks-sidebar-open')
-                );
-                if (opensRailNavigation) {
-                    if (typeof root.prksToggleSidebarDrawer === 'function') {
-                        root.prksToggleSidebarDrawer(true);
-                    } else if (typeof root.prksOpenSidebarDrawer === 'function') {
-                        root.prksOpenSidebarDrawer();
-                    }
-                    prksWriteNavExpandedPref(spec.prefKey, true);
-                    prksSyncNavDisclosures(route);
-                    return;
-                }
-                const expandedNow = prksNavDisclosureExpanded(which, route);
-                prksWriteNavExpandedPref(spec.prefKey, !expandedNow);
-                prksSyncNavDisclosures(route);
-            });
-        }
-        prksSyncNavDisclosures(prksParseRoute(root.location ? root.location.hash : ''));
-    }
-
+    /**
+     * Publish the Main route's sidebar destination. Vue owns the active
+     * marker. Called only for the Main TabContext.
+     */
     function prksSyncSidebarActive(route) {
-        if (typeof document === 'undefined' || !document.querySelectorAll) return;
         const origin = prksReadOriginForRoute(route);
         const href = prksSidebarHrefForRoute(route, origin);
-        const links = document.querySelectorAll('.nav-link');
-        links.forEach((l) => {
-            l.classList.remove('active');
-            l.removeAttribute('aria-current');
+        let progressStatus = null;
+        if (route && route.name === 'progress' && route.params && route.params.status) {
+            progressStatus = String(route.params.status);
+        }
+        prksNoteShellChrome({
+            route: route || null,
+            activeHref: href,
+            progressStatus: progressStatus,
         });
-        let match = null;
-        if (href) {
-            links.forEach((l) => {
-                if (l.getAttribute('href') === href) match = l;
-            });
-            if (!match && route && route.name === 'progress' && route.params && route.params.status) {
-                links.forEach((l) => {
-                    if (l.getAttribute('data-status') === route.params.status) match = l;
-                });
-            }
-        }
-        if (match) {
-            match.classList.add('active');
-            match.setAttribute('aria-current', 'page');
-        }
-        prksSyncNavDisclosures(route);
     }
 
     function prksRouteScrollElement(ctx) {
@@ -773,7 +703,7 @@
         prksNavigate: prksNavigate,
         prksSyncSidebarActive: prksSyncSidebarActive,
         prksSyncNavDisclosures: prksSyncNavDisclosures,
-        prksInitNavDisclosures: prksInitNavDisclosures,
+        prksNoteShellChrome: prksNoteShellChrome,
         prksReadNavExpandedPref: prksReadNavExpandedPref,
         prksWriteNavExpandedPref: prksWriteNavExpandedPref,
         prksNavDisclosureExpanded: prksNavDisclosureExpanded,

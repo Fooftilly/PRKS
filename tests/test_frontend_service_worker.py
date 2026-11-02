@@ -21,6 +21,8 @@ _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_sw_selftest.js")
 #     fetches them eagerly even though no <script> tag names them directly.
 #   - icon-512.png is only referenced from manifest.webmanifest (a separate
 #     JSON file, not index.html markup), for PWA install/splash icons.
+#   - logo.svg is the sidebar brand image painted by Vue app-shell, not an
+#     index.html tag.
 _SHELL_EXTRAS_NOT_IN_HTML = {
     "/",
     "/index.html",
@@ -28,6 +30,7 @@ _SHELL_EXTRAS_NOT_IN_HTML = {
     "/js/pdf-viewer-runtime.js",
     "/js/pdf-cache-install.js",
     "/icons/icon-512.png",
+    "/logo.svg",
 }
 
 

@@ -17,7 +17,12 @@ on:
 concurrency:
   # Never let the nightly scan cancel an in-progress master push gate.
   # Isolate scheduled runs so master pushes cannot cancel the scan either.
-  group: test-gate-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event.pull_request.number || github.ref }}
+  # Mergify may re-run a previous PR Test Gate after a new commit. Without
+  # isolating re-runs, that OLD SHA's retry cancels the current required gate,
+  # leaving its check contexts pending forever (observed PR #1082 on Nov 1).
+  # First attempts still cancel stale first attempts for runner efficiency.
+  # Re-runs use their unique run ID and cannot cancel a fresh-head gate.
+  group: test-gate-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event.pull_request.number || github.ref }}-${{ github.run_attempt > 1 && github.run_id || 'first' }}
   cancel-in-progress: true
 
 jobs:
@@ -134,14 +139,18 @@ jobs:
           report_path: 'test-reports/unit*.xml'
           test_step_outcome: ${{ steps.tests.outcome }}
 
-  postgres-helpers:
-    # Nightly detection only repeats the unit suite, not PostgreSQL jobs.
+  postgres-helpers-shards:
+    # Independent disposable PostgreSQL per deterministic test-module slice.
     if: github.event_name != 'schedule'
     permissions:
       contents: read
-    name: PostgreSQL helper tests
+    name: PostgreSQL helpers (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     # Disposable PostgreSQL 18 with the builtin locale (docs/postgresql-architecture.md
     # §13.1). The harness only uses its `postgres` maintenance database to create
@@ -181,7 +190,33 @@ jobs:
       - name: Run PostgreSQL helper and harness tests
         env:
           PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          PRKS_PG_SHARD: ${{ matrix.shard }}/2
+        # Keep the existing command allowlist exact. The approved wrapper
+        # enumerates all modules and fail-closed partitions by PRKS_PG_SHARD.
         run: scripts/test-postgres
+
+  postgres-helpers:
+    # Keep the existing required check name; fail if any shard fails, is
+    # cancelled or is skipped. No silent missing required checks.
+    if: ${{ always() && github.event_name != 'schedule' }}
+    needs: postgres-helpers-shards
+    permissions:
+      contents: read
+    name: PostgreSQL helper tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require both PostgreSQL helper shards
+        env:
+          SHARD_RESULT: ${{ needs.postgres-helpers-shards.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SHARD_RESULT" != "success" ]]; then
+            echo "::error::PostgreSQL helper shards did not all pass: $SHARD_RESULT"
+            exit 1
+          fi
+          echo "All PostgreSQL helper shards passed."
 
   backend-parity:
     if: github.event_name != 'schedule'

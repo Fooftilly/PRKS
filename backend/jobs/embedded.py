@@ -66,6 +66,12 @@ LOGGER = logging.getLogger("prks.jobs")
 
 EMBEDDED_WORKER_ENV = "PRKS_EMBEDDED_WORKER"
 
+# Use the same 100 ms upper polling interval as the signal watcher when
+# serving HTTP. BaseServer.serve_forever defaults to 500 ms, which causes an
+# avoidable delay in shutdown() even after the stop signal was observed.
+# This changes responsiveness, never the worker drain/grace contract.
+_SERVER_POLL_INTERVAL_S = 0.1
+
 # How much longer than stop_grace a stop waits for the worker thread: the
 # release after the deadline and the listener's close (at most 2 s).
 _STOP_MARGIN = 10.0
@@ -188,7 +194,7 @@ class WebJobs:
             self.worker.attach_objects(root)
 
     def serve(self, server: Serving, *, check_every: float = 0.1) -> None:
-        """Run ``server.serve_forever()`` with the worker running; stop the worker after it returns.
+        """Serve requests with bounded shutdown polling; drain worker on return.
 
         The listening socket is closed as soon as serving ends, before the
         worker's grace period, so new connections are refused at once rather
@@ -214,7 +220,7 @@ class WebJobs:
             if self.worker is not None:
                 self.worker.start()
             watcher.start()
-            server.serve_forever()
+            server.serve_forever(poll_interval=_SERVER_POLL_INTERVAL_S)
         finally:
             done.set()
             # Requests already being handled keep their threads; a second

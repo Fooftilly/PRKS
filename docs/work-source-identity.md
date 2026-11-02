@@ -79,20 +79,27 @@ normally dominate are absent.
 5. otherwise                     -> source_kind verbatim (usually '')
 ```
 
-Then `components/works.js`:
+Then the Work shell (`detail-lifecycle.ts` / `WorkVideoPane`):
 
 ```
 kind == 'pdf'    -> PDF pane if file_path, else "No PDF file attached."
-kind == 'video'  -> renderVideoViewerPane(work)
+kind == 'video'  -> Vue video pane from the effective source
 otherwise        -> "No file attached."
 ```
 
-And `prksYoutubeEmbedUrl(source_url, provider_id)`:
+And `resolveWorkVideoEmbed` (`frontend-app/src/features/work/video-embed.ts`):
 
 ```
-provider_id present  -> https://www.youtube.com/embed/<provider_id>   [STOPS HERE]
-otherwise            -> parse source_url (youtube.com/watch?v=, youtu.be/, /embed/)
-neither               -> "No embeddable video URL" + a plain link
+provider is youtube, or blank (blank means youtube):
+  provider_id is a well-formed identifier
+      -> https://www.youtube.com/embed/<provider_id>   [STOPS HERE]
+  provider_id present but not an identifier
+      -> no embed, and the URL is not used as a different video
+  otherwise
+      -> parse source_url (youtube.com/watch?v=, youtu.be/, /embed/)
+         when that id is a well-formed identifier
+neither
+      -> "No embeddable video URL", plus Open link only for an http(s) URL
 ```
 
 **`provider_id` short-circuits the URL entirely.** This single line is why

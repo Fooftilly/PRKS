@@ -343,7 +343,11 @@ jobs:
 
       - name: Install Vue toolchain from the lockfile
         if: steps.docs-scope.outputs.docs_only != 'true'
-        run: npm ci --ignore-scripts --prefix frontend-app
+        # setup-node already restores the pinned npm content cache; use it
+        # preferentially and omit the install-time registry audit request.
+        # The existing lockfile verification, lint, typecheck, Vitest and
+        # committed-production-build parity checks still run unchanged.
+        run: npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --prefix frontend-app
 
       - name: OpenAPI TypeScript types match checked-in artifacts
         if: steps.docs-scope.outputs.docs_only != 'true'

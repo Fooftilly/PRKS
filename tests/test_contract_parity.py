@@ -624,11 +624,21 @@ class ContractParityTests(unittest.TestCase):
             f"#/people/role/{role}" for role in people
         )
 
-        sidebar = re.findall(
-            r'href="(#/people/role/[A-Za-z]+)"',
-            read("frontend/index.html"),
+        # Sidebar role shortcuts are generated from PEOPLE_ROLES. A second
+        # literal href list would be able to drift from the registry.
+        catalog = read("frontend-app/src/app-shell/catalog.ts")
+        sidebar = read("frontend-app/src/app-shell/SidebarNav.vue")
+        self.assertIn("from '../domain/people-roles'", catalog)
+        self.assertIn("return PEOPLE_ROLES.map((role)", catalog)
+        self.assertIn("href: '#/people/role/' + role", catalog)
+        self.assertNotRegex(
+            catalog,
+            r"href:\s*'#/people/role/[A-Za-z]+'",
+            "sidebar catalog must not hard-code people-role hrefs",
         )
-        self.assertEqual(tuple(sidebar), expected_hrefs)
+        self.assertIn("const roleLinks = peopleRoleLinks()", sidebar)
+        self.assertIn('v-for="link in roleLinks"', sidebar)
+        self.assertIn(':href="link.href"', sidebar)
 
         palette_active = active_js_source(read("frontend/js/command-palette.js"))
         palette_hrefs = re.findall(

@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksWorkCard from '../../components/PrksWorkCard.vue'
 import { useWorkCardCollection } from '../../components/use-work-card-collection'
 import { workCardCollectionFingerprint, workCardThumbOptions, type PrksWorkCardWork } from '../../components/work-card'
+import FolderTree from '../folder-library/FolderTree.vue'
+import { acceptFolderRows } from '../folder-library/projection'
+import { folderDetailExpandIds, readFolderDetailTreeSnapshot } from '../folder-library/tree'
+import type { FolderRow } from '../folder-library/types'
+import FolderDetailNav from './FolderDetailNav.vue'
+import FolderSubfolders from './FolderSubfolders.vue'
 import { folderDetailIntentsKey } from './intents'
 import type { FolderDetailProjection } from './projection'
 
@@ -16,6 +22,10 @@ const intents = inject(folderDetailIntentsKey)
 const rootEl = ref<HTMLElement | null>(null)
 const mainEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
+const treeHost = ref<HTMLElement | null>(null)
+const hierarchyRows = ref<FolderRow[]>([])
+const hierarchyStatus = ref<'loading' | 'ready' | 'error'>('loading')
+const expandedIds = ref(new Set(intents?.readExpanded?.() ?? []))
 
 const ready = computed(() => props.projection.availability === 'ready' && !!props.projection.folder)
 const unavailable = computed(() => props.projection.availability === 'unavailable')
@@ -34,22 +44,37 @@ const canDelete = computed(() => {
   return current.works.length === 0 && !hasChildren
 })
 
-const summaryHtml = computed(() => {
+const summaryParts = computed(() => {
   const current = folder.value
-  if (!current) return ''
-  return window.prksFolderDetailSummaryHtml?.(current.source) ?? ''
+  if (!current) return []
+  const childN = current.children.length
+  const workN = current.works.length
+  return [
+    `${childN} subfolder${childN === 1 ? '' : 's'}`,
+    `${workN} file${workN === 1 ? '' : 's'}`,
+  ]
 })
 
-const navHtml = computed(() => {
-  const current = folder.value
-  if (!current) return ''
-  return window.prksFolderDetailNavHtml?.(intents?.owner() ?? null, current.source) ?? ''
+const parentRef = computed(() => {
+  const parent = folder.value?.source?.parent
+  if (!parent || typeof parent !== 'object') return null
+  const record = parent as { id?: unknown; title?: unknown }
+  const id = record.id == null ? '' : String(record.id)
+  const titleText = record.title == null ? '' : String(record.title)
+  if (!id || !titleText) return null
+  return { id, title: titleText }
 })
 
-const subfoldersHtml = computed(() => {
+const navKey = computed(() => {
   const current = folder.value
   if (!current) return ''
-  return window.prksFolderDetailSubfoldersHtml?.(current.children) ?? ''
+  const parent = parentRef.value
+  return `${current.id}\u0000${current.title}\u0000${parent?.id || ''}\u0000${parent?.title || ''}`
+})
+
+const tabId = computed(() => {
+  const id = intents?.owner()?.tabId
+  return id == null ? '' : String(id)
 })
 
 const collectionClass = computed(() => {
@@ -75,13 +100,64 @@ useWorkCardCollection(mainEl, {
     }),
 })
 
+function rememberExpanded(): void {
+  intents?.writeExpanded?.([...expandedIds.value])
+}
+
+function mergeExpanded(ids: readonly string[]): void {
+  if (!ids.length) return
+  const next = new Set(expandedIds.value)
+  let changed = false
+  for (const id of ids) {
+    if (!next.has(id)) {
+      next.add(id)
+      changed = true
+    }
+  }
+  if (!changed) return
+  expandedIds.value = next
+  rememberExpanded()
+}
+
+function applyTreeSnapshot(value: unknown): void {
+  if (!treeApplyAlive) return
+  const snapshot = readFolderDetailTreeSnapshot(value)
+  if (!snapshot) return
+  if (snapshot.status === 'error') {
+    hierarchyStatus.value = 'error'
+    return
+  }
+  const rows = acceptFolderRows(snapshot.rows)
+  if (!snapshot.selectionOnly) hierarchyRows.value = rows
+  hierarchyStatus.value = 'ready'
+  const selected = snapshot.selectedId || folder.value?.id || ''
+  const displayed = snapshot.selectionOnly ? hierarchyRows.value : rows
+  mergeExpanded(folderDetailExpandIds(selected, displayed))
+}
+
+type FolderTreeHost = HTMLElement & { __prksApplyFolderDetailTree?: (value: unknown) => void }
+
+let boundTreeHost: FolderTreeHost | null = null
+let treeApplyAlive = true
+
+function clearTreeApply(host: FolderTreeHost | null): void {
+  if (!host) return
+  delete host.__prksApplyFolderDetailTree
+  if (boundTreeHost === host) boundTreeHost = null
+}
+
+function bindTreeApply(): void {
+  const host = treeHost.value as FolderTreeHost | null
+  if (boundTreeHost && boundTreeHost !== host) clearTreeApply(boundTreeHost)
+  if (!host) return
+  host.__prksApplyFolderDetailTree = applyTreeSnapshot
+  boundTreeHost = host
+}
 
 function rebindHierarchyNav(): void {
   const root = rootEl.value
   const current = folder.value
   if (!root || !current || !ready.value) return
-  // v-html replaced the band. Remount listeners only. Tree refresh stays on
-  // the route generation inside commitSurface.
   window.prksMountFolderHierarchyNav?.(intents?.owner() ?? null, current.source, root)
 }
 
@@ -89,6 +165,7 @@ function commitSurface(): void {
   const root = rootEl.value
   const current = folder.value
   if (!root || !current || !ready.value) return
+  bindTreeApply()
   window.prksCommitFolderDetailSurface?.(intents?.owner() ?? null, current.source, root, {
     preserveFolderWorkspace: props.projection.preserveWorkspace,
   })
@@ -106,15 +183,28 @@ function onNewFolder(): void {
   intents?.createChild(source)
 }
 
+function onToggleFolder(folderId: string): void {
+  const next = new Set(expandedIds.value)
+  if (next.has(folderId)) next.delete(folderId)
+  else next.add(folderId)
+  expandedIds.value = next
+  rememberExpanded()
+}
+
 onMounted(() => {
   paintMode()
   commitSurface()
 })
 
+onUnmounted(() => {
+  treeApplyAlive = false
+  clearTreeApply(boundTreeHost)
+})
+
 watch(
   () => ({
     key: `${props.projection.generation}:${folder.value?.id || ''}:${props.projection.preserveWorkspace ? '1' : '0'}:${props.projection.availability}`,
-    nav: navHtml.value,
+    nav: navKey.value,
   }),
   (current, previous) => {
     paintMode()
@@ -159,11 +249,25 @@ watch(
         </button>
       </div>
       <div
+        ref="treeHost"
         class="prks-folder-detail__tree-scroll"
         data-prks-folder-tree-host
         data-prks-folder-detail-tree-host
       >
-        <PrksInlineMessage class="prks-folder-tree__empty">Loading folders…</PrksInlineMessage>
+        <PrksInlineMessage v-if="hierarchyStatus === 'loading'" class="prks-folder-tree__empty">
+          Loading folders…
+        </PrksInlineMessage>
+        <PrksInlineMessage v-else-if="hierarchyStatus === 'error'" class="prks-folder-tree__empty">
+          Could not load folders.
+        </PrksInlineMessage>
+        <FolderTree
+          v-else
+          variant="detail"
+          :folders="hierarchyRows"
+          :expanded-ids="expandedIds"
+          :selected-id="folder?.id || null"
+          @toggle="onToggleFolder"
+        />
       </div>
     </aside>
     <div ref="mainEl" class="prks-folder-detail__main">
@@ -183,11 +287,23 @@ watch(
             Delete Folder
           </PrksButton>
         </div>
-        <span style="display: contents" v-html="summaryHtml"></span>
+        <p v-if="summaryParts.length" class="prks-page-summary">
+          <template v-for="(part, index) in summaryParts" :key="part">
+            <span v-if="index > 0" class="prks-summary-sep" aria-hidden="true"> · </span>
+            {{ part }}
+          </template>
+        </p>
       </div>
-      <span style="display: contents" v-html="navHtml"></span>
+      <FolderDetailNav
+        v-if="folder"
+        :folder-id="folder.id"
+        :title="title"
+        :parent-id="parentRef?.id"
+        :parent-title="parentRef?.title"
+        :tab-id="tabId"
+      />
       <p class="mb-md">{{ description }}</p>
-      <span style="display: contents" v-html="subfoldersHtml"></span>
+      <FolderSubfolders :children="folder?.children || []" />
       <div class="prks-page-header page-header page-header--split prks-folder-detail__files-header">
         <div class="page-header__title-row">
           <h3>Files</h3>

@@ -25,11 +25,9 @@ have been merged.
 import json
 
 from backend.entity_ids import is_distributed
+from backend.tag_color import DEFAULT_COLOR, normalized_tag_color
 
 MAX_NAME_BYTES = 200
-DEFAULT_COLOR = "#6d6cf7"
-
-
 def canonical_name(value):
     return ("" if value is None else str(value)).strip()
 
@@ -47,8 +45,10 @@ def validate_create(op):
         raise ValueError("INVALID_ENVELOPE")
     if len(canonical_name(name).encode("utf-8")) > MAX_NAME_BYTES:
         raise ValueError("INVALID_ENVELOPE")
-    if not isinstance(payload["color"], str) or not payload["color"].strip():
-        raise ValueError("INVALID_ENVELOPE")
+    try:
+        normalized_tag_color(payload["color"])
+    except ValueError as exc:
+        raise ValueError("INVALID_ENVELOPE") from exc
 
 
 def _row(conn, tag_id):
@@ -84,8 +84,9 @@ def insert_tag_on_conn(conn, tag_id, name, color=DEFAULT_COLOR):
     clean = canonical_name(name)
     if not clean:
         raise ValueError("tag name is empty")
+    paint = normalized_tag_color(color, blank_defaults=True)
     conn.execute("INSERT INTO tags (id, name, color) VALUES (?, ?, ?)",
-                 (tag_id, clean, color or DEFAULT_COLOR))
+                 (tag_id, clean, paint))
     conn.execute("INSERT INTO sync_tag_lifecycle (tag_id, state) VALUES (?, 'active')",
                  (tag_id,))
     return tag_id

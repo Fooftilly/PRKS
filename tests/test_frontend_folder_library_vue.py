@@ -71,11 +71,14 @@ class FolderLibraryVueContracts(unittest.TestCase):
         self.assertNotIn("if (!props.offlineCached)", pane)
         self.assertNotIn("initWhen:", pane)
         folders = (FRONTEND / "components" / "folders.js").read_text()
-        self.assertIn("prksToggleFolderNodeInHost", folders)
-        self.assertIn("prksToggleAllFolderNodesInHost", folders)
-        self.assertIn("delegateToggle", folders)
-        tree = (FRONTEND_APP / "FolderTree.vue").read_text()
-        self.assertIn("delegateToggle: true", tree)
+        self.assertNotIn("prksToggleFolderNodeInHost", folders)
+        self.assertNotIn("function prksFolderLibraryTreeInnerHtml", folders)
+        tree = (FRONTEND_APP / "FolderTreeNode.vue").read_text()
+        self.assertIn("prks-folder-tree__toggle", tree)
+        self.assertIn("buildFolderTree", (FRONTEND_APP / "tree.ts").read_text())
+        route = (FRONTEND_APP / "FolderLibraryRoute.vue").read_text()
+        self.assertIn("ctx.ui.folderTree", (ROOT / "docs" / "frontend-migration-boundaries.md").read_text())
+        self.assertIn("writeExpanded", route)
         # Legacy tab helper must await the Vue switchTab bridge (load+paint).
         switch = folders[folders.index("function prksSwitchFolderLibraryTab") :]
         switch = switch[: switch.index("\nfunction prksFolderLibraryCatalogGlanceParts")]

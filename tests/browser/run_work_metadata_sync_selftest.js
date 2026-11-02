@@ -2160,7 +2160,61 @@ async function highFanOut() {
     delete globalThis.prksSync;
 }
 
+/* Exercise the actual exported durable-save state helper from the shipped
+ * metadata module. No runtime source extraction or dynamic evaluation: the
+ * asynchronous save belongs to A's session even while B owns the panel. */
+function backgroundSaveBaselineCommit() {
+    const save = globalThis.prksCommitDurableWorkMetaBaseline;
+    const still = globalThis.prksDurableWorkMetaSaveSessionStill;
+    assert.equal(typeof save, 'function');
+    assert.equal(typeof still, 'function');
+    // Panel owner B is deliberately not part of A's durable save session.
+    const ui = {
+        workDetailsMode: 'metadata',
+        workMetaEditSession: 7,
+        workMetaDraftWorkId: 'W-A',
+        workMetaDraft: { title: 'Saved in A' },
+        workMetaBaseline: { title: 'Old title' },
+    };
+    const ctx = {
+        tabId: 'A', destroyed: false, ui,
+        lastResolvedRoute: { name: 'work', params: { workId: 'W-A' } },
+        getEntity: () => ({ id: 'W-A' }),
+    };
+    assert.equal(still(ctx, 'W-A', 7), true,
+        'the originating Work A remains the durable-save owner');
+    save(ctx, 'W-A', 7,
+        { title: 'Saved in A' }, ['title']);
+    assert.equal(ui.workMetaBaseline.title, 'Saved in A',
+        'A commits its own persisted edit without owning the visible B panel');
+
+    ui.workMetaDraft.title = 'New unsaved edit';
+    save(ctx, 'W-A', 7,
+        { title: 'Saved in A' }, ['title']);
+    assert.equal(ui.workMetaBaseline.title, 'Saved in A',
+        'a later draft is never incorrectly marked saved');
+
+    for (const mutate of [
+        () => { ui.workMetaEditSession = 8; },
+        () => { ui.workMetaDraftWorkId = 'W-B'; },
+        () => { ctx.lastResolvedRoute = { name: 'work', params: { workId: 'W-B' } }; },
+        () => { ctx.destroyed = true; },
+    ]) {
+        ui.workMetaEditSession = 7;
+        ui.workMetaDraftWorkId = 'W-A';
+        ctx.lastResolvedRoute = { name: 'work', params: { workId: 'W-A' } };
+        ctx.destroyed = false;
+        ui.workMetaBaseline.title = 'Old';
+        mutate();
+        save(ctx, 'W-A', 7,
+            { title: 'New unsaved edit' }, ['title']);
+        assert.equal(ui.workMetaBaseline.title, 'Old',
+            'stale sessions/routes/destroyed tabs must never be committed');
+    }
+}
+
 async function main() {
+    backgroundSaveBaselineCommit();
     await coalescing();
     await editorCoalescing();
     await independence();

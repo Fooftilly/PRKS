@@ -62,6 +62,7 @@ function load(rel) {
 
 global.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 load('frontend/js/tab-context.js');
+load('frontend/js/work-notes-state.js');
 load('frontend/js/ui.js');
 const apiSource = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
 (0, eval)(apiSource.slice(

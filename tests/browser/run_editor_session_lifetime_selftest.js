@@ -132,6 +132,9 @@ global.initPdfViewerForWork = function () { pdfInits += 1; };
 
 global.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
 require(path.join(rootDir, 'frontend/js/tab-context.js'));
+// The real classic app loads Work-note state before ui.js. The remount guard
+// must be installed by its production owner, not reimplemented as a test stub.
+require('../../frontend/js/work-notes-state.js');
 (0, eval)(fs.readFileSync(path.join(rootDir, 'frontend/js/ui.js'), 'utf8'));
 
 global.renderWorkMetaTab = function () {

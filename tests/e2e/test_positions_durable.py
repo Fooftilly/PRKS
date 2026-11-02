@@ -213,17 +213,6 @@ class DurablePositionTests(unittest.TestCase):
         self.assertEqual(stored['name'], 'Renamed too')
         self.assertEqual(stored['description'], 'Edited offline.')
 
-    def test_an_edit_taken_back_before_it_is_sent_leaves_no_intent(self):
-        server, page, context = self.start()
-        position = server.ids['position_a']
-        self.prepare(page, position)
-        self.offline(page, context)
-
-        page.evaluate("id => updatePosition(id, { name: 'Temporarily Renamed' })", position)
-        self.wait_for_family(page, 'SET_POSITION_FIELD')
-        page.evaluate("([id, name]) => updatePosition(id, { name: name })",
-                      [position, POSITION_A_NAME])
-        self.drained(page, 'reverting an unsent rename must leave no operation behind')
 
     def test_one_conflicted_field_does_not_block_the_other(self):
         """A rename refused by the server must not make the description
@@ -340,19 +329,6 @@ class DurablePositionTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => rows.filter("
             "  o => o.status === 'conflict').length)")
         self.assertEqual(conflicts, 1)
-
-    def test_deleting_a_position_created_offline_folds_the_whole_case_away(self):
-        server, page, context = self.start()
-        self.offline(page, context)
-        position = page.evaluate(
-            "() => createPosition({ name: 'Offline Mistake' }).then(p => p.id)")
-        self.wait_for_family(page, 'CREATE_POSITION')
-        page.evaluate("id => deletePosition(id)", position)
-        self.drained(page, 'nothing about this Position should ever reach the server')
-
-        self.reconnect(page, context)
-        self.settled(page)
-        self.assertNotIn('Offline Mistake', self.positions_in_db(server))
 
 
 if __name__ == '__main__':

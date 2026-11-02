@@ -219,7 +219,18 @@ class BrowseOfflineTests(unittest.TestCase):
         tab = page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]')
         self.assertFalse(tab.is_disabled(), 'Recently added is cached now')
         page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
-        page.wait_for_timeout(700)
+        # Wait for the actual cached Recently Added pane, not a fixed 700ms
+        # after the tab switch. The visible title and Added label must both
+        # appear inside that pane before checking the page as a whole.
+        page.wait_for_function(
+            """title => {
+                const pane = document.querySelector('[data-pane="recently-added"]');
+                const text = pane && pane.textContent || '';
+                return !!pane && pane.getAttribute('aria-hidden') === 'false'
+                    && text.includes(title) && text.includes('Added');
+            }""",
+            arg=WORK_A_TITLE,
+        )
         text = o._content_text(page)
         self.assertIn(WORK_A_TITLE, text)
         self.assertIn('Added', text)

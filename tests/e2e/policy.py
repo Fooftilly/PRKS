@@ -222,8 +222,6 @@ FEATURES = {
             "tests.e2e.test_positions_durable",
             "tests.e2e.test_positions_route_surface",
             "tests.e2e.test_offline.OfflinePositionTests",
-            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_position_index_search_matches_title_and_description",
-            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_position_relationship_rows_use_shared_research_row_language",
         ),
     },
     "arguments": {
@@ -234,8 +232,6 @@ FEATURES = {
             "tests.e2e.test_offline.OfflineArgumentTests",
             "tests.e2e.test_offline.OfflineArgumentCoherenceTests",
             "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_index_search_respects_kind_filter",
-            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_detail_counts_and_contextual_empty_wording",
-            "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_filtered_true_empty_state_describes_active_kind",
             "tests.e2e.test_app.ResearchIndexAndDetailPolishTests.test_argument_filtered_search_empty_is_kind_aware",
         ),
     },
@@ -387,7 +383,6 @@ AFFECTED_RULES = (
             "tests/e2e/__init__.py",
             "tests/browser/pointer_capture.py",
             "scripts/e2e",
-            ".github/workflows/test-gate.yml",
             ".github/workflows/e2e-gate.yml",
         ),
         "features": ("smoke", "wait-async"),
@@ -553,7 +548,12 @@ AFFECTED_RULES = (
         "name": "work-detail",
         "paths": (
             "frontend/js/components/works.js",
-            "frontend/js/components/works-video.js",
+            "frontend-app/src/features/work/video-embed.ts",
+            "frontend-app/src/features/work/WorkVideoPane.vue",
+            "frontend-app/src/features/work/WorkMainSurface.vue",
+            "frontend-app/src/features/work/WorkDetailRoute.vue",
+            "frontend-app/src/features/work/detail-lifecycle.ts",
+            "frontend-app/src/features/work/main-surface.ts",
         ),
         "features": ("work-detail",),
         "note": "Core Work-detail UI → metadata/people/notes/PDF/sync coverage",
@@ -852,7 +852,7 @@ AFFECTED_RULES = (
     {
         "name": "work-create",
         "paths": (
-            "frontend/js/ribbon-create.js",
+            "frontend-app/src/app-shell/**",
             "frontend/js/components/work-cards.js",
         ),
         "features": ("work-create", "shell"),
@@ -897,6 +897,17 @@ AFFECTED_RULES = (
         "features": (),
         "skip": True,
         "note": "Non-E2E tests → no browser E2E selection",
+    },
+    # This workflow controls only the independent Unit/API/PostgreSQL gate.
+    # It neither builds nor runs the E2E harness and is already validated by
+    # its required Unit/API command-allowlist contract and workflow lint.
+    # Keep e2e-gate.yml and the shared Python installer on the full-E2E path.
+    {
+        "name": "test-gate-workflow-only",
+        "paths": (".github/workflows/test-gate.yml",),
+        "features": (),
+        "skip": True,
+        "note": "Test Gate orchestration only → PostgreSQL/unit checks, no Chromium E2E",
     },
     # The schema files and the snapshot tooling aren't imported by the served
     # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
@@ -1365,14 +1376,33 @@ def aggregate_ci_gate_outcome(
     """
     if plan_result != "success":
         return False, "E2E plan job failed"
-    if (not plan_run) or plan_mode == "skip":
+    # Never turn a missing/invalid plan output into an accepted skip. This job
+    # is a required check even when the matrix was not scheduled.
+    if (
+        type(plan_run) is not bool
+        or type(plan_pointer) is not bool
+        or plan_mode not in ("skip", "affected", "full")
+    ):
+        return False, "E2E plan has missing or invalid decision fields"
+    if plan_mode == "skip":
+        if (
+            plan_run
+            or plan_pointer
+            or e2e_result != "skipped"
+            or pointer_result != "skipped"
+        ):
+            return False, "Skipped E2E plan disagrees with scheduled jobs"
         return True, "E2E gate skipped (mode=skip)"
+    if not plan_run:
+        return False, "Runnable E2E plan unexpectedly disabled the matrix"
+    if plan_mode == "full" and not plan_pointer:
+        return False, "Full E2E plan unexpectedly disabled pointer capture"
     if e2e_result != "success":
         return False, "One or more E2E shards failed (mode=%s)" % plan_mode
     if plan_pointer:
         if pointer_result != "success":
             return False, "E2E pointer_capture failed (result=%s)" % pointer_result
-    elif pointer_result not in ("skipped", "success"):
+    elif pointer_result != "skipped":
         return False, "Unexpected pointer job result when not planned: %s" % pointer_result
     return True, "E2E gate passed (mode=%s pointer=%s)" % (
         plan_mode,

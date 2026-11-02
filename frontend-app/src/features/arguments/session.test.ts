@@ -160,6 +160,22 @@ describe('Arguments route bridge', () => {
     expect(readRouteSurface(main)?.ownsMainShell).toBe(true)
     expect(readRouteSurface(side)?.ownsMainShell).toBe(false)
     expect(readRouteSurface(side)?.canonicalHash).toBe('#/arguments?kind=argument')
+    expect(mainHost.querySelector('[data-prks-argument-rows]')?.id).toBe('prks-arg-main-rows')
+    expect(secondaryHost.querySelector('[data-prks-argument-rows]')?.id).toBe('prks-arg-side-rows')
+    expect(mainHost.querySelector('[data-prks-argument-rows]')?.getAttribute('aria-labelledby')).toBe(
+      'prks-arg-main-kind-all',
+    )
+    expect(secondaryHost.querySelector('[data-prks-argument-rows]')?.getAttribute('aria-labelledby')).toBe(
+      'prks-arg-side-kind-argument',
+    )
+    expect(mainHost.querySelector('[data-arg-filter="all"]')?.getAttribute('aria-controls')).toBe(
+      'prks-arg-main-rows',
+    )
+    expect(secondaryHost.querySelector('[data-arg-filter="argument"]')?.getAttribute('aria-controls')).toBe(
+      'prks-arg-side-rows',
+    )
+    expect(mainHost.querySelector('#prks-arg-side-kind-argument')).toBeNull()
+    expect(secondaryHost.querySelector('#prks-arg-main-kind-all')).toBeNull()
   })
 
   it('filters kind in the projection and searches name and main text locally', async () => {
@@ -214,6 +230,28 @@ describe('Arguments route bridge', () => {
     expect(el.querySelector('#prks-stance-new-empty')).toBeNull()
   })
 
+  it('renders Stance-only empty state and a populated Argument filter with native routes', () => {
+    paintHelpers()
+    const pane = owner('filtered')
+    const el = host()
+    presentArgumentsIndex({ owner: pane, host: el, kind: 'stance', items: [], generation: 1 })
+    expect(el.querySelector('[data-prks-argument-rows] .prks-research-index__empty .meta-row')?.textContent?.trim()).toBe(
+      'No Stances yet.',
+    )
+    expect(el.querySelector('#prks-stance-new-empty')).not.toBeNull()
+    expect(el.querySelector('#prks-argument-new-empty')).toBeNull()
+    expect(el.textContent).not.toContain('No Arguments or Stances yet.')
+    expect(readRouteSurface(pane)?.canonicalHash).toBe('#/arguments?kind=stance')
+
+    presentArgumentsIndex({ owner: pane, host: el, kind: 'argument', items: [rows[1]], generation: 2 })
+    const visible = el.querySelectorAll('[data-prks-argument-rows] .prks-research-row')
+    expect(visible).toHaveLength(1)
+    expect(visible[0]?.textContent).toContain('Unrelated Argument')
+    expect(el.querySelector('#prks-stance-new-empty')).toBeNull()
+    expect(el.querySelector('#prks-argument-new-empty')).toBeNull()
+    expect(readRouteSurface(pane)?.canonicalHash).toBe('#/arguments?kind=argument')
+  })
+
   it('paints detail overlays, unavailable, and not-found without fetch', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -250,6 +288,16 @@ describe('Arguments route bridge', () => {
     expect(el.textContent).toContain('Renamed work')
     expect(el.textContent).toContain('Mention title')
     expect(el.querySelector('.research-entity__section-count')?.textContent).toBe('2')
+    // These counts use the actual ArgumentDetailRoute + shared section header.
+    // Keep the independent section counts, not merely the first one.
+    for (const [heading, count] of [
+      ['prks-arg-targets-h', '2'],
+      ['prks-arg-sources-h', '1'],
+      ['prks-arg-resp-h', '1'],
+      ['prks-arg-mentions-h', '1'],
+    ]) {
+      expect(el.querySelector(`#${heading}`)?.parentElement?.querySelector('.research-entity__section-count')?.textContent).toBe(count)
+    }
     expect(readRouteSurface(pane)?.canonicalHash).toBe('#/arguments/A1')
     expect(fetchMock).not.toHaveBeenCalled()
 
@@ -273,6 +321,25 @@ describe('Arguments route bridge', () => {
     expect(el.textContent).toContain('Argument or Stance not available offline')
     expect(el.textContent).toContain('This item is not available offline.')
     expect(el.textContent).not.toContain('Pending rename')
+  })
+
+  it('renders empty Argument relationships with zero counts and context-aware wording', () => {
+    paintHelpers()
+    const pane = owner('empty-relations')
+    const el = host()
+    presentBaseDetail(el, pane)
+    const sections = [
+      ['prks-arg-targets-h', 'No targets.'],
+      ['prks-arg-sources-h', 'No sources.'],
+      ['prks-arg-resp-h', 'No responses.'],
+      ['prks-arg-mentions-h', 'Not mentioned in research notes.'],
+    ]
+    for (const [heading, emptyText] of sections) {
+      const title = el.querySelector(`#${heading}`)
+      expect(title).not.toBeNull()
+      expect(title?.parentElement?.querySelector('.research-entity__section-count')?.textContent).toBe('0')
+      expect(title?.closest('.research-entity__section')?.querySelector(':scope > p.meta-row')?.textContent?.trim()).toBe(emptyText)
+    }
   })
 
   it('enters edit, cancels without saving, and leaves edit after a retained generation change', async () => {

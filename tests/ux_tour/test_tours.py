@@ -843,7 +843,7 @@ class ResearchGraphTourTest(_UXTour):
             tour.checkpoint(page, "argument-detail")
             page.locator('#sidebar a.nav-link[href="#/arguments"]').click()
             page.wait_for_function("() => location.hash === '#/arguments'")
-            page.locator("#prks-argument-rows .prks-research-row", has_text=TOUR_STANCE_NAME).first.click()
+            page.locator("[data-prks-argument-rows] .prks-research-row", has_text=TOUR_STANCE_NAME).first.click()
             page.wait_for_function("() => location.hash.indexOf('#/arguments/') === 0")
             page.locator("h2", has_text=TOUR_STANCE_NAME).wait_for()
 

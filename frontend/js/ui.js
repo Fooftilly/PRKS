@@ -117,236 +117,51 @@ function prksResetModalBaselines() {
     window.__prksModalBaselineReady = {};
 }
 
+// Not named prksModalHost: a classic-script function declaration is the
+// window binding, and the Vue host assigns that same property to its API.
+function prksReadModalHost() {
+    const host = window.prksModalHost;
+    return host && typeof host === 'object' ? host : null;
+}
+
 function prksIsModalUnsavedConfirmOpen() {
+    const host = prksReadModalHost();
+    if (host && typeof host.isUnsavedConfirmOpen === 'function') return !!host.isUnsavedConfirmOpen();
     const root = document.getElementById('prks-modal-unsaved-confirm');
     return !!(root && !root.classList.contains('hidden'));
 }
 
 function prksHideModalUnsavedConfirm(options) {
-    const restoreFocus = !options || options.restoreFocus !== false;
-    const root = document.getElementById('prks-modal-unsaved-confirm');
-    const opener = window.__prksModalUnsavedConfirmOpener;
-    window.__prksModalUnsavedConfirmOpener = null;
-    if (root) {
-        root.classList.add('hidden');
-        root.setAttribute('aria-hidden', 'true');
-    }
-    window.__prksModalUnsavedConfirmOnDiscard = null;
-    if (
-        restoreFocus &&
-        opener &&
-        opener !== document.body &&
-        typeof opener.focus === 'function' &&
-        document.contains(opener) &&
-        !(root && root.contains(opener))
-    ) {
-        try {
-            opener.focus({ preventScroll: true });
-        } catch (_e) {}
-    }
+    const host = prksReadModalHost();
+    if (host && typeof host.hideUnsavedConfirm === 'function') host.hideUnsavedConfirm(options);
 }
 
 function prksOpenModalUnsavedConfirm(onDiscard) {
-    window.__prksModalUnsavedConfirmOnDiscard = typeof onDiscard === 'function' ? onDiscard : null;
-    const active = document.activeElement;
-    window.__prksModalUnsavedConfirmOpener =
-        active && active !== document.body ? active : null;
-    const root = document.getElementById('prks-modal-unsaved-confirm');
-    if (!root) {
-        const fn = window.__prksModalUnsavedConfirmOnDiscard;
-        prksHideModalUnsavedConfirm();
-        if (fn) fn();
+    const host = prksReadModalHost();
+    if (!host || typeof host.openUnsavedConfirm !== 'function') {
+        // The feature shell can be open before the Vue dialog host mounts.
+        // Discarding here would drop the draft with no confirmation. Leave
+        // the modal open; the next close request asks once the host exists.
         return;
     }
-    root.classList.remove('hidden');
-    root.setAttribute('aria-hidden', 'false');
-    const discard = document.getElementById('prks-modal-unsaved-confirm-discard');
-    if (discard && typeof discard.focus === 'function') {
-        requestAnimationFrame(() => discard.focus());
-    }
+    host.openUnsavedConfirm(typeof onDiscard === 'function' ? onDiscard : null);
 }
-
-function prksDiscardConfirmedClose() {
-    const fn = window.__prksModalUnsavedConfirmOnDiscard;
-    prksHideModalUnsavedConfirm({ restoreFocus: false });
-    if (fn) fn();
-}
-
-let prksModalConfirmResolve = null;
-let prksModalConfirmAlertOnly = false;
-let prksModalConfirmOpener = null;
-let prksModalConfirmDrawerOwnerTabId = '';
 
 function prksIsModalConfirmOpen() {
+    const host = prksReadModalHost();
+    if (host && typeof host.isConfirmOpen === 'function') return !!host.isConfirmOpen();
     const root = document.getElementById('prks-modal-confirm');
     return !!(root && !root.classList.contains('hidden'));
 }
 
-function prksRestoreModalConfirmCancel() {
-    const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
-    if (cancelBtn) {
-        cancelBtn.classList.remove('hidden');
-        cancelBtn.setAttribute('aria-hidden', 'false');
-    }
-    const actions = document.querySelector('.prks-modal-confirm__actions');
-    if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
-    prksModalConfirmAlertOnly = false;
-}
-
-function prksFocusStaysOnFocusedTile(node) {
-    if (!node || typeof node.closest !== 'function') return true;
-    const tile = node.closest('.prks-tile[data-prks-tab-id]');
-    if (!tile) return true;
-    const tileId = tile.getAttribute('data-prks-tab-id');
-    if (!tileId) return true;
-    const snap = typeof window.prksWorkspaceSnapshot === 'function' ? window.prksWorkspaceSnapshot() : null;
-    const focused = snap && snap.focusedTabId;
-    if (!focused) return true;
-    return String(tileId) === String(focused);
-}
-
-function prksRememberModalConfirmOpener(active) {
-    prksModalConfirmOpener = active && active !== document.body ? active : null;
-    prksModalConfirmDrawerOwnerTabId = '';
-    const opener = prksModalConfirmOpener;
-    if (!opener || typeof opener.closest !== 'function') return;
-    const drawer = opener.closest('[data-prks-role="pdf-annotation-drawer"]');
-    const ownerTabId = drawer && drawer.getAttribute('data-prks-owner-tab-id');
-    if (ownerTabId) prksModalConfirmDrawerOwnerTabId = String(ownerTabId);
-}
-
-function prksReplacementAnnotationDelete(opener, ownerTabId) {
-    const pane = opener && opener.isConnected && typeof opener.closest === 'function'
-        ? opener.closest('.work-pdf-pane')
-        : null;
-    if (pane && pane.isConnected) {
-        const inPane = pane.querySelector('.annotation-row__delete');
-        if (inPane) return inPane;
-    }
-    if (!ownerTabId || typeof document.querySelectorAll !== 'function') return null;
-    const drawers = document.querySelectorAll('[data-prks-role="pdf-annotation-drawer"]');
-    for (let i = 0; i < drawers.length; i += 1) {
-        const drawer = drawers[i];
-        if (!drawer || drawer.getAttribute('data-prks-owner-tab-id') !== String(ownerTabId)) continue;
-        const button = drawer.querySelector('.annotation-row__delete');
-        if (button) return button;
-    }
-    return null;
-}
-
-function prksHideModalConfirm() {
-    const root = document.getElementById('prks-modal-confirm');
-    if (root) {
-        root.classList.add('hidden');
-        root.setAttribute('aria-hidden', 'true');
-    }
-    prksRestoreModalConfirmCancel();
-    prksModalConfirmResolve = null;
-    const opener = prksModalConfirmOpener;
-    const ownerTabId = prksModalConfirmDrawerOwnerTabId;
-    prksModalConfirmOpener = null;
-    prksModalConfirmDrawerOwnerTabId = '';
-    let target = null;
-    if (
-        opener &&
-        typeof opener.focus === 'function' &&
-        document.contains(opener) &&
-        prksFocusStaysOnFocusedTile(opener)
-    ) {
-        target = opener;
-    } else if (
-        opener &&
-        opener.classList &&
-        opener.classList.contains('annotation-row__delete')
-    ) {
-        // The list may have been repainted while the dialog was open.
-        // Focus the replacement Delete in that drawer's owning tab.
-        const replacement = prksReplacementAnnotationDelete(opener, ownerTabId);
-        if (
-            replacement &&
-            typeof replacement.focus === 'function' &&
-            prksFocusStaysOnFocusedTile(replacement)
-        ) {
-            target = replacement;
-        }
-    }
-    if (target) target.focus();
-}
-
-function prksFinishModalConfirm(confirmed) {
-    const resolve = prksModalConfirmResolve;
-    prksHideModalConfirm();
-    if (typeof resolve === 'function') resolve(!!confirmed);
-}
-
 /**
- * In-app confirm dialog (replaces window.confirm for destructive flows).
+ * In-app confirm dialog. The Vue modal host paints it; this is the classic call site.
  * @returns {Promise<boolean>}
  */
 function prksConfirmDialog(options = {}) {
-    return new Promise((resolve) => {
-        const root = document.getElementById('prks-modal-confirm');
-        if (!root) {
-            resolve(false);
-            return;
-        }
-        const titleEl = document.getElementById('prks-modal-confirm-title');
-        const descEl = document.getElementById('prks-modal-confirm-desc');
-        const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
-        const okBtn = document.getElementById('prks-modal-confirm-ok');
-        const title = options.title != null ? String(options.title) : 'Confirm';
-        const message = options.message != null ? String(options.message) : '';
-        const messageHtml = options.messageHtml != null ? String(options.messageHtml) : '';
-        const confirmLabel =
-            options.confirmLabel != null ? String(options.confirmLabel) : 'OK';
-        const cancelLabel =
-            options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
-        const danger = options.danger === true;
-        const alertOnly = options.alertOnly === true;
-        prksModalConfirmAlertOnly = alertOnly;
-        const actions = document.querySelector('.prks-modal-confirm__actions');
-
-        if (titleEl) titleEl.textContent = title;
-        if (descEl) {
-            if (messageHtml) {
-                descEl.classList.add('prks-modal-confirm__desc--rich');
-                descEl.innerHTML = messageHtml;
-            } else {
-                descEl.classList.remove('prks-modal-confirm__desc--rich');
-                descEl.textContent = message;
-            }
-        }
-        if (cancelBtn) {
-            if (alertOnly) {
-                cancelBtn.classList.add('hidden');
-                cancelBtn.setAttribute('aria-hidden', 'true');
-            } else {
-                cancelBtn.classList.remove('hidden');
-                cancelBtn.setAttribute('aria-hidden', 'false');
-                cancelBtn.textContent = cancelLabel;
-            }
-        }
-        if (actions) {
-            actions.classList.toggle('prks-modal-confirm__actions--alertOnly', alertOnly);
-        }
-        if (okBtn) {
-            okBtn.textContent = confirmLabel;
-            okBtn.classList.remove('prks-btn--primary', 'prks-btn--danger');
-            okBtn.classList.add(danger ? 'prks-btn--danger' : 'prks-btn--primary');
-        }
-
-        prksModalConfirmResolve = resolve;
-        prksRememberModalConfirmOpener(document.activeElement);
-        root.classList.remove('hidden');
-        root.setAttribute('aria-hidden', 'false');
-        const focusEl =
-            alertOnly || !(danger && cancelBtn && !cancelBtn.classList.contains('hidden'))
-                ? okBtn || cancelBtn
-                : cancelBtn;
-        if (focusEl && typeof focusEl.focus === 'function') {
-            requestAnimationFrame(() => focusEl.focus());
-        }
-    });
+    const host = prksReadModalHost();
+    if (!host || typeof host.confirm !== 'function') return Promise.resolve(false);
+    return host.confirm(options || {});
 }
 
 /**
@@ -578,82 +393,6 @@ function prksConfirmUnsavedRouteLeave(options) {
         cancelLabel: 'Keep editing',
         danger: true,
     });
-}
-
-function prksBindModalConfirmOnce() {
-    const root = document.getElementById('prks-modal-confirm');
-    if (!root || root.dataset.bound === '1') return;
-    root.dataset.bound = '1';
-    const cancel = document.getElementById('prks-modal-confirm-cancel');
-    const ok = document.getElementById('prks-modal-confirm-ok');
-    const scrim = document.getElementById('prks-modal-confirm-scrim');
-    if (cancel) {
-        cancel.addEventListener('click', () =>
-            prksFinishModalConfirm(prksModalConfirmAlertOnly)
-        );
-    }
-    if (ok) {
-        ok.addEventListener('click', () => prksFinishModalConfirm(true));
-    }
-    if (scrim) {
-        scrim.addEventListener('click', () =>
-            prksFinishModalConfirm(prksModalConfirmAlertOnly)
-        );
-    }
-}
-
-function prksBindModalUnsavedConfirmOnce() {
-    const root = document.getElementById('prks-modal-unsaved-confirm');
-    if (!root || root.dataset.bound === '1') return;
-    root.dataset.bound = '1';
-    const cancel = document.getElementById('prks-modal-unsaved-confirm-cancel');
-    const discard = document.getElementById('prks-modal-unsaved-confirm-discard');
-    const scrim = document.getElementById('prks-modal-unsaved-confirm-scrim');
-    if (cancel) {
-        cancel.addEventListener('click', () => prksHideModalUnsavedConfirm());
-    }
-    if (discard) {
-        discard.addEventListener('click', () => prksDiscardConfirmedClose());
-    }
-    if (scrim) {
-        scrim.addEventListener('click', () => prksHideModalUnsavedConfirm());
-    }
-}
-
-function prksStopModalEscape(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-}
-
-/**
- * One Escape stack for every `.modal`, the unsaved prompt, and the shared
- * confirm/alert. The topmost layer wins. A prompt never dismisses the modal
- * underneath it. An open doc-type menu inside the modal is its own layer.
- * Drag-cancel keeps the pointer gesture's own Escape.
- */
-function prksOnModalLifecycleKeydown(e) {
-    if (!e || e.key !== 'Escape' || e.isComposing) return;
-    if (document.body.classList.contains('prks-workspace-dragging')) return;
-    if (prksIsModalConfirmOpen()) {
-        prksStopModalEscape(e);
-        prksFinishModalConfirm(prksModalConfirmAlertOnly);
-        return;
-    }
-    if (prksIsModalUnsavedConfirmOpen()) {
-        prksStopModalEscape(e);
-        prksHideModalUnsavedConfirm();
-        return;
-    }
-    if (prksDismissModalInnerEscapeLayer()) {
-        prksStopModalEscape(e);
-        return;
-    }
-    const activeModal = document.querySelector('.modal:not(.hidden)');
-    if (!activeModal) return;
-    prksStopModalEscape(e);
-    if (prksCloseStandalonePageModal(activeModal)) return;
-    requestModalClose('escape');
 }
 
 /** Tag and publisher dialogs own a private backdrop and close function. */
@@ -1051,12 +790,8 @@ function prksAnyModalOpen() {
 }
 
 function initModalCloseUi() {
-    prksBindModalUnsavedConfirmOnce();
-    prksBindModalConfirmOnce();
-    if (!window.__prksModalLifecycleKeyBound) {
-        window.__prksModalLifecycleKeyBound = true;
-        document.addEventListener('keydown', prksOnModalLifecycleKeydown, true);
-    }
+    // Escape, confirm, and unsaved presentation belong to the Vue modal host.
+    // This listener is only the feature-modal backdrop, which still lives in the shell.
     const backdrop = document.getElementById('modal-backdrop');
     if (!backdrop || backdrop.dataset.boundClose !== '1') {
         if (!backdrop) return;
@@ -1076,30 +811,16 @@ function prksSetOverlayBackdropVisible(visible) {
 }
 
 function prksSyncMobileToggleButtons() {
-    const navBtn = document.getElementById('prks-mobile-nav-btn');
-    const detBtn = document.getElementById('prks-mobile-details-btn');
-    if (!navBtn && !detBtn) return;
     const sbOpen = document.body.classList.contains('prks-sidebar-open');
     const rpOpen = document.body.classList.contains('prks-right-panel-open');
-    if (navBtn) navBtn.setAttribute('aria-expanded', sbOpen ? 'true' : 'false');
-    if (detBtn) detBtn.setAttribute('aria-expanded', rpOpen ? 'true' : 'false');
+    if (typeof window.prksNoteShellChrome === 'function') {
+        window.prksNoteShellChrome({ sidebarOpen: sbOpen, detailsOpen: rpOpen });
+    }
 }
 
 function prksIsTiledWorkspace() {
     const app = document.getElementById('app-container');
     return !!(app && app.classList.contains('app-container--tiled'));
-}
-
-function prksPrepareSidebarRailTooltips() {
-    const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
-    const controls = sidebar.querySelectorAll(
-        '.nav-menu > li > .nav-link, .nav-menu > li > .nav-disclosure__row > .nav-link, .nav-menu > li > .nav-disclosure__row > .nav-disclosure__toggle--full'
-    );
-    for (let i = 0; i < controls.length; i++) {
-        const label = controls[i].querySelector('.nav-link__label');
-        if (label && label.textContent) controls[i].title = label.textContent.trim();
-    }
 }
 
 function prksSyncDenseWorkspaceShell(tiled) {
@@ -1166,37 +887,19 @@ function prksToggleRightPanelOverlay(forceOpen) {
 }
 
 function initMobileShell() {
-    const navBtn = document.getElementById('prks-mobile-nav-btn');
-    const detBtn = document.getElementById('prks-mobile-details-btn');
+    // Nav, details, expand, and collapse controls are Vue app-shell buttons.
+    // This runs after the module mounts, so binding them here would add a
+    // second click listener. The right-panel close control stays classic.
     const closeBtn = document.getElementById('prks-right-panel-close');
     const overlayBackdrop = document.getElementById('prks-overlay-backdrop');
-    const expandBtn = document.getElementById('prks-sidebar-expand-btn');
-    const collapseBtn = document.getElementById('prks-sidebar-collapse-btn');
 
-    prksPrepareSidebarRailTooltips();
-
-    if (navBtn && navBtn.dataset.bound !== '1') {
-        navBtn.dataset.bound = '1';
-        navBtn.addEventListener('click', () => prksToggleSidebarDrawer());
-    }
-    if (detBtn && detBtn.dataset.bound !== '1') {
-        detBtn.dataset.bound = '1';
-        detBtn.addEventListener('click', () => prksToggleRightPanelOverlay());
-    }
     if (closeBtn && closeBtn.dataset.bound !== '1') {
         closeBtn.dataset.bound = '1';
         closeBtn.addEventListener('click', () => {
             prksToggleRightPanelOverlay(false);
-            if (detBtn && typeof detBtn.focus === 'function') detBtn.focus();
+            const detailsBtn = document.getElementById('prks-mobile-details-btn');
+            if (detailsBtn && typeof detailsBtn.focus === 'function') detailsBtn.focus();
         });
-    }
-    if (expandBtn && expandBtn.dataset.bound !== '1') {
-        expandBtn.dataset.bound = '1';
-        expandBtn.addEventListener('click', () => prksToggleSidebarDrawer(true));
-    }
-    if (collapseBtn && collapseBtn.dataset.bound !== '1') {
-        collapseBtn.dataset.bound = '1';
-        collapseBtn.addEventListener('click', () => prksToggleSidebarDrawer(false));
     }
     if (overlayBackdrop && overlayBackdrop.dataset.bound !== '1') {
         overlayBackdrop.dataset.bound = '1';
@@ -1354,6 +1057,8 @@ function closeModals() {
     prksResetModalBaselines();
 }
 
+window.prksDismissModalInnerEscapeLayer = prksDismissModalInnerEscapeLayer;
+window.prksCloseStandalonePageModal = prksCloseStandalonePageModal;
 window.requestModalClose = requestModalClose;
 window.initModalCloseUi = initModalCloseUi;
 window.prksConfirmDialog = prksConfirmDialog;
@@ -1581,75 +1286,11 @@ function prksFindPersonInCache(personId) {
     return null;
 }
 
-/** Text prompt using confirm shell. Resolves trimmed string on OK, null on cancel. */
+/** Text prompt on the Vue confirm shell. Resolves trimmed string on OK, null on cancel. */
 function prksPromptTextDialog(options = {}) {
-    return new Promise((resolve) => {
-        const root = document.getElementById('prks-modal-confirm');
-        const titleEl = document.getElementById('prks-modal-confirm-title');
-        const descEl = document.getElementById('prks-modal-confirm-desc');
-        const cancelBtn = document.getElementById('prks-modal-confirm-cancel');
-        const okBtn = document.getElementById('prks-modal-confirm-ok');
-        const actions = document.querySelector('.prks-modal-confirm__actions');
-        if (!root || !descEl || !okBtn || !cancelBtn) {
-            resolve(null);
-            return;
-        }
-        const title = options.title != null ? String(options.title) : 'Edit';
-        const message = options.message != null ? String(options.message) : '';
-        const defaultValue = options.defaultValue != null ? String(options.defaultValue) : '';
-        const okLabel = options.okLabel != null ? String(options.okLabel) : 'Save';
-        const cancelLabel = options.cancelLabel != null ? String(options.cancelLabel) : 'Cancel';
-        const multiline = options.multiline === true;
-
-        if (titleEl) titleEl.textContent = title;
-        descEl.textContent = '';
-        descEl.classList.toggle('prks-modal-confirm__desc--prompt', true);
-        if (message) {
-            const p = document.createElement('span');
-            p.className = 'prks-modal-prompt__hint';
-            p.textContent = message;
-            descEl.appendChild(p);
-        }
-        const input = document.createElement(multiline ? 'textarea' : 'input');
-        if (!multiline) input.type = 'text';
-        else input.rows = options.rows != null ? Number(options.rows) || 8 : 8;
-        input.className =
-            'prks-modal-prompt__input' + (multiline ? ' prks-modal-prompt__input--multiline' : '');
-        input.value = defaultValue;
-        input.setAttribute('aria-label', title);
-        input.setAttribute('autocomplete', 'off');
-        descEl.appendChild(input);
-
-        cancelBtn.classList.remove('hidden');
-        cancelBtn.setAttribute('aria-hidden', 'false');
-        cancelBtn.textContent = cancelLabel;
-        if (actions) actions.classList.remove('prks-modal-confirm__actions--alertOnly');
-        okBtn.textContent = okLabel;
-        okBtn.classList.remove('prks-btn--danger');
-        okBtn.classList.add('prks-btn--primary');
-        prksModalConfirmAlertOnly = false;
-
-        if (!multiline) {
-            input.addEventListener('keydown', (e) => {
-                if (e.key !== 'Enter' || e.shiftKey) return;
-                e.preventDefault();
-                prksFinishModalConfirm(true);
-            });
-        }
-
-        prksModalConfirmResolve = (confirmed) => {
-            const val = confirmed ? String(input.value || '').trim() : null;
-            descEl.classList.remove('prks-modal-confirm__desc--prompt');
-            descEl.textContent = '';
-            resolve(val);
-        };
-        root.classList.remove('hidden');
-        root.setAttribute('aria-hidden', 'false');
-        requestAnimationFrame(() => {
-            input.focus();
-            if (typeof input.select === 'function' && !multiline) input.select();
-        });
-    });
+    const host = prksReadModalHost();
+    if (!host || typeof host.prompt !== 'function') return Promise.resolve(null);
+    return host.prompt(options || {});
 }
 
 async function prksEditRoleCreditOnWork(btn) {
@@ -2884,33 +2525,6 @@ function prksReconcileSavedPrivateNote(family, ctx, settledSession, id, content)
  * overlay has gone. Keep this specific same-tab body visible as clean text
  * until a read agrees; never re-enqueue it or apply this rule to Folder notes.
  */
-function prksWorkPrivateNoteNeedsCommittedHandoff(family, existing, ctx, id, initialText, carried) {
-    if (carried || family.entityType !== 'work' || !existing ||
-        existing.retired || existing.dirty || existing.promise ||
-        existing.state !== 'committed' ||
-        String(existing.entityId) !== String(id) ||
-        String(existing.ownerTabId) !== String(ctx.tabId) ||
-        !Number.isSafeInteger(existing.settledSaveToken) ||
-        existing.settledSaveToken <= 0 ||
-        existing.settledSaveToken !== existing.latestSaveToken) return false;
-    const base = existing.settledBase;
-    const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
-    if (!base || typeof base.value !== 'string' ||
-        !Number.isSafeInteger(base.revision) || base.revision < 0 ||
-        !canonical || String(canonical.id) !== String(id) ||
-        !canonical.sources || canonical.sources.private !== 'server' ||
-        canonical.private_notes !== base.value ||
-        canonical.private_notes === String(existing.draftText)) return false;
-    /* Read the body before overlay, not initialText: initialText may already
-     * be this pane's queued text. A different body cannot be proved stale;
-     * it could be another device's newer save. */
-    const painted = String(initialText == null ? '' : initialText);
-    if (painted !== base.value && painted !== String(existing.draftText)) return false;
-    const observed = ctx.getResource && ctx.getResource('workNotesObserved');
-    const rev = observed && observed.private ? observed.private.revision : null;
-    return !Number.isSafeInteger(rev) || rev <= base.revision + 1;
-}
-
 function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     if (!family || !ctx || !ctx.ui || id == null || String(id) === '') return null;
     const existing = ctx.ui[family.sessionSlot];
@@ -2925,7 +2539,7 @@ function prksEnsurePrivateNoteSession(family, ctx, id, initialText) {
     }
     const remembered = prksTakeRememberedPrivateNote(family, ctx, id);
     const carried = remembered != null;
-    const priorCommitted = prksWorkPrivateNoteNeedsCommittedHandoff(
+    const priorCommitted = window.prksWorkPrivateNoteNeedsCommittedHandoff(
         family, existing, ctx, id, initialText, carried
     );
     const session = {
@@ -4791,7 +4405,7 @@ function renderPlaylistSummarySidebarHtml(pl, editing) {
     const desc = escapeHtml(pl.description || '').trim();
     const originalUrl = String(pl.original_url || '').trim();
     const originalUrlHtml = originalUrl
-        ? `<p class="meta-row meta-row--compact"><strong>Original playlist URL:</strong> <a href="${escapeHtml(originalUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrl)}</a></p>`
+        ? prksExternalUrlRowHtml('Original playlist URL', originalUrl, true)
         : '<p class="meta-row meta-row--compact meta-row--muted-italic">No original playlist URL.</p>';
     const count = Array.isArray(pl.items) ? pl.items.length : 0;
     const editLabel = editing ? 'Done' : 'Edit';
@@ -4893,15 +4507,13 @@ function prksWorkMetaSessionStill(ctx, workId, session) {
     return true;
 }
 
+/* The shared state helper is intentionally panel-independent: the original
+ * Work's editor baseline must retire after durable save even if B is focused.
+ * The visible panel remains protected by prksWorkMetaSessionStill. */
 function prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, fields) {
-    if (!prksWorkMetaSessionStill(ctx, workId, session)) return;
-    const draft = ctx.ui && ctx.ui.workMetaDraft;
-    const baseline = ctx.ui && ctx.ui.workMetaBaseline;
-    if (!draft || !baseline || !snapshot) return;
-    (fields || []).forEach((field) => {
-        const saved = snapshot[field] == null ? '' : String(snapshot[field]);
-        if (String(draft[field] == null ? '' : draft[field]) === saved) baseline[field] = saved;
-    });
+    if (typeof prksCommitDurableWorkMetaBaseline === 'function') {
+        prksCommitDurableWorkMetaBaseline(ctx, workId, session, snapshot, fields);
+    }
 }
 
 function prksWorkMetaRetainWorkId(ctx) {
@@ -5420,7 +5032,7 @@ function prksWorkPanelViewShellHtml(work, parts) {
         ? `<p class="meta-row"><strong>Published:</strong> ${escapeHtml(typeof prksFormatPublishedForDisplay === 'function' ? prksFormatPublishedForDisplay(work.published_date) : work.published_date)}</p>`
         : '';
     const originalUrl = parts && parts.originalUrlPdf
-        ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(parts.originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(parts.originalUrlPdf)}</a></p>`
+        ? prksExternalUrlRowHtml('Original URL', parts.originalUrlPdf)
         : '';
     const abstractRow = work.abstract
         ? `<p class="meta-row"><strong>Abstract:</strong> ${escapeHtml(work.abstract)}</p>`
@@ -5587,7 +5199,7 @@ function renderWorkMetaTab(work, mode = 'view') {
             <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
             ${
                 originalUrlPdf
-                    ? `<p class="meta-row"><strong>Original URL:</strong> <a href="${escapeHtml(originalUrlPdf)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originalUrlPdf)}</a></p>`
+                    ? prksExternalUrlRowHtml('Original URL', originalUrlPdf)
                     : ''
             }
             ${renderRow('Abstract', work.abstract)}
@@ -5730,7 +5342,7 @@ function renderFolderTagsChipsHtml(folder) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};" ` +
+                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
                 `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
                 `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
@@ -5751,6 +5363,36 @@ function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* Stored colors are CSS values, not HTML: escaping quotes does not stop
+ * semicolons or url(). Restrict the style attribute to CSS hex colors. */
+function prksSafeTagColorCss(value) {
+    const color = String(value == null ? '' : value).trim();
+    return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color) ? color : '#6d6cf7';
+}
+
+/* Render imported/synced URLs as links only when the destination is absolute
+ * HTTP(S). Invalid/unsafe schemes remain visible as escaped plain text. */
+function prksSafeHttpUrl(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return '';
+    try {
+        const parsed = new URL(raw);
+        return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : '';
+    } catch (_e) {
+        return '';
+    }
+}
+
+function prksExternalUrlRowHtml(label, value, compact = false) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return '';
+    const href = prksSafeHttpUrl(raw);
+    const html = href
+        ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(raw)}</a>`
+        : escapeHtml(raw);
+    return `<p class="meta-row${compact ? ' meta-row--compact' : ''}"><strong>${escapeHtml(label)}:</strong> ${html}</p>`;
 }
 
 function prksEscapeAttr(s) {
@@ -5886,7 +5528,7 @@ function renderWorkTagsChips(work, options = {}) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${escapeHtml(t.color || '#6d6cf7')};">` +
+                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};">` +
                 `<a href="#/search?tag=${encodeURIComponent(t.name)}" class="work-tag-chip__link">${escapeHtml(t.name)}</a>` +
                 (editable ? `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-work-id="${escapeHtml(work.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` : '') +
                 `</span>`
@@ -6870,7 +6512,7 @@ function prksIsWorkModalFolderCommitted() {
 
 // Shared YouTube URL/host contract used by creation validation. Kept in sync
 // with backend _is_youtube_host()/_youtube_video_id() and
-// components/works-video.js's embed-URL parsing.
+// frontend-app/src/features/work/video-embed.ts embed-URL parsing.
 const PRKS_YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 
 function prksIsRecognizedYoutubeHost(hostname) {
@@ -6903,112 +6545,21 @@ function prksIsValidYoutubeUrl(rawUrl) {
 }
 
 function prksIsComboboxPanelOpen(results) {
+    // Same predicate as prksComboboxPanelIsOpen. The fallback covers harnesses
+    // that evaluate this file without combobox-keys.js.
+    if (typeof prksComboboxPanelIsOpen === 'function') return prksComboboxPanelIsOpen(results);
     if (!results || results.classList.contains('hidden')) return false;
     return prksIsInlineComboboxPanel(results) ? results.classList.contains('is-open') : true;
 }
 
 /**
- * Keyboard model for the New File comboboxes: ArrowUp/ArrowDown move the
- * highlighted result, Enter picks it (or the first real match for a typed
- * query), Escape is the modal lifecycle's inner layer. Picking reuses the
- * row's own mousedown handler, so keyboard and pointer share one commit path.
+ * New File comboboxes use the shared keyboard model in combobox-keys.js.
+ * Escape for an open list stays the modal lifecycle's inner layer
+ * (prksDismissModalInnerEscapeLayer), which runs before the input handler.
  */
 function prksBindWorkModalComboboxKeys(inputId, resultsId, options) {
-    const input = document.getElementById(inputId);
-    const results = document.getElementById(resultsId);
-    if (!input || !results || input.dataset.prksKeysBound === '1') return;
-    input.dataset.prksKeysBound = '1';
-    const enterCreates = !!(options && options.enterCreates);
-    input.setAttribute('role', 'combobox');
-    input.setAttribute('aria-autocomplete', 'list');
-    input.setAttribute('aria-controls', resultsId);
-    input.setAttribute('aria-expanded', 'false');
-    results.setAttribute('role', 'listbox');
-    let active = -1;
-    // Set when ArrowDown reopens a closed list: highlight once rows exist
-    // (some lists render asynchronously), so one press still lands on a match.
-    let highlightOnRender = false;
-    // Typing invalidates the open rows until the list re-renders (the tag and
-    // playlist lists render after a fetch): Enter must not pick a stale row.
-    let stale = false;
-    const items = () => Array.from(results.querySelectorAll('.result-item:not(.no-results)'));
-    const firstRealIndex = (list) => {
-        const i = list.findIndex((el) => !el.classList.contains('result-item--create'));
-        return i >= 0 ? i : 0;
-    };
-    const paint = () => {
-        items().forEach((el, i) => {
-            if (!el.id) el.id = `${resultsId}-opt-${i}`;
-            el.setAttribute('role', 'option');
-            const on = i === active;
-            el.classList.toggle('result-item--active', on);
-            el.setAttribute('aria-selected', on ? 'true' : 'false');
-            if (on) {
-                input.setAttribute('aria-activedescendant', el.id);
-                if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
-            }
-        });
-        if (active < 0) input.removeAttribute('aria-activedescendant');
-    };
-    new MutationObserver(() => {
-        input.setAttribute('aria-expanded', prksIsComboboxPanelOpen(results) ? 'true' : 'false');
-    }).observe(results, { attributes: true, attributeFilter: ['class'] });
-    new MutationObserver(() => {
-        stale = false;
-        const list = items();
-        active = highlightOnRender && list.length ? firstRealIndex(list) : -1;
-        if (list.length) highlightOnRender = false;
-        paint();
-    }).observe(results, { childList: true });
-    // Capture phase: runs before the list's own input handler, whose render
-    // (synchronous or not) is what marks the rows fresh again.
-    input.addEventListener(
-        'input',
-        () => {
-            highlightOnRender = false;
-            stale = true;
-        },
-        true
-    );
-    input.addEventListener('keydown', (e) => {
-        if (e.isComposing) return;
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (!prksIsComboboxPanelOpen(results)) {
-                highlightOnRender = e.key === 'ArrowDown';
-                if (typeof input.onfocus === 'function') input.onfocus();
-                return;
-            }
-            const list = items();
-            if (!list.length) return;
-            if (e.key === 'ArrowDown' && active < 0) {
-                // A "Quick-create …" row is listed first; land on a real match.
-                active = firstRealIndex(list);
-            } else if (e.key === 'ArrowDown') active = (active + 1) % list.length;
-            else active = active <= 0 ? list.length - 1 : active - 1;
-            paint();
-            return;
-        }
-        if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-        if (!prksIsComboboxPanelOpen(results)) return;
-        if (stale) {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-        }
-        const list = items();
-        let pick = active >= 0 ? list[active] : null;
-        if (!pick && String(input.value || '').trim()) {
-            pick =
-                list.find((el) => !el.classList.contains('result-item--create')) ||
-                (enterCreates ? list.find((el) => el.classList.contains('result-item--create')) : null) ||
-                null;
-        }
-        if (!pick) return;
-        e.preventDefault();
-        e.stopPropagation();
-        pick.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    });
+    if (typeof prksBindComboboxKeys !== 'function') return;
+    prksBindComboboxKeys(document.getElementById(inputId), document.getElementById(resultsId), options);
 }
 
 /** Collapsed disclosures say how much they hold, so nothing entered is silently out of sight. */

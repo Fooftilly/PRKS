@@ -49,6 +49,7 @@ from tests.e2e.harness import (
     stop_all_servers,
 )
 from tests.e2e.install_browser import ensure_chromium_installed
+from tests.e2e.ci_gate_summary import format_e2e_gate_summary
 from tests.e2e.policy import (
     FAILURE_DIAGNOSTICS_PATH,
     FULL_GATE_EXTERNAL_SHARDS,
@@ -1692,6 +1693,36 @@ def _profile_infrastructure_total(phases: dict) -> float:
     nested = set()
     if "server_start" in phases:
         nested.update(("server_spawn", "server_http_ready"))
+        # The child stages occur before the first ready HTTP response. They
+        # explain startup cost; they are not another additive test duration.
+        nested.update(name for name in phases if name.startswith("startup_"))
+    # A partial profile may contain the reconciler's inclusive stage but no
+    # server_start (for example, after an interrupted startup). The new
+    # startup_text_* details are nested in that stage even without the outer
+    # server timing. Keep their values visible in the report, not additive in
+    # the ranking. When both parents are absent, retain the observed fragments.
+    if "startup_text_reconcile" in phases or "startup_text_reconcile_failed" in phases:
+        nested.update(
+            name for name in phases
+            if name.startswith("startup_text_")
+            and name not in ("startup_text_reconcile", "startup_text_reconcile_failed")
+        )
+    # The sync stage can also survive a truncated profile without the outer
+    # reconciliation or server_start markers. Its extractor/work timings are
+    # subdivisions, not additional runtime, even when a stage failed.
+    if "startup_text_sync" in phases or "startup_text_sync_failed" in phases:
+        nested.update((
+            "startup_text_extractor_probe", "startup_text_extractor_probe_failed",
+            "startup_text_work_sync", "startup_text_work_sync_failed",
+        ))
+    if "server_stop" in phases:
+        # Process exit, database drop and temp cleanup are subdivisions of
+        # AppServer.stop(), never extra wall time.
+        nested.update((
+            "postgres_drop", "postgres_drop_failed",
+            "server_stop_process", "server_stop_process_failed",
+            "server_stop_temp_cleanup", "server_stop_temp_cleanup_failed",
+        ))
     if "app_ready" in phases:
         nested.update((
             "app_navigation", "app_sidebar_wait", "app_folder_wait", "app_route_wait"
@@ -2192,21 +2223,21 @@ def _main(argv=None) -> int:
 
     if args.ci_aggregate:
         # Single source of truth for e2e-gate.yml e2e-result (no Chromium).
-        def _env_true(name: str) -> bool:
-            return (os.environ.get(name) or "").strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
+        # The plan job emits canonical "true"/"false" outputs. Do not
+        # interpret missing or malformed outputs as false: that previously
+        # let the required check approve a skip when the matrix was missing.
+        def _env_bool(name: str) -> bool | None:
+            return {"true": True, "false": False}.get(os.environ.get(name))
 
+        plan_run = _env_bool("PLAN_RUN")
+        plan_pointer = _env_bool("PLAN_POINTER")
         ok, msg = aggregate_ci_gate_outcome(
-            plan_run=_env_true("PLAN_RUN"),
-            plan_mode=(os.environ.get("PLAN_MODE") or "").strip() or "skip",
-            plan_pointer=_env_true("PLAN_POINTER"),
-            plan_result=(os.environ.get("PLAN_RESULT") or "").strip(),
-            e2e_result=(os.environ.get("E2E_RESULT") or "").strip(),
-            pointer_result=(os.environ.get("POINTER_RESULT") or "").strip(),
+            plan_run=plan_run,
+            plan_mode=os.environ.get("PLAN_MODE") or "",
+            plan_pointer=plan_pointer,
+            plan_result=os.environ.get("PLAN_RESULT") or "",
+            e2e_result=os.environ.get("E2E_RESULT") or "",
+            pointer_result=os.environ.get("POINTER_RESULT") or "",
         )
         # Optional diagnostics for the Actions log (reason/features are data only).
         plan_reason = (os.environ.get("PLAN_REASON") or "").strip()
@@ -2216,7 +2247,7 @@ def _main(argv=None) -> int:
             "e2e-plan: result=%s run=%s mode=%s"
             % (
                 (os.environ.get("PLAN_RESULT") or "").strip(),
-                "true" if _env_true("PLAN_RUN") else "false",
+                "unknown" if plan_run is None else ("true" if plan_run else "false"),
                 (os.environ.get("PLAN_MODE") or "").strip(),
             )
         )
@@ -2225,7 +2256,7 @@ def _main(argv=None) -> int:
         print("test_count: %s" % (plan_count or "unknown"))
         print(
             "pointer_capture planned: %s (parallel with matrix)"
-            % ("true" if _env_true("PLAN_POINTER") else "false")
+            % ("unknown" if plan_pointer is None else ("true" if plan_pointer else "false"))
         )
         if plan_reason:
             print("reason: %s" % plan_reason)
@@ -2234,6 +2265,13 @@ def _main(argv=None) -> int:
             "pointer_capture: %s"
             % ((os.environ.get("POINTER_RESULT") or "").strip())
         )
+        # The required job name remains stable for branch protection, but it
+        # can select full, affected or skipped browser coverage. Surface that
+        # distinction on the job summary rather than hiding it in raw logs.
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as summary:
+                summary.write(format_e2e_gate_summary(os.environ, passed=ok))
         if ok:
             print(msg)
             return 0

@@ -3,6 +3,211 @@
 This document tracks per-test E2E cost separately from suite-level sharding.
 
 
+## PostgreSQL identity provisioning attribution (#740)
+
+The current E2E browser harness uses a **fresh harness-owned PostgreSQL
+database and identity/Library bootstrap for each AppServer**, in addition to
+its separate seeded fixture tree. The normal `--profile` diagnostic used to
+measure seed cloning, server spawn/HTTP readiness, browser context creation,
+application readiness, and shutdown, but could not isolate the PostgreSQL
+provisioning step; this matters when comparing recent runner-minutes to the
+pre-PostgreSQL historical baseline.
+
+**Opt-in only:** `python tests/e2e/run.py --profile --jobs 1
+tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation`
+(or the manual **PRKS Full E2E Gate** workflow with `profile: true`) now
+includes two additional per-test phases:
+
+- `postgres_provision`: total time spent assigning the fresh database and
+  bootstrapping the owner/Library before seeded fixtures are copied or the
+  application process is launched. A failed provision is reported separately
+  as `postgres_provision_failed` without masking the original error.
+- `postgres_drop`: the database drop within AppServer teardown; it is a
+  **subset of** `server_stop`, not another additive runtime cost.
+  Failed drops are separately marked and retain the existing retry behavior.
+
+The printed per-phase totals are intentionally inclusive diagnostics, not a
+stack of disjoint wall-clock partitions. Slowest-profiled-test ranking excludes
+the nested `postgres_drop` when `server_stop` is recorded. No extra database,
+worker, browser session, network call, or artifact is created for measurement.
+Normal nonprofiled runs preserve the same setup and teardown order. This
+change **does not itself reduce E2E run time**; measure a bounded manual
+profile before attributing CI slowdown to PostgreSQL or changing fixture
+isolation, retry policy or shard count.
+
+## Bounded embedded-server shutdown polling (next measured slice, #740)
+
+[Manual E2E profile #41251873500](https://github.com/Fooftilly/PRKS/actions/runs/41251873500)
+on `master@5648b807` passed all **819** source Chromium tests in six shards.
+The profile attributed `server_stop=450.34s` (inclusive) and
+`server_stop_process=428.95s` across the six runners. The code inspection
+found that the PostgreSQL-authenticated web runtime's `WebJobs.serve`
+uses `socketserver.BaseServer.serve_forever()` at Python's **0.5 second
+default poll interval** while its signal watcher already checks every
+0.1 second. The wait for the base server's poll loop to exit can explain
+a significant share of the recurring roughly 0.5-second per-test process
+stop cost. This is a **source-supported hypothesis**, not a benchmarked
+speedup.
+
+The next proposed slice sets the embedded web server's
+`serve_forever(poll_interval=0.1)`, retaining the existing signal
+watcher, graceful job draining/lease release, listening-socket close,
+PostgreSQL drop and per-test isolation. SQLite-only server behavior is
+unchanged. The trade-off is more frequent inexpensive selector wakeups
+while idle. Existing PostgreSQL signal-and-worker lifecycle tests plus
+a targeted poll-interval contract cover shutdown semantics.
+
+**Validation:** after merging, compare a fresh fixed-configuration manual
+six-shard `profile: true` run against #41251873500. Compare
+`server_stop_process` and total job wall time; report runner noise and
+do not claim per-test or end-to-end savings without a controlled
+same-runner A/B. Do not lower stop timeouts or skip worker grace to meet
+a performance target.
+
+## Warm actual PDF text index in E2E fixture seeds (#740)
+
+[Manual full six-shard profile #41301594839](https://github.com/Fooftilly/PRKS/actions/runs/41301594839) passed **819/819 Chromium tests**, with all nine jobs green, on `master@1427abaa`. Across six independent shards `startup_text_sync` totaled **444.07s**, split into **431.15s** of `startup_text_extractor_probe` (97.1%) and **12.85s** of `startup_text_work_sync`. This is measured subprocess-startup import cost, not a PDF extraction or FTS bottleneck.
+
+The common `tests/e2e/fixtures.py:seed_library` now prepares the **real, production-derived** `PRKSTextIndex` using its normal `reconcile_all()` on the two source fixture PDFs. This happens in the Python E2E seed-builder process before the worker-local immutable seed template is snapshotted or copied. The existing `_finalize_seed_template` WAL checkpoint includes `prks_text_index.db`, so each freshly cloned storage tree carries its **own** independently writable derived index, matching PDF fingerprints, and real FTS entries. The E2E server still runs the **unchanged** complete startup reconciliation (including schema validation, fingerprint/source scan, missing/corrupt/stale repair, orphan cleanup and conditional FTS rebuild) against the private storage copy. An unchanged clone has no pending PDFs and therefore does not import PyMuPDF again in the fresh server process. Works or PDF bytes intentionally changed *after* the common seed continue to trigger the existing cold synchronization path.
+
+The seed fails closed when extraction cannot prepare both real managed PDFs. Non-browser regression coverage verifies real FTS hits after template cloning without a child PyMuPDF import, stale fingerprint detection and real re-extraction, plus full cold regeneration if the derived index is removed. No FTS/search result mocking, canonical-DB text, shared server/storage/PG or browser state, new retry, CI gate skip or production code change. All E2E tests still use new PostgreSQL Libraries and fresh PRKS subprocesses and browser contexts.
+
+**Validation and measurement:** exact-head unit/API plus all source and packaged Chromium gates are required. This optimization is a **hypothesis from the baseline**, not a demonstrated speedup. After merge, run the same one-time manual six-shard profile on an exact new master SHA with `profile=true`, `route_fastpath=false`, `module_affinity=false`, `shard_count=6`; compare `startup_text_extractor_probe`, `server_start`, and the total job wall with #41301594839. Source seed-build overhead and remaining missing/stale-PDF imports must be included; do not add nested phase totals or claim controlled causality from separate CI runners.
+
+## Text-index startup reconciliation subphase attribution (#740)
+
+The accepted [six-shard cold-start profile #41251873500](https://github.com/Fooftilly/PRKS/actions/runs/41251873500) measured **442.92 seconds** of `startup_text_reconcile` across 819 independent source Chromium tests. This is the largest measured child startup stage, but does not identify whether source reads, stale-PDF synchronization or derived-index maintenance dominate. Skipping startup reconciliation, caching index state across tests or omitting crash/restore checks is **not** justified by that result.
+
+The existing per-test **manual-only** `profile: true` report now exposes seven nested stages (in seconds) under `startup_text_reconcile`:
+
+- `startup_text_load_state` — read the existing derived index's sync/fingerprint state
+- `startup_text_source_scan` — load canonical managed-PDF Work rows, resolve paths and check fingerprints
+- `startup_text_sync` — inclusive cost of extractor availability and synchronizing changed/missing/failed PDFs
+- `startup_text_extractor_probe` — one-time extractor availability/import when pending PDF rows exist
+- `startup_text_work_sync` — inclusive processing of all pending PDF works, including extraction and index writes; one record per startup, not one per PDF
+- `startup_text_orphan_cleanup` — remove derived-only rows for deleted/unlinked PDFs
+- `startup_text_fts_verify` — verify/rebuild suspect FTS only when required (normally absent)
+
+The [post-#1075 manual run #41297081864](https://github.com/Fooftilly/PRKS/actions/runs/41297081864) passed 819/819 Chromium cases on `master@cce2561` and attributed **398.19s of 399.98s** total text reconciliation to `startup_text_sync` (six-shard sums); state loading and source scanning were 0.25s and 1.34s, and orphan cleanup rounded to 0.00s. This shows where the time goes, but not yet whether the PyMuPDF availability/import check or the per-work sync loop dominates. The two new nested markers answer that question with no change to extraction, FTS, or recovery behavior. `startup_text_extractor_probe` is absent when there are no pending works, not a measured zero. The two child stages must not be added to their inclusive `startup_text_sync` parent.
+
+For partial profiles, the additive infrastructure ranking excludes the seven `startup_text_*` details whenever an inclusive `startup_text_reconcile` or `startup_text_reconcile_failed` is present, even if `server_start` is missing. When reconciliation/server parent timings are absent but an inclusive `startup_text_sync` or `startup_text_sync_failed` remains, its extractor/work children are also excluded from the additive ranking. Child fragments remain countable only when their inclusive parents are absent. This affects only the ranking, not the phase report or startup execution.
+
+These phases reuse the child-only, triple-gated `PRKS_E2E_STARTUP_PROFILE=1` + `PRKS_E2E=1` + `PRKS_TESTING=1` fixed-name duration recorder. They are emitted to the E2E subprocess's private stderr only, with no PDF content, Work IDs, paths, URLs or database identifiers. A raised exception emits the corresponding `_failed` marker and retains the original error. The FTS stage is absent if the existing early-return path skips it; **absence is not zero**. In a rare recursive recovery, the parser preserves the first instance of a repeated stage name rather than treating retries as additive. Normal application operation and unprofiled CI add no clocks, no new database/browser/process, and no changed index or FTS policy.
+
+**Next evidence:** run the same manual, fixed-`master`, six-shard `profile: true` gate after this PR merges. Inspect the five nested stage totals together with `startup_text_reconcile` (not added to it), `server_start` and `server_stop_process`. Only propose a targeted change after the dominant stage is demonstrated; if performance is claimed, use a controlled same-runner A/B. Preserve fresh per-test storage, Library/database, browser and subprocess boundaries and full PDF/restore assertions.
+
+## Cold E2E process startup and shutdown attribution (#740)
+
+[Manual full E2E profile #41248967692](https://github.com/Fooftilly/PRKS/actions/runs/41248967692)
+passed all **819** tests on `master@f2dd432`. Across six source-Chromium
+shards, the per-test profile measured `server_start=822.61s` and
+`server_stop=448.69s`, versus `postgres_provision=80.10s` and nested
+`postgres_drop=19.01s`. Those timings identify *where* time is spent, not
+which of the stages can be safely removed. In particular, the 50ms HTTP
+readiness probe interval does not explain the child process's cold imports.
+
+On a **manual** full E2E run with `profile: true`, the child now emits
+fixed-name, duration-only diagnostic records to its **private disposable
+stderr file**, read after the successful readiness probe. The child-side
+timings include:
+
+- `startup_imports`: top-level `prks_app.py` imports from the first
+  module statement (does **not** include the interpreter's bootstrap).
+- `startup_dependency_gate`, `startup_config`, `startup_identity`,
+  `startup_jobs`: runtime checks and authentication/worker initialization.
+- `startup_storage_open`, `startup_restore`, `startup_bind`,
+  `startup_logging`, `startup_worker_bind`: storage lease, interrupted
+  restore recovery, database bind, log binding, embedded-worker root binding.
+- `startup_thumbnail_cleanup`, `startup_pdf_cleanup`,
+  `startup_text_reconcile`, `startup_research_reconcile`,
+  `startup_staging_cleanup`: server startup reconciliation and maintenance.
+
+The parent adds `server_stop_process` (wait for the test process to exit)
+and `server_stop_temp_cleanup` (temporary storage cleanup); the existing
+`postgres_drop` phase measures database teardown. These shutdown detail
+phases are **nested in** `server_stop`, just as all `startup_*` details
+are nested in `server_start`. Their phase sums must not be added to their
+parents. `server_http_ready` includes cold process startup, so it does
+**not** measure time spent sleeping between HTTP probes. The residual
+between `server_start` and the child's reported phases includes Python
+interpreter bootstrap, uninstrumented startup work, socket setup and
+readiness/probe latency.
+
+Records require **all three flags** in the child:
+`PRKS_E2E_STARTUP_PROFILE=1`, `PRKS_E2E=1`, and
+`PRKS_TESTING=1`. The harness sets the first flag only while a
+per-test E2E profile is active and ignores inherited values otherwise.
+It accepts only finite, whitelisted phase names and numeric values; no paths,
+record contents, DB settings, URLs or exception strings are sent as metrics.
+Failed stages retain their original failure semantics and are labeled
+`*_failed`. The ordinary server and E2E gates do not add clocks, new
+processes or storage. These are **diagnostics, not a speed optimization**.
+
+**Next experiment:** manually dispatch the existing `PRKS Full E2E Gate`
+on an exact merged SHA with `profile: true` and `shard_count: 6`; compare
+the six job summaries for cold imports, dependency gate, identity,
+storage/data binding, index reconciliation, process stop and residual
+readiness. Focus any subsequent A/B on a verified dominant component. Keep
+fresh test storage, PostgreSQL Library, subprocess and Chromium contexts.
+
+## Manual full-gate shard profile summaries (#740)
+
+The existing `PRKS Full E2E Gate` accepts a **manual** `profile: true`
+input. Each successful source-Chromium shard now publishes a small
+aggregate-only phase breakdown in its **GitHub Actions job summary**, alongside
+the existing per-test diagnostic lines in the job log. The summary includes
+`postgres_provision` and `postgres_drop` next to seed build/clone, server
+spawn/readiness, browser context, app readiness and async waits. Its phase
+rows are inclusive and can overlap; do not add the rows as if they were
+exclusive wall-clock partitions. Missing phase samples say **not observed**,
+not zero.
+
+The shard step writes a schema-v2 aggregate benchmark JSON into
+`RUNNER_TEMP` only when `workflow_dispatch` sets `profile: true`.
+A fail-closed, standard-library summary renderer validates test completion,
+navigation counters and numeric phase names/durations before printing Markdown.
+It emits no test identifiers, file paths, fixtures, record data or database
+names and uploads **no report artifact**. If a successful manual profile
+has a missing or corrupt report, the summary step fails rather than showing
+misleading numbers. Ordinary PR/push source and packaged gates, selection,
+isolation, sharding, test history and required status checks are unchanged.
+
+To collect the next evidence under #740, dispatch the manual full gate on
+one fixed master SHA with `profile: true`, leave `shard_count: 6`, and
+inspect the six individual E2E job summaries. Compare PostgreSQL setup,
+server readiness, seed and browser time before proposing optimizations.
+This is **diagnostic output**, not evidence of faster tests by itself.
+
+## Exact E2E feature-selector drift guard (#740)
+
+The Unit/API gate now validates the **exact method IDs** in
+`tests/e2e/policy.py::FEATURES` against the actual Python E2E source via
+`ast.parse` in `tests/test_e2e_policy.py`. This closes a real audit gap:
+after moving research-detail E2Es into Vue, stale exact selectors survived
+in the Positions and Arguments feature catalogs (#1060) because normal
+feature selection silently ignored nonmatching entries.
+
+The guard verifies the module file, test class and explicitly named method.
+It parses each referenced module only once without importing Playwright,
+starting a browser or connecting to a database; a deleted or renamed method
+therefore fails the existing fast unit/contract gate. It does **not** change
+the runtime feature selector, affected-file mapping, required smoke IDs,
+packaged policy, retries, sharding, or default E2E workload. Class/module
+prefix selectors remain valid: they intentionally select more than one case
+and are excluded from exact-method validation. The optional packaged
+coverage audit continues to report other unmatched prefixes separately.
+
+**Follow-up: broaden the source drift guard to all feature-selector prefixes.**
+Module-wide selectors now require an existing E2E Python module; class-wide
+selectors require that the named class still exists; exact method selectors
+continue to require their declared class method. The unit gate parses each
+module once via AST and tests intentional missing module, class and method
+negative controls. This closes the remaining silent stale-prefix gap without
+importing Playwright, running E2E discovery, or changing any runtime selector.
+A source-level guard cannot prove a class has discovered tests via inheritance
+or dynamically generated methods; real runner discovery and the optional
+packaged coverage audit remain separate checks.
+
 ## Packaged smoke critical-defect coverage audit (#993)
 
 The packaged smoke-plus-affected planner remains **inactive**; every automatic
@@ -1435,6 +1640,478 @@ KEEP (entrypoint UI, not helper-call):
 | Work metadata editor `#save-work-identity-btn` reconciles playlist titles in place | Editor save path is distinct from playlist inline-rename | Node `embeddedReconciliation` owns ACK patch mechanics |
 
 Playlist stale-hold E2Es (in-flight GET held across a durable membership/delete) stay in Chromium until the Node selftest covers that richer hold/release composition. Folder/Playlist cache render, route ownership, and disconnect control matrices remain KEEP.
+
+### Position / Playlist direct-API pilot (six MOVE contracts, #740)
+
+The six E2Es listed below invoked the classic public functions directly via
+`page.evaluate`, then inspected durable pending operations or canonical state.
+They never clicked the Position form, Playlist editor, or drag target. Four
+were queue-only; two additionally reconnected and checked that a never-sent
+create/delete pair had not produced a database row. Their fast replacements now
+wake the **real sync runtime** with an observed transport and prove that no
+operation is transmitted after the wrapper folds the pair. Other Position and
+Playlist E2Es retain real browser offline/reload/projection and server handoff
+coverage.
+
+| Former E2E (removed) | Fast replacement (production code under test) |
+| --- | --- |
+| `DurablePositionTests.test_an_edit_taken_back_before_it_is_sent_leaves_no_intent` | `run_position_sync_selftest.js`: real `api.js updatePosition` → `prksAcknowledgedPositionBase` → dirty fields → durable writer. The known revision 3 stays attached to A→B→A, which must leave zero `SET_POSITION_FIELD` rows. |
+| `DurablePositionTests.test_deleting_a_position_created_offline_folds_the_whole_case_away` | Same Node selftest: real `api.js createPosition` / `deletePosition`, permanent distributed ID, queued create and empty final operation list. |
+| `DurablePlaylistTests.test_a_rename_taken_back_before_it_is_sent_leaves_no_intent` | `run_playlist_sync_selftest.js`: real `components/playlists.js updatePlaylist`, a cached acknowledged title at revision 3, A→B→A, zero `SET_PLAYLIST_FIELD` operations. |
+| `DurablePlaylistTests.test_a_second_drag_replaces_the_first_rather_than_racing_it` | Same Node selftest: real `reorderPlaylist` over acknowledged order at revision 2; first replacement is one ordered operation, return to original order has zero queued reorders. The browser drag event path is separately exercised by retained scenarios. |
+| `DurablePlaylistTests.test_putting_a_video_back_where_it_started_leaves_no_intent` | Same Node selftest: real `addWorkToPlaylist` / `prksSetWorkPlaylist` using a cached Work playlist-state at revision 4; moving away and back leaves zero membership operations. |
+| `DurablePlaylistTests.test_deleting_a_playlist_created_offline_folds_the_whole_case_away` | Same Node selftest: real `createPlaylist` / `deletePlaylistCanonical`; unsent create folds to zero queue rows. |
+
+Each Node selftest has a **mutation negative-control**: temporarily replace
+the real durable field writer with a no-op during the cancel call, confirm the
+zero-pending assertion *fails*, restore the writer, and prove the genuine wrapper
+cancels the pending operation. The folded-create tests also verify that reconnect wakes the sync runtime
+without sending any request. The existing local-store Node tests still own
+coalescing, dependency, and fold behavior; Python backend sync tests own
+ordinary server acceptance and idempotency. The pre-existing
+`tests.test_frontend_position_sync` and `tests.test_frontend_playlist_sync`
+Python tests invoke these Node scripts in the normal unit/contract gate.
+
+**Retained in Chromium**: Position/Playlist creation and editing offline
+across real reload, user-visible list/detail/Work projections, separate
+revision conflict UI, deletion tombstone/refusal, genuine playlist drag
+persistence and reconnect, ordering/dependency races, and actual API/server
+handoff. Do not remove these merely because a Node store test has a similar
+name.
+
+The October 28 calibrated timing-baseline weights for the six removed IDs
+sum to about **31.2 seconds** per complete E2E inventory, about **62.4
+aggregate test-execution seconds** across source and packaged gates. These
+are *historical scheduling weights*, not measured runner-minute savings or a
+promise of shorter CI wall time. Both gates must still run their entire
+remaining six-shard inventories on the exact PR head. No change to selection,
+runner deadlines, retries, browser isolation, or packaged policy.
+
+### Offline read-model validator matrix migration (four MOVE contracts, #740)
+
+The larger offline suites contain a distinct category of deterministic tests
+that booted Chromium and a seeded server solely to call **pure payload shape
+predicates** with `page.evaluate`. These did not test cache publication,
+offline render, service-worker behavior, or real IndexedDB persistence:
+
+| Removed Chromium case | Fast replacement |
+| --- | --- |
+| `OfflinePositionTests.test_position_shape_validators_reject_unusable_rows` | Position index/detail shape matrices, 18 asserted outcomes |
+| `OfflineArgumentTests.test_argument_shape_validators_reject_unusable_rows` | Argument/Stance index/detail shape matrices, 45 asserted outcomes |
+| `OfflinePeopleTests.test_people_validator_matches_renderer_scalar_contract` | People index/detail optional-string and Work year/date scalar matrix, 8 contract-wide Boolean assertions |
+| `PlaylistsOfflineTests.test_predicates_protect_every_rendered_field` | Playlist index/detail scalar, embedded Work, position/count matrix, 31 asserted outcomes |
+
+The replacement `tests/browser/run_offline_read_model_shape_selftest.js`
+extracts and executes the **unchanged production validator definitions** and
+People string-field declaration from `frontend/js/app.js`, then executes
+the original table-driven JavaScript inputs and expected outcomes. Missing
+or renamed functions, ambiguous declarations, malformed payloads, and
+invalid expected results fail the test. A separate
+`tests/test_frontend_offline_read_model_shapes.py` invokes the Node suite
+in the ordinary Python Unit/API/contract test gate. **102 individual
+expectations** remain, with no reimplemented test-side predicates or
+new production exports.
+
+Retained Chromium coverage continues to prove that **malformed authoritative
+HTTP responses do not poison a good cache**, malformed persisted rows are
+discarded, genuine cached rows render offline, legitimate empty indexes
+remain distinct from unavailability, and real page navigation, disconnected
+operation, cache fencing and concurrency behave correctly. Existing
+`tests/test_frontend_offline_runtime.py` also pins the app's
+`validate: prksIs...` read-through wiring.
+
+The committed 2026-10-28 weights for the four removed browser IDs sum to
+**7.341s per full E2E inventory** (14.682s combined across source and
+packaged inventories). These are historical *test scheduling weights*, not
+measured runner or wall-time savings. This is intentionally a small first
+slice of the 146-test `test_offline.py` and 34-test
+`test_playlists_offline.py` inventories: the larger cache/invalidation
+matrix is KEEP-heavy and must be audited by complete invariant, not by
+name or execution time. No CI or production changes.
+
+### Argument ACK cache-coherence rationalization (two MOVE contracts, #740)
+
+Two short E2Es that called the public Argument API directly and asserted
+only cache invalidation/generation outcomes had stronger surviving coverage:
+
+| Former E2E (removed) | Preserved browser coverage | Fast contract |
+| --- | --- | --- |
+| `OfflinePositionTests.test_argument_source_change_does_not_invalidate_positions` | The later full-stack Node ACK contract replaces the surviving source-only E2E; real browser failed-transport behavior remains in `OfflineArgumentCoherenceTests.test_failed_argument_mutations_retain_the_cache` | Real `prksOfflineReconcileArgumentSources` with unchanged and changed ACK responses; an unchanged ACK retains every cache, changed ACK sweeps Arguments and Graph but leaves Position/Concept/People snapshots and lists eligible |
+| `OfflineArgumentCoherenceTests.test_argument_targets_invalidate_arguments_and_positions_only` | `OfflinePositionTests.test_argument_target_change_invalidates_the_position_domain` verifies server ACK, updated Position verdict, authoritative refetch and real offline reload; the full-stack Node source-ACK contract retains Argument cache-fencing integration | Real `prksOfflineReconcileArgumentTargets` ACK clears Arguments/Positions/Graph but preserves Concepts and People |
+
+The new `tests/browser/run_argument_ack_coherence_selftest.js` calls the
+**production `frontend/js/offline-runtime.js` singleton's exported
+`prksOfflineReconcileArgumentSources` and `prksOfflineReconcileArgumentTargets`**,
+using its real per-domain sweep and entity-patch logic with a disposable
+store. It checks the source/target distinction, clean unchanged ACK,
+state-revision advancement, cache/list invalidation and unrelated domain
+isolation against exact expected footprints. This is not a hand-rebuilt
+cache-invalidation policy. The Python wrapper
+`tests/test_frontend_argument_ack_coherence.py` runs it in the existing
+unit/API/contract gate.
+
+**Not moved:** actual server ACK and conflict/retry behavior, real offline
+Position reopens and verdict rendering, IndexedDB retention across reload,
+canonical browser cache and Graph integration. Those remain E2E.
+
+Historical calibrated timing weights: 2.451 + 3.575 =
+**6.026s of summed test execution** per full source/package E2E inventory,
+12.052s across two inventories; this is *not* measured CI wall-time
+or billed-minute savings. No runtime or CI selection change.
+
+### Folder ACK cache-footprint rationalization (three MOVE contracts, #740)
+
+Three `FoldersOfflineTests` E2Es launched Chromium and a seeded
+PostgreSQL server, called canonical Folder functions using `page.evaluate`,
+and inspected only cached entities/lists and domain generations (no UI
+interaction, disconnect, or IndexedDB lifecycle):
+
+| Removed E2E | Fast production-owned assertion |
+| --- | --- |
+| `test_folder_create_invalidates_only_folders` | `reconcileCreatedFolder` inserts the canonical row into the existing cached Folder index and increments only the Folder generation; existing cached Works and six other read-model domains survive |
+| `test_description_only_update_keeps_member_work_snapshots` | `reconcileFolderField` patches description into Folder index and detail while keeping both member and unrelated Work snapshots, preserving other domains |
+| `test_reparent_invalidates_folders_but_no_work_snapshots` | `reconcileFolderField` updates the parent pointer in the Folder index, invalidates the now-stale Folder detail containing a parent object, and keeps existing Work snapshots and unrelated domains |
+
+The existing `tests/browser/run_offline_runtime_selftest.js` now runs
+`verifyFolderAckCacheFootprint`, **directly invoking the shipped
+`createPrksOfflineRuntime` reconcilers with a disposable store**.
+The cache-footprint matrix checks domain-generation changes, cached list
+retention, Work snapshot preservation, and a rename-ACK negative comparator
+that evicts *only* the server-listed member Work. Every seeded and surviving
+Folder index/detail snapshot is additionally checked by the **shipped**
+`app.js` Folder read validators (including required counts, parent pointers,
+children, Works and tags), not a test-authored schema.
+
+`verifyFolderFieldAckDispatch` closes the dispatch-layer gap: it calls the
+**production** `patchFolder` API wrapper for both description and reparent,
+queues a real `SET_FOLDER_FIELD` operation through the fake-IndexedDB local
+store, runs the real sync coordinator and `prksFolderFieldSyncHandler`
+validation/dispatch against a deterministic ACK transport, and then checks
+both the reconciled cache and retired operation. A missing handler dispatch,
+invalid response, or broken wrapper now fails the fast gate rather than being
+hidden behind a fabricated direct reconciler call. The accepted Folder base
+is read through the shipped Folder-state read logic from disposable cache.
+This extends the existing Node test registered by
+`tests/test_frontend_offline_runtime.py`; no new production test hooks.
+
+**KEEP in Chromium:** `test_folder_rename_invalidates_exactly_its_member_work_snapshots`
+still proves actual end-to-end server ACK and selective Work eviction;
+Folder creation dialogs, hierarchy rendering, offline page reload,
+Folder/Work route changes, cache corruption and refetch, and Tag coherence
+remain under browser coverage. The pure ACK replacement is not offered as
+proof of any of those browser-specific boundaries.
+
+The pre-existing 2026-10-28 E2E baseline weights for these three tests
+sum to **14.384 historical test-execution seconds per full inventory**,
+28.768s over source and packaged inventories. This is not an observed
+critical-path wall-clock improvement. No production, retry, E2E selection,
+shard, or packaged-test policy changes.
+
+### Work-role and biography cache-domain helpers (three MOVE contracts, #740)
+
+Three E2Es checked explicit legacy coherence hooks by directly calling
+`prksMarkWorkRoleChanged` or `prksMarkPeopleDomainChanged` after manually
+issuing a server request; one also reloaded the Folder index between helper
+calls. These were not tests of the **current durable-role ACK wiring**, which
+is exercised by retained Work-People/People browser suites and the production
+reconciliation tests.
+
+| Removed browser test | Fast replacement contract |
+| --- | --- |
+| `FoldersOfflineTests.test_author_and_editor_roles_invalidate_folders_but_other_roles_do_not` | Author and Editor invalidate Folder hierarchy; Reviewer and other roles do not. Folder index/entity preservation and eviction are checked directly against the shipped offline runtime. |
+| `FoldersOfflineTests.test_person_rename_invalidates_folders_but_biography_does_not` | Despite its name, the former test PATCHed only `about` (not a rename), then explicitly called `prksMarkPeopleDomainChanged`. Fast coverage proves People invalidation leaves Folder index/details untouched. Actual Person editing remains E2E. |
+| `OfflinePeopleCoherenceTests.test_every_role_type_invalidates_people_but_only_author_invalidates_arguments` | Every role stales People and Person Groups; **only Author** also stales Arguments. Author/Editor additionally stale Folder Work-card credit and relevant browse caches; other roles do not. |
+
+The new `tests/browser/run_work_role_domain_coherence_selftest.js` extracts
+the **shipped functions from `frontend/js/api.js`** (rather than rewriting
+branch policy) and invokes their real domain markers and cache sweeps from
+`frontend/js/offline-runtime.js`. It tests Author, Editor, Reviewer,
+Translator and empty role values through both the legacy Work-evicting
+delegate and the shared ACK-safe dependency helper, plus the old alias
+delegate and biography-only People invalidation. Every domain's actual
+generation, list/entity retention, and Work entity fate is asserted.
+`tests/test_frontend_work_role_domain_coherence.py` registers the suite in
+the existing fast Unit/API/contract gate.
+
+**Retained browser boundaries:** durable Work-role edit, role pickers and
+credit rendering in `test_work_people_offline.py` and related Person E2Es;
+real Folder index rendering, invalidation, and role-dependent Work credit
+through other tests; actual Person metadata edit/ACK and offline reload
+behavior in `test_person_edit_offline.py`. Work-role server ACK projection
+patching and revision ownership are also tested in the separate production
+`run_work_role_sync_selftest.js`. This slice moves only the manually invoked
+cache-hook policy, not those end-to-end contracts.
+
+Historical 2026-10-28 baseline weights: 5.272 + 4.968 + 3.736 =
+**13.976 seconds summed per full E2E inventory**, 27.952s across source and
+packaged inventories. These are *historical test scheduling weights*, not
+measured wall-clock savings. No production changes, CI selection alterations,
+timeouts, retries, sharding changes, or packaged exception.
+
+### Work private-reminder handoff proof selection (one MOVE contract, #740)
+
+`WorkspaceTabsTests.test_private_reminder_ack_proof_must_match_work_and_base`
+previously launched Chromium but invoked only
+`prksSaveWorkPrivateNoteForSession` from `frontend/js/ui.js` with a
+**stubbed** `prksSaveWorkNoteDurably` and synthetic ACK receipts. It
+neither exercised a live UI save nor verified server ACK delivery or
+IndexedDB persistence, so its specific contract belongs in the fast
+Node layer.
+
+`tests/browser/run_work_note_sync_selftest.js` now extracts and calls that
+**exact shipped session-save implementation**, alongside its existing
+`committedPrivateAckProofIsExactAndBounded` test of the real Work-note ACK
+receipt registry. The replacement covers 16 receipt/session variations:
+absent or foreign proof; mismatched, negative, fractional, string or stale
+revisions; missing session proof or handoff text; and valid matching, later
+and equal revisions. For every case it asserts the observed base, exact
+durable enqueue arguments and result, receipt lookup scope, and the
+critical **revert** distinction: cancel the never-sent X row only without
+proven ACK; with valid ACK, saving V is a new edit against X.
+
+**KEEP in Chromium:** `test_private_reminder_acknowledged_handoff_revert_persists`,
+`test_private_reminder_handoff_without_ack_proof_still_conflicts`,
+`test_private_reminder_handoff_proven_ack_rejects_foreign_write`,
+cold park/remount behavior and real user-visible notes/save state. Those
+require browser lifecycle, real durable queue and a server-side foreign
+writer. The replacement deliberately does not claim to test them.
+
+Historical calibrated weight for the removed synthetic-proof E2E:
+**1.606 seconds per full E2E inventory** (3.212s across source and
+packaged inventories). This is scheduling-weight accounting, *not*
+measured CI wall time or runner-minute savings. No production/runtime
+changes, retries, shard selection, or packaged policy changes.
+
+### Playlist field/reorder ACK read-model coherence (three MOVE contracts, #740)
+
+Three Playlist Chromium tests booted a browser/server to call the classic
+`updatePlaylist` / `reorderPlaylist` wrappers via `page.evaluate` and inspect
+the resulting *disposable cache* without interacting with the UI or testing
+browser offline/reload behavior:
+
+| Removed E2E | Replacement fast assertion |
+| --- | --- |
+| `test_a_description_edit_keeps_member_work_caches` | Description ACK patches both index and detail, advances the per-field sync base and keeps member Work snapshots |
+| `test_a_title_edit_stales_member_work_snapshots_only` | One combined title+description wrapper edit yields two field-scoped operations and ACKs, patches the index/detail and invalidates exactly cached member Works, not an unrelated Work |
+| `test_a_reorder_keeps_member_work_caches_and_reorders_the_detail` | Order ACK updates the cached detail's item order and order revision, fences stale index only, keeps member and unrelated Works |
+
+The replacement `run_playlist_ack_dispatch_selftest.js` imports the
+**production** wrappers from `frontend/js/components/playlists.js` through
+guarded CommonJS exports (classic browser window bindings are unchanged), uses
+the actual IndexedDB-style local durable queue, and drives the real
+`createPrksSyncRuntime` protocol dispatcher and `playlist-state.js`
+field/order handlers against deterministic ACK envelopes. It then inspects
+the real offline-runtime reconciler's cache and reuses the shipped `app.js`
+read validators from the existing 102-case
+`run_offline_read_model_shape_selftest.js` rather than dynamically compiling
+another copy. The app.js durable-store read is represented by a minimal
+test adapter to the real sync store. It checks handler registration, ACK
+events and queue retirement, revisions, isolation of unrelated cached data
+and member Work retention/eviction.
+Registered under existing `tests/test_frontend_playlist_sync.py` Unit/API gate.
+
+**KEEP in Chromium:** live Playlist navigation and item rendering; offline
+refresh/reload and degraded client; real membership operations, actual ACKs,
+conflicts and refusal paths; stale read fencing, Work/Playlist cross-navigation
+and SW behavior in `test_playlists_offline.py` and other Playlist E2Es. The only browser-source change is a guarded Node export of existing wrappers; no browser behavior, durable semantics or test-only mutation hook changes.
+
+The 2026-10-28 timing baseline weights for these three former E2Es sum to
+**15.629 historical seconds per full test inventory**, or 31.258s across
+source and packaged inventories. This is a *summed historical test weight*,
+not a verified reduction in critical-path wall-clock CI time. No E2E runner,
+selection, shard, packaged, timeout or retry policy changes.
+
+### Argument-source production ACK lifecycle (one additional MOVE, #740)
+
+The former
+`OfflineArgumentCoherenceTests.test_argument_sources_invalidate_arguments_but_not_positions`
+called `window.putArgumentSources` with a seeded browser cache and asserted
+that a successful write invalidated the Argument domain but preserved cached
+Positions and Concepts. It did not navigate, reload, disconnect, exercise
+service-worker behavior or check the contents of a rendered destination.
+Its successful ACK/cache-fencing requirement now has a more precise
+`tests/browser/run_argument_ack_coherence_selftest.js` replacement:
+
+- `prksSetArgumentSourcesDurably` writes a source aggregate and its
+  acknowledged revision to the real `createPrksLocalStore` using disposable
+  IndexedDB; before connectivity is enabled it must remain one unattempted
+  pending operation and must not evict cached Arguments.
+- Production `createPrksSyncRuntime` and
+  `prksArgumentSourcesSyncHandler` send that immutable envelope, validate
+  the server ACK, update `argument-state` source revision while preserving the
+  targets revision, emit exactly one ACK and retire the durable row only after
+  reconciliation. The test also checks that the real browser coordinator
+  registers `SET_ARGUMENT_SOURCES` to that same handler.
+- The shipped offline-runtime reconciler invalidates cached Argument detail
+  and index; Position, Concept and People lists and entities remain eligible.
+  An intentional extra Position eviction must fail the retained-domain
+  assertions.
+- A mismatched Argument ID or malformed server revision must **not**
+  reconcile, evict Argument cache, emit an ACK or retire durable intent.
+  The coordinator retains each row as pending with a retryable error.
+  These failure cases are independent negative controls for result validation.
+
+This replacement exercises the actual durable writer, sync protocol and cache
+implementation, but **does not** spin up the PostgreSQL HTTP server or execute
+the `putArgumentSources` browser API wrapper itself. Its delegation to the
+durable writer is covered by the existing
+`tests/test_frontend_argument_sync.py` structural contract. Chromium still
+exercises the public wrapper on transport failure in
+`test_failed_argument_mutations_retain_the_cache`, real offline Argument
+editor/route behavior in `test_offline_argument_index_and_detail_mutate_through_durable_queue`,
+and authoritative Position verdicts and offline reload in
+`test_argument_target_change_invalidates_the_position_domain`. These,
+along with cross-tab ownership, PDF, SW and persistence tests, remain browser
+checks; there is no claim that Node replaces those boundaries.
+
+The removed test has a **3.449-second historical calibrated scheduling weight
+per full source or packaged test inventory** (6.898 seconds summed across
+both). These are not measured critical-path or runner-minute savings.
+No production runtime code, E2E runner, workflow path selection, sharding,
+timeout, retry or packaged-asset coverage changes.
+
+### Research-index local filtering and filtered-empty presentation (two MOVE, #740)
+
+Two remaining `ResearchIndexAndDetailPolishTests` Chromium checks only inspected
+already-rendered Position and Argument index views after raw fixture requests.
+Neither tested a durable mutation, an API error, offline reload, cache
+invalidation, cross-tab state, or an actual route link activation:
+
+- `test_position_index_search_matches_title_and_description` filled the
+  Position search field for a title, a description phrase, and a missing query.
+  The production `PositionsIndexRoute.vue` is now exercised through its
+  mounted `session.test.ts` route bridge with two distinct fixture rows.
+  The fast test dispatches real input events, verifies the two individual
+  matching rows, checks exact search-only empty wording and its clear action,
+  and ensures no HTTP fetch is issued.
+- `test_argument_filtered_true_empty_state_describes_active_kind` checked
+  only the "No Stances yet." message and correct new-Stance action before
+  navigating to an Argument-filled view. The production
+  `ArgumentsIndexRoute.vue` is now mounted twice via `session.test.ts`
+  with explicit filtered projections: Stances are genuinely empty, Arguments
+  contain one row, and the respective native canonical route keys and action
+  states are asserted.
+
+**KEEP in Chromium:** `test_clear_search_across_indexes_targets_current_input`
+tests real search input, clear-button clicks and focus across all three
+indexes; `test_argument_filtered_search_empty_is_kind_aware` tests a
+search-empty Stances view, clearing and preserved route; and
+`test_argument_index_search_respects_kind_filter` exercises the live
+kind-filter route and search on server data. `test_concept_index_search_matches_name_alias_and_parent`
+retains live client filtering and an explicit no-extra-requests check.
+The Position durable, offline and actual Position/Argument route-navigation
+tests remain untouched. These are separate browser behaviors not replicated
+by the new Vue presentation assertions.
+
+Retired historical calibrated weights: **1.550 + 1.592 = 3.142 test-seconds**
+per independent full source or packaged inventory, **6.284 summed** across
+both inventories. Scheduling weights only, not measured runner-minute or
+critical-path savings. Both exact E2E feature selectors and timing keys were
+removed with their methods. No production application code, shard policy,
+CI workflow selection, timeout, retry or offline gate is changed.
+
+### Research detail presentation contracts (two MOVE, #740)
+
+Two `ResearchIndexAndDetailPolishTests` cases created fixture records by
+calling raw `POST /api/arguments` in `page.evaluate`, then navigated to a
+ready route and inspected only rendered text, counters and link attributes:
+
+- `test_position_relationship_rows_use_shared_research_row_language` checked
+  the Argument name/kind/verdict, native Argument href and Position relationship
+  counter. The production `PositionDetailRoute.vue` fixture in the existing
+  Vue `session.test.ts` now checks all five against the actual shared
+  `PrksResearchRow` and `PrksResearchSectionHead` renderers.
+- `test_argument_detail_counts_and_contextual_empty_wording` checked four
+  section counters and four contextual empty messages after synthetic record
+  creation. The production `ArgumentDetailRoute.vue` fixture now checks each
+  populated section counter, and a second fixture asserts each zero counter
+  and exact empty-state message. Both execute the shipped Vue presentation
+  rather than copying HTML strings into a test-only implementation.
+
+These tests did not activate links, save through the durable editors, verify
+server ACKs, reload, test service-worker cache or cross a browser connectivity
+boundary. **KEEP in Chromium:** Argument target changes and Position-domain
+invalidation, real Position→Argument cached/uncached navigation, Position
+relationship rendering offline, Argument detail durable edits and the
+Argument/Position cross-route and sync/refusal cases in
+`test_offline.py`, `test_positions_durable.py`, and
+`test_arguments_durable.py`. These remain responsible for real browser,
+server/route and durable synchronization integrations; the Vue tests cover
+only the presentation aspects.
+
+Historical weights: **1.578 + 1.628 = 3.206 test-seconds** per independently
+scheduled source or packaged E2E inventory (6.412 summed). These are not
+observed wall-time, critical-path, or runner-minute savings. No production
+code, runner, workflow selection, shards, retries, timeouts or packaged
+coverage policy changed.
+
+### Position/Argument offline-navigation guard (one MOVE, #740)
+
+`OfflinePositionTests.test_position_code_no_longer_applies_its_own_argument_offline_policy`
+reloaded an already cached Position offline to check that Argument links had
+no disabled/title attributes, no obsolete `__prksPositionArgumentGuardBound`
+expando and that the Graph button was enabled. It did not activate either
+navigation surface. The Position detail is now rendered by
+`frontend-app/src/features/positions/PositionDetailRoute.vue`; the normal
+`session.test.ts` Vue route-bridge fixture now checks the **actual rendered**
+native Argument href, missing disabled/title attributes, absent obsolete
+guard marker, and enabled Graph control. It does so against the production
+component and shared research-row component, without a full server, Chromium
+startup, cache warm-up or offline reload.
+
+**KEEP in Chromium:**
+`test_cached_position_opens_a_cached_argument_offline` verifies the actual
+link remains enabled and opens the cached Argument while offline;
+`test_cached_position_reports_an_uncached_argument_as_unavailable` verifies
+it still navigates to the Argument route rather than being blocked by the
+Position; `test_position_graph_action_navigates_to_uncached_graph_offline`
+checks the enabled Graph action and offline destination after clicking it.
+Those are the browser/runtime boundaries and are not removed. The Vue test
+protects the renderer contract, while those retained E2Es protect the
+service-worker/cache, routing and offline integration contracts.
+
+The removed test had **2.544 historical calibrated test-seconds per full
+source or packaged test inventory** (5.088 seconds summed across the two
+inventories). This is a scheduling weight, not a measured improvement to
+CI runner-minutes or critical-path time. No production files, E2E runner,
+selection, sharding, timeout, retry or packaged-asset policy changed.
+
+### Work private-reminder committed-handoff guard (one MOVE, #740)
+
+The removed `WorkspaceTabsTests.test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves` case started a full browser and evaluated 11 fabricated JavaScript states against the synchronous `prksWorkPrivateNoteNeedsCommittedHandoff` predicate. It did not click, navigate, fetch, save, reload or exercise service-worker/IndexedDB persistence. Unlike the surrounding WorkspaceTabs tests, its assertion was a pure Boolean guard matrix.
+
+The shipped predicate now has exactly one owner in `frontend/js/work-notes-state.js`; the existing classic `frontend/js/ui.js` calls it from `prksEnsurePrivateNoteSession` rather than holding a duplicated implementation. The browser `work-notes-state.js` already loads before `ui.js`, so the production function is available via the same `window.prksWorkPrivateNoteNeedsCommittedHandoff` name. Its observed input and return behavior are unchanged.
+
+`tests/browser/run_work_note_sync_selftest.js` runs **27 cases** against that exported production predicate without opening a browser: same-tab committed stale canonical reads and pending overlay paint; authoritative foreign or newer server content; unconfirmed, pending, inflight, failed, retired or carried sessions; foreign owner tabs and Work IDs; Folder exclusion; missing or invalid revisions/bases; and the exact base+one revision boundary. `tests/test_frontend_work_note_sync.py` checks single ownership and classic script order. The existing Unit/API gate owns both tests.
+
+**KEEP in Chromium:** `test_private_reminder_handoff_revert_cancels_never_sent_row`, `test_private_reminder_hide_show_prefers_unsettled_complete_draft`, `test_private_reminder_acknowledged_handoff_revert_persists`, `test_private_reminder_handoff_without_ack_proof_still_conflicts`, `test_private_reminder_handoff_proven_ack_rejects_foreign_write`, and research-note session and reload tests. These continue checking actual routes, DOM/editor states, durable saves, transport/ACK, and race-sensitive browser behavior; none is superseded by a pure guard test.
+
+The former E2E carried **1.476 seconds of historical calibrated test weight per source or packaged full suite**, or 2.952 summed seconds across both inventories. This is not measured wall-clock or runner-minute savings. No HTTP service, test selection, sharding, timeout, retry or packaged test gate changes.
+
+### Retire raw-request People coherence probes (two REMOVE, #740)
+
+Two older `test_offline.py` checks still invoked **raw HTTP mutations**, rather
+than the actual durable People / Person Group client writers now used by the
+browser:
+
+| Former E2E | What it actually exercised | Stronger coverage retained |
+| --- | --- | --- |
+| `OfflinePeopleCoherenceTests.test_creating_an_unassigned_group_leaves_people_eligible` | `prksRequest('POST /api/person-groups')`, a fixed 500 ms delay and a People cache-generation equality check. It bypassed `prksCreatePersonGroupDurably` and never checked the server ACK or Group read-model patch. | `test_person_groups_offline.py::test_group_acknowledgements_patch_the_caches_they_own` creates an unassigned Group **through the durable writer**, drains the real server ACK, verifies only the Person Group generation changes, checks the new cached Group list row, and also exercises rename, membership and deletion effects on People caches. |
+| `OfflinePeopleCoherenceTests.test_failed_person_mutation_retains_the_people_cache` | A direct `PATCH /api/persons/{id}` was intercepted with HTTP 500; **the test itself** called `prksMarkPeopleDomainChanged()` conditionally on a successful raw response. This did not drive the real Person field writer or its ACK/refusal handler. It used a fixed 400 ms delay. | `test_person_edit_offline.py` retains real Chromium Person editor and durable-writer coverage for reconnect/ACK with no rollback, independently conflicted fields, and failed creation prerequisites. `tests/browser/run_person_metadata_sync_selftest.js` retains per-field durable envelope, ordering and retry/conflict contracts. |
+
+Both removed cases were legacy *probes of generic request behavior*, not
+proof of a current browser feature. Keeping them as Chromium tests would give
+false confidence that the modern durable mutation route is guarded. The
+surviving dedicated suites provide the appropriate domain boundary with real
+browser interactions and server-backed ACK or conflict results. No tests of
+offline reload, person forms, group editor, negative-refusal state, request
+transport, cache durability or cross-tab behavior are deleted.
+
+Two calibrated timing keys are retired: **2.973 + 3.068 = 6.041 historical
+test-seconds per full source or packaged inventory**, 12.082 summed seconds
+across the two inventories. These are scheduling estimates, **not** measured
+critical-path CI or billed-runner savings. No production code, E2E runner,
+sharding, retry, timeout or workflow-selection changes.
 
 ## Benchmark protocol
 

@@ -32,6 +32,19 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_adoption_stays_offline_after_async_pending_check(self):
+        """The actual PDF adoption branch must not POST after an offline flip."""
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" /
+                         "run_pdf_annotation_adopt_offline_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_materialization_handoff_selftests(self):
         proc = subprocess.run(
             ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_handoff_selftest.js")],

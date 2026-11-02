@@ -4,6 +4,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksScopeLine from '../../components/PrksScopeLine.vue'
 import { useResearchIndexList } from '../../research-index/useResearchIndexList'
+import { argumentDomScopeKey } from './dom-scope'
 import { argumentIntentsKey } from './intents'
 import { useArgumentPendingAction } from './pending-action'
 import { argumentKindUi, filterArgumentIndexItems, normalizeArgumentSearchQuery } from './match'
@@ -56,12 +57,44 @@ const emptyActionKind = computed((): ArgumentKind => {
   return 'argument'
 })
 
+const KIND_FILTERS = ['all', 'argument', 'stance'] as const
+const domScope = inject(argumentDomScopeKey, 'prks-arg-pane')
+const rowsId = `${domScope}-rows`
+
+function kindTabId(kind: (typeof KIND_FILTERS)[number]): string {
+  return `${domScope}-kind-${kind}`
+}
+
 function tabSelected(kind: 'all' | ArgumentKind): boolean {
   return props.projection.kind === kind
 }
 
+function isKindFilter(value: string | null): value is (typeof KIND_FILTERS)[number] {
+  return value === 'all' || value === 'argument' || value === 'stance'
+}
+
+const activeTabId = computed(() => kindTabId(props.projection.kind))
+
 function onFilter(kind: 'all' | ArgumentKind): void {
   intents?.filterKind(kind)
+}
+
+/** Horizontal tabs: Left/Right wrap, Home/End jump, and the selected kind follows focus. */
+function onTabKeydown(event: KeyboardEvent): void {
+  if (!(event.target instanceof Element)) return
+  const currentKind = event.target.getAttribute('data-arg-filter')
+  if (!isKindFilter(currentKind)) return
+  const current = KIND_FILTERS.indexOf(currentKind)
+  let next = current
+  if (event.key === 'ArrowRight') next = (current + 1) % KIND_FILTERS.length
+  else if (event.key === 'ArrowLeft') next = (current + KIND_FILTERS.length - 1) % KIND_FILTERS.length
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = KIND_FILTERS.length - 1
+  else return
+  event.preventDefault()
+  const kind = KIND_FILTERS[next]!
+  if (!tabSelected(kind)) onFilter(kind)
+  rootEl.value?.querySelector<HTMLButtonElement>(`[data-arg-filter="${kind}"]`)?.focus()
 }
 
 function onCreate(kind: ArgumentKind): void {
@@ -111,32 +144,50 @@ function onCreate(kind: ArgumentKind): void {
         </div>
         <PrksScopeLine v-bind="scopeLine" />
       </div>
-      <div class="prks-tabs" role="tablist" aria-label="Argument kind">
+      <div
+        class="prks-tabs"
+        role="tablist"
+        aria-orientation="horizontal"
+        aria-label="Argument kind"
+        @keydown="onTabKeydown"
+      >
         <button
+          :id="kindTabId('all')"
           type="button"
           class="prks-tab"
           :class="{ 'is-active': tabSelected('all') }"
+          role="tab"
           :aria-selected="tabSelected('all') ? 'true' : 'false'"
+          :aria-controls="rowsId"
+          :tabindex="tabSelected('all') ? 0 : -1"
           data-arg-filter="all"
           @click="onFilter('all')"
         >
           All
         </button>
         <button
+          :id="kindTabId('argument')"
           type="button"
           class="prks-tab"
           :class="{ 'is-active': tabSelected('argument') }"
+          role="tab"
           :aria-selected="tabSelected('argument') ? 'true' : 'false'"
+          :aria-controls="rowsId"
+          :tabindex="tabSelected('argument') ? 0 : -1"
           data-arg-filter="argument"
           @click="onFilter('argument')"
         >
           Arguments
         </button>
         <button
+          :id="kindTabId('stance')"
           type="button"
           class="prks-tab"
           :class="{ 'is-active': tabSelected('stance') }"
+          role="tab"
           :aria-selected="tabSelected('stance') ? 'true' : 'false'"
+          :aria-controls="rowsId"
+          :tabindex="tabSelected('stance') ? 0 : -1"
           data-arg-filter="stance"
           @click="onFilter('stance')"
         >
@@ -155,7 +206,13 @@ function onCreate(kind: ArgumentKind): void {
           aria-label="Search arguments and stances…"
         >
       </div>
-      <div id="prks-argument-rows" class="list-view prks-research-index">
+      <div
+        :id="rowsId"
+        data-prks-argument-rows
+        class="list-view prks-research-index"
+        role="tabpanel"
+        :aria-labelledby="activeTabId"
+      >
         <template v-if="filtered.length">
           <ArgumentRow
             v-for="item in filtered"

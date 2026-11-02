@@ -213,6 +213,27 @@ class SmokeSelectionTests(unittest.TestCase):
 
 
 class FeatureSelectionTests(unittest.TestCase):
+    @staticmethod
+    def _is_exact_method_selector(selector: str) -> bool:
+        # A module such as tests.e2e.test_positions_durable also starts with
+        # "test_"; only module.Class.test_method has a method segment.
+        parts = selector.split(".")
+        return len(parts) >= 5 and parts[-1].startswith("test_")
+
+    def test_exact_selector_classification_preserves_broad_feature_prefixes(self):
+        self.assertFalse(self._is_exact_method_selector("tests.e2e.test_positions_durable"))
+        self.assertFalse(
+            self._is_exact_method_selector(
+                "tests.e2e.test_app.ResearchIndexAndDetailPolishTests"
+            )
+        )
+        self.assertTrue(
+            self._is_exact_method_selector(
+                "tests.e2e.test_app.ResearchIndexAndDetailPolishTests"
+                ".test_argument_index_search_respects_kind_filter"
+            )
+        )
+
     def test_graph_feature_selects_app_and_offline_graph(self):
         selected = policy.select_features(FAKE_IDS, ["graph"])
         self.assertTrue(
@@ -227,6 +248,73 @@ class FeatureSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             policy.select_features(FAKE_IDS, ["not-a-real-group"])
         self.assertIn("unknown E2E feature", str(ctx.exception))
+
+    def _assert_feature_selector_source(self, selector, parsed_modules):
+        """Check module/class/method prefixes using source AST, not Playwright."""
+        parts = selector.split(".")
+        self.assertIn(
+            len(parts), (3, 4, 5), f"unsupported E2E selector shape: {selector}"
+        )
+        self.assertEqual(parts[:2], ["tests", "e2e"], selector)
+        self.assertTrue(parts[2].startswith("test_"), selector)
+        path = Path(_PROJECT_DIR, "tests", "e2e", parts[2] + ".py")
+        self.assertTrue(path.is_file(), f"missing E2E module for {selector}")
+        if path not in parsed_modules:
+            parsed_modules[path] = ast.parse(
+                path.read_text(encoding="utf-8"), filename=str(path)
+            )
+        if len(parts) == 3:
+            return  # Module-wide selector: the source module exists.
+        classes = [
+            node for node in parsed_modules[path].body
+            if isinstance(node, ast.ClassDef) and node.name == parts[3]
+        ]
+        self.assertTrue(classes, f"missing E2E class for {selector}")
+        if len(parts) == 4:
+            return  # Class-wide selector: the declared class exists.
+        self.assertTrue(
+            self._is_exact_method_selector(selector),
+            f"invalid E2E method selector: {selector}",
+        )
+        self.assertTrue(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == parts[4]
+                for cls in classes for node in cls.body
+            ),
+            f"stale exact E2E feature selector: {selector}",
+        )
+
+    def test_declared_feature_selectors_point_to_existing_e2e_source(self):
+        """Retired module/class/method selectors must not silently lose coverage.
+
+        Every feature prefix is checked, without importing the browser harness.
+        AST reads are cached per module; unittest discovery stays authoritative
+        for inherited tests and dynamic collection.
+        """
+        parsed_modules = {}
+        checked_kinds = set()
+        for feature, config in policy.FEATURES.items():
+            for selector in config["selectors"]:
+                with self.subTest(feature=feature, selector=selector):
+                    self._assert_feature_selector_source(selector, parsed_modules)
+                checked_kinds.add(len(selector.split(".")))
+        self.assertEqual(checked_kinds, {3, 4, 5})
+
+    def test_missing_module_class_and_exact_method_selectors_fail_closed(self):
+        missing = (
+            "tests.e2e.test_nonexistent_feature_module",
+            "tests.e2e.test_app.NonexistentFeatureClass",
+            "tests.e2e.test_app.AppShellAndNavigationTests.test_deleted_feature_method",
+        )
+        parsed_modules = {}
+        for selector in missing:
+            with self.subTest(selector=selector):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    r"missing E2E module|missing E2E class|stale exact E2E",
+                ):
+                    self._assert_feature_selector_source(selector, parsed_modules)
 
     def test_catalog_lists_every_feature(self):
         text = policy.format_feature_catalog()
@@ -1380,18 +1468,44 @@ class AffectedMappingTests(unittest.TestCase):
         )
         self.assertFalse(early_ptr_fail)
 
-    def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
-        for path in (
-            ".github/workflows/test-gate.yml",
-            ".github/workflows/e2e-gate.yml",
+    def test_ci_workflow_selection_preserves_full_e2e_boundary(self):
+        # Changes to E2E orchestration or its shared Python installer still
+        # require the full browser suite; the independent Test Gate does not.
+        e2e_gate = ".github/workflows/e2e-gate.yml"
+        rule, feats, skip, _note = policy.match_affected_path(e2e_gate)
+        self.assertEqual(rule, "e2e-framework")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("smoke", "wait-async"))
+        self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+        self.assertEqual(policy.plan_ci_e2e([e2e_gate])["mode"], "full")
+
+        test_gate = ".github/workflows/test-gate.yml"
+        rule, feats, skip, _note = policy.match_affected_path(test_gate)
+        self.assertEqual(rule, "test-gate-workflow-only")
+        self.assertTrue(skip)
+        self.assertEqual(feats, ())
+        only_pg_ci = [
+            test_gate,
+            "scripts/test-postgres",
+            "scripts/ci/pg_test_shards.py",
+            "tests/test_dependency_gate.py",
+        ]
+        plan = policy.plan_ci_e2e(only_pg_ci)
+        self.assertEqual(plan["mode"], "skip")
+        self.assertFalse(plan["run"])
+
+        # A mixed PR cannot hide a production, E2E runner, or shared installer
+        # change behind the Test Gate exemption.
+        for risky in (
+            e2e_gate,
+            "tests/e2e/run.py",
+            "scripts/ci/install_pinned_python.py",
+            "frontend/js/app.js",
         ):
-            with self.subTest(path=path):
-                rule, feats, skip, _note = policy.match_affected_path(path)
-                self.assertEqual(rule, "e2e-framework")
-                self.assertFalse(skip)
-                # wait-async rides with the shared e2e-framework rule (#222).
-                self.assertEqual(feats, ("smoke", "wait-async"))
-                self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+            with self.subTest(risky=risky):
+                mixed = policy.plan_ci_e2e(only_pg_ci + [risky])
+                self.assertEqual(mixed["mode"], "full")
+                self.assertTrue(mixed["run"])
 
     def test_ci_dependency_installer_requires_full_e2e(self):
         plan = policy.plan_ci_e2e(["scripts/ci/install_pinned_python.py"])

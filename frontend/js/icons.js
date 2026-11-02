@@ -58,7 +58,7 @@
         return prksIcon(name, { size: 22, className: 'prks-page-header-icon' });
     }
 
-    /** Same Lucide keys as sidebar People role filters (index.html nav-link--sub). */
+    /** Same Lucide keys as sidebar People role filters (app-shell catalog). */
     const PRKS_ROLE_TYPE_ICON = {
         Author: 'penLine',
         Editor: 'filePen',

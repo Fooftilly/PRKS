@@ -25,7 +25,7 @@
     // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'bd1b69adc334';
+    const DEPENDENCY_REVISION = '9115574fd145';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope, `prks-pdf-v2:<scope key>`
@@ -169,8 +169,8 @@
         '/js/api.js',
         '/js/doc-types.js',
         '/js/overview-primitives.js',
+        '/js/combobox-keys.js',
         '/js/ui.js',
-        '/js/ribbon-create.js',
         '/js/components/work-cards.js',
         '/js/folder-hierarchy-nav.js',
         '/js/components/folders.js',
@@ -550,7 +550,13 @@
         async function handleNavigation(request) {
             try {
                 const res = await fetchImpl(request);
-                if (isCacheableStaticResponse(res)) {
+                // Only an actual HTML shell response can refresh the offline shell.
+                // Navigation to API or non-shell paths must not poison '/'.
+                const path = pathnameOf(request.url, env.origin || 'http://localhost/');
+                const type = res && res.headers && typeof res.headers.get === 'function'
+                    ? (res.headers.get('Content-Type') || '') : '';
+                if ((path === '/' || path === '/index.html') &&
+                    /^text\/html(?:\s*;|$)/i.test(type) && isCacheableStaticResponse(res)) {
                     const cache = await cachesApi.open(SHELL_CACHE);
                     cache.put('/', res.clone()).catch(function () {});
                 }

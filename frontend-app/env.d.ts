@@ -46,6 +46,11 @@ interface PrksNavigateOptions {
 }
 
 interface Window {
+  prksModalHost?: import('./src/modal/types').PrksModalHostApi
+  requestModalClose?: (reason?: string) => boolean
+  prksDismissModalInnerEscapeLayer?: () => boolean
+  prksCloseStandalonePageModal?: (modal: Element) => boolean
+  prksWorkspaceSnapshot?: () => { focusedTabId?: string | null } | null | undefined
   /** Sanitized `/api/client-errors` reporter from `api.js` (deduped there). */
   prksReportClientError?: (input: { kind: string; source: string; request_id?: string }) => void
   prksVueActivatePerformanceDiagnostics?: () => void
@@ -163,6 +168,17 @@ interface Window {
   prksIsoToDdMmYyyy?: (iso: string) => string
   prksShowInlineComboboxResults?: (input: HTMLElement, results: HTMLElement) => void
   prksHideInlineComboboxResults?: (results: HTMLElement) => void
+  prksBindComboboxKeys?: (
+    input: HTMLInputElement,
+    results: HTMLElement,
+    options?: {
+      enterCreates?: boolean
+      onOpen?: () => void
+      onEscape?: () => void
+    },
+  ) => void
+  prksComboboxRenderEpoch?: (input: HTMLInputElement) => number
+  prksComboboxRendered?: (input: HTMLInputElement, epoch: number) => void
   prksTagMatchesQuery?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
   prksTagExactMatch?: (tag: { name?: string; aliases?: string[] }, query: string) => boolean
   prksTagComboboxLabel?: (tag: { name?: string; aliases?: string[] }, query: string) => string
@@ -182,11 +198,56 @@ interface Window {
   }) => void
   /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
-  prksOpenCommandPalette?: () => void
+  prksOpenCommandPalette?: (options?: {
+    scope?: 'all' | 'create'
+    navigationTarget?: 'current' | 'new-tab' | 'tile'
+    splitPlacement?: { targetLeafTabId?: string; axis?: string; placement?: string } | null
+  }) => boolean | void
+  prksCloseCommandPalette?: () => void
+  prksCommandPaletteView?: () => import('./src/palette/types').PaletteView
+  prksCommandPaletteSubscribe?: (
+    listener: (view: import('./src/palette/types').PaletteView) => void,
+  ) => () => void
+  prksCommandPaletteSetQuery?: (raw: string) => void
+  prksCommandPaletteHandleKey?: (event: KeyboardEvent) => void
+  prksCommandPaletteActivateFromPointer?: (
+    index: number,
+    event?: import('./src/palette/types').PalettePointerEvent,
+  ) => void
+  prksParseRoute?: (hash: string) => import('./src/app-shell/chrome').ShellChromeRoute
+  prksSidebarHrefForRoute?: (
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+    originRoute?: { name?: string; canonicalHash?: string; hash?: string } | null,
+  ) => string | null
+  prksReadOriginForRoute?: (
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+  ) => { name?: string; hash?: string; label?: string } | null
+  prksNavDisclosureExpanded?: (
+    which: string,
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+  ) => boolean
+  prksNavFamilyForcesOpen?: (
+    which: string,
+    route: import('./src/app-shell/chrome').ShellChromeRoute | null,
+  ) => boolean
+  prksWriteNavExpandedPref?: (key: string, on: boolean) => void
+  PRKS_NAV_DISCLOSURES?: Record<string, { prefKey: string; listId?: string; show?: string; hide?: string }>
+  prksSyncSidebarActive?: (route: import('./src/app-shell/chrome').ShellChromeRoute | null) => void
+  prksSyncNavDisclosures?: (route?: import('./src/app-shell/chrome').ShellChromeRoute | null) => void
+  prksNoteShellChrome?: (patch: Partial<import('./src/app-shell/chrome').ShellChromeSnapshot>) => void
+  prksVueApplyShellChrome?: (snapshot: import('./src/app-shell/chrome').ShellChromeSnapshot) => void
+  __prksShellChrome?: Partial<import('./src/app-shell/chrome').ShellChromeSnapshot>
+  prksToggleSidebarDrawer?: (forceOpen?: boolean) => void
+  prksOpenSidebarDrawer?: () => void
+  prksToggleRightPanelOverlay?: (forceOpen?: boolean) => void
+  prksNavAttentionBadgeHtml?: (options: { count?: number | null; ariaLabel?: string }) => string
+  prksRoleTypeIconHtml?: (role: string, opts?: { size?: string; className?: string }) => string
   prksEffectiveFolderDetailWorks?: (folder: unknown) => unknown[]
-  prksFolderDetailSummaryHtml?: (folder: unknown) => string
-  prksFolderDetailNavHtml?: (ctx: unknown, folder: unknown) => string
-  prksFolderDetailSubfoldersHtml?: (children: readonly unknown[]) => string
+  prksFolderNavTriggerHtml?: (
+    folder: unknown,
+    rows: unknown,
+    options?: { tabId?: string },
+  ) => string
   prksCommitFolderDetailSurface?: (
     ctx: unknown,
     folder: unknown,
@@ -278,18 +339,13 @@ interface Window {
   prksTogglePersonWorksEdit?: (ctx?: unknown) => void
   prksRemoveWorkRoleLink?: (button: HTMLButtonElement) => Promise<void>
   prksPersonViewInGraph?: () => void
-  prksFolderLibraryTreeInnerHtml?: (
-    list: unknown,
-    filterQuery?: string,
-    options?: { delegateToggle?: boolean },
-  ) => string
   prksFolderLibraryCatalogGlanceParts?: (folders: unknown) => Array<string | null>
-  prksPaintFolderLibraryGlance?: (host: HTMLElement, parts: unknown) => void
   prksScheduleFolderLibraryGlance?: (
     root: ParentNode | HTMLElement,
     options?: {
       folders?: unknown[]
       recentlyAddedWorks?: unknown[] | null
+      onParts?: (parts: readonly unknown[]) => void
     },
   ) => void
   prksPublishFolderDashboardState?: (state: {
@@ -301,23 +357,8 @@ interface Window {
     [key: string]: unknown
   }) => void
   prksUnpublishFolderDashboardState?: (container: HTMLElement) => void
-  prksFolderLibraryExpandToggleLabel?: (folders: unknown) => string
-  prksFolderLibraryExpandToggleInnerHtml?: () => string
-  prksFolderTreeHasCollapsibleNodes?: (folders: unknown) => boolean
-  prksFolderTreeAllCollapsed?: (folders: unknown) => boolean
   prksBindFolderOfflineState?: (ctx: unknown, container: HTMLElement) => void
   prksOpenFolderModalFromLibrarySearch?: (query?: string) => void
-  prksToggleFolderNode?: (folderId: string) => void
-  prksToggleFolderNodeInHost?: (
-    treeHost: HTMLElement,
-    folderId: string,
-    folders?: readonly unknown[],
-  ) => void
-  prksToggleAllFolderNodes?: () => void
-  prksToggleAllFolderNodesInHost?: (
-    treeHost: HTMLElement,
-    folders: readonly unknown[],
-  ) => void
   prksOfflineRecentlyAddedFetch?: () => Promise<{
     source?: string
     value?: unknown

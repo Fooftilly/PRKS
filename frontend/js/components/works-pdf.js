@@ -1826,10 +1826,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // widgets stay out of the annotations table. Offline skips (server needed).
     // Never adopt from known-stale PDF bytes, and never while unresolved PDF
     // annotation ops exist (pending local intent is not adoption authority).
-    const onlineForAdopt =
-        typeof window.prksOfflineRuntimeState !== 'function' ||
-        window.prksOfflineRuntimeState() === 'online';
-    if (onlineForAdopt && typeof viewer.getAnnotations === 'function') {
+    if (isOnlineRuntime() && typeof viewer.getAnnotations === 'function') {
         try {
             let adoptBlocked = false;
             const canon = runtime.acknowledgedAnnotationSetRevision;
@@ -1851,18 +1848,36 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 abandonSetup();
                 return;
             }
-            if (!adoptBlocked) {
-                const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
-                const adoptRes = await prksRequest(
+            // The unresolved-op read above yields to IndexedDB: connectivity
+            // can change while it is pending. Never send a byte-adoption write
+            // after transitioning offline/reconnecting, even when this viewer
+            // was initially opened online and its setup identity remains live.
+            if (!adoptBlocked && isOnlineRuntime()) {
+                // The request coordinator serializes mutations, and the Library
+                // epoch adapter may await /api/session before transport. A
+                // synchronous online check alone cannot protect that later
+                // dispatch. Abort this *non-durable* adoption if reachability
+                // changes while either queue is waiting.
+                const controller = new AbortController();
+                const unsubscribe = typeof window.prksOfflineRuntimeSubscribe === 'function'
+                    ? window.prksOfflineRuntimeSubscribe(function () {
+                        if (!isOnlineRuntime()) controller.abort();
+                    }) : null;
+                try {
+                    if (!isOnlineRuntime()) controller.abort();
+                    if (!controller.signal.aborted) {
+                        const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+                        const adoptRes = await prksRequest(
                     `/api/works/${workId}/annotations/adopt`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ viewer_annotations: viewerItems }),
+                        signal: controller.signal,
                     },
-                    { dedupe: false, retry: false, freshForMs: 0 }
+                    { dedupe: false, retry: false, freshForMs: 0, cancellableMutation: true }
                 );
-                if (setupEligible() && adoptRes && adoptRes.ok) {
+                if (!controller.signal.aborted && setupEligible() && adoptRes && adoptRes.ok) {
                     const adoptBody = await adoptRes.json().catch(function () { return null; });
                     if (
                         adoptBody &&
@@ -1885,6 +1900,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             }
                         }
                     }
+                }
+                    }
+                } finally {
+                    if (typeof unsubscribe === 'function') unsubscribe();
                 }
             }
         } catch (_eAdopt) {

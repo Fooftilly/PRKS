@@ -293,7 +293,13 @@
             );
         }
 
-        function noteRequestSuccess() {
+        function noteRequestSuccess(issuedAtGeneration) {
+            // A response issued before an offline/reconnecting transition is
+            // not proof of CURRENT reachability. It may finish after a newer
+            // failed request and must not reopen the durable-sync claim gate.
+            // Legacy explicit callers without a token keep their semantics.
+            if (Number.isSafeInteger(issuedAtGeneration) &&
+                issuedAtGeneration !== connectivityGeneration) return;
             probeAttempt = 0;
             clearProbeTimer();
             if (state !== STATE_ONLINE) setState(STATE_ONLINE);
@@ -419,6 +425,10 @@
                 }
             }
 
+            // Capture reachability at real network start, after optional
+            // IndexedDB cache lookup. The earlier connectionToken still
+            // guards a stale cached result across offline transitions.
+            const networkToken = connectivityGeneration;
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -426,7 +436,7 @@
                 const kindOfError = classifyError(err);
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
-                    noteRequestSuccess();
+                    noteRequestSuccess(networkToken);
                     if (err.status === 404) {
                         return { value: null, source: 'server', cachedAt: null };
                     }
@@ -459,7 +469,7 @@
                 }
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
-            noteRequestSuccess();
+            noteRequestSuccess(networkToken);
             // Validate before publishing: a malformed 200 must never replace a
             // good cached entity.
             assertAcceptableShape(options2.validate, raw);
@@ -3075,6 +3085,10 @@
                 }
             }
 
+            // Capture reachability at real network start, after optional
+            // IndexedDB cache lookup. The earlier connectionToken still
+            // guards a stale cached result across offline transitions.
+            const networkToken = connectivityGeneration;
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -3082,7 +3096,7 @@
                 const kindOfError = classifyError(err);
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
-                    noteRequestSuccess();
+                    noteRequestSuccess(networkToken);
                     if (err.status === 404) {
                         return { value: null, source: 'server', cachedAt: null };
                     }
@@ -3110,7 +3124,7 @@
                 }
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
-            noteRequestSuccess();
+            noteRequestSuccess(networkToken);
             // Validate before publishing: a malformed 200 must never replace a
             // good cached list snapshot.
             assertAcceptableShape(options2.validate, raw);
@@ -3211,6 +3225,7 @@
         return {
             init: init,
             getState: getState,
+            getConnectivityGeneration: () => connectivityGeneration,
             subscribe: subscribe,
             noteRequestSuccess: noteRequestSuccess,
             noteRequestFailure: noteRequestFailure,
@@ -3298,11 +3313,14 @@
     function prksOfflineRuntimeState() {
         return production.getState();
     }
+    function prksOfflineRuntimeGeneration() {
+        return production.getConnectivityGeneration();
+    }
     function prksOfflineRuntimeSubscribe(fn) {
         return production.subscribe(fn);
     }
-    function prksOfflineNoteRequestSuccess() {
-        production.noteRequestSuccess();
+    function prksOfflineNoteRequestSuccess(issuedAtGeneration) {
+        production.noteRequestSuccess(issuedAtGeneration);
     }
     function prksOfflineNoteRequestFailure() {
         production.noteRequestFailure();
@@ -3461,6 +3479,7 @@
         prksOfflineFormatCachedAt: formatCachedAt,
         prksOfflineRuntimeInit: prksOfflineRuntimeInit,
         prksOfflineRuntimeState: prksOfflineRuntimeState,
+        prksOfflineRuntimeGeneration: prksOfflineRuntimeGeneration,
         prksOfflineRuntimeSubscribe: prksOfflineRuntimeSubscribe,
         prksOfflineNoteRequestSuccess: prksOfflineNoteRequestSuccess,
         prksOfflineNoteRequestFailure: prksOfflineNoteRequestFailure,

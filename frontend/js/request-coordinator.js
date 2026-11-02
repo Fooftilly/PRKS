@@ -62,9 +62,14 @@
         return false;
     }
 
-    function reportPrksReachable() {
+    function reachabilityGeneration() {
+        return typeof root.prksOfflineRuntimeGeneration === 'function'
+            ? root.prksOfflineRuntimeGeneration() : undefined;
+    }
+
+    function reportPrksReachable(issuedAtGeneration) {
         if (typeof root.prksOfflineNoteRequestSuccess === 'function') {
-            root.prksOfflineNoteRequestSuccess();
+            root.prksOfflineNoteRequestSuccess(issuedAtGeneration);
         }
     }
 
@@ -221,7 +226,7 @@
             });
         }
 
-        async function epochFetch(url, init) {
+        async function epochFetch(url, init, onTransportStart) {
             let sent = init;
             if (isLibraryMutation(url, init) && !hasHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER)) {
                 // A caller that gives up while the session is read is answered at once.
@@ -234,6 +239,8 @@
                     });
                 }
             }
+            // Library epoch preflight may have awaited /api/session.
+            if (typeof onTransportStart === 'function') onTransportStart();
             const response = await fetchImpl(url, sent);
             note(response);
             return response;
@@ -655,12 +662,16 @@
             while (attempt < 1 + (retryEnabled ? PRKS_REQUEST_RETRY_MAX : 0)) {
                 if (signal.aborted) throw makeAbortError();
                 try {
-                    const response = await fetchImpl(href, networkInit(fetchOptions, signal));
+                    // Snapshot immediately before the real transport attempt.
+                    // Old successful responses cannot undo a newer disconnect.
+                    let issuedAtGeneration = reachabilityGeneration();
+                    const response = await fetchImpl(href, networkInit(fetchOptions, signal),
+                        () => { issuedAtGeneration = reachabilityGeneration(); });
                     // A transport that ignores abort may resolve after a
                     // flight's header deadline. Do not publish late responses
                     // or let them incorrectly mark the server reachable.
                     if (signal.aborted) throw makeAbortError();
-                    if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable();
+                    if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable(issuedAtGeneration);
                     if (retryEnabled && shouldRetryStatus(response.status) && attempt < PRKS_REQUEST_RETRY_MAX) {
                         counts.retries += 1;
                         attempt += 1;
@@ -803,12 +814,20 @@
             let error = null;
             let networkFailed = false;
             try {
-                response = await fetchImpl(job.href, networkInit(job.fetchOptions, undefined));
-                if (!isManagedPdfHref(job.href)) reportPrksReachable();
+                // Only explicitly cancellable, non-durable background writes
+                // honor a caller's signal. Durable sync operations retain their
+                // existing cannot-cancel-on-navigation semantics.
+                const signal = job.cancellable ? job.fetchOptions.signal : undefined;
+                if (signal && signal.aborted) throw makeAbortError();
+                let issuedAtGeneration = reachabilityGeneration();
+                response = await fetchImpl(job.href, networkInit(job.fetchOptions, signal),
+                    () => { issuedAtGeneration = reachabilityGeneration(); });
+                if (signal && signal.aborted) throw makeAbortError();
+                if (!isManagedPdfHref(job.href)) reportPrksReachable(issuedAtGeneration);
             } catch (err) {
                 error = err;
                 networkFailed = !prksIsAbortError(err);
-                if (!isManagedPdfHref(job.href)) reportPrksUnreachable(err);
+                if (networkFailed && !isManagedPdfHref(job.href)) reportPrksUnreachable(err);
             }
             if (response && response.ok) {
                 bumpEpochAndClearCache();
@@ -818,7 +837,8 @@
             const waiters = job.waiters.splice(0, job.waiters.length);
             waiters.forEach(function (waiter) {
                 if (error) {
-                    counts.failed += 1;
+                    if (prksIsAbortError(error)) counts.aborted += 1;
+                    else counts.failed += 1;
                     waiter.reject(error);
                 } else {
                     try {
@@ -865,6 +885,9 @@
                     enqueueMutation({
                         href: href,
                         fetchOptions: opts,
+                        // Opt in only for best-effort writes such as PDF-byte
+                        // adoption. Never abort durable queue submissions.
+                        cancellable: pol.cancellableMutation === true,
                         waiters: [{ resolve: resolve, reject: reject }],
                     });
                 });

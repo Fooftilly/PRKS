@@ -1,12 +1,12 @@
 # Maintainer / browser-test dependencies. Not used by Docker or production runtime.
-playwright==1.64.0
+playwright==1.64.1
 # Contract-test helpers for the typed API boundary (#180 / #45). Required by
 # the Unit / API / contract Test Gate job (installed alongside runtime pins);
 # not used by Docker or production runtime.
 openapi-core==0.23.1
 # Bounded property/state-machine tests for revision and sync invariants (#854).
 # Unit Test Gate installs this; not included in PRKS production runtime.
-hypothesis==6.170.9
+hypothesis==6.170.10
 # CommonMark parser for verified docs-only PR links, anchors and references.
 # CI docs profile loads only these wheels; no production runtime dependency.
 markdown-it-py==4.2.0
@@ -16,4 +16,4 @@ requests==2.34.2
 
 # Read-only, manual/path-scoped synthetic OpenAPI fuzz pilot (#855).
 # Installed only by the dedicated Schemathesis workflow.
-schemathesis==4.32.4
+schemathesis==4.32.5

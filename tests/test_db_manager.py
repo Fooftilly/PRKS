@@ -1085,8 +1085,8 @@ class TestDBManager(unittest.TestCase):
 
     def test_merge_tags_dedupes_work_with_both_tags(self):
         w = self.db.add_work(title="MergeW2")
-        src = self.db.add_tag("MergeS", "#1")["id"]
-        tgt = self.db.add_tag("MergeT", "#2")["id"]
+        src = self.db.add_tag("MergeS", "#111")["id"]
+        tgt = self.db.add_tag("MergeT", "#222")["id"]
         self.db.add_tag_to_work(w, src)
         self.db.add_tag_to_work(w, tgt)
         self.db.merge_tags_into(src, tgt)
@@ -1094,8 +1094,8 @@ class TestDBManager(unittest.TestCase):
         self.assertEqual({r["tag_id"] for r in rows}, {tgt})
 
     def test_merge_tags_migrates_source_aliases(self):
-        src = self.db.add_tag("MSrc", "#1")["id"]
-        tgt = self.db.add_tag("MTgt", "#2")["id"]
+        src = self.db.add_tag("MSrc", "#111")["id"]
+        tgt = self.db.add_tag("MTgt", "#222")["id"]
         self.db.add_tag_alias(src, "MigratedAlias")
         self.db.merge_tags_into(src, tgt)
         tags = self.db.get_all_tags()
@@ -1103,8 +1103,8 @@ class TestDBManager(unittest.TestCase):
         self.assertIn("MigratedAlias", trow.get("aliases", []))
 
     def test_merge_tags_drops_source_alias_matching_target_canonical(self):
-        src = self.db.add_tag("MSrc2", "#1")["id"]
-        tgt = self.db.add_tag("CanonicalTgt", "#2")["id"]
+        src = self.db.add_tag("MSrc2", "#111")["id"]
+        tgt = self.db.add_tag("CanonicalTgt", "#222")["id"]
         # Bypass add_tag_alias: same text as target canonical (nocase) is invalid via API but may exist in data.
         aid = self.db.generate_id("L")
         self.db.execute_query(

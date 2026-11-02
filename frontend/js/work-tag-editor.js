@@ -223,6 +223,12 @@
         }
         input.onfocus = () => void dropdown(); input.oninput = () => void dropdown();
         input.onblur = () => setTimeout(() => root.prksHideInlineComboboxResults(results), 200);
+        if (typeof root.prksBindComboboxKeys === 'function') {
+            root.prksBindComboboxKeys(input, results, {
+                enterCreates: true,
+                onEscape: function () { root.prksHideInlineComboboxResults(results); },
+            });
+        }
     }
     function mount(ctx, workId) {
         if (!ctx || !root.prksSync) return;

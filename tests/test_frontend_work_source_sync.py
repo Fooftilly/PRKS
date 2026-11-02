@@ -283,9 +283,15 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
                          'a bare enqueue would leave two intents for one aggregate')
 
     def test_components_do_not_interpret_source_operations(self):
-        for name in ('components/works.js', 'components/works-video.js',
-                     'components/work-cards.js', 'components/playlists.js'):
-            source = (FRONTEND / name).read_text()
-            with self.subTest(module=name):
+        paths = [
+            FRONTEND / 'components/works.js',
+            FRONTEND / 'components/work-cards.js',
+            FRONTEND / 'components/playlists.js',
+            ROOT / 'frontend-app/src/features/work/video-embed.ts',
+            ROOT / 'frontend-app/src/features/work/WorkVideoPane.vue',
+        ]
+        for path in paths:
+            source = path.read_text()
+            with self.subTest(module=str(path.relative_to(ROOT))):
                 for forbidden in ('SET_WORK_SOURCE', 'listOperations', 'prksSync.store'):
                     self.assertNotIn(forbidden, source, forbidden)

@@ -2,6 +2,9 @@
 import argparse
 import os
 import sys
+import time
+
+_IMPORT_STARTED = time.perf_counter()
 
 from backend.log_config import setup_logging
 from backend.backup_restore import recover_incomplete_restore
@@ -163,36 +166,48 @@ def start_jobs(auth, environ=None):
 
 
 if __name__ == "__main__":
+    from backend.startup_profile import phase as startup_phase, record_imports
+
+    record_imports(_IMPORT_STARTED)
     args = build_parser().parse_args()
     if args.testing:
         os.environ["PRKS_TESTING"] = "1"
 
     # Fail before storage/DB/migrations/server when the Python env is wrong.
-    from backend.dependency_gate import ensure_runtime_or_exit
+    with startup_phase("startup_dependency_gate"):
+        from backend.dependency_gate import ensure_runtime_or_exit
 
-    ensure_runtime_or_exit()
+        ensure_runtime_or_exit()
 
-    try:
-        config = StorageConfig.from_env(cli_root=args.storage_root)
-    except StorageRootError as exc:
-        print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
-        raise SystemExit(2) from None
+    with startup_phase("startup_config"):
+        try:
+            config = StorageConfig.from_env(cli_root=args.storage_root)
+        except StorageRootError as exc:
+            print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
+            raise SystemExit(2) from None
     # Before the root is opened: the PostgreSQL start check takes the root's
     # shared lease, which the single-process lease below excludes.
-    auth = start_identity(args, config)
-    jobs = start_jobs(auth)
+    with startup_phase("startup_identity"):
+        auth = start_identity(args, config)
+    with startup_phase("startup_jobs"):
+        jobs = start_jobs(auth)
     # Held until this process exits: the single-process lease (root.lock).
-    bound_root = open_storage(config)
+    with startup_phase("startup_storage_open"):
+        bound_root = open_storage(config)
     # Every later open stays beneath the root that was validated and leased,
     # even if a root symlink is retargeted while the process runs.
     config = bound_root.anchor(config)
-    recover_incomplete_restore(config)
-    config = bind_storage(config)
-    setup_logging(config)
-    bound_root.log_binding()
+    with startup_phase("startup_restore"):
+        recover_incomplete_restore(config)
+    with startup_phase("startup_bind"):
+        config = bind_storage(config)
+    with startup_phase("startup_logging"):
+        setup_logging(config)
+        bound_root.log_binding()
     if jobs is not None:
         # The embedded worker's object maintenance acts on the leased root only.
-        jobs.bind_root(config.root)
+        with startup_phase("startup_worker_bind"):
+            jobs.bind_root(config.root)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
     run_server(port=port, host=args.host, auth=auth, jobs=jobs)

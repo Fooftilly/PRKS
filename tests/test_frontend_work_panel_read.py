@@ -77,6 +77,34 @@ class WorkPanelReadContractTests(unittest.TestCase):
         self.assertLess(_TAGS.index("if (!live(ctx, state)) return;"), _TAGS.index("store.coalesceWorkTag"))
         self.assertIn("prksEffectiveWorkTags(work, state.operations)", _TAGS)
 
+    def test_stored_external_urls_cannot_become_unsafe_legacy_links(self):
+        """Legacy renderer sinks must retain the same HTTP(S) policy as Vue."""
+        helper = _UI[
+            _UI.index("function prksSafeHttpUrl(value) {"):
+            _UI.index("function prksEscapeAttr(s) {")
+        ]
+        self.assertIn("new URL(raw)", helper)
+        self.assertIn("parsed.protocol === 'https:' || parsed.protocol === 'http:'", helper)
+        self.assertIn("return '';", helper)
+        self.assertIn("const href = prksSafeHttpUrl(raw)", helper)
+        self.assertIn(": escapeHtml(raw)", helper)
+        self.assertIn("prksExternalUrlRowHtml('Original playlist URL', originalUrl, true)", _UI)
+        self.assertIn("prksExternalUrlRowHtml('Original URL', parts.originalUrlPdf)", _UI)
+        self.assertIn("prksExternalUrlRowHtml('Original URL', originalUrlPdf)", _UI)
+        self.assertNotIn('href="${escapeHtml(originalUrl)}"', _UI)
+        self.assertNotIn('href="${escapeHtml(parts.originalUrlPdf)}"', _UI)
+        self.assertNotIn('href="${escapeHtml(originalUrlPdf)}"', _UI)
+
+    def test_legacy_tag_css_declarations_cannot_escape_color_grammar(self):
+        helper = _UI[
+            _UI.index("function prksSafeTagColorCss(value) {"):
+            _UI.index("function prksSafeHttpUrl(value) {")
+        ]
+        self.assertIn("return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/", helper)
+        self.assertIn("color : '#6d6cf7'", helper)
+        self.assertEqual(_UI.count("prksSafeTagColorCss(t.color)"), 2)
+        self.assertNotIn("escapeHtml(t.color || '#6d6cf7')", _UI)
+
     def test_view_shell_keeps_editor_hosts(self):
         shell = _UI[_UI.index("function prksWorkPanelViewShellHtml"):_UI.index("function renderWorkMetaTab")]
         self.assertIn('data-prks-role="work-bib-rows"', shell)

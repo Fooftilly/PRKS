@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, provide } from 'vue'
+import { argumentDomScope, argumentDomScopeKey } from './dom-scope'
 import { argumentIntentsKey, browserArgumentIntents, type ArgumentIntentOwner } from './intents'
 
 const props = defineProps<{
@@ -8,6 +9,8 @@ const props = defineProps<{
 }>()
 
 const current = computed(() => browserArgumentIntents(props.owner, props.generation))
+
+provide(argumentDomScopeKey, argumentDomScope(props.owner))
 
 provide(argumentIntentsKey, {
   create: (kind) => current.value.create(kind),

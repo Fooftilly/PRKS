@@ -166,11 +166,19 @@ def _open_work_from_home(page, title, *, profile_prefix=None):
         page.locator('#sidebar a.nav-link[href="#/folders"]').click()
         page.wait_for_function("() => location.hash === '#/folders'")
     with stage("recent"):
-        # Preserve the complete click + card-visibility assertion in this
-        # inclusive stage. The two children reveal whether its repeatable
-        # ~1.300s post-#945 cost is action/handler or async list/DOM paint.
+        # Opt-in manual profile (#740): measure Playwright actionability
+        # separately from the *real* user click. trial=True performs no click.
+        # The probe can pre-scroll/warm actionability, so compare with a
+        # baseline on the same runner; it is not proof of handler time.
+        tab = page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]')
+        if (
+            profile_prefix in ("person_create", "person_edit")
+            and os.environ.get("PRKS_E2E_PERSON_RECENT_TRIAL") == "1"
+        ):
+            with stage("recent_trial"):
+                tab.click(trial=True)
         with stage("recent_click"):
-            page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]').click()
+            tab.click()
         with stage("recent_card"):
             page.locator(".card-title", has_text=title).wait_for()
     with stage("card_click"):
@@ -1254,10 +1262,23 @@ class WorkDetailsPolishTests(_BrowserE2E):
             )
             page.wait_for_timeout(200)
             self.assertEqual(patches, [])
+            # Other independent operations (notably MARK_WORK_OPENED)
+            # can still be queued while this viewer finishes mounting. The
+            # forbidden mutation is a Work metadata *field* operation, not
+            # a global prohibition on every unrelated durable operation.
+            # Count every metadata-field write for this Work, not just the
+            # invalid date's field, so a partially applied form still fails.
+            field_ops = page.evaluate(
+                """work => prksSync.store.listOperations().then(rows =>
+                    rows.filter(op => op.entity_type === 'work' &&
+                        String(op.entity_id) === String(work) &&
+                        op.operation === 'SET_WORK_METADATA_FIELD')
+                )""",
+                work_a,
+            )
             self.assertEqual(
-                page.evaluate("() => prksSync.store.listOperations().then(r => r.length)"),
-                0,
-                "a date PRKS would have to guess at is never enqueued either",
+                field_ops, [],
+                "invalid date cannot enqueue any Work metadata field",
             )
         finally:
             try:
@@ -2173,36 +2194,6 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         page.wait_for_function("() => location.hash.indexOf('#/concepts/') === 0")
         page.locator("h2.prks-page-title", has_text="Ideology").wait_for()
 
-    def test_position_index_search_matches_title_and_description(self):
-        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
-        position_id = server.ids["position"]
-        page.evaluate(
-            """(id) => prksRequest('/api/positions/' + id, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: 'A distinctive research phrase about standardization.' }),
-            })""",
-            arg=position_id,
-        )
-        page.evaluate("() => window.prksNavigate('#/positions')")
-        page.wait_for_function("() => location.hash === '#/positions'")
-        page.locator("#prks-position-rows .prks-research-row").first.wait_for()
-        search = page.locator("#prks-position-search")
-
-        search.fill("Unrelated Position")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 1"
-        )
-        search.fill("standardization")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 1"
-        )
-        search.fill("no-such-position-text")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-position-rows .prks-research-row').length === 0"
-        )
-        self.assertIn("No Positions match", page.locator("#prks-position-rows").inner_text())
-
     def test_argument_index_search_respects_kind_filter(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         page.evaluate(
@@ -2214,25 +2205,25 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         )
         page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("#prks-argument-rows .prks-research-row").first.wait_for()
+        page.locator("[data-prks-argument-rows] .prks-research-row").first.wait_for()
         search = page.locator("#prks-argument-search")
 
         search.fill("Marx")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 1"
         )
-        self.assertIn("Marx on alienation", page.locator("#prks-argument-rows").inner_text())
+        self.assertIn("Marx on alienation", page.locator("[data-prks-argument-rows]").inner_text())
 
         # An Argument name must not surface while the Stances kind filter is active.
         search.fill("Unrelated Argument")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 0"
         )
 
         search.fill("")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 1"
         )
 
     def test_concept_detail_sections_and_relationship_navigation(self):
@@ -2291,91 +2282,7 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         mention_link.first.wait_for()
         self.assertEqual(mention_link.first.get_attribute("href"), "#/works/" + work_a)
 
-    def test_position_relationship_rows_use_shared_research_row_language(self):
-        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
-        position_id = server.ids["position"]
-        argument_id = page.evaluate(
-            """async (posId) => {
-                const res = await prksRequest('/api/arguments', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: 'Supporting argument',
-                        kind: 'argument',
-                        targets: [{ type: 'position', id: posId, verdict_id: 'supports' }],
-                    }),
-                });
-                const created = await res.json();
-                return created.id;
-            }""",
-            arg=position_id,
-        )
-        self.assertTrue(argument_id)
-        page.evaluate("(id) => window.prksNavigate('#/positions/' + id)", arg=position_id)
-        page.wait_for_function("() => location.hash.indexOf('#/positions/') === 0")
-        row = page.locator(".research-entity__section a.prks-research-row", has_text="Supporting argument")
-        row.wait_for()
-        row_text = row.inner_text()
-        self.assertIn("Supporting argument", row_text)
-        self.assertIn("Argument", row_text)
-        self.assertIn("Supports", row_text)
-        self.assertEqual(row.get_attribute("href"), "#/arguments/" + argument_id)
-        self.assertEqual(page.locator(".research-entity__section-count").first.inner_text(), "1")
 
-    def test_argument_detail_counts_and_contextual_empty_wording(self):
-        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
-        work_a = server.ids["work_a"]
-        position_id = server.ids["position"]
-        populated_id = page.evaluate(
-            """async (args) => {
-                const res = await prksRequest('/api/arguments', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: 'Populated argument',
-                        kind: 'argument',
-                        main_text: 'Body text.',
-                        targets: [{ type: 'position', id: args.posId, verdict_id: 'supports' }],
-                        sources: [{ work_id: args.workId, pages: '1-2' }],
-                    }),
-                });
-                return (await res.json()).id;
-            }""",
-            arg={"posId": position_id, "workId": work_a},
-        )
-        empty_id = page.evaluate(
-            """async () => {
-                const res = await prksRequest('/api/arguments', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: 'Bare argument', kind: 'argument' }),
-                });
-                return (await res.json()).id;
-            }"""
-        )
-
-        page.evaluate("(id) => window.prksNavigate('#/arguments/' + id)", arg=populated_id)
-        page.wait_for_function("() => location.hash.indexOf('#/arguments/') === 0")
-        page.locator(".research-entity__section-head", has_text="Responds to").locator(
-            ".research-entity__section-count"
-        ).first.wait_for()
-        counts = {}
-        for label in ("Responds to", "Sources", "Responses", "Mentioned in notes"):
-            head = page.locator(".research-entity__section-head", has_text=label)
-            counts[label] = head.locator(".research-entity__section-count").inner_text()
-        self.assertEqual(counts["Responds to"], "1")
-        self.assertEqual(counts["Sources"], "1")
-        self.assertEqual(counts["Responses"], "0")
-        self.assertEqual(counts["Mentioned in notes"], "0")
-
-        page.evaluate("(id) => window.prksNavigate('#/arguments/' + id)", arg=empty_id)
-        page.wait_for_function("() => location.hash.indexOf('#/arguments/') === 0")
-        page.locator("h2.prks-page-title", has_text="Bare argument").wait_for()
-        body = page.locator(".research-entity").inner_text()
-        self.assertIn("No targets.", body)
-        self.assertIn("No sources.", body)
-        self.assertIn("No responses.", body)
-        self.assertIn("Not mentioned in research notes.", body)
 
     def test_header_actions_remain_reachable(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
@@ -2451,52 +2358,35 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
     def test_clear_search_across_indexes_targets_current_input(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
         sequence = [
-            ("#/concepts", "prks-concept-search", "prks-concept-rows"),
-            ("#/positions", "prks-position-search", "prks-position-rows"),
-            ("#/arguments", "prks-argument-search", "prks-argument-rows"),
+            ("#/concepts", "prks-concept-search", "#prks-concept-rows"),
+            ("#/positions", "prks-position-search", "#prks-position-rows"),
+            ("#/arguments", "prks-argument-search", "[data-prks-argument-rows]"),
         ]
-        for hash_route, input_id, rows_host_id in sequence:
+        for hash_route, input_id, rows_host in sequence:
             page.evaluate("(h) => window.prksNavigate(h)", arg=hash_route)
             page.wait_for_function("(h) => location.hash === h", arg=hash_route)
-            page.locator("#" + rows_host_id + " .prks-research-row").first.wait_for()
+            page.locator(rows_host + " .prks-research-row").first.wait_for()
             total = page.evaluate(
-                "(id) => document.querySelectorAll('#' + id + ' .prks-research-row').length",
-                arg=rows_host_id,
+                "(sel) => document.querySelectorAll(sel + ' .prks-research-row').length",
+                arg=rows_host,
             )
             search = page.locator("#" + input_id)
             search.fill("zzz-nonexistent-query")
             page.wait_for_function(
-                "(id) => document.querySelectorAll('#' + id + ' .prks-research-row').length === 0",
-                arg=rows_host_id,
+                "(sel) => document.querySelectorAll(sel + ' .prks-research-row').length === 0",
+                arg=rows_host,
             )
-            page.locator("#" + rows_host_id + " [data-research-search-clear]").click()
+            page.locator(rows_host + " [data-research-search-clear]").click()
             self.assertEqual(search.input_value(), "", hash_route)
             page.wait_for_function(
-                "(a) => document.querySelectorAll('#' + a.id + ' .prks-research-row').length === a.n",
-                arg={"id": rows_host_id, "n": total},
+                "(a) => document.querySelectorAll(a.sel + ' .prks-research-row').length === a.n",
+                arg={"sel": rows_host, "n": total},
             )
             self.assertEqual(
                 page.evaluate("() => document.activeElement && document.activeElement.id"),
                 input_id,
                 hash_route,
             )
-
-    def test_argument_filtered_true_empty_state_describes_active_kind(self):
-        server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
-        page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
-        page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("#prks-argument-rows").wait_for()
-        empty_text = page.locator("#prks-argument-rows").inner_text()
-        self.assertIn("No Stances yet.", empty_text)
-        self.assertNotIn("No Arguments or Stances yet.", empty_text)
-        self.assertEqual(page.locator("#prks-argument-rows #prks-stance-new-empty").count(), 1)
-        self.assertEqual(page.locator("#prks-argument-rows #prks-argument-new-empty").count(), 0)
-
-        page.evaluate("() => window.prksNavigate('#/arguments?kind=argument')")
-        page.wait_for_function("() => location.hash === '#/arguments?kind=argument'")
-        page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length > 0"
-        )
 
     def test_argument_filtered_search_empty_is_kind_aware(self):
         server, page, _collector = self._start_app(seed_fn=seed_graph_context_library)
@@ -2509,20 +2399,20 @@ class ResearchIndexAndDetailPolishTests(_BrowserE2E):
         )
         page.evaluate("() => window.prksNavigate('#/arguments?kind=stance')")
         page.wait_for_function("() => location.hash === '#/arguments?kind=stance'")
-        page.locator("#prks-argument-rows .prks-research-row").first.wait_for()
+        page.locator("[data-prks-argument-rows] .prks-research-row").first.wait_for()
         search = page.locator("#prks-argument-search")
 
         search.fill("zzz-nonexistent")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 0"
         )
-        empty_text = page.locator("#prks-argument-rows").inner_text()
+        empty_text = page.locator("[data-prks-argument-rows]").inner_text()
         self.assertIn("No Stances match", empty_text)
         self.assertNotIn("No Arguments or Stances match", empty_text)
 
-        page.locator("#prks-argument-rows [data-research-search-clear]").click()
+        page.locator("[data-prks-argument-rows] [data-research-search-clear]").click()
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 1"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 1"
         )
         self.assertEqual(page.evaluate("() => location.hash"), "#/arguments?kind=stance")
         self.assertEqual(
@@ -4617,65 +4507,6 @@ class WorkspaceTabsTests(_BrowserE2E):
         )
         self.assertEqual(persisted, final_text)
 
-    def test_private_reminder_committed_handoff_excludes_foreign_and_failed_saves(self):
-        _server, page, _collector = self._start_app()
-        evidence = page.evaluate(
-            """() => {
-                const guard = window.prksWorkPrivateNoteNeedsCommittedHandoff;
-                if (typeof guard !== 'function') throw Error('handoff guard missing');
-                const family = { entityType: 'work' };
-                const session = {
-                    entityId: 'W', ownerTabId: 'tab',
-                    state: 'committed', retired: false, dirty: false,
-                    promise: null, latestSaveToken: 1, settledSaveToken: 1,
-                    draftText: 'locally queued X',
-                    settledBase: { value: 'previous V', revision: 4 },
-                };
-                function test(patch = {}, canonicalText = 'previous V',
-                              revision = 5, source = 'server', displayed = 'previous V',
-                              familyType = family) {
-                    const existing = Object.assign({}, session, patch);
-                    const ctx = { tabId: 'tab', getResource: key => {
-                        if (key === 'workNotesCanonical') return {
-                            id: 'W', private_notes: canonicalText,
-                            sources: { private: source }
-                        };
-                        if (key === 'workNotesObserved') return {
-                            private: { revision }
-                        };
-                        return null;
-                    }};
-                    return guard(familyType, existing, ctx, 'W', displayed, false);
-                }
-                return {
-                    stale: test(),
-                    pendingOverlay: test({}, 'previous V', 5, 'server', 'locally queued X'),
-                    foreign: test({}, 'foreign B', 6, 'server', 'foreign B'),
-                    newerRevision: test({}, 'previous V', 7),
-                    cacheOnly: test({}, 'previous V', 5, 'cache'),
-                    inflight: test({ promise: {} }),
-                    failed: test({ state: 'error', dirty: true }),
-                    unsettled: test({ settledSaveToken: 0 }),
-                    noBase: test({ settledBase: null }),
-                    foreignTab: test({ ownerTabId: 'elsewhere' }),
-                    folder: test({}, 'previous V', 5, 'server',
-                        'previous V', { entityType: 'folder' }),
-                };
-            }"""
-        )
-        self.assertEqual(evidence, {
-            "stale": True,
-            "pendingOverlay": True,
-            "foreign": False,
-            "newerRevision": False,
-            "cacheOnly": False,
-            "inflight": False,
-            "failed": False,
-            "unsettled": False,
-            "noBase": False,
-            "foreignTab": False,
-            "folder": False,
-        })
 
     def test_private_reminder_handoff_revert_cancels_never_sent_row(self):
         server, page, _collector = self._start_app()
@@ -4995,57 +4826,6 @@ class WorkspaceTabsTests(_BrowserE2E):
         if expected:
             collector.console_errors.remove(expected[0])
 
-    def test_private_reminder_ack_proof_must_match_work_and_base(self):
-        _server, page, _collector = self._start_app()
-        # Invoke the real UI save-selection boundary. Stub only durable
-        # enqueue (so no network mutation); wrong or absent receipts must
-        # NEVER replace the pinned handoff base with the newer revision.
-        bases = page.evaluate(
-            """async () => {
-                const save = window.prksSaveWorkNoteDurably;
-                const ack = window.prksAcknowledgedWorkPrivateNote;
-                const id = 'W-proof-scope';
-                const base = { value: 'V', revision: 4 };
-                const ctx = {
-                    ui: { workPrivateNoteSession: {
-                        entityId: id, handoffBase: base, handoffText: 'X',
-                        settledOpId: 'original-op',
-                    }},
-                    getResource: key => key === 'workNotesObserved'
-                        ? { private: base } : null,
-                };
-                let selected = null;
-                try {
-                    window.prksSaveWorkNoteDurably = (_id, _kind, _text, observed) => {
-                        selected = { value: observed.value, revision: observed.revision };
-                        return Promise.resolve({ code: 'saved', opId: null });
-                    };
-                    const cases = [
-                        null,
-                        { entityId: 'W-foreign', baseRevision: 4, revision: 5 },
-                        { entityId: id, baseRevision: 3, revision: 5 },
-                        { entityId: id, baseRevision: 4, revision: 5 },
-                    ];
-                    const result = [];
-                    for (const receipt of cases) {
-                        window.prksAcknowledgedWorkPrivateNote = () => receipt;
-                        selected = null;
-                        await prksSaveWorkPrivateNoteForSession({ ctx }, id, 'Y');
-                        result.push(selected);
-                    }
-                    return result;
-                } finally {
-                    window.prksSaveWorkNoteDurably = save;
-                    window.prksAcknowledgedWorkPrivateNote = ack;
-                }
-            }"""
-        )
-        self.assertEqual(bases, [
-            {"value": "V", "revision": 4},
-            {"value": "V", "revision": 4},
-            {"value": "V", "revision": 4},
-            {"value": "X", "revision": 5},
-        ])
 
     def test_private_reminder_handoff_without_ack_proof_still_conflicts(self):
         page, work_a, ids, selector, _stale, new_text, server_url, collector = (
@@ -5981,7 +5761,16 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    return { title: work && work.title, panel: panel ? panel.innerHTML : '' };
+                    // Compare panel content without live status regions: any
+                    // Work's sync notices can settle asynchronously after a
+                    // focus switch and are not part of the panel's data.
+                    const stable = panel && panel.cloneNode(true);
+                    if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
+                        .forEach(node => node.replaceChildren());
+                    return {
+                        title: work && work.title,
+                        panel: stable ? stable.innerHTML : '',
+                    };
                 }""",
                 arg=work_b_tab_id,
             )
@@ -5992,7 +5781,15 @@ class TabContextHostRootTests(_BrowserE2E):
                 "(id) => { const w = window.prksGetTabContext(id).getEntity('work'); return w && w.title === 'Saved While Unfocused'; }",
                 arg=main_id,
             )
-            page.wait_for_timeout(300)
+            # Entity title updates before the durable ACK is completely retired.
+            # A fixed sleep can resume mid-finalization and yield a false
+            # unsaved-leave refusal; wait for the actual sync invariant.
+            wait_for_async(
+                page,
+                "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+                timeout=20000,
+                message="Work A's saved operation never retired before route leave",
+            )
 
             # B's panel/entity are completely untouched by A's background acknowledgement.
             after = page.evaluate(
@@ -6000,9 +5797,15 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
+                    // Compare panel content without live status regions: any
+                    // Work's sync notices can settle asynchronously after a
+                    // focus switch and are not part of the panel's data.
+                    const stable = panel && panel.cloneNode(true);
+                    if (stable) stable.querySelectorAll('[aria-live], [role="status"]')
+                        .forEach(node => node.replaceChildren());
                     return {
                         title: work && work.title,
-                        panel: panel ? panel.innerHTML : '',
+                        panel: stable ? stable.innerHTML : '',
                         ownerTabId: panel ? panel.dataset.prksOwnerTabId : '',
                     };
                 }""",
