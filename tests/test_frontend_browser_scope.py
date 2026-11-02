@@ -74,7 +74,9 @@ class BrowserScopeStructure(unittest.TestCase):
         for page_const, sw_const in (
             ("POINTER_DB_NAME", "SCOPE_POINTER_DB"),
             ("POINTER_STORE", "SCOPE_POINTER_STORE"),
+            ("CLIENTS_STORE", "SCOPE_CLIENTS_STORE"),
             ("POINTER_KEY", "SCOPE_POINTER_KEY"),
+            ("BIND_MESSAGE", "SCOPE_BIND_MESSAGE"),
         ):
             page_value = re.search(r"const %s = '([^']+)';" % page_const, scope).group(1)
             sw_value = re.search(r"const %s = '([^']+)';" % sw_const, sw).group(1)
@@ -83,6 +85,10 @@ class BrowserScopeStructure(unittest.TestCase):
         self.assertEqual(
             re.search(r"pdf: '([^']+)'", scope).group(1),
             re.search(r"const PDF_CACHE_BASE = '([^']+)';", sw).group(1),
+        )
+        self.assertEqual(
+            re.search(r"const POINTER_DB_VERSION = (\d+);", scope).group(1),
+            re.search(r"const SCOPE_POINTER_DB_VERSION = (\d+);", sw).group(1),
         )
         self.assertEqual(
             re.search(r"ID_PATTERN = (/[^;]+/);", scope).group(1),
@@ -96,6 +102,19 @@ class BrowserScopeStructure(unittest.TestCase):
         self.assertGreater(check, 0)
         self.assertLess(check, claim)
         self.assertIn("session: root.prksBrowserScope", code)
+
+
+    def test_session_reads_go_through_the_request_coordinator(self) -> None:
+        code = _code(_read(_JS, "browser-scope.js"))
+        self.assertIn("root.prksRequest(url, init, { dedupe: false })", code)
+        self.assertNotIn("root.fetch(", code)
+        html = _read(_FRONTEND, "index.html")
+        self.assertLess(html.find('src="/js/request-coordinator.js"'), html.find('src="/js/browser-scope.js"'))
+
+    def test_worker_serves_each_page_its_own_binding(self) -> None:
+        sw = _code(_read(_FRONTEND, "sw.js"))
+        self.assertIn("handlers.handlePdfRequest(request, pathname, event.clientId || '')", sw)
+        self.assertIn("handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId)", sw)
 
 
 if __name__ == "__main__":

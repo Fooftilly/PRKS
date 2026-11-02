@@ -34,6 +34,11 @@
      * pending, never settled or retired -- until the session is good again.
      * An expired session pauses the queue; it never drops it (§10.4). */
     const HOLD_RETRY_MS = 30000;
+    const HOLD_LABELS = {
+        signed_out: 'Waiting for sign-in.',
+        refused: 'Refused for this account; waiting.',
+        epoch: 'Waiting for the Library to be confirmed.',
+    };
     function admissionHold(response, data) {
         const code = data && (data.code || data.error);
         if (response.status === 401) return 'signed_out';
@@ -48,15 +53,17 @@
         const supported = op => Object.prototype.hasOwnProperty.call(handlers, op.operation);
         const listeners = new Set();
         const discarded = [];
-        // Why delivery is paused, or null. 'changed' and 'unbound' last for
-        // the page: its store belongs to a scope that is no longer signed in.
+        // Why delivery is paused, or null. 'changed', 'logged_out' and
+        // 'unbound' last for the page: its store belongs to a scope that is
+        // no longer signed in here.
+        const PERMANENT = ['changed', 'logged_out', 'unbound'];
         let held = null;
         let running = false, timer = null, recovered = false;
         function hold(reason) {
             const changed = held !== reason;
             held = reason;
             if (changed) emit({ held: reason });
-            if (reason !== 'changed' && reason !== 'unbound') schedule(HOLD_RETRY_MS);
+            if (PERMANENT.indexOf(reason) === -1) schedule(HOLD_RETRY_MS);
         }
         function release() {
             if (held === null) return;
@@ -64,11 +71,16 @@
             emit({ held: null });
         }
         function permanentlyHeld() {
-            return held === 'changed' || held === 'unbound';
+            return PERMANENT.indexOf(held) !== -1;
         }
-        // Another account signed in here: nothing more is sent from this page.
+        // Another account signed in here, or this one signed out: nothing
+        // more is sent from this page.
         if (deps.session && typeof deps.session.subscribe === 'function') {
-            deps.session.subscribe(() => hold('changed'));
+            deps.session.subscribe(event => hold(event && event.reason === 'logged_out' ? 'logged_out' : 'changed'));
+        }
+        function retiredReason() {
+            const reason = typeof deps.session.retiredReason === 'function' ? deps.session.retiredReason() : null;
+            return reason === 'logged_out' ? 'logged_out' : 'changed';
         }
         /* Before a send: is the session still this store's scope? Without a
          * session check (Node tests) every send is allowed. */
@@ -77,7 +89,7 @@
             const state = await deps.session.verify();
             if (state === 'same') { release(); return true; }
             if (state === 'unreachable') { schedule(5000); return false; }
-            hold(state === 'changed' || state === 'unbound' ? state : 'signed_out');
+            hold(PERMANENT.indexOf(state) !== -1 ? state : 'signed_out');
             return false;
         }
         function emit(event) {
@@ -234,7 +246,7 @@
             if (permanentlyHeld()) return;
             if (deps.session) {
                 const bound = await deps.session.resolve();
-                if (deps.session.isRetired()) { hold('changed'); return; }
+                if (deps.session.isRetired()) { hold(retiredReason()); return; }
                 if (!bound) { hold('unbound'); return; }
             }
             if (!recovered) await recover();
@@ -275,7 +287,7 @@
                         // so the claim's attempt is given back: a never-sent
                         // row can still be revised or cancelled locally.
                         await store.updateOperationSyncState(op.op_id, {
-                            status: 'pending', attempt_count: priorAttempts, last_error: 'Waiting for sign-in.',
+                            status: 'pending', attempt_count: priorAttempts, last_error: HOLD_LABELS[heldBy],
                         });
                         hold(heldBy);
                         break;

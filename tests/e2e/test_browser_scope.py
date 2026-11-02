@@ -9,9 +9,15 @@ accounts of one Library, signed into one browser by `POST /api/login`.
   again.
 - An expired session mid-queue holds the queue (rows stay pending, nothing
   is settled) and delivers once the account signs in again.
+- An explicit sign-out in one tab retires every open page of that account:
+  their stores refuse reads and writes and nothing more is sent, and the rows
+  wait until the account signs in again.
 - Another account signing in under an open page retires that page's stores:
   nothing more is sent from it.
 - Without a session the page opens no store at all.
+- The service worker serves each tab its own account's PDF cache: offline,
+  two tabs of two accounts asking for the same path get different bytes, and
+  a retired tab gets none.
 
 Editor recovery drafts are scoped in a later slice; these tests use the
 durable operation queue (`prksSync.store`).
@@ -22,7 +28,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 
-from tests.e2e.fixtures import seed_folders_library
+from tests.e2e.fixtures import seed_folders_library, seed_library
 from tests.e2e.harness import AppServer, PageCollector, require_chromium, wait_for_async
 from tests.e2e.postgres_identity import OWNER_LOGIN, PASSWORD
 
@@ -86,11 +92,9 @@ class BrowserScopeTests(unittest.TestCase):
         )
         self.assertEqual(response.status, 200, response.text())
 
-    def sign_out(self):
-        response = self.context.request.post(
-            self.server.origin + "/api/logout", headers={"Origin": self.server.origin}
-        )
-        self.assertEqual(response.status, 200, response.text())
+    def expire_session(self):
+        """The session ends without this browser signing out (as on expiry)."""
+        self.context.clear_cookies()
 
     def open_page(self):
         page = self.context.new_page()
@@ -189,7 +193,7 @@ class BrowserScopeTests(unittest.TestCase):
         page = self.open_page()
         op_id = self.queue_one_attempted_open(page)
 
-        self.sign_out()
+        self.expire_session()
         self.release_sync(page)
         wait_for_async(
             page,
@@ -206,6 +210,43 @@ class BrowserScopeTests(unittest.TestCase):
         self.sign_in(OWNER_LOGIN)
         self.wait_delivered(page)
         self.assertIsNone(page.evaluate("() => prksSync.held()"))
+
+    def test_explicit_sign_out_retires_every_open_page_of_the_account(self):
+        self.sign_in(OWNER_LOGIN)
+        first = self.open_page()
+        op_id = self.queue_one_attempted_open(first)
+        second = self.open_page()
+        sent = self.sends(second)
+        self.release_sync(first)
+
+        first.evaluate("() => prksBrowserScope.signOut()")
+        for page in (first, second):
+            wait_for_async(
+                page,
+                "async () => prksBrowserScope.isRetired() && prksBrowserScope.retiredReason() === 'logged_out'",
+                message="an explicit sign-out did not retire the page",
+            )
+            wait_for_async(
+                page,
+                "async () => { await prksSync.wake(); return prksSync.held() === 'logged_out'; }",
+                message="an explicit sign-out did not stop delivery",
+            )
+            refused = page.evaluate(
+                """async () => {
+                    try { await prksSync.store.listOperations(); return null; }
+                    catch (err) { return err.prksLocalStoreCode || 'error'; }
+                }"""
+            )
+            self.assertEqual(refused, "unavailable", "a signed-out page must not read the account's queue")
+        self.assertEqual(sent, [], "nothing may be sent after an explicit sign-out")
+        first.close()
+        second.close()
+
+        # Nothing was deleted: the same account signing in again delivers it.
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        self.assertEqual([r["op_id"] for r in page.evaluate(_OPS)], [op_id])
+        self.wait_delivered(page)
 
     def test_another_account_signing_in_retires_the_open_page(self):
         reader_id = self.server.library.accounts[READER]
@@ -264,6 +305,99 @@ class BrowserScopeTests(unittest.TestCase):
                 name.startswith(("prks-local", "prks-offline")),
                 "no queue or cache may be opened without a session: %s" % names,
             )
+
+
+
+class BrowserScopePdfCacheTests(unittest.TestCase):
+    """Offline, each tab reads its own account's PDF cache through the worker."""
+
+    def setUp(self):
+        self.server = AppServer(seed_fn=seed_library, auth="session", members=(READER,))
+        self.addCleanup(self.server.stop)
+        self.server.start()
+        self.pdf_path = "/api/pdfs/%s" % self.server.ids["pdf_name"]
+        self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900})
+        self.addCleanup(self.context.close)
+
+    def sign_in(self, login):
+        response = self.context.request.post(
+            self.server.origin + "/api/login",
+            data=json.dumps({"login": login, "password": PASSWORD}),
+            headers={"Content-Type": "application/json", "Origin": self.server.origin},
+        )
+        self.assertEqual(response.status, 200, response.text())
+
+    def open_controlled_page(self):
+        page = self.context.new_page()
+        PageCollector(page, self.server.origin)
+        page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.prksBrowserScope")
+        page.evaluate("() => navigator.serviceWorker.ready.then(() => true)")
+        page.wait_for_function("() => !!(navigator.serviceWorker && navigator.serviceWorker.controller)")
+        page.evaluate("() => prksBrowserScope.resolve()")
+        return page
+
+    def fetch_pdf(self, page):
+        return page.evaluate(
+            """async (path) => {
+                try {
+                    const res = await fetch(path, { cache: 'no-store' });
+                    if (!res.ok) return { status: res.status };
+                    const text = await res.text();
+                    return { status: res.status, head: text.slice(0, 6) };
+                } catch (err) { return { status: 0 }; }
+            }""",
+            self.pdf_path,
+        )
+
+    def test_each_tab_reads_its_own_account_pdf_cache_offline(self):
+        self.sign_in(OWNER_LOGIN)
+        tab_a = self.open_controlled_page()
+        name_a = tab_a.evaluate("() => prksBrowserScope.dbName('pdf')")
+        # Online, the worker caches the whole file into tab A's own cache.
+        self.assertEqual(self.fetch_pdf(tab_a)["head"][:4], "%PDF")
+        wait_for_async(
+            tab_a,
+            "async ([name, path]) => !!(await (await caches.open(name)).match(path))",
+            arg=[name_a, self.pdf_path],
+            message="tab A's PDF never reached its own cache",
+        )
+
+        # Account B signs in while tab A stays open, and has the same path
+        # cached with different bytes.
+        self.sign_in(READER)
+        tab_b = self.open_controlled_page()
+        name_b = tab_b.evaluate("() => prksBrowserScope.dbName('pdf')")
+        self.assertNotEqual(name_a, name_b)
+        tab_b.evaluate(
+            """async ([name, path]) => {
+                const cache = await caches.open(name);
+                await cache.put(path, new Response('B-ONLY', { headers: { 'Content-Type': 'application/pdf' } }));
+            }""",
+            [name_b, self.pdf_path],
+        )
+
+        self.context.set_offline(True)
+        self.assertEqual(self.fetch_pdf(tab_b), {"status": 200, "head": "B-ONLY"})
+        a_offline = self.fetch_pdf(tab_a)
+        self.assertEqual(a_offline["status"], 200, a_offline)
+        self.assertEqual(a_offline["head"][:4], "%PDF", "tab A must never be served account B's bytes")
+
+        # Back online, tab A notices the other account and retires: the
+        # worker then serves it no cache at all.
+        self.context.set_offline(False)
+        self.assertEqual(tab_a.evaluate("() => prksBrowserScope.verify()"), "changed")
+        self.context.set_offline(True)
+        wait_for_async(
+            tab_a,
+            """async (path) => {
+                try { return (await fetch(path, { cache: 'no-store' })).status === 503; }
+                catch (err) { return false; }
+            }""",
+            arg=self.pdf_path,
+            message="a retired tab was still served a PDF cache",
+        )
+        self.assertEqual(self.fetch_pdf(tab_b), {"status": 200, "head": "B-ONLY"})
 
 
 if __name__ == "__main__":

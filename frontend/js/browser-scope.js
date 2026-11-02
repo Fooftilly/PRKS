@@ -18,27 +18,53 @@
  *     record is forgotten. A server without accounts, a signed-out browser or
  *     an unknown answer never opens any store.
  *
+ * The session read goes through the request coordinator and is bounded:
+ * past `sessionTimeoutMs` it counts as unreachable, and its late answer is
+ * dropped unread, so it can never record over a newer one.
+ *
  * The page's scope is fixed once resolved. `verify()` re-reads the session:
  *   - 'same'         the session is still this scope.
- *   - 'signed_out'   no session (401 or similar). Sync holds; rows stay.
+ *   - 'signed_out'   no session (401 or similar): the session expired. Sync
+ *                    holds; rows stay, and the same account signing in again
+ *                    resumes this page.
+ *   - 'logged_out'   this account signed out explicitly (`signOut()`, in
+ *                    this tab or another). The page's scope is retired.
  *   - 'changed'      another account signed in here. The page's scope is
- *                    retired: its stores close and refuse to open, and sync
- *                    stops for good. A reload binds the new account.
+ *                    retired.
  *   - 'unreachable'  the server did not answer.
  *   - 'unbound'      this page has no scope at all; only a reload binds one.
+ * A retired scope's stores close and refuse to open, sync stops for good, and
+ * nothing is deleted. A reload binds whoever is signed in then.
+ *
+ * The page re-verifies on its own lifecycle (visible again, focus, online,
+ * page show, and once a minute while visible), not only before a send, so an
+ * idle page with an empty queue also notices another account.
  *
  * The record of the last confirmed scope lives in its own small IndexedDB
  * database, so the service worker can read it too (`frontend/sw.js` names
- * the same database, store and key).
+ * the same database, stores and keys). The page also tells the worker which
+ * scope it is bound to, so the worker serves each page its own PDF cache.
  */
 (function (root) {
     'use strict';
 
     const SESSION_PATH = '/api/session';
+    const LOGOUT_PATH = '/api/logout';
     const POINTER_DB_NAME = 'prks-browser-scope-v1';
-    const POINTER_DB_VERSION = 1;
+    // Version 2 adds the worker's per-client bindings (`clients`); the worker
+    // opens the same version.
+    const POINTER_DB_VERSION = 2;
     const POINTER_STORE = 'pointer';
+    const CLIENTS_STORE = 'clients';
     const POINTER_KEY = 'current';
+    // An explicit sign-out of one scope, so a page that missed the broadcast
+    // still retires (instead of holding as for an expired session).
+    const LOGOUT_KEY = 'logged_out';
+    const SESSION_TIMEOUT_MS = 10000;
+    const LIFECYCLE_MIN_INTERVAL_MS = 2000;
+    const LIFECYCLE_POLL_MS = 60000;
+    const CHANNEL_NAME = 'prks-browser-scope';
+    const BIND_MESSAGE = 'prks-scope-bind';
     const UNREACHABLE_STATUSES = [502, 503, 504];
     // A scope id is the server's identifier; these characters keep it safe in
     // a database and cache name.
@@ -51,9 +77,11 @@
         pdf: 'prks-pdf-v2',
     });
 
+    // Through the request coordinator (frontend/AGENTS.md transport boundary),
+    // never deduplicated or cached: each read is a fresh answer.
     function defaultFetch(url, init) {
-        if (typeof root.fetch !== 'function') return Promise.reject(new Error('fetch is unavailable'));
-        return root.fetch(url, init);
+        if (typeof root.prksRequest !== 'function') return Promise.reject(new Error('the request coordinator is unavailable'));
+        return root.prksRequest(url, init, { dedupe: false });
     }
 
     function defaultIndexedDB() {
@@ -123,6 +151,9 @@
                     if (!db.objectStoreNames.contains(POINTER_STORE)) {
                         db.createObjectStore(POINTER_STORE, { keyPath: 'key' });
                     }
+                    if (!db.objectStoreNames.contains(CLIENTS_STORE)) {
+                        db.createObjectStore(CLIENTS_STORE, { keyPath: 'clientId' });
+                    }
                 };
                 req.onerror = function () { reject(req.error || new Error('open failed')); };
                 req.onblocked = function () { reject(new Error('blocked')); };
@@ -156,11 +187,28 @@
                         key: POINTER_KEY,
                         scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
                     });
+                    // A confirmed session of this scope ends its sign-out.
+                    const marker = store.get(LOGOUT_KEY);
+                    marker.onsuccess = function () {
+                        if (marker.result && marker.result.scopeKey === scope.key) store.delete(LOGOUT_KEY);
+                    };
                 });
             },
             forget: function () {
                 return withStore('readwrite', function (store) {
                     store.delete(POINTER_KEY);
+                });
+            },
+            markLoggedOut: function (scope) {
+                return withStore('readwrite', function (store) {
+                    store.delete(POINTER_KEY);
+                    store.put({ key: LOGOUT_KEY, scopeKey: scope.key });
+                });
+            },
+            loggedOut: function (scope) {
+                return withStore('readonly', function (store, done) {
+                    const get = store.get(LOGOUT_KEY);
+                    get.onsuccess = function () { done(!!get.result && get.result.scopeKey === scope.key); };
                 });
             },
         };
@@ -174,10 +222,18 @@
             : defaultIndexedDB();
         const pointer = createPointer(idbFactory);
         const listeners = new Set();
+        const sessionTimeoutMs = options.sessionTimeoutMs > 0 ? options.sessionTimeoutMs : SESSION_TIMEOUT_MS;
+        const serviceWorker = options.serviceWorker || null;
+        const channel = options.channel || null;
 
         let resolving = null;
         let bound = null;
         let retired = false;
+        let retiredReason = null;
+        // Each session read is numbered; only a read newer than the last one
+        // recorded may change the record.
+        let readSeq = 0;
+        let recordedSeq = 0;
 
         function emit(event) {
             listeners.forEach(function (fn) {
@@ -185,8 +241,35 @@
             });
         }
 
-        /** One session read: { kind: 'session'|'none'|'unreachable', scope }. */
+        /**
+         * One bounded session read, recorded: { kind: 'session'|'none'|'unreachable', scope }.
+         * Past the deadline it is unreachable; its late answer is dropped.
+         */
         function readSession() {
+            const seq = ++readSeq;
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            let expired = false;
+            let timer = null;
+            const deadline = new Promise(function (resolveDeadline) {
+                timer = setTimeout(function () {
+                    expired = true;
+                    if (controller) controller.abort();
+                    resolveDeadline({ kind: 'unreachable', scope: null });
+                }, sessionTimeoutMs);
+            });
+            const read = fetchAnswer(controller).then(function (answer) {
+                if (expired) return null;
+                clearTimeout(timer);
+                if (seq < recordedSeq) return answer;
+                recordedSeq = seq;
+                return record(answer).then(function () { return answer; });
+            });
+            return Promise.race([read, deadline]).then(function (answer) {
+                return answer || { kind: 'unreachable', scope: null };
+            });
+        }
+
+        function fetchAnswer(controller) {
             return Promise.resolve()
                 .then(function () {
                     return fetchImpl(SESSION_PATH, {
@@ -194,6 +277,7 @@
                         credentials: 'same-origin',
                         cache: 'no-store',
                         headers: { Accept: 'application/json' },
+                        signal: controller ? controller.signal : undefined,
                     });
                 })
                 .then(function (response) {
@@ -222,15 +306,14 @@
         function resolve() {
             if (resolving) return resolving;
             resolving = readSession().then(function (answer) {
-                return record(answer).then(function () {
-                    if (answer.kind === 'session') return answer.scope;
-                    if (answer.kind === 'unreachable') {
-                        return pointer.read().catch(function () { return null; });
-                    }
-                    return null;
-                });
+                if (answer.kind === 'session') return answer.scope;
+                if (answer.kind === 'unreachable') {
+                    return pointer.read().catch(function () { return null; });
+                }
+                return null;
             }).then(function (scope) {
                 bound = scope || null;
+                announce();
                 return bound;
             });
             return resolving;
@@ -239,24 +322,88 @@
         /** Re-reads the session against the page's scope. */
         function verify() {
             return resolve().then(function (scope) {
-                if (retired) return 'changed';
+                if (retired) return retiredReason;
                 if (!scope) return 'unbound';
                 return readSession().then(function (answer) {
-                    return record(answer).then(function () {
-                        if (answer.kind === 'unreachable') return 'unreachable';
-                        if (answer.kind === 'none') return 'signed_out';
-                        if (sameScope(answer.scope, scope)) return 'same';
-                        retire();
-                        return 'changed';
+                    if (retired) return retiredReason;
+                    if (answer.kind === 'unreachable') return 'unreachable';
+                    if (answer.kind === 'none') {
+                        // Expired, or signed out on purpose? Only an explicit
+                        // sign-out of this scope retires the page.
+                        return pointer.loggedOut(scope).catch(function () { return false; }).then(function (out) {
+                            if (!out) return 'signed_out';
+                            retire('logged_out');
+                            return retiredReason;
+                        });
+                    }
+                    if (sameScope(answer.scope, scope)) return 'same';
+                    retire('changed');
+                    return retiredReason;
+                });
+            });
+        }
+
+        function retire(reason) {
+            if (retired) return;
+            retired = true;
+            retiredReason = reason;
+            announce();
+            emit({ type: 'retired', reason: reason });
+        }
+
+        /**
+         * Explicit sign-out: ends the server session, records the sign-out of
+         * this scope, and retires this page and every other page of the scope
+         * (broadcast now; the record for a page that misses it). Nothing is
+         * deleted: the scope's rows wait until the account signs in again.
+         */
+        function signOut() {
+            return resolve().then(function (scope) {
+                const send = Promise.resolve().then(function () {
+                    return fetchImpl(LOGOUT_PATH, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { Accept: 'application/json' },
+                    });
+                });
+                return send.then(function (response) {
+                    if (!response || !response.ok) throw new Error('sign_out_failed');
+                    if (!scope) return;
+                    return pointer.markLoggedOut(scope).catch(function () {}).then(function () {
+                        if (channel) {
+                            try { channel.postMessage({ type: 'logged_out', key: scope.key }); } catch (_e) { /* best effort */ }
+                        }
+                        retire('logged_out');
                     });
                 });
             });
         }
 
-        function retire() {
-            if (retired) return;
-            retired = true;
-            emit({ type: 'retired' });
+        function onChannelMessage(data) {
+            if (!data || data.type !== 'logged_out' || !bound || retired) return;
+            if (data.key === bound.key) retire('logged_out');
+        }
+        if (channel) {
+            channel.onmessage = function (event) { onChannelMessage(event && event.data); };
+        }
+
+        /** Tells the controlling service worker which scope this page is bound to. */
+        function announce() {
+            if (!serviceWorker) return;
+            const controller = serviceWorker.controller;
+            if (!controller || typeof controller.postMessage !== 'function') return;
+            try {
+                controller.postMessage({
+                    type: BIND_MESSAGE,
+                    key: bound && !retired ? bound.key : null,
+                    retired: retired,
+                });
+            } catch (_e) { /* the worker then serves this page no cache */ }
+        }
+        if (serviceWorker && typeof serviceWorker.addEventListener === 'function') {
+            serviceWorker.addEventListener('controllerchange', function () {
+                if (resolving) resolving.then(announce, announce);
+            });
         }
 
         /** `<base>:<scope key>` for a live scope, else null (never an unscoped name). */
@@ -271,9 +418,11 @@
         return {
             resolve: resolve,
             verify: verify,
+            signOut: signOut,
             dbName: dbName,
             current: function () { return retired ? null : bound; },
             isRetired: function () { return retired; },
+            retiredReason: function () { return retiredReason; },
             subscribe: function (fn) {
                 listeners.add(fn);
                 return function () { listeners.delete(fn); };
@@ -281,8 +430,45 @@
         };
     }
 
+    /**
+     * Re-verifies `scope` on the page's lifecycle: visible again, focus,
+     * online, page show, and every `pollMs` while visible. Calls closer than
+     * `minIntervalMs` collapse into one. Returns a detach function.
+     */
+    function watchLifecycle(scope, win, doc, timing) {
+        const t = timing || {};
+        const minInterval = t.minIntervalMs >= 0 ? t.minIntervalMs : LIFECYCLE_MIN_INTERVAL_MS;
+        const pollMs = t.pollMs > 0 ? t.pollMs : LIFECYCLE_POLL_MS;
+        const now = t.now || Date.now;
+        let last = -Infinity;
+        function visible() {
+            return !doc || doc.visibilityState === undefined || doc.visibilityState === 'visible';
+        }
+        function check() {
+            if (scope.isRetired() || !visible()) return;
+            const at = now();
+            if (at - last < minInterval) return;
+            last = at;
+            scope.verify().catch(function () { /* the next event tries again */ });
+        }
+        const winEvents = ['focus', 'online', 'pageshow'];
+        winEvents.forEach(function (name) { if (win && win.addEventListener) win.addEventListener(name, check); });
+        if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', check);
+        const poll = setInterval(check, pollMs);
+        return function detach() {
+            clearInterval(poll);
+            winEvents.forEach(function (name) { if (win && win.removeEventListener) win.removeEventListener(name, check); });
+            if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', check);
+        };
+    }
+
     const api = {
         createPrksBrowserScope: createPrksBrowserScope,
+        prksWatchBrowserScopeLifecycle: watchLifecycle,
+        PRKS_SCOPE_BIND_MESSAGE: BIND_MESSAGE,
+        PRKS_SCOPE_CLIENTS_STORE: CLIENTS_STORE,
+        PRKS_SCOPE_LOGOUT_KEY: LOGOUT_KEY,
+        PRKS_SCOPE_POINTER_DB_VERSION: POINTER_DB_VERSION,
         prksScopeFromSession: scopeFromSession,
         prksScopedStoreName: storeName,
         PRKS_SCOPE_STORE_BASES: STORE_BASES,
@@ -296,7 +482,17 @@
     });
 
     // One scope per page. Workers and Node tests build their own.
-    if (root.document) root.prksBrowserScope = createPrksBrowserScope();
+    if (root.document) {
+        let channel = null;
+        try {
+            channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL_NAME) : null;
+        } catch (_e) {
+            channel = null;
+        }
+        const serviceWorker = root.navigator && root.navigator.serviceWorker ? root.navigator.serviceWorker : null;
+        root.prksBrowserScope = createPrksBrowserScope({ channel: channel, serviceWorker: serviceWorker });
+        watchLifecycle(root.prksBrowserScope, root, root.document);
+    }
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = api;

@@ -82,19 +82,34 @@ coordinator names no family: adding one is a registration.
   that cannot be reached (network error, 502/503/504) reuses the last
   confirmed scope, recorded in `prks-browser-scope-v1` (ids only), so an
   offline reload still opens that account's data; any other answer (401, 403,
-  404, a malformed body) gives no scope and forgets the record. Without a
-  scope the queue refuses every write and the cache is unavailable; no
-  unscoped name exists. The service worker reads the same record and serves
-  or stores managed PDFs only in that scope's cache; a page install names its
-  cache and is refused unless it is the recorded one.
-- **Auth hold.** Before each send the sync runtime re-reads the session
-  (`prksBrowserScope.verify()`). Signed out: delivery holds, rows stay
-  pending, the attempt count is untouched, and it retries every 30 s and on
-  focus. Another account signed in: the page's scope is retired, its stores
-  close and refuse to open, and the runtime holds for the life of the page;
-  a reload binds the new account. Admission refusals of a sent operation
-  (401, 403, 400 `LIBRARY_EPOCH_REQUIRED`, 409 `LIBRARY_EPOCH_CHANGED`) were
-  never executed, so they hold the row as pending and are never settled,
+  404, a malformed body) gives no scope and forgets the record. The read
+  goes through the request coordinator, never deduplicated, and is bounded
+  (10 s): past the deadline it counts as unreachable and its late answer is
+  dropped without touching the record. Without a scope the queue refuses
+  every write and the cache is unavailable; no unscoped name exists.
+- **Managed PDFs per tab.** Each page tells the service worker which scope
+  it is bound to (`prks-scope-bind`); the worker keeps one binding per
+  client in `prks-browser-scope-v1` and serves or stores a page's PDFs only
+  in that page's own `prks-pdf-v2:<scope>`. A retired page gets no cache. A
+  client that never bound (a dedicated worker, a page still loading) gets
+  the last confirmed scope only when every live page that has bound agrees
+  with it; otherwise the network only. A page install must name its own
+  bound cache.
+- **Auth hold.** The page re-reads the session
+  (`prksBrowserScope.verify()`) before each send and on its own lifecycle
+  (visible again, focus, online, page show, once a minute while visible), so
+  an idle page with an empty queue notices too. The session expired (401,
+  no explicit sign-out): delivery holds, rows stay pending, and it retries
+  every 30 s; the same account signing in again resumes the page. Signed
+  out on purpose (`prksBrowserScope.signOut()`, in this tab or another):
+  the sign-out is broadcast and recorded, and every open page of that
+  account retires. Another account signed in: the page retires. A retired
+  page's stores close and refuse reads and writes, the runtime holds for the
+  life of the page, nothing is deleted, and a reload binds whoever is signed
+  in. Admission refusals of a sent operation (401, 403, 400
+  `LIBRARY_EPOCH_REQUIRED`, 409 `LIBRARY_EPOCH_CHANGED`) were never
+  executed, so they hold the row as pending with the attempt count from
+  before the send (a never-sent row stays editable) and are never settled,
   conflicted or retired. `prksSyncDiagnostics()` reports the hold as `held`.
 - `prks-offline-v2:<scope>` remains a disposable cache of acknowledged server data.
 - `prks-local-v2:<scope>` holds semantic operations and a random device UUID. Its

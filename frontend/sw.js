@@ -29,15 +29,22 @@
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope, `prks-pdf-v2:<scope key>`
-    // (frontend/js/browser-scope.js). The worker learns the scope from the
-    // record of the last confirmed scope that the page keeps; with no record
-    // it neither reads nor writes any PDF cache. The unscoped cache of
-    // earlier builds is retired.
+    // (frontend/js/browser-scope.js). Each page tells the worker which scope
+    // it is bound to (PRKS_SCOPE_BIND_MESSAGE); the worker keeps that per
+    // client in the scope database, so a page is only ever served its own
+    // scope's cache, and a retired page none. A request from a client that
+    // never bound (a dedicated worker, a page still loading) gets the last
+    // confirmed scope only when every live page bound to a scope agrees with
+    // it; otherwise, and with no record at all, the worker neither reads nor
+    // writes any PDF cache. The unscoped cache of earlier builds is retired.
     const PDF_CACHE_BASE = 'prks-pdf-v2';
     const RETIRED_PDF_CACHE = 'prks-pdf-v1';
     const SCOPE_POINTER_DB = 'prks-browser-scope-v1';
+    const SCOPE_POINTER_DB_VERSION = 2;
     const SCOPE_POINTER_STORE = 'pointer';
+    const SCOPE_CLIENTS_STORE = 'clients';
     const SCOPE_POINTER_KEY = 'current';
+    const SCOPE_BIND_MESSAGE = 'prks-scope-bind';
     const SCOPE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
     // unable to poison the active shell cache"): a currently-active worker
@@ -363,7 +370,7 @@
      * Page → worker install. Returns null for any other message so the
      * listener can ignore it. Resolves false when the bytes were not stored.
      */
-    function handlePdfCacheMessage(data, cachesApi, pdfCacheName) {
+    function handlePdfCacheMessage(data, cachesApi, pdfCacheName, clientId) {
         if (!data || data.type !== PDF_CACHE_INSTALL_MESSAGE) return null;
         if (!cachesApi || typeof cachesApi.open !== 'function') return Promise.resolve(false);
         const pathname = typeof data.pathname === 'string' ? data.pathname : '';
@@ -371,8 +378,8 @@
         const bytes = copyPdfBytes(data.buffer);
         if (!bytes) return Promise.resolve(false);
         const wanted = typeof data.cacheName === 'string' ? data.cacheName : '';
-        return Promise.resolve(pdfCacheName ? pdfCacheName() : null).then(function (name) {
-            // Only into the signed-in scope's cache, and only the one the page named.
+        return Promise.resolve(pdfCacheName ? pdfCacheName(clientId || '', true) : null).then(function (name) {
+            // Only into the sending page's own scope cache, and only the one it named.
             if (!name || name !== wanted) return false;
             return cachesApi.open(name).then(function (cache) {
                 return installAuthoritativeWholeFilePdf(cache, pathname, bytes);
@@ -402,11 +409,14 @@
         });
     }
 
-    /**
-     * The signed-in scope's PDF cache name from the page's record of the last
-     * confirmed scope, or null. Resolves, never rejects: any failure is null.
-     */
-    function readScopedPdfCacheName(idbFactory) {
+    function validScopeKey(key) {
+        if (typeof key !== 'string') return false;
+        const ids = key.split('.');
+        return ids.length === 3 && ids.every(function (id) { return SCOPE_ID_PATTERN.test(id); });
+    }
+
+    /** Opens the scope database (the page's version), or resolves null. */
+    function openScopeDb(idbFactory) {
         return new Promise(function (resolve) {
             if (!idbFactory || typeof idbFactory.open !== 'function') {
                 resolve(null);
@@ -414,7 +424,7 @@
             }
             let req;
             try {
-                req = idbFactory.open(SCOPE_POINTER_DB, 1);
+                req = idbFactory.open(SCOPE_POINTER_DB, SCOPE_POINTER_DB_VERSION);
             } catch (_e) {
                 resolve(null);
                 return;
@@ -424,30 +434,108 @@
                 if (!db.objectStoreNames.contains(SCOPE_POINTER_STORE)) {
                     db.createObjectStore(SCOPE_POINTER_STORE, { keyPath: 'key' });
                 }
+                if (!db.objectStoreNames.contains(SCOPE_CLIENTS_STORE)) {
+                    db.createObjectStore(SCOPE_CLIENTS_STORE, { keyPath: 'clientId' });
+                }
             };
             req.onerror = req.onblocked = function () { resolve(null); };
-            req.onsuccess = function () {
-                const db = req.result;
-                let get;
+            req.onsuccess = function () { resolve(req.result); };
+        });
+    }
+
+    /**
+     * The last confirmed scope and every client binding:
+     * { pointerKey: string|null, bindings: Map<clientId, { key, retired }> }.
+     * Resolves, never rejects: any failure reads as nothing recorded.
+     */
+    function readScopeState(idbFactory) {
+        const empty = { pointerKey: null, bindings: new Map() };
+        return openScopeDb(idbFactory).then(function (db) {
+            if (!db) return empty;
+            return new Promise(function (resolve) {
+                let tx;
                 try {
-                    get = db.transaction(SCOPE_POINTER_STORE, 'readonly').objectStore(SCOPE_POINTER_STORE).get(SCOPE_POINTER_KEY);
+                    tx = db.transaction([SCOPE_POINTER_STORE, SCOPE_CLIENTS_STORE], 'readonly');
                 } catch (_e) {
                     db.close();
-                    resolve(null);
+                    resolve(empty);
                     return;
                 }
-                get.onerror = function () { db.close(); resolve(null); };
+                const state = { pointerKey: null, bindings: new Map() };
+                const get = tx.objectStore(SCOPE_POINTER_STORE).get(SCOPE_POINTER_KEY);
                 get.onsuccess = function () {
-                    db.close();
                     const scope = get.result && get.result.scope;
-                    const ids = scope ? [scope.instanceId, scope.libraryId, scope.userId] : [];
-                    const valid = ids.length === 3 && ids.every(function (id) {
-                        return typeof id === 'string' && SCOPE_ID_PATTERN.test(id);
-                    });
-                    resolve(valid ? PDF_CACHE_BASE + ':' + ids.join('.') : null);
+                    const key = scope ? [scope.instanceId, scope.libraryId, scope.userId].join('.') : null;
+                    state.pointerKey = validScopeKey(key) ? key : null;
                 };
-            };
+                const all = tx.objectStore(SCOPE_CLIENTS_STORE).getAll();
+                all.onsuccess = function () {
+                    (all.result || []).forEach(function (row) {
+                        if (!row || typeof row.clientId !== 'string') return;
+                        state.bindings.set(row.clientId, {
+                            key: validScopeKey(row.key) ? row.key : null,
+                            retired: row.retired === true,
+                        });
+                    });
+                };
+                tx.oncomplete = function () { db.close(); resolve(state); };
+                tx.onabort = tx.onerror = function () { db.close(); resolve(empty); };
+            });
         });
+    }
+
+    /**
+     * Records which scope `clientId` is bound to (null key: none) and drops
+     * the bindings of clients that are gone. Resolves true when written.
+     */
+    function writeClientBinding(idbFactory, clientId, key, retired, liveClientIds) {
+        if (typeof clientId !== 'string' || !clientId) return Promise.resolve(false);
+        return openScopeDb(idbFactory).then(function (db) {
+            if (!db) return false;
+            return new Promise(function (resolve) {
+                let tx;
+                try {
+                    tx = db.transaction(SCOPE_CLIENTS_STORE, 'readwrite');
+                } catch (_e) {
+                    db.close();
+                    resolve(false);
+                    return;
+                }
+                const store = tx.objectStore(SCOPE_CLIENTS_STORE);
+                store.put({ clientId: clientId, key: validScopeKey(key) && !retired ? key : null, retired: retired === true });
+                if (liveClientIds) {
+                    const rows = store.getAll();
+                    rows.onsuccess = function () {
+                        (rows.result || []).forEach(function (row) {
+                            const id = row && row.clientId;
+                            if (typeof id === 'string' && id !== clientId && !liveClientIds.has(id)) store.delete(id);
+                        });
+                    };
+                }
+                tx.oncomplete = function () { db.close(); resolve(true); };
+                tx.onabort = tx.onerror = function () { db.close(); resolve(false); };
+            });
+        });
+    }
+
+    /**
+     * The PDF cache a request from `clientId` may use, or null.
+     * - A bound client: its own scope's cache; a retired or unscoped one none.
+     * - `strict` (installs): only a bound client's own cache.
+     * - Any other client: the last confirmed scope, only when every live page
+     *   that has bound agrees with it (none retired, none on another scope).
+     */
+    function selectPdfCacheName(state, clientId, liveWindowIds, strict) {
+        const own = clientId ? state.bindings.get(clientId) : null;
+        if (own) return own.key && !own.retired ? PDF_CACHE_BASE + ':' + own.key : null;
+        if (strict || !state.pointerKey) return null;
+        const live = liveWindowIds || new Set();
+        let agreed = true;
+        state.bindings.forEach(function (binding, id) {
+            if (!live.has(id)) return;
+            if (binding.retired || binding.key !== state.pointerKey) agreed = false;
+        });
+        return agreed ? PDF_CACHE_BASE + ':' + state.pointerKey : null;
     }
 
     /**
@@ -516,11 +604,11 @@
             });
         }
 
-        async function handlePdfRequest(request, pathname) {
+        async function handlePdfRequest(request, pathname, clientId) {
             // Snapshot before any await so an install that lands while this
             // GET is still draining is visible at put time.
             const generationAtStart = wholeFilePdfGeneration(pathname);
-            const cacheName = await pdfCacheName();
+            const cacheName = await pdfCacheName(clientId || '', false);
             if (!cacheName) {
                 // No signed-in scope: the network only, no cache read or write.
                 try {
@@ -706,8 +794,18 @@
         if (!scope || typeof scope.addEventListener !== 'function') return;
 
         const origin = (scope.location && scope.location.origin) || '';
-        const pdfCacheName = function () {
-            return readScopedPdfCacheName(scope.indexedDB);
+        function liveClientIds(type) {
+            if (!scope.clients || typeof scope.clients.matchAll !== 'function') return Promise.resolve(new Set());
+            return scope.clients.matchAll({ type: type, includeUncontrolled: true }).then(function (list) {
+                return new Set((list || []).map(function (c) { return c.id; }));
+            }, function () {
+                return new Set();
+            });
+        }
+        const pdfCacheName = function (clientId, strict) {
+            return Promise.all([readScopeState(scope.indexedDB), liveClientIds('window')]).then(function (parts) {
+                return selectPdfCacheName(parts[0], clientId, parts[1], strict);
+            });
         };
         const handlers = createHandlers({
             caches: scope.caches,
@@ -747,7 +845,7 @@
             const pathname = pathnameOf(url, origin);
 
             if (isManagedPdfPath(pathname)) {
-                event.respondWith(handlers.handlePdfRequest(request, pathname));
+                event.respondWith(handlers.handlePdfRequest(request, pathname, event.clientId || ''));
                 return;
             }
             if (pathname === '/' || pathname === '/index.html' || isNavigationRequest(request)) {
@@ -761,8 +859,17 @@
         });
 
         scope.addEventListener('message', function (event) {
+            const sourceId = event.source && typeof event.source.id === 'string' ? event.source.id : '';
+            const data = event.data;
+            if (data && data.type === SCOPE_BIND_MESSAGE) {
+                const bind = liveClientIds('all').then(function (live) {
+                    return writeClientBinding(scope.indexedDB, sourceId, data.key, data.retired === true, live);
+                });
+                if (typeof event.waitUntil === 'function') event.waitUntil(bind);
+                return;
+            }
             if (!scope.caches) return;
-            const done = handlePdfCacheMessage(event.data, scope.caches, pdfCacheName);
+            const done = handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId);
             if (!done) return;
             const port = event.ports && event.ports[0];
             const task = Promise.resolve(done).then(function (ok) {
@@ -808,7 +915,12 @@
         PRKS_SW_SCOPE_POINTER_DB: SCOPE_POINTER_DB,
         PRKS_SW_SCOPE_POINTER_STORE: SCOPE_POINTER_STORE,
         PRKS_SW_SCOPE_POINTER_KEY: SCOPE_POINTER_KEY,
-        readScopedPdfCacheName: readScopedPdfCacheName,
+        readScopeState: readScopeState,
+        writeClientBinding: writeClientBinding,
+        selectPdfCacheName: selectPdfCacheName,
+        PRKS_SW_SCOPE_BIND_MESSAGE: SCOPE_BIND_MESSAGE,
+        PRKS_SW_SCOPE_CLIENTS_STORE: SCOPE_CLIENTS_STORE,
+        PRKS_SW_SCOPE_POINTER_DB_VERSION: SCOPE_POINTER_DB_VERSION,
         PRKS_SW_SHELL_STAGING_CACHE: SHELL_STAGING_CACHE,
         PRKS_SW_STATIC_STAGING_CACHE: STATIC_STAGING_CACHE,
         PRKS_SW_SHELL_PRECACHE_PATHS: SHELL_PRECACHE_PATHS,

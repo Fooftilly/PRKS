@@ -852,10 +852,12 @@ async function run() {
     /* ---- source has no generic /api/... JSON caching and no mutation queueing ---- */
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/sw.js'), 'utf8');
     assert('sw.js has no localStorage', src.indexOf('localStorage') === -1);
-    // IndexedDB only to read the page's scope record, never to store anything.
-    assertEq('sw.js reaches IndexedDB once, for the scope record', src.split('scope.indexedDB').length - 1, 1);
-    assertEq('sw.js opens only the scope record database', src.split('idbFactory.open(').length - 1, 1);
-    assert('the one open names the scope record database', src.indexOf('idbFactory.open(SCOPE_POINTER_DB, 1)') !== -1);
+    // IndexedDB only for the scope database: read the page's record, keep each
+    // page's binding. No domain data.
+    assertEq('sw.js reaches IndexedDB twice, read and bind', src.split('scope.indexedDB').length - 1, 2);
+    assertEq('sw.js opens only the scope database', src.split('idbFactory.open(').length - 1, 1);
+    assert('the one open names the scope database at the page version',
+        src.indexOf('idbFactory.open(SCOPE_POINTER_DB, SCOPE_POINTER_DB_VERSION)') !== -1);
     assert('sw.js never writes the scope record', !/objectStore\(SCOPE_POINTER_STORE\)\.(put|add|delete|clear)/.test(src));
     assert('sw.js fetch handler comments out generic /api passthrough', src.indexOf("notably /api/... JSON -- passes straight through") !== -1);
 
