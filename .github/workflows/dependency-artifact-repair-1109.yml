@@ -1,0 +1,60 @@
+# One-off branch-scoped artifact generation; this workflow removes itself after success.
+name: One-shot combined frontend dependency artifacts 1109
+on:
+  push:
+    branches:
+      - dependabot/npm_and_yarn/frontend-app/frontend-routine-af3f5266ba
+    paths:
+      - .github/workflows/dependency-artifact-repair-1109.yml
+permissions:
+  contents: write
+jobs:
+  rebuild:
+    if: github.repository == 'Fooftilly/PRKS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout reviewed dependency changes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+      - name: Validate exact source and requested versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "dependabot/npm_and_yarn/frontend-app/frontend-routine-af3f5266ba"
+          test "$(git rev-parse HEAD^)" = "6a72ce9547fe8e59f747d130979cad58b0d118fe"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          pkg = json.loads(Path("frontend-app/package.json").read_text())
+          assert pkg["dependencies"]["@tanstack/vue-query"] == "5.105.0"
+          assert pkg["devDependencies"]["eslint-plugin-vue"] == "10.12.0"
+          assert pkg["devDependencies"]["typescript-eslint"] == "8.72.1"
+          assert pkg["devDependencies"]["vite"] == "8.3.5"
+          PY
+      - name: Set up pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Regenerate lockfile and all production assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund --prefix frontend-app
+          bash scripts/refresh_dependency_artifacts.sh frontend-app
+          if git diff --quiet -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md frontend-app/package-lock.json; then
+            echo "Expected generated dependency changes were not produced" >&2
+            exit 1
+          fi
+      - name: Commit lock, generated assets and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "PRKS dependency maintainer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- frontend/ frontend-app/THIRD_PARTY_LICENSES.md frontend-app/package-lock.json
+          git rm -- .github/workflows/dependency-artifact-repair-1109.yml
+          git commit -m "build(deps): regenerate combined Vue and Vite production assets"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
