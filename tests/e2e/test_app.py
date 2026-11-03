@@ -1311,6 +1311,11 @@ class WorkDetailsPolishTests(_BrowserE2E):
             "() => { const b = document.getElementById('save-work-identity-btn');"
             "        return !!b && !b.disabled; }"
         )
+        # Opening the Work queued its own operation. Let it land first, so the
+        # held send below can only be the Title save's.
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)"
+        )
         page.route("**/api/sync/operations", hold_send)
         try:
             page.fill("#meta-title", "Busy Save Title")
