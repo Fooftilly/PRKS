@@ -843,16 +843,20 @@
         const bindWaiters = new Map();
         function waitForBinding(clientId) {
             return new Promise(function (resolve) {
-                const list = bindWaiters.get(clientId) || [];
-                bindWaiters.set(clientId, list.concat([resolve]));
-                setTimeout(resolve, BIND_WAIT_MS);
+                let timer = null;
+                function settle() {
+                    clearTimeout(timer);
+                    const left = (bindWaiters.get(clientId) || []).filter(function (fn) { return fn !== settle; });
+                    if (left.length) bindWaiters.set(clientId, left);
+                    else bindWaiters.delete(clientId);
+                    resolve();
+                }
+                bindWaiters.set(clientId, (bindWaiters.get(clientId) || []).concat([settle]));
+                timer = setTimeout(settle, BIND_WAIT_MS);
             });
         }
         function bindingWritten(clientId) {
-            const list = bindWaiters.get(clientId);
-            if (!list) return;
-            bindWaiters.delete(clientId);
-            list.forEach(function (resolve) { resolve(); });
+            (bindWaiters.get(clientId) || []).slice().forEach(function (settle) { settle(); });
         }
         function selectNow(clientId, strict) {
             return Promise.all([readScopeState(scope.indexedDB), liveClientIds('window')]).then(function (parts) {
