@@ -15,6 +15,8 @@ const sw = require(path.join(rootDir, 'frontend/sw.js'));
 // The signed-in scope's PDF cache, as the worker reads it from the scope record.
 const PDF_CACHE = sw.PRKS_SW_PDF_CACHE_BASE + ':I1.L1.U1';
 const scopedPdfCacheName = function () { return Promise.resolve(PDF_CACHE); };
+// The current session is still the cache's own scope.
+const sessionConfirmed = function () { return Promise.resolve(true); };
 
 let passed = 0;
 let failed = 0;
@@ -592,7 +594,7 @@ async function run() {
             pathname: pathname,
             cacheName: PDF_CACHE,
             buffer: Buffer.from('FROM-MESSAGE'),
-        }, cacheStorage, scopedPdfCacheName);
+        }, cacheStorage, scopedPdfCacheName, '', sessionConfirmed);
         assert('pdf cache install message stores the posted bytes', ok === true);
         const pdfCache = await cacheStorage.open(PDF_CACHE);
         const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
@@ -603,7 +605,7 @@ async function run() {
             pathname: '/api/works/not-a-pdf',
             cacheName: PDF_CACHE,
             buffer: Buffer.from('NOPE'),
-        }, cacheStorage, scopedPdfCacheName);
+        }, cacheStorage, scopedPdfCacheName, '', sessionConfirmed);
         assert('pdf cache install message rejects a non-pdf path', rejected === false);
     }
     {
@@ -645,7 +647,7 @@ async function run() {
                     const bridge = new MessageChannel();
                     bridge.port1.onmessage = function (event) {
                         if (!reply) return;
-                        Promise.resolve(sw.handlePdfCacheMessage(event.data, cachesApi, scopedPdfCacheName)).then(function (ok) {
+                        Promise.resolve(sw.handlePdfCacheMessage(event.data, cachesApi, scopedPdfCacheName, '', sessionConfirmed)).then(function (ok) {
                             pagePort.postMessage({ ok: !!ok });
                         }, function () {
                             pagePort.postMessage({ ok: false });

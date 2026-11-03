@@ -475,6 +475,48 @@ class BrowserScopePdfCacheTests(unittest.TestCase):
             "tab A's cache must never take bytes fetched under another account",
         )
 
+    def install_saved_bytes(self, page, name, body):
+        """Posts the worker the same install a successful PDF save sends."""
+        return page.evaluate(
+            """async ([name, path, body]) => {
+                const bytes = new TextEncoder().encode(body).buffer;
+                const channel = new MessageChannel();
+                const answer = new Promise((resolve) => {
+                    channel.port1.onmessage = (event) => resolve(!!(event.data && event.data.ok));
+                });
+                navigator.serviceWorker.controller.postMessage(
+                    { type: 'prks-pdf-cache-install', pathname: path, cacheName: name, buffer: bytes },
+                    [channel.port2, bytes],
+                );
+                return answer;
+            }""",
+            [name, self.pdf_path, body],
+        )
+
+    def test_an_old_tab_never_installs_saved_bytes_after_another_account_signs_in(self):
+        self.sign_in(OWNER_LOGIN)
+        tab_a = self.open_controlled_page()
+        name_a = tab_a.evaluate("() => prksBrowserScope.dbName('pdf')")
+        # Under its own session, a save's install still replaces the cached copy.
+        self.assertTrue(self.install_saved_bytes(tab_a, name_a, "%PDF-A-SAVED"))
+        self.assertEqual(self.cached_head(tab_a, name_a), "%PDF-A-S")
+
+        # B signs in while tab A is still bound; A's next save runs under B's
+        # session and its install must not touch A's cache.
+        self.sign_in(READER)
+        self.assertFalse(
+            self.install_saved_bytes(tab_a, name_a, "%PDF-B-SAVED"),
+            "the worker must refuse bytes saved under another account",
+        )
+        self.assertEqual(
+            self.cached_head(tab_a, name_a), "%PDF-A-S",
+            "tab A's cache must never take bytes saved under another account",
+        )
+
+        # Offline, A still reads the bytes it cached under its own session.
+        self.context.set_offline(True)
+        self.assertEqual(self.fetch_pdf(tab_a), {"status": 200, "head": "%PDF-A"})
+
 
 if __name__ == "__main__":
     unittest.main()

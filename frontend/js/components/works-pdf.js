@@ -2005,6 +2005,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             // Nothing can be serving a previous whole-file entry.
             return true;
         }
+        // No worker to check the session, so the page does it: the save ran
+        // under whichever session the browser holds now, and another
+        // account's bytes must never enter this page's cache.
+        const scope = window.prksBrowserScope;
+        let sessionState = '';
+        try {
+            sessionState = scope && typeof scope.verify === 'function' ? await scope.verify() : '';
+        } catch (_eVerify) {
+            sessionState = '';
+        }
+        if (sessionState !== 'same') return false;
         try {
             const cache = await caches.open(cacheName);
             const response = new Response(body, {

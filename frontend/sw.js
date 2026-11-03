@@ -379,8 +379,16 @@
     /**
      * Page → worker install. Returns null for any other message so the
      * listener can ignore it. Resolves false when the bytes were not stored.
+     *
+     * The bytes come from a save the page made over the network, under
+     * whichever session the browser holds now. They enter the sender's cache
+     * only when `confirmScope` shows that session is still the cache's own
+     * scope. Without that check (another account signed in, the session
+     * expired, or the server cannot be reached) nothing is stored. A refused
+     * install still advances the path's generation, so a network GET that
+     * started before the save cannot put older bytes back afterwards.
      */
-    function handlePdfCacheMessage(data, cachesApi, pdfCacheName, clientId) {
+    function handlePdfCacheMessage(data, cachesApi, pdfCacheName, clientId, confirmScope) {
         if (!data || data.type !== PDF_CACHE_INSTALL_MESSAGE) return null;
         if (!cachesApi || typeof cachesApi.open !== 'function') return Promise.resolve(false);
         const pathname = typeof data.pathname === 'string' ? data.pathname : '';
@@ -391,8 +399,19 @@
         return Promise.resolve(pdfCacheName ? pdfCacheName(clientId || '', true) : null).then(function (name) {
             // Only into the sending page's own scope cache, and only the one it named.
             if (!name || name !== wanted) return false;
-            return cachesApi.open(name).then(function (cache) {
-                return installAuthoritativeWholeFilePdf(cache, pathname, bytes, name);
+            const confirm = typeof confirmScope === 'function'
+                ? Promise.resolve(confirmScope(name)).catch(function () { return false; })
+                : Promise.resolve(false);
+            return confirm.then(function (confirmed) {
+                if (confirmed !== true) {
+                    return enqueueWholeFilePdfWrite(pathname, name, function () {
+                        advanceWholeFilePdfGeneration(pathname, name);
+                        return false;
+                    });
+                }
+                return cachesApi.open(name).then(function (cache) {
+                    return installAuthoritativeWholeFilePdf(cache, pathname, bytes, name);
+                });
             });
         }).then(function (ok) {
             return !!ok;
@@ -952,7 +971,7 @@
                 return;
             }
             if (!scope.caches) return;
-            const done = handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId);
+            const done = handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId, confirmScope);
             if (!done) return;
             const port = event.ports && event.ports[0];
             const task = Promise.resolve(done).then(function (ok) {

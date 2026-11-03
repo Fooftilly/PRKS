@@ -90,11 +90,16 @@ coordinator names no family: adding one is a registration.
 - **Managed PDFs per tab.** Each page tells the service worker which scope
   it is bound to (`prks-scope-bind`); the worker keeps one binding per
   client in `prks-browser-scope-v1` and serves or stores a page's PDFs only
-  in that page's own `prks-pdf-v2:<scope>`. A retired page gets no cache. A
-  client that never bound (a dedicated worker, a page still loading) gets
-  the last confirmed scope only when every live page that has bound agrees
-  with it; otherwise the network only. A page install must name its own
-  bound cache.
+  in that page's own `prks-pdf-v2:<scope>`. A retired page gets no cache.
+  A live page that has not bound yet waits briefly for its binding and
+  never borrows another scope; a dedicated worker gets the last confirmed
+  scope only when every live page is bound to it; otherwise the network
+  only. Bytes enter a cache only while the session is still that cache's
+  scope: a network GET checks `/api/session` before and after the fetch,
+  and a post-save install (which must name the sender's own bound cache)
+  checks it before the put. Without that confirmation (another account
+  signed in, expiry, offline) the bytes are served or kept by the page but
+  never cached. Offline reads of bytes already cached are unchanged.
 - **Auth hold.** The page re-reads the session
   (`prksBrowserScope.verify()`) before each send and on its own lifecycle
   (visible again, focus, online, page show, once a minute while visible), so

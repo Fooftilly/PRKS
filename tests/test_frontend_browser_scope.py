@@ -114,7 +114,16 @@ class BrowserScopeStructure(unittest.TestCase):
     def test_worker_serves_each_page_its_own_binding(self) -> None:
         sw = _code(_read(_FRONTEND, "sw.js"))
         self.assertIn("handlers.handlePdfRequest(request, pathname, event.clientId || '')", sw)
-        self.assertIn("handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId)", sw)
+        self.assertIn("handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId, confirmScope)", sw)
+
+    def test_page_cache_fallback_checks_the_session_before_storing(self) -> None:
+        src = _code(_read(_JS, "components", "works-pdf.js"))
+        start = src.index("async function cacheManagedPdfBytes")
+        body = src[start:src.index("function detachAnnotationViewer", start)]
+        verify_at = body.index("await scope.verify()")
+        self.assertIn("if (sessionState !== 'same') return false;", body)
+        self.assertLess(body.index("installPdfBytesThroughController(path, body, cacheName)"), verify_at)
+        self.assertLess(verify_at, body.index("caches.open(cacheName)"))
 
 
 if __name__ == "__main__":

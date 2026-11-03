@@ -564,6 +564,34 @@ async function testWorker() {
     }, storage2, byClient, 'tab-a');
     record("a page cannot install into another scope's cache", foreign === false && storage2.caches.size === 0);
 
+    // A post-save install is stored only while the session is still the
+    // cache's own scope: the save ran under whichever session the browser
+    // holds, so another account's bytes never enter this page's cache.
+    {
+        const path = '/api/pdfs/post-save-switch.pdf';
+        const storage4 = cacheStorage();
+        const seed = await storage4.open(name);
+        await seed.put(path, new Response('%PDF-A-OLD'));
+        const own = async () => name;
+        const install = (body, confirm) => sw.handlePdfCacheMessage({
+            type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: path, cacheName: name, buffer: Buffer.from(body),
+        }, storage4, own, 'tab-a', confirm);
+        const headOf = async () => (await (await (await storage4.open(name)).match(path)).clone().text());
+        const asked = [];
+        const switched = await install('%PDF-B-SAVED', async (n) => { asked.push(n); return false; });
+        record('an install after another account signed in is refused',
+            switched === false && asked.length === 1 && asked[0] === name);
+        record("the refused install leaves the page's cached bytes unchanged", (await headOf()) === '%PDF-A-OLD');
+        const failing = await install('%PDF-B-SAVED', async () => { throw new TypeError('offline'); });
+        record('an install whose session check fails is refused', failing === false && (await headOf()) === '%PDF-A-OLD');
+        const unchecked = await install('%PDF-B-SAVED');
+        record('an install without a session check is refused', unchecked === false && (await headOf()) === '%PDF-A-OLD');
+        const before = sw.wholeFilePdfGeneration(path, name);
+        const confirmed = await install('%PDF-A-NEW', async () => true);
+        record('an install under the same session is stored', confirmed === true && (await headOf()) === '%PDF-A-NEW');
+        record('a refused install still advances the generation', before === 3);
+    }
+
     // A network PDF is cached only while the session is still the cache's scope.
     for (const [label, confirmed, stored] of [['confirmed', [true, true], true],
         ['changed before the fetch', [false, true], false], ['changed during the fetch', [true, false], false]]) {
