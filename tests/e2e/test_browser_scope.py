@@ -467,6 +467,8 @@ class BrowserScopePdfCacheTests(unittest.TestCase):
         with open(pdf_file, "wb") as fh:
             fh.write(b"%PDF-B-ONLY\n%%EOF\n")
         self.assertEqual(self.fetch_pdf(tab_a)["head"], "%PDF-B", "the online answer is served as is")
+        # The worker's refused cache write leaves no observable event to wait on.
+        # prks-allow-wait-for-timeout: asserting a cache write that must NOT happen needs a bounded window
         tab_a.wait_for_timeout(1500)
         self.assertEqual(
             self.cached_head(tab_a, name_a), original,
