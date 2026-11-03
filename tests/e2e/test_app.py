@@ -5742,6 +5742,11 @@ class TabContextHostRootTests(_BrowserE2E):
             "() => { const b = document.getElementById('save-work-identity-btn');"
             "        return !!b && !b.disabled; }"
         )
+        # Opening A and B queued their own operations. Let them land first, so
+        # the held send is A's Title save and nothing of B's settles later.
+        wait_for_async(page,
+            "() => prksSync.store.listOperations().then(r => r.length === 0)"
+        )
 
         page.route("**/api/sync/operations", hold_send)
         try:
