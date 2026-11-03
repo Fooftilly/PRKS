@@ -107,8 +107,11 @@ coordinator names no family: adding one is a registration.
   no explicit sign-out): delivery holds, rows stay pending, and it retries
   every 30 s; the same account signing in again resumes the page. Signed
   out on purpose (`prksBrowserScope.signOut()`, in this tab or another):
-  the sign-out is broadcast and recorded, and every open page of that
-  account retires. Another account signed in: the page retires. A retired
+  the sign-out is broadcast and recorded with the time it took effect, and
+  every open page of that account retires. A session answer from a read
+  that began before that time (in any tab) never restores the account or
+  clears the record; only a session confirmed by a later read does.
+  Another account signed in: the page retires. A retired
   page's stores close and refuse reads and writes, the runtime holds for the
   life of the page, nothing is deleted, and a reload binds whoever is signed
   in. Admission refusals of a sent operation (401, 403, 400

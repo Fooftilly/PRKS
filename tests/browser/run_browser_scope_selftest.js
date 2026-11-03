@@ -200,6 +200,40 @@ async function testSignOut() {
     await b.resolve();
     await b.signOut();
     record("another account's sign-out does not retire this page", !a.isRetired());
+
+    // Another tab's session read was answered before a sign-out but recorded
+    // after it: the sign-out wins, in every tab.
+    {
+        const idb3 = createFakeIndexedDBFactory();
+        let clock = 1000;
+        const now = () => clock;
+        let releaseLate;
+        const late = new Promise((r) => { releaseLate = r; });
+        const signer = scopeApi.createPrksBrowserScope({ indexedDB: idb3, now, fetchImpl: fetchFor([ok(SESSION_A)]) });
+        const slow = scopeApi.createPrksBrowserScope({
+            indexedDB: idb3, now, fetchImpl: fetchFor([ok(SESSION_A), () => late.then(() => json(SESSION_A, 200))]),
+        });
+        await signer.resolve();
+        await slow.resolve();
+        clock = 2000;
+        const pending = slow.verify(); // its read begins now, before the sign-out
+        clock = 3000;
+        await signer.signOut();
+        clock = 4000;
+        releaseLate();
+        const verdict = await pending;
+        record('a session answer older than another tab\'s sign-out retires the page',
+            verdict === 'logged_out' && slow.isRetired(), verdict);
+        record('it does not restore the last confirmed scope', (await sw.readScopeState(idb3)).pointerKey === null);
+        const reload = scopeApi.createPrksBrowserScope({ indexedDB: idb3, now, fetchImpl: fetchFor([offline()]) });
+        record('an offline reload after it opens no store', (await reload.resolve()) === null && (await reload.dbName('local')) === null);
+        const missed = scopeApi.createPrksBrowserScope({ indexedDB: idb3, now, fetchImpl: fetchFor([ok(SESSION_A), signedOut]) });
+        clock = 4500;
+        // A read that begins after the sign-out is a new session.
+        await missed.resolve();
+        record('a session confirmed after the sign-out ends it', (await sw.readScopeState(idb3)).pointerKey === KEY_A);
+        record('and a later expiry only holds', (await missed.verify()) === 'signed_out' && !missed.isRetired());
+    }
 }
 
 async function testAnnounceAndLifecycle() {

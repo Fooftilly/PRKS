@@ -181,16 +181,33 @@
                     get.onsuccess = function () { done(scopeFromRecord(get.result)); };
                 });
             },
-            write: function (scope) {
-                return withStore('readwrite', function (store) {
-                    store.put({
-                        key: POINTER_KEY,
-                        scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
-                    });
-                    // A confirmed session of this scope ends its sign-out.
+            /**
+             * Records a confirmed session of `scope` read from `startedAt`.
+             * Resolves false, writing nothing, when that scope was signed out
+             * at or after the read began (in any tab): the answer predates the
+             * sign-out and must not bring the scope back. One readwrite
+             * transaction, so the check and the write cannot interleave with
+             * another tab's sign-out.
+             */
+            write: function (scope, startedAt) {
+                return withStore('readwrite', function (store, done) {
                     const marker = store.get(LOGOUT_KEY);
                     marker.onsuccess = function () {
-                        if (marker.result && marker.result.scopeKey === scope.key) store.delete(LOGOUT_KEY);
+                        const out = marker.result;
+                        if (out && out.scopeKey === scope.key) {
+                            const at = Number(out.at) || 0;
+                            if (!(Number(startedAt) > at)) {
+                                done(false);
+                                return;
+                            }
+                            // A session confirmed after the sign-out ends it.
+                            store.delete(LOGOUT_KEY);
+                        }
+                        store.put({
+                            key: POINTER_KEY,
+                            scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
+                        });
+                        done(true);
                     };
                 });
             },
@@ -199,10 +216,10 @@
                     store.delete(POINTER_KEY);
                 });
             },
-            markLoggedOut: function (scope) {
+            markLoggedOut: function (scope, at) {
                 return withStore('readwrite', function (store) {
                     store.delete(POINTER_KEY);
-                    store.put({ key: LOGOUT_KEY, scopeKey: scope.key });
+                    store.put({ key: LOGOUT_KEY, scopeKey: scope.key, at: at });
                 });
             },
             loggedOut: function (scope) {
@@ -225,6 +242,17 @@
         const sessionTimeoutMs = options.sessionTimeoutMs > 0 ? options.sessionTimeoutMs : SESSION_TIMEOUT_MS;
         const serviceWorker = options.serviceWorker || null;
         const channel = options.channel || null;
+        // Wall clock, shared by every tab of the origin: orders a session read
+        // against another tab's sign-out.
+        // Sub-millisecond where available, so a read begun just after a
+        // sign-out is not mistaken for one begun before it.
+        const now = typeof options.now === 'function' ? options.now : function () {
+            const perf = root.performance;
+            if (perf && typeof perf.now === 'function' && typeof perf.timeOrigin === 'number') {
+                return perf.timeOrigin + perf.now();
+            }
+            return Date.now();
+        };
 
         let resolving = null;
         let bound = null;
@@ -257,12 +285,16 @@
                     resolveDeadline({ kind: 'unreachable', scope: null });
                 }, sessionTimeoutMs);
             });
+            const startedAt = now();
             const read = fetchAnswer(controller).then(function (answer) {
                 if (expired) return null;
                 clearTimeout(timer);
                 if (seq < recordedSeq) return answer;
                 recordedSeq = seq;
-                return record(answer).then(function () { return answer; });
+                return record(answer, startedAt).then(function (kept) {
+                    // Answered before a sign-out of that scope: the session is over.
+                    return kept === false ? { kind: 'none', scope: null } : answer;
+                });
             });
             return Promise.race([read, deadline]).then(function (answer) {
                 return answer || { kind: 'unreachable', scope: null };
@@ -294,12 +326,17 @@
                 });
         }
 
-        function record(answer) {
+        /** Resolves false only when the answer predates a sign-out of its scope. */
+        function record(answer, startedAt) {
             // The record follows the server's answer; a failed write only costs
             // an offline reload, never a wrong scope.
-            if (answer.kind === 'session') return pointer.write(answer.scope).catch(function () {});
-            if (answer.kind === 'none') return pointer.forget().catch(function () {});
-            return Promise.resolve();
+            if (answer.kind === 'session') {
+                return pointer.write(answer.scope, startedAt).then(function (kept) {
+                    return kept !== false;
+                }, function () { return true; });
+            }
+            if (answer.kind === 'none') return pointer.forget().then(function () { return true; }, function () { return true; });
+            return Promise.resolve(true);
         }
 
         /** The page's scope, or null. Resolved once per page. */
@@ -369,7 +406,9 @@
                 return send.then(function (response) {
                     if (!response || !response.ok) throw new Error('sign_out_failed');
                     if (!scope) return;
-                    return pointer.markLoggedOut(scope).catch(function () {}).then(function () {
+                    // Stamped after the server ended the session: any read that
+                    // began before this moment cannot restore the scope.
+                    return pointer.markLoggedOut(scope, now()).catch(function () {}).then(function () {
                         if (channel) {
                             try { channel.postMessage({ type: 'logged_out', key: scope.key }); } catch (_e) { /* best effort */ }
                         }

@@ -25,6 +25,7 @@ durable operation queue (`prksSync.store`).
 
 import json
 import os
+import time
 import unittest
 from datetime import datetime, timezone
 
@@ -248,6 +249,62 @@ class BrowserScopeTests(unittest.TestCase):
         page = self.open_page()
         self.assertEqual([r["op_id"] for r in page.evaluate(_OPS)], [op_id])
         self.wait_delivered(page)
+
+    def test_a_session_answer_older_than_a_sign_out_never_restores_the_account(self):
+        self.sign_in(OWNER_LOGIN)
+        signer = self.open_page()
+        # This tab misses the sign-out broadcast, so only the record can tell it.
+        late = self.context.new_page()
+        PageCollector(late, self.server.origin)
+        late.add_init_script("window.BroadcastChannel = undefined;")
+        late.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        late.wait_for_selector(".prks-folder-library")
+        self.assertTrue(self.scope_user(late))
+
+        # The late tab's session read is answered before the sign-out, but its
+        # answer reaches the page only after it.
+        held = []
+        late.route("**/api/session", lambda route: held.append((route, route.fetch())))
+        late.evaluate("() => { window.__verdict = prksBrowserScope.verify(); }")
+        deadline = time.time() + 10
+        while time.time() < deadline and not held:
+            # prks-allow-wait-for-timeout: polling for a route handler to capture the held request
+            late.wait_for_timeout(50)
+        self.assertTrue(held, "the late tab never read its session")
+        self.assertEqual(held[0][1].status, 200)
+
+        signer.evaluate("() => prksBrowserScope.signOut()")
+        route, response = held.pop()
+        route.fulfill(response=response)
+        late.unroute("**/api/session")
+
+        self.assertEqual(late.evaluate("() => window.__verdict"), "logged_out")
+        self.assertIsNone(
+            late.evaluate(
+                """() => new Promise((resolve, reject) => {
+                    const open = indexedDB.open(PRKS_SCOPE_POINTER_DB_NAME);
+                    open.onerror = () => reject(open.error);
+                    open.onsuccess = () => {
+                        const db = open.result;
+                        const get = db.transaction(PRKS_SCOPE_POINTER_STORE).objectStore(PRKS_SCOPE_POINTER_STORE)
+                            .get(PRKS_SCOPE_POINTER_KEY);
+                        get.onsuccess = () => { db.close(); resolve(get.result || null); };
+                        get.onerror = () => { db.close(); reject(get.error); };
+                    };
+                })"""
+            ),
+            "an answer older than the sign-out must not restore the last confirmed account",
+        )
+        # An offline reload finds no account to open.
+        self.assertIsNone(
+            late.evaluate(
+                """async () => {
+                    const offline = createPrksBrowserScope({ fetchImpl: () => Promise.reject(new TypeError('offline')) });
+                    const scope = await offline.resolve();
+                    return scope ? scope.key : (await offline.dbName('local'));
+                }"""
+            )
+        )
 
     def test_another_account_signing_in_retires_the_open_page(self):
         reader_id = self.server.library.accounts[READER]
