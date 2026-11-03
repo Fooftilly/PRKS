@@ -492,6 +492,9 @@
         const serviceWorker = root.navigator && root.navigator.serviceWorker ? root.navigator.serviceWorker : null;
         root.prksBrowserScope = createPrksBrowserScope({ channel: channel, serviceWorker: serviceWorker });
         watchLifecycle(root.prksBrowserScope, root, root.document);
+        // Bind at once, so the service worker knows this page before it asks
+        // for a PDF (an unbound page is served no cache).
+        root.prksBrowserScope.resolve().catch(function () { /* fails closed */ });
     }
 
     if (typeof module !== 'undefined' && module.exports) {

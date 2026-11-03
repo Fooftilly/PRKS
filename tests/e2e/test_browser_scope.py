@@ -28,6 +28,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 
+from backend.storage.config import StorageConfig
 from tests.e2e.fixtures import seed_folders_library, seed_library
 from tests.e2e.harness import AppServer, PageCollector, require_chromium, wait_for_async
 from tests.e2e.postgres_identity import OWNER_LOGIN, PASSWORD
@@ -327,9 +328,20 @@ class BrowserScopePdfCacheTests(unittest.TestCase):
         )
         self.assertEqual(response.status, 200, response.text())
 
-    def open_controlled_page(self):
+    def open_controlled_page(self, bind=True):
         page = self.context.new_page()
         PageCollector(page, self.server.origin)
+        if not bind:
+            # This tab's binding never reaches the worker: a live, unbound page.
+            page.add_init_script(
+                """(() => {
+                    const post = ServiceWorker.prototype.postMessage;
+                    ServiceWorker.prototype.postMessage = function (message, ...rest) {
+                        if (message && message.type === 'prks-scope-bind') return;
+                        return post.call(this, message, ...rest);
+                    };
+                })()"""
+            )
         page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
         page.wait_for_function("() => !!window.prksBrowserScope")
         page.evaluate("() => navigator.serviceWorker.ready.then(() => true)")
@@ -398,6 +410,68 @@ class BrowserScopePdfCacheTests(unittest.TestCase):
             message="a retired tab was still served a PDF cache",
         )
         self.assertEqual(self.fetch_pdf(tab_b), {"status": 200, "head": "B-ONLY"})
+
+
+    def cached_head(self, page, name):
+        return page.evaluate(
+            """async ([name, path]) => {
+                const hit = await (await caches.open(name)).match(path);
+                return hit ? (await hit.text()).slice(0, 8) : null;
+            }""",
+            [name, self.pdf_path],
+        )
+
+    def put_bytes(self, page, name, body):
+        page.evaluate(
+            """async ([name, path, body]) => {
+                const cache = await caches.open(name);
+                await cache.put(path, new Response(body, { headers: { 'Content-Type': 'application/pdf' } }));
+            }""",
+            [name, self.pdf_path, body],
+        )
+
+    def test_an_unbound_tab_is_never_served_the_last_confirmed_accounts_pdf(self):
+        self.sign_in(READER)
+        tab_b = self.open_controlled_page()
+        name_b = tab_b.evaluate("() => prksBrowserScope.dbName('pdf')")
+        self.put_bytes(tab_b, name_b, "B-ONLY")
+        # Tab A is live under the same browser, but the worker never learns
+        # its binding (still loading, or its message lost).
+        tab_a = self.open_controlled_page(bind=False)
+
+        self.context.set_offline(True)
+        self.assertEqual(self.fetch_pdf(tab_b), {"status": 200, "head": "B-ONLY"})
+        self.assertEqual(
+            self.fetch_pdf(tab_a), {"status": 503},
+            "an unbound tab must get the network only, never the last confirmed account's cache",
+        )
+
+    def test_an_old_tab_never_caches_the_new_accounts_pdf_bytes(self):
+        self.sign_in(OWNER_LOGIN)
+        tab_a = self.open_controlled_page()
+        name_a = tab_a.evaluate("() => prksBrowserScope.dbName('pdf')")
+        self.assertEqual(self.fetch_pdf(tab_a)["head"][:4], "%PDF")
+        wait_for_async(
+            tab_a,
+            "async ([name, path]) => !!(await (await caches.open(name)).match(path))",
+            arg=[name_a, self.pdf_path],
+            message="tab A's PDF never reached its own cache",
+        )
+        original = self.cached_head(tab_a, name_a)
+        self.assertTrue(original.startswith("%PDF-1"), original)
+
+        # B signs in while tab A is still bound, and the same route now
+        # answers different bytes.
+        self.sign_in(READER)
+        pdf_file = os.path.join(StorageConfig.for_testing(self.server.storage_root).pdfs_dir, self.server.ids["pdf_name"])
+        with open(pdf_file, "wb") as fh:
+            fh.write(b"%PDF-B-ONLY\n%%EOF\n")
+        self.assertEqual(self.fetch_pdf(tab_a)["head"], "%PDF-B", "the online answer is served as is")
+        tab_a.wait_for_timeout(1500)
+        self.assertEqual(
+            self.cached_head(tab_a, name_a), original,
+            "tab A's cache must never take bytes fetched under another account",
+        )
 
 
 if __name__ == "__main__":

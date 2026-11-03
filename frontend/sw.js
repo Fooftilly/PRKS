@@ -45,6 +45,9 @@
     const SCOPE_CLIENTS_STORE = 'clients';
     const SCOPE_POINTER_KEY = 'current';
     const SCOPE_BIND_MESSAGE = 'prks-scope-bind';
+    const SESSION_PATH = '/api/session';
+    // How long a page's PDF request waits for that page's own binding.
+    const BIND_WAIT_MS = 3000;
     const SCOPE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
     // unable to poison the active shell cache"): a currently-active worker
@@ -535,14 +538,25 @@
     function selectPdfCacheName(state, clientId, liveWindowIds, strict) {
         const own = clientId ? state.bindings.get(clientId) : null;
         if (own) return own.key && !own.retired ? PDF_CACHE_BASE + ':' + own.key : null;
-        if (strict || !state.pointerKey) return null;
+        if (strict || !state.pointerKey || !clientId) return null;
         const live = liveWindowIds || new Set();
-        let agreed = true;
-        state.bindings.forEach(function (binding, id) {
-            if (!live.has(id)) return;
-            if (binding.retired || binding.key !== state.pointerKey) agreed = false;
+        // An unbound page has no identity of its own: never another one's cache.
+        if (live.has(clientId)) return null;
+        // Any other client (a dedicated worker) borrows the last confirmed
+        // scope only when every live page is bound to it.
+        let agreed = live.size > 0;
+        live.forEach(function (id) {
+            const binding = state.bindings.get(id);
+            if (!binding || binding.retired || binding.key !== state.pointerKey) agreed = false;
         });
         return agreed ? PDF_CACHE_BASE + ':' + state.pointerKey : null;
+    }
+
+    /** The scope key a GET /api/session body names, or null (the page's own check, browser-scope.js). */
+    function sessionScopeKey(body) {
+        if (!body || typeof body !== 'object') return null;
+        const key = [body.instance_id, body.library && body.library.id, body.user && body.user.id].join('.');
+        return validScopeKey(key) ? key : null;
     }
 
     /**
@@ -553,6 +567,11 @@
         const cachesApi = env.caches;
         const fetchImpl = env.fetchImpl;
         const pdfCacheName = env.pdfCacheName || function () { return Promise.resolve(null); };
+        // Whether the server's session is still the scope of `cacheName`. A
+        // network PDF is written into a cache only when it is, before and
+        // after the fetch: a tab whose account changed under it must not
+        // store the new account's bytes under the old scope.
+        const confirmScope = env.confirmScope || function () { return Promise.resolve(true); };
 
         async function handleNavigation(request) {
             try {
@@ -653,6 +672,7 @@
                 }
             }
             try {
+                const confirmedBefore = Promise.resolve(confirmScope(cacheName)).catch(function () { return false; });
                 const res = await fetchImpl(request);
                 if (isWholeFilePdfResponse(request, res)) {
                     let cloned = null;
@@ -662,9 +682,10 @@
                         cloned = null;
                     }
                     if (cloned) {
-                        commitNetworkWholeFilePdf(
-                            cache, pathname, cloned, generationAtStart, cacheName
-                        ).catch(function () {});
+                        Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
+                            if (!checks[0] || !checks[1]) return false;
+                            return commitNetworkWholeFilePdf(cache, pathname, cloned, generationAtStart, cacheName);
+                        }).catch(function () {});
                     }
                 }
                 return res;
@@ -817,9 +838,48 @@
                 return new Set();
             });
         }
-        const pdfCacheName = function (clientId, strict) {
+        // A page that is still binding: its request waits briefly for its own
+        // binding instead of borrowing any other scope.
+        const bindWaiters = new Map();
+        function waitForBinding(clientId) {
+            return new Promise(function (resolve) {
+                const list = bindWaiters.get(clientId) || [];
+                bindWaiters.set(clientId, list.concat([resolve]));
+                setTimeout(resolve, BIND_WAIT_MS);
+            });
+        }
+        function bindingWritten(clientId) {
+            const list = bindWaiters.get(clientId);
+            if (!list) return;
+            bindWaiters.delete(clientId);
+            list.forEach(function (resolve) { resolve(); });
+        }
+        function selectNow(clientId, strict) {
             return Promise.all([readScopeState(scope.indexedDB), liveClientIds('window')]).then(function (parts) {
-                return selectPdfCacheName(parts[0], clientId, parts[1], strict);
+                return { state: parts[0], live: parts[1], name: selectPdfCacheName(parts[0], clientId, parts[1], strict) };
+            });
+        }
+        const pdfCacheName = function (clientId, strict) {
+            return selectNow(clientId, strict).then(function (first) {
+                const unboundPage = !!clientId && first.live.has(clientId) && !first.state.bindings.has(clientId);
+                if (!unboundPage) return first.name;
+                return waitForBinding(clientId).then(function () {
+                    return selectNow(clientId, strict).then(function (again) { return again.name; });
+                });
+            });
+        };
+        const confirmScope = function (cacheName) {
+            if (!cacheName) return Promise.resolve(false);
+            return scope.fetch(SESSION_PATH, {
+                method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' },
+            }).then(function (response) {
+                if (!response || response.status !== 200) return false;
+                return response.json().then(function (body) {
+                    const key = sessionScopeKey(body);
+                    return !!key && PDF_CACHE_BASE + ':' + key === cacheName;
+                });
+            }).catch(function () {
+                return false;
             });
         };
         const handlers = createHandlers({
@@ -828,6 +888,7 @@
                 return scope.fetch(request);
             },
             pdfCacheName: pdfCacheName,
+            confirmScope: confirmScope,
         });
 
         scope.addEventListener('install', function (event) {
@@ -879,6 +940,9 @@
             if (data && data.type === SCOPE_BIND_MESSAGE) {
                 const bind = liveClientIds('all').then(function (live) {
                     return writeClientBinding(scope.indexedDB, sourceId, data.key, data.retired === true, live);
+                }).then(function (written) {
+                    bindingWritten(sourceId);
+                    return written;
                 });
                 if (typeof event.waitUntil === 'function') event.waitUntil(bind);
                 return;
@@ -933,6 +997,7 @@
         readScopeState: readScopeState,
         writeClientBinding: writeClientBinding,
         selectPdfCacheName: selectPdfCacheName,
+        sessionScopeKey: sessionScopeKey,
         PRKS_SW_SCOPE_BIND_MESSAGE: SCOPE_BIND_MESSAGE,
         PRKS_SW_SCOPE_CLIENTS_STORE: SCOPE_CLIENTS_STORE,
         PRKS_SW_SCOPE_POINTER_DB_VERSION: SCOPE_POINTER_DB_VERSION,

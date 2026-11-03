@@ -530,6 +530,16 @@ async function testWorker() {
     record('an install needs the sender bound to that scope',
         sw.selectPdfCacheName(state, 'worker-1', new Set(['tab-b']), true) === null
         && sw.selectPdfCacheName(state, 'tab-b', live, true) === nameB);
+    // A live page that has not bound yet (still loading, or its bind is lost)
+    // never borrows the last confirmed account's cache.
+    const gap = { pointerKey: KEY_B, bindings: new Map([['tab-b', { key: KEY_B, retired: false }]]) };
+    const gapLive = new Set(['tab-a', 'tab-b']);
+    record('an unbound live page gets no cache even when every bound page agrees',
+        sw.selectPdfCacheName(gap, 'tab-a', gapLive, false) === null);
+    record('a worker gets no cache while any live page is unbound',
+        sw.selectPdfCacheName(gap, 'worker-1', gapLive, false) === null);
+    record('a client with no id gets no cache', sw.selectPdfCacheName(gap, '', new Set(['tab-b']), false) === null);
+    record('a worker gets no cache with no live page at all', sw.selectPdfCacheName(gap, 'worker-1', new Set(), false) === null);
     record('no record and no binding: no cache',
         sw.selectPdfCacheName({ pointerKey: null, bindings: new Map() }, 'x', new Set(), false) === null);
 
@@ -553,6 +563,27 @@ async function testWorker() {
         type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/pdfs/a.pdf', cacheName: nameB, buffer: Buffer.from('X'),
     }, storage2, byClient, 'tab-a');
     record("a page cannot install into another scope's cache", foreign === false && storage2.caches.size === 0);
+
+    // A network PDF is cached only while the session is still the cache's scope.
+    for (const [label, confirmed, stored] of [['confirmed', [true, true], true],
+        ['changed before the fetch', [false, true], false], ['changed during the fetch', [true, false], false]]) {
+        const storage3 = cacheStorage();
+        const answers = confirmed.slice();
+        const h = sw.createHandlers({
+            caches: storage3,
+            fetchImpl: async () => new Response('%PDF-NEW', { status: 200, headers: { 'Content-Type': 'application/pdf' } }),
+            pdfCacheName: async () => name,
+            confirmScope: async (cacheName) => cacheName === name && answers.shift(),
+        });
+        const got = await h.handlePdfRequest(request, '/api/pdfs/a.pdf', 'tab-a');
+        await new Promise((r) => setTimeout(r, 20));
+        const cache = storage3.caches.get(name);
+        const has = !!(cache && cache.entries.get('/api/pdfs/a.pdf'));
+        record('a network PDF, session ' + label + ': ' + (stored ? 'cached' : 'never cached') + ', still served',
+            got.status === 200 && has === stored, String(has));
+    }
+    record('the worker reads a session body as its scope key',
+        sw.sessionScopeKey(SESSION_A) === KEY_A && sw.sessionScopeKey({ user: null }) === null);
 }
 
 async function main() {
