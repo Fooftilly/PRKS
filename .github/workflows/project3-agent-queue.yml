@@ -1,0 +1,75 @@
+name: Project 3 agent queue publisher
+
+# Public, read-only ownership inventory for cloud agents without Project V2
+# GraphQL credentials. Does not change Project values, issue state or blockers.
+# Only trusted master code and the existing protected project-automation token
+# can read the board; the ordinary GITHUB_TOKEN writes a dedicated data branch.
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/project3-agent-queue.yml
+      - scripts/project3_agent_queue.py
+      - scripts/project3_readiness.py
+  schedule:
+    - cron: "13 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: project3-agent-queue-publisher
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  publish:
+    if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: project-automation
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The checkout uses only the job-scoped GITHUB_TOKEN, not the
+          # project-scoped PAT. Needed for the data-branch push below.
+          persist-credentials: true
+
+      # Only Project items are relevant to agent ownership. Preserve the
+      # readiness module's pagination/identity/privacy checks, without
+      # querying every unrelated open repository issue.
+      - name: Read and publish public Project 3 agent queue
+        env:
+          PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+        run: >-
+          python3 scripts/project3_agent_queue.py publish-live
+          --out "$RUNNER_TEMP/agent-queue.json"
+
+      - name: Publish to dedicated data branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin refs/heads/project3-agent-queue >/dev/null; then
+            git fetch --quiet --no-tags --depth=1 origin refs/heads/project3-agent-queue
+            git switch -C project3-agent-queue FETCH_HEAD
+            # Refuse to modify an unexpected branch layout.
+            [[ "$(git ls-files)" == 'agent-queue.json' ]] || {
+              echo 'Refusing to publish: data branch has unexpected tracked files.' >&2
+              exit 1
+            }
+          else
+            git switch --orphan project3-agent-queue
+            # switch --orphan already clears tracked files from the worktree.
+          fi
+          install -m 0644 "$RUNNER_TEMP/agent-queue.json" agent-queue.json
+          git add -- agent-queue.json
+          if git diff --cached --quiet; then
+            echo 'No change to agent queue'
+          else
+            git commit -m 'chore: refresh public Project #3 agent ownership queue'
+            git push origin HEAD:refs/heads/project3-agent-queue
+          fi

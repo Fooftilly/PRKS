@@ -26,6 +26,9 @@ const createError = ref('')
 const aliasAddError = ref('')
 const aliasRemoveError = ref('')
 const aliasDeleteError = ref('')
+// Open and close each start a new alias editing session. A late write applies
+// only to the session that submitted it.
+let aliasSession = 0
 const aliasPublisher = computed(() => rows.value.find((row) => row.id === aliasPublisherId.value) ?? null)
 const plusIcon = computed(() => window.prksTagPlusIconHtml?.() ?? '')
 const buildingIcon = computed(() => window.prksIcon?.('building-2', { size: 'sm' }) ?? '')
@@ -51,7 +54,16 @@ function restoreFocus(trigger: HTMLElement | null, fallback: HTMLElement | null)
   }
 }
 
+function advanceAliasSession(): void {
+  aliasSession += 1
+}
+
+function aliasOutcomeCurrent(publisherId: string, session: number): boolean {
+  return aliasPublisherId.value === publisherId && aliasSession === session
+}
+
 function closeAlias(): void {
+  advanceAliasSession()
   const trigger = aliasTrigger.value
   const publisherId = aliasPublisherId.value
   aliasPublisherId.value = null
@@ -61,6 +73,7 @@ function closeAlias(): void {
 }
 
 function openAlias(row: PublisherRow, event: MouseEvent): void {
+  advanceAliasSession()
   aliasTrigger.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   aliasDraft.value = ''
   aliasPublisherId.value = row.id
@@ -89,7 +102,7 @@ function createPublisher(): void {
     if (outcome.status === 'error') createError.value = outcome.message
     else if (outcome.status === 'success') {
       createError.value = ''
-      draftName.value = ''
+      if (draftName.value === name) draftName.value = ''
     }
   })
 }
@@ -99,13 +112,14 @@ function addAlias(): void {
   if (!publisher) return
   const publisherId = publisher.id
   const draft = aliasDraft.value
+  const session = aliasSession
   void withBusy('alias-add', async () => {
     const outcome = await props.intents.addAlias(publisherId, draft)
-    if (aliasPublisherId.value !== publisherId) return
+    if (!aliasOutcomeCurrent(publisherId, session)) return
     if (outcome.status === 'error') aliasAddError.value = outcome.message
     else if (outcome.status === 'success') {
       aliasAddError.value = ''
-      aliasDraft.value = ''
+      if (aliasDraft.value === draft) aliasDraft.value = ''
     }
   })
 }
@@ -114,9 +128,10 @@ function removeAlias(alias: string): void {
   const publisher = aliasPublisher.value
   if (!publisher) return
   const publisherId = publisher.id
+  const session = aliasSession
   void withBusy(`alias-remove:${alias}`, async () => {
     const outcome = await props.intents.removeAlias(publisherId, alias)
-    if (aliasPublisherId.value !== publisherId) return
+    if (!aliasOutcomeCurrent(publisherId, session)) return
     if (outcome.status === 'error') aliasRemoveError.value = outcome.message
     else if (outcome.status === 'success') aliasRemoveError.value = ''
   })
@@ -126,9 +141,10 @@ function removePublisher(): void {
   const publisher = aliasPublisher.value
   if (!publisher) return
   const publisherId = publisher.id
+  const session = aliasSession
   void withBusy('delete', async () => {
     const outcome = await props.intents.remove(publisherId, publisher.name)
-    if (aliasPublisherId.value !== publisherId) return
+    if (!aliasOutcomeCurrent(publisherId, session)) return
     if (outcome.status === 'error') aliasDeleteError.value = outcome.message
     else if (outcome.status === 'success') aliasDeleteError.value = ''
   })

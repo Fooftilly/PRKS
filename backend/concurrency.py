@@ -51,6 +51,13 @@ def request_access_mode(method: str, path: str, query: str = "") -> str | None:
             return MODE_RESTORE
         if path == "/api/backups/stage":
             return MODE_READ
+        if path == "/api/processing-items":
+            # Streams a whole PDF between its two fenced PostgreSQL commands
+            # (the key lookup, then the register); holding the mutation gate
+            # meanwhile would stall every other write. A restore waits for
+            # this read, so the body has an idle timeout and a deadline
+            # (backend/api/processing.py).
+            return MODE_READ
         return MODE_MUTATION
     if method in _MUTATING_METHODS:
         return MODE_MUTATION

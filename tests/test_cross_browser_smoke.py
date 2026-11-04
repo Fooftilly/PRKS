@@ -18,7 +18,7 @@ from scripts.ci.cross_browser_smoke import (
 def report(engines=("firefox", "webkit")):
     return {
         "format": "prks-cross-browser-smoke-v1",
-        "fixture": "disposable_appserver_synthetic_sqlite",
+        "fixture": "disposable_appserver_disposable_postgres",
         "browsers": [
             {"engine": engine, "version": "1.2.3", "passed": True, "checks": list(CHECKS)}
             for engine in engines
@@ -30,10 +30,9 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
     def test_disallows_inherited_live_auth_and_database_connections(self):
         verify_isolation({})
         verify_isolation({"PRKS_STORAGE": "/nonexistent-user-storage"})
-        for env in (
-            "PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE",
-            "PRKS_TEST_DATABASE_URL",
-        ):
+        # The disposable test server is what the E2E AppServer runs on.
+        verify_isolation({"PRKS_TEST_DATABASE_URL": "postgresql://127.0.0.1/postgres"})
+        for env in ("PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE"):
             with self.subTest(env=env), self.assertRaises(RuntimeError):
                 verify_isolation({env: "sensitive-secret"})
 

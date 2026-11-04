@@ -39,6 +39,8 @@ from tests.e2e.policy import (
     SEED_CACHE_ENV,
     env_flag_enabled,
 )
+from tests.e2e.postgres_identity import provision_library
+from backend.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
 
 REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"
@@ -834,6 +836,11 @@ def wait_http(url: str, timeout: float = READY_TIMEOUT_S) -> None:
             with urllib.request.urlopen(req, timeout=2) as res:
                 if 200 <= res.status < 500:
                     return
+        except urllib.error.HTTPError as err:
+            # A session-mode server answers 401 before anyone signs in: it is up.
+            if err.code < 500:
+                return
+            last = err
         except (urllib.error.URLError, TimeoutError, OSError) as err:
             last = err
         time.sleep(0.05)
@@ -1110,7 +1117,7 @@ class PageCollector:
 class AppServer:
     """One PRKS subprocess + temp storage. Seed before start()."""
 
-    def __init__(self, seed_fn=None, extra_env=None):
+    def __init__(self, seed_fn=None, extra_env=None, auth=None, members=()):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
         # The storage root is a fresh, empty child directory so PRKS treats it
         # as a new root (storage-architecture §7.1); server output lives beside
@@ -1131,8 +1138,25 @@ class AppServer:
         # best-effort outbound call deterministically). Never used to change how the
         # app talks to its own storage/port.
         self._extra_env = dict(extra_env or {})
+        # The disposable PostgreSQL Library behind this server; kept across
+        # start retries, dropped by stop() (tests/e2e/postgres_identity.py).
+        # `auth="session"` signs accounts in by password; `members` adds
+        # editors beside the owner.
+        self.library = None
+        self._auth = auth
+        self._members = tuple(members)
 
     def start(self):
+        if self.library is None:
+            try:
+                kwargs = {"members": self._members}
+                if self._auth is not None:
+                    kwargs["auth"] = self._auth
+                with profile_e2e_phase("postgres_provision"):
+                    self.library = provision_library(self.storage_root, **kwargs)
+            except Exception:
+                self._tmpdir.cleanup()
+                raise
         if self._seed_fn is not None:
             self.ids, self.seed_cache_hit = _materialize_seed(
                 self._seed_fn, self.storage_root
@@ -1144,7 +1168,17 @@ class AppServer:
         env["PRKS_LOG_FILE"] = os.path.join(self.storage_root, "prks-errors.log")
         env["PYTHONUNBUFFERED"] = "1"
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
+        # Only this server's own database: never a live deployment's settings.
+        for name in ("PRKS_TEST_DATABASE_URL", "PRKS_DATABASE_URL_FILE"):
+            env.pop(name, None)
+        env.update(self.library.server_env())
         env.update(self._extra_env)
+        # The child emits only fixed-name timing records in a disposable E2E
+        # run. Never inherit this diagnostic from the ambient environment.
+        env.pop(CHILD_STARTUP_PROFILE_ENV, None)
+        if _ACTIVE_PROFILE is not None:
+            env[CHILD_STARTUP_PROFILE_ENV] = "1"
+            env["PRKS_E2E"] = "1"
         for attempt in range(SERVER_START_ATTEMPTS):
             started = time.perf_counter()
             profiled = _ACTIVE_PROFILE is not None
@@ -1176,6 +1210,7 @@ class AppServer:
                     self.port = find_free_port()
                     self.origin = "http://%s:%s" % (HOST, self.port)
                     continue
+                self._drop_library()
                 self._tmpdir.cleanup()
                 raise RuntimeError(
                     "PRKS E2E server failed to start on %s\nstdout:\n%s\nstderr:\n%s"
@@ -1187,6 +1222,11 @@ class AppServer:
                 _profile_phase("server_spawn", spawned - started)
                 _profile_phase("server_http_ready", ready - spawned)
             _profile_phase("server_start", ready - started)
+            if profiled:
+                # Read only the successful subprocess's private stderr. Fresh
+                # _spawn() truncates this file on any bind-conflict retry.
+                for name, seconds in parse_records(_read_file(self._stderr_path)).items():
+                    _profile_phase(name, seconds)
             e2e_heartbeat("SERVER_READY")
             return self
         raise RuntimeError("PRKS E2E server could not obtain a free port")
@@ -1244,9 +1284,10 @@ class AppServer:
         started = time.perf_counter()
         try:
             if self.proc is not None:
-                _terminate(self.proc)
-                if self.proc.poll() is None:
-                    raise RuntimeError("PRKS E2E server process did not exit")
+                with profile_e2e_phase("server_stop_process"):
+                    _terminate(self.proc)
+                    if self.proc.poll() is None:
+                        raise RuntimeError("PRKS E2E server process did not exit")
         finally:
             try:
                 for handle in (self._stdout, self._stderr):
@@ -1262,9 +1303,21 @@ class AppServer:
                     _LIVE_SERVERS.remove(self)
                 except ValueError:
                     pass
-                self._tmpdir.cleanup()
+                try:
+                    self._drop_library()
+                finally:
+                    with profile_e2e_phase("server_stop_temp_cleanup"):
+                        self._tmpdir.cleanup()
             finally:
                 _profile_phase("server_stop", time.perf_counter() - started)
+
+
+    def _drop_library(self):
+        # Cleared only once dropped, so a failed drop can be retried by stop().
+        if self.library is not None:
+            with profile_e2e_phase("postgres_drop"):
+                self.library.drop()
+            self.library = None
 
 
 class FixtureServer:

@@ -106,7 +106,7 @@ function handlerContract() {
 }
 
 async function coalescingFor(operation, kindLabel) {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store };
     const save = text => store.saveWorkNote('W-1', operation, text, observed('A', 0));
     const rowsOf = async () => noteRows(await store.listOperations(), operation, 'W-1');
@@ -159,7 +159,7 @@ async function coalescingFor(operation, kindLabel) {
 }
 
 async function scopesDoNotBlockEachOther() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     await store.saveWorkNote('W-1', RESEARCH, 'R-B', observed('A', 0));
     const research = (await store.listOperations()).find(r => r.operation === RESEARCH);
     await store.claimOperation(research.op_id);
@@ -177,7 +177,7 @@ async function scopesDoNotBlockEachOther() {
 }
 
 async function byteLimits() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const researchLimit = globalThis.PRKS_LOCAL_WORK_RESEARCH_NOTE_BYTES;
     const privateLimit = globalThis.PRKS_LOCAL_WORK_PRIVATE_NOTE_BYTES;
     assert.equal(researchLimit, 32 * 1024 * 1024);
@@ -223,7 +223,7 @@ async function mutationTestAtoBtoA() {
     fs.writeFileSync(tmp, mutated, { mode: 0o600 });
     try {
         const { createPrksLocalStore: createMutated } = require(tmp);
-        const store = createMutated({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createMutated({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         await store.saveWorkNote('W-1', RESEARCH, 'B', observed('A', 0));
         await store.saveWorkNote('W-1', RESEARCH, 'A', observed('A', 0));
         const rows = noteRows(await store.listOperations(), RESEARCH, 'W-1');
@@ -261,7 +261,7 @@ async function durableSaveThroughObservedBaseCancels() {
     /* Mirrors prksEnqueueWorkResearchNotesSave: editor text + prksWorkNoteObserved
      * → prksSaveWorkNoteDurably. Store-only coalescing is covered above; this
      * proves the acknowledged-base selection the editor path relies on. */
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store, changed() {} };
     const resources = {
         workNotesObserved: {
@@ -302,7 +302,7 @@ async function durableSaveThroughObservedBaseCancels() {
 
     /* Failure mode Codex called out: feeding the effective body as observed
      * makes editing back to A look like a new change. */
-    const poison = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const poison = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     await poison.saveWorkNote('W-1', RESEARCH, 'B', observed('A', 0));
     await poison.saveWorkNote('W-1', RESEARCH, 'A', observed('B', 0));
     const poisoned = noteRows(await poison.listOperations(), RESEARCH, 'W-1');
@@ -355,7 +355,7 @@ async function enqueuePathAtoBtoACancels() {
     if (typeof globalThis.prksResetResearchDraftsForTest === 'function') {
         globalThis.prksResetResearchDraftsForTest();
     }
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     globalThis.prksSync = { store, changed() {} };
 
     let editorText = 'A';
@@ -429,7 +429,7 @@ const STILL_SYNCING = 'Still syncing — wait or resolve the conflict in Diagnos
 async function busyNoteHarness(tabId, options) {
     ensureWorksEnqueueLoaded();
     globalThis.prksResetResearchDraftsForTest();
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const listeners = new Set();
     let saveCalls = 0;
     const realSave = store.saveWorkNote;
@@ -889,7 +889,7 @@ async function busyRetryIsOwnerScoped() {
 }
 
 async function reconciliation() {
-    const cache = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
     await cache.putEntity('work', 'W-1', {
         id: 'W-1', title: 'Paper', text_content: 'A', private_notes: 'P',
     });
@@ -970,7 +970,7 @@ async function reconciliation() {
      * changed=false. Only the second must fence, because this device's
      * derived caches may still be from the older body it observed. */
     async function researchAckFence(workId, baseRevision, serverRevision) {
-        const cacheN = createPrksOfflineStore({ indexedDB: createFakeIndexedDBFactory() });
+        const cacheN = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
         await cacheN.putEntity('work', workId, { id: workId, text_content: 'Same' });
         await cacheN.putEntity('work-notes-state', workId, {
             work_id: workId, research_note_revision: serverRevision, private_note_revision: 0,
@@ -1033,7 +1033,7 @@ async function reconciliation() {
 
 
 async function guardedCarriedReminderCancellation() {
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const base = observed('V', 4);
     const rows = async () => noteRows(await store.listOperations(), PRIVATE, 'W-1')
         .filter(row => row.status !== 'acknowledged');
@@ -1124,8 +1124,196 @@ function committedPrivateAckProofIsExactAndBounded() {
     delete globalThis.prksSync;
 }
 
+
+/* The Work reminder remount gate is a synchronous decision over a committed
+ * same-tab session and a canonical server read. The previous Chromium check
+ * launched an entire browser but supplied only synthetic JavaScript objects,
+ * so exercise the same shipped production predicate beside ACK coverage. */
+function committedReminderRemountRequiresExactEvidence() {
+    const guard = globalThis.prksWorkPrivateNoteNeedsCommittedHandoff;
+    assert.equal(typeof guard, 'function', 'production Work note guard exported');
+    const family = {entityType: 'work'};
+    const saved = {
+        entityId: 'W', ownerTabId: 'tab',
+        state: 'committed', retired: false, dirty: false,
+        promise: null, latestSaveToken: 1, settledSaveToken: 1,
+        draftText: 'locally queued X',
+        settledBase: {value: 'previous V', revision: 4},
+    };
+    function probe(options = {}) {
+        const own = key => Object.prototype.hasOwnProperty.call(options, key);
+        const session = {...saved, ...(options.session || {})};
+        const ctx = {tabId: own('tabId') ? options.tabId : 'tab',
+            getResource: key => {
+                if (key === 'workNotesCanonical') return own('canonical')
+                    ? options.canonical : {
+                        id: 'W',
+                        private_notes: own('canonicalText') ? options.canonicalText : 'previous V',
+                        sources: {private: own('source') ? options.source : 'server'},
+                    };
+                if (key === 'workNotesObserved') return own('observed')
+                    ? options.observed : {
+                        private: {revision: own('revision') ? options.revision : 5},
+                    };
+                return null;
+            },
+        };
+        return guard(own('family') ? options.family : family,
+            session, ctx, own('id') ? options.id : 'W',
+            own('displayed') ? options.displayed : 'previous V',
+            !!options.carried);
+    }
+    const cases = [
+        ['previous server body is stale after same-tab save', {}, true],
+        ['painted pending overlay must survive remount', {displayed:'locally queued X'}, true],
+        ['canonical confirms same text: nothing to hand off',
+            {canonicalText:'locally queued X'}, false],
+        ['foreign newer canonical body is not overwritten',
+            {canonicalText:'foreign B', revision:6, displayed:'foreign B'}, false],
+        ['revision newer than settled ACK is authoritative', {revision:7}, false],
+        ['non-server cache is not proof', {source:'cache'}, false],
+        ['inflight save cannot be treated as committed', {session:{promise:{}}}, false],
+        ['failed save retains draft status, never a committed handoff',
+            {session:{state:'error',dirty:true}}, false],
+        ['unsettled token cannot be carried', {session:{settledSaveToken:0}}, false],
+        ['missing settled base is unsafe', {session:{settledBase:null}}, false],
+        ['other tab does not inherit proof', {session:{ownerTabId:'elsewhere'}}, false],
+        ['Folder notes do not use Work handoff', {family:{entityType:'folder'}}, false],
+        ['carried recovery draft owns its text', {carried:true}, false],
+        ['retired session does not own a handoff', {session:{retired:true}}, false],
+        ['dirty session does not own a handoff', {session:{dirty:true}}, false],
+        ['wrong Work entity is not the owner', {session:{entityId:'W-other'}}, false],
+        ['canonical Work identity must match', {canonical:{id:'W-other',
+            private_notes:'previous V',sources:{private:'server'}}}, false],
+        ['missing server canonical cannot prove stale read', {canonical:null}, false],
+        ['missing canonical source cannot prove stale read', {canonical:{
+            id:'W',private_notes:'previous V'}}, false],
+        ['wrong painted text is not reused', {displayed:'unrelated text'}, false],
+        ['future save token is not settled',
+            {session:{latestSaveToken:2,settledSaveToken:1}}, false],
+        ['invalid negative base revision', {session:{settledBase:{
+            value:'previous V', revision:-1}}}, false],
+        ['unknown revision cannot disprove a known stale read', {revision:null}, true],
+        ['equal revision remains safely within the handoff fence', {revision:4}, true],
+        ['base plus one is the latest allowable revision', {revision:5}, true],
+        ['base plus two is not safe', {revision:6}, false],
+    ];
+    for (const [name, options, expected] of cases) {
+        assert.equal(probe(options), expected, name);
+    }
+    // Mutation control: if a caller erases the same-tab gate, this negative
+    // case must fail. Both session and current tab must match.
+    assert.equal(probe({tabId:'foreign'}), false,
+        'a foreign current tab cannot inherit another session');
+}
+
+/* Real Work private-reminder session save-selection boundary. The former E2E
+ * invoked it through page.evaluate with a stubbed enqueue and fabricated ACK
+ * receipts, so it proved pure base-selection rules, not a browser boundary.
+ * Test the shipped ui.js implementation here, alongside the actual ACK-receipt
+ * creation and 64-record bound already covered above. */
+async function privateReminderHandoffRequiresExactAckProof() {
+    const ui = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    const marker = 'async function prksSaveWorkPrivateNoteForSession(';
+    const start = ui.indexOf(marker);
+    assert.notEqual(start, -1, 'shipped private-reminder session save boundary must exist');
+    assert.equal(ui.indexOf(marker, start + marker.length), -1,
+        'do not silently pick one of two private-reminder implementations');
+    const end = ui.indexOf('\n}', start);
+    assert.notEqual(end, -1, 'session save boundary must have a closing brace');
+    const shipped = ui.slice(start, end + 2);
+    const newSave = (observed, enqueue, receiptLookup) =>
+        new Function('prksEnsureWorkNotesBase', 'prksWorkNoteObserved',
+            'prksSaveWorkNoteDurably', 'prksAcknowledgedWorkPrivateNote',
+            shipped + '\nreturn prksSaveWorkPrivateNoteForSession;')(
+            async () => { throw Error('a known observed base should not be fetched'); },
+            observed, enqueue, receiptLookup);
+    const entityId = 'W-proof-scope';
+    const handoff = {value: 'V', revision: 4};
+    const good = {entityId, baseRevision: 4, revision: 5};
+    const old = {value: 'V', revision: 4};
+    const confirmed = {value: 'X', revision: 5};
+    const cases = [
+        {name: 'absent ACK', receipt: null, expected: old},
+        {name: 'foreign Work', receipt: {...good, entityId: 'W-foreign'}, expected: old},
+        {name: 'wrong base revision', receipt: {...good, baseRevision: 3}, expected: old},
+        {name: 'future base revision', receipt: {...good, baseRevision: 6}, expected: old},
+        {name: 'ACK revision rolls back', receipt: {...good, revision: 3}, expected: old},
+        {name: 'negative revision', receipt: {...good, revision: -1}, expected: old},
+        {name: 'fractional revision', receipt: {...good, revision: 5.5}, expected: old},
+        {name: 'string revision', receipt: {...good, revision: '5'}, expected: old},
+        {name: 'missing ACK revision', receipt: {entityId, baseRevision: 4}, expected: old},
+        {name: 'missing handoff text', receipt: good, handoffText: null, expected: old},
+        {name: 'matching ACK', receipt: good, expected: confirmed},
+        {name: 'matching later ACK', receipt: {...good, revision: 8},
+            expected: {value: 'X', revision: 8}},
+        {name: 'equal but valid ACK revision', receipt: {...good, revision: 4},
+            expected: {value: 'X', revision: 4}},
+        {name: 'wrong session owner', receipt: good,
+            entityOverride: 'W-foreign', expected: old, shouldLookup: false},
+        {name: 'no queued op ID', receipt: good,
+            opId: null, expected: old, shouldLookup: false},
+        {name: 'no session', receipt: good,
+            noSession: true, expected: old, shouldLookup: false},
+    ];
+    for (const test of cases) {
+        const writes = [], lookups = [];
+        const observed = (_ctx, kind) => {
+            assert.equal(kind, PRIVATE_KIND);
+            return old;
+        };
+        const save = newSave(
+            observed,
+            async (workId, kind, text, source, options) => {
+                writes.push({workId, kind, text, source, options});
+                return {code: 'saved', opId: null};
+            },
+            opId => { lookups.push(opId); return test.receipt; },
+        );
+        const session = test.noSession ? null : {
+            entityId: test.entityOverride || entityId,
+            handoffBase: {...handoff},
+            handoffText: Object.prototype.hasOwnProperty.call(test, 'handoffText')
+                ? test.handoffText : 'X',
+            settledOpId: Object.prototype.hasOwnProperty.call(test, 'opId')
+                ? test.opId : 'original-op',
+        };
+        const editor = {
+            ctx: {ui: {workPrivateNoteSession: session},
+                getEntity: () => null, getResource: () => null},
+        };
+        const result = await save(editor, entityId, 'Y');
+        assert.deepEqual(result.base, test.expected,
+            test.name + ': next save must pin the correct base');
+        assert.deepEqual(result.result, {code: 'saved', opId: null},
+            test.name + ': return durable enqueue result');
+        assert.deepEqual(writes, [{
+            workId: entityId, kind: PRIVATE_KIND, text: 'Y',
+            source: test.expected, options: null,
+        }], test.name + ': exact durable-save inputs');
+        assert.deepEqual(lookups, test.shouldLookup === false ? [] : ['original-op'],
+            test.name + ': only this session op may supply ACK proof');
+
+        // A revert to old V must carry special cancellation provenance only
+        // when no valid acknowledgement shows the previous X was committed.
+        // Otherwise the revert is a real edit from X, not a stale-base no-op.
+        writes.length = 0;
+        const reverted = await save(editor, entityId, 'V');
+        const acked = test.expected.value === 'X';
+        assert.deepEqual(reverted.base, test.expected, test.name + ': revert base');
+        assert.deepEqual(writes, [{
+            workId: entityId, kind: PRIVATE_KIND, text: 'V',
+            source: test.expected,
+            options: !acked && session && session.entityId === entityId
+                ? {cancelPendingText: session.handoffText} : null,
+        }], test.name + ': revert cancellation vs acknowledged edit');
+    }
+}
+
 async function main() {
     acknowledgedBase();
+    committedReminderRemountRequiresExactEvidence();
+    await privateReminderHandoffRequiresExactAckProof();
     handlerContract();
     enqueueSelectsAcknowledgedObserved();
     await coalescingFor(RESEARCH, 'Research');

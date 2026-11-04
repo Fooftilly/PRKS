@@ -17,8 +17,8 @@ const tag = { id: 'T-A', name: 'Existing', color: '#123456', aliases: [] };
 const ack = { code: 'ACKNOWLEDGED', work_id: 'W-A', tag_id: tag.id, present: true, server_revision: 1, tag };
 async function main() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const opts = { work_id: 'W-A', assigned: [], known_absent: {} };
     await cache.putEntity('work', 'W-A', { id: 'W-A', title: 'Complete base', tags: [] });
     await cache.putEntity('work-tag-options', 'W-A', opts);
@@ -82,6 +82,7 @@ async function main() {
     assert.deepEqual(globalThis.prksEffectiveWorkTags({ id: 'W-A', tags: [tag] }, await store.listOperations()), []);
     assert.equal((await store.getOperation(remove.op_id)).status, 'conflict');
     await connectivity();
+    await offlineDuringInventory();
     await transport();
     await lifecycle();
     await staleReads();
@@ -109,6 +110,62 @@ function syncRuntime(store, request, reconcile) {
     return globalThis.createPrksSyncRuntime({ store, online: () => true, request, handlers: tagHandlers(reconcile) });
 }
 
+/* An observed online state can become offline while IndexedDB returns
+ * its pending-operation inventory. That async boundary must not irreversibly
+ * claim an operation which the app never tried to send. This reproduces the
+ * Work-source coalescing failure observed in the full E2E gate on master as
+ * well as the PostgreSQL-sharding PR, without a browser retry or fake ACK. */
+async function offlineDuringInventory() {
+    const factory = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const op = await store.coalesceWorkTag('W-INVENTORY', tag.id, true, false, 0, tag);
+    const listOperations = store.listOperations.bind(store);
+    let reads = 0;
+    let entered;
+    const inventoryStarted = new Promise(resolve => { entered = resolve; });
+    let release;
+    const holdInventory = new Promise(resolve => { release = resolve; });
+    const delayedStore = Object.assign({}, store, {
+        listOperations: async () => {
+            reads += 1;
+            // Recovery and dependency repair read first; defer the actual
+            // send candidate read until *after* the browser loses reachability.
+            if (reads === 3) {
+                entered();
+                await holdInventory;
+            }
+            return listOperations();
+        },
+    });
+    let online = true;
+    let sent = 0;
+    const runtime = globalThis.createPrksSyncRuntime({
+        store: delayedStore,
+        online: () => online,
+        request: async () => {
+            sent += 1;
+            return { ok: true, status: 200, json: async () => ({ ...ack, work_id: 'W-INVENTORY' }) };
+        },
+        handlers: tagHandlers(async () => true),
+    });
+    const waking = runtime.wake();
+    await inventoryStarted;
+    online = false;
+    release();
+    await waking;
+    assert.equal(sent, 0, 'disconnection during IDB inventory cannot send');
+    assert.equal((await store.getOperation(op.op_id)).attempt_count, 0,
+        'the unsent operation remains coalescible after disconnect');
+    assert.equal((await store.getOperation(op.op_id)).status, 'pending');
+
+    online = true;
+    await runtime.wake();
+    runtime.stop();
+    assert.equal(sent, 1, 'a later observed reconnect still sends normally');
+    assert.equal(await store.getOperation(op.op_id), null,
+        'reconnected ACK retires the original operation');
+}
+
 /* PHASE A -- reachability is observed, never assumed.
  *
  * The regression this pins: the coordinator could claim and send a pending
@@ -119,10 +176,10 @@ function syncRuntime(store, request, reconcile) {
  * then hit `scope_busy` over a request that never left the machine. */
 async function connectivity() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     let reachable = false;
     const offline = createPrksOfflineRuntime({
-        store: createPrksOfflineStore({ indexedDB: factory }), window: null,
+        store: createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory }), window: null,
         setTimeout: () => null, clearTimeout: () => {},
         prksRequest: async () => {
             if (!reachable) throw new Error('unreachable');
@@ -198,7 +255,7 @@ async function transport() {
         ['ACK with a non-integer revision', async () => ({ ok: true, status: 200, json: async () => ({ ...ack, work_id: 'W-T', server_revision: 'one' }) })],
     ];
     for (const [label, handler] of failures) {
-        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const op = await store.coalesceWorkTag('W-T', tag.id, true, false, 0, tag);
         let calls = 0;
         const runtime = syncRuntime(store, async (path, init) => {
@@ -236,7 +293,7 @@ async function transport() {
      * WorkTagSyncTests separately proves that replaying that op_id is
      * idempotent at the ledger/domain boundary. */
     {
-        const retryStore = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const retryStore = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const retryOp = await retryStore.coalesceWorkTag('W-LOST', tag.id, true, false, 0, tag);
         const sent = [];
         let loseFirstResponse = true;
@@ -273,7 +330,7 @@ async function transport() {
     /* Recognized terminal protocol errors must not enter a transport retry
      * loop; they persist a bounded structured result for the user instead. */
     for (const code of ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION', 'UNSUPPORTED_DEPENDENCIES']) {
-        const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+        const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
         const op = await store.coalesceWorkTag('W-T', tag.id, true, false, 0, tag);
         let calls = 0;
         const runtime = syncRuntime(store,
@@ -287,7 +344,7 @@ async function transport() {
     }
 
     /* FUTURE_REVISION is a domain outcome, not a transport fault. */
-    const store = createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
     const op = await store.coalesceWorkTag('W-T', tag.id, true, false, 0, tag);
     const runtime = syncRuntime(store, async () => ({ ok: false, status: 400, json: async () => ({
         work_id: 'W-T', tag_id: tag.id, code: 'FUTURE_REVISION',
@@ -305,8 +362,8 @@ async function transport() {
  * anywhere earlier leaves a replayable row rather than a lost edit. */
 async function lifecycle() {
     const factory = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: factory, uuid });
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-L', { id: 'W-L', title: 'Lifecycle', tags: [] });
     await cache.putEntity('work-tag-options', 'W-L', { work_id: 'W-L', assigned: [], known_absent: {} });
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
@@ -377,7 +434,7 @@ async function lifecycle() {
  * one race covers the Work detail and the tag-options projection together. */
 async function staleReads() {
     const factory = createFakeIndexedDBFactory();
-    const cache = createPrksOfflineStore({ indexedDB: factory });
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     const stale = { work_id: 'W-S', assigned: [{ tag_id: tag.id, relation_revision: 5 }], known_absent: {} };
     await cache.putEntity('work', 'W-S', { id: 'W-S', title: 'Race', tags: [] });
     await cache.putEntity('work-tag-options', 'W-S', { work_id: 'W-S', assigned: [], known_absent: {} });
@@ -418,8 +475,8 @@ async function staleReads() {
  * Web Locks available. Exactly one may claim an operation. */
 async function claimRace() {
     const factory = createFakeIndexedDBFactory();
-    const a = createPrksLocalStore({ indexedDB: factory, uuid });
-    const b = createPrksLocalStore({ indexedDB: factory, uuid });
+    const a = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
+    const b = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid });
     const op = await a.coalesceWorkTag('W-R', tag.id, true, false, 0, tag);
     const claims = await Promise.all([a.claimOperation(op.op_id), b.claimOperation(op.op_id)]);
     assert.equal(claims.filter(Boolean).length, 1, 'exactly one claimant wins');

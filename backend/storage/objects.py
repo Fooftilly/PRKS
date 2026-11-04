@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import heapq
 import logging
 import os
 import re
 import stat
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import BinaryIO, Callable, Iterator, Mapping, Optional, Protocol, runtime_checkable
 
@@ -200,6 +201,9 @@ class ObjectInfo:
     version: str
     # Set only when this call computed it (put_new/replace with hash=True).
     sha256: Optional[str] = None
+    # Seconds since the epoch the bytes were last written; set by ``stat``.
+    # Maintenance only: the orphan sweep's grace period (postgresql-architecture §11.2).
+    modified_at: Optional[float] = None
 
 
 Writer = Callable[[BinaryIO], None]
@@ -225,6 +229,8 @@ class StorageBackend(Protocol):
 
     def iter_keys(self, namespace: str) -> Iterator[StorageKey]: ...
 
+    def list_keys(self, namespace: str, *, after: Optional[str] = None, limit: int) -> list[StorageKey]: ...
+
 
 @runtime_checkable
 class LocalPathCapable(Protocol):
@@ -233,14 +239,15 @@ class LocalPathCapable(Protocol):
     Use the path only inside the ``with`` block; never store, log or return it.
     """
 
-    def local_path(self, key: StorageKey): ...
+    def local_path(self, key: StorageKey) -> AbstractContextManager[str]: ...
 
 
 def mint_name(namespace: str, hint: str) -> str:
     """A fresh key name for ``namespace`` (today's ``mint_managed_pdf_filename`` rules).
 
-    Only ``asset-objects`` names are minted. Portrait names are derived from a
-    person ID and an image-URL hash, never minted.
+    Only ``asset-objects`` names are minted here. On SQLite a portrait's name
+    is derived from the person ID and an image-URL hash; on PostgreSQL each
+    cached portrait gets a fresh name from ``backend.domain.objects.portraits``.
     """
     if namespace == NAMESPACE_ASSET_OBJECTS:
         from backend.db_manager import mint_managed_pdf_filename
@@ -249,6 +256,14 @@ def mint_name(namespace: str, hint: str) -> str:
     if namespace in NAMESPACES:
         raise InvalidStorageKey("names in this namespace are not minted")
     raise InvalidStorageKey("unknown storage namespace")
+
+
+def _is_key_name(name: str) -> bool:
+    try:
+        validate_key_name(name)
+    except InvalidStorageKey:
+        return False
+    return True
 
 
 def _check_key(key: object) -> StorageKey:
@@ -486,7 +501,8 @@ class LocalFilesystemStorage:
         if found is None:
             return None
         _, st = found
-        return ObjectInfo(key=key, size=st.st_size, version=_version_token(st), sha256=None)
+        return ObjectInfo(key=key, size=st.st_size, version=_version_token(st), sha256=None,
+                          modified_at=st.st_mtime)
 
     def delete(self, key: StorageKey) -> bool:
         key = _check_key(key)
@@ -534,6 +550,31 @@ class LocalFilesystemStorage:
                 yield StorageKey(namespace, name)
             except InvalidStorageKey:
                 continue  # temporaries, reserved and unrepresentable names
+
+    def list_keys(self, namespace: str, *, after: Optional[str] = None, limit: int) -> list[StorageKey]:
+        """Maintenance only: at most ``limit`` keys named after ``after``, in name order.
+
+        One streaming pass over the namespace directory that holds at most
+        ``limit`` names at a time (a bounded heap), so a caller pages through
+        a namespace of any size in bounded memory by passing the last name
+        of the previous page as ``after``. Nothing is ``stat``-ed.
+        """
+        if namespace not in NAMESPACES:
+            raise InvalidStorageKey("unknown storage namespace")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        if after is not None:
+            validate_key_name(after)
+        directory = self._namespace_dir(namespace, create=False)
+        if directory is None:
+            return []
+        with os.scandir(directory) as it:
+            names = heapq.nsmallest(limit, (
+                entry.name for entry in it
+                if (after is None or entry.name > after)
+                and entry.is_file(follow_symlinks=False) and _is_key_name(entry.name)
+            ))
+        return [StorageKey(namespace, name) for name in names]
 
     # -- local-only extension (§10.3) -------------------------------------------------
 

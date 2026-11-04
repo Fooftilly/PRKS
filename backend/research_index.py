@@ -11,12 +11,15 @@ import logging
 import os
 import sqlite3
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from backend.db_manager import PRKSDatabase
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.research_markup import normalize_concept_key, parse_research_markup
 from backend.storage.config import StorageConfig
+
+if TYPE_CHECKING:
+    from backend.research_graph import GraphSnapshot
 
 LOGGER = logging.getLogger("prks.research_index")
 
@@ -465,11 +468,22 @@ class PRKSResearchIndex:
             text = work.get("text_content") or ""
             start = int(r["start_offset"])
             end = int(r["end_offset"])
-            snippet = _snippet(text, start, end)
+            snippet = note_snippet(text, start, end)
             bucket["occurrences"].append(
                 {"start": start, "end": end, "snippet": snippet}
             )
         return [grouped[wid] for wid in work_ids if wid in grouped]
+
+    def build_graph(self, db: PRKSDatabase, *, include_people: bool = False) -> GraphSnapshot:
+        """The Research Graph from ``db`` and this index (``ResearchGraphBuilder``).
+
+        Here so ``server.py`` builds the graph through the bound index object,
+        as it reads mentions; ``PostgresResearchIndex.build_graph`` answers the
+        same on PostgreSQL. Raises ``GraphTooLargeError`` past the bounds.
+        """
+        from backend.research_graph import ResearchGraphBuilder
+
+        return ResearchGraphBuilder().build(db, self, include_people=include_people)
 
     def reconcile_all(self, db: PRKSDatabase) -> Dict[str, int]:
         summary = {
@@ -516,7 +530,8 @@ class PRKSResearchIndex:
         return summary
 
 
-def _snippet(text: str, start: int, end: int) -> str:
+def note_snippet(text: str, start: int, end: int) -> str:
+    """The text around a mention, as a backlink shows it (shared with PostgreSQL)."""
     if not text:
         return ""
     a = max(0, start - _SNIPPET_RADIUS)

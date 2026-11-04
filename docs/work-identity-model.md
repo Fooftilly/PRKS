@@ -126,14 +126,14 @@ keeps Work IDs unchanged.
 | Research Note text | canonical text | `[[W-…]]` or `[[Title]]` wiki links (`resolve_wiki_links`) |
 | URLs / workspace tabs | browser | `#/works/W-…`, persisted workspace layout |
 | `prks.pdf.lastPage.<workId>` | browser `localStorage` | Last-read PDF page, per device |
-| `prks-local-v1` (IndexedDB) | browser, durable | Pending operations carrying `work_id` and base revisions |
+| `prks-local-v2:<scope>` (IndexedDB) | browser, durable | Pending operations carrying `work_id` and base revisions |
 | Offline cache entities | browser, disposable | `work:*`, `work-annotations`, `works-browse:index`, `recent:index`, `recently-added:index`, summaries |
 | Backups | archive | The main DB carries all of the above |
 
 These do **not** hold a Work ID: the managed PDF file name
 (`<unix>_<8hex>_<name>.pdf`, from `mint_managed_pdf_filename`),
 `pending_pdf_cleanup` (keyed by basename), and the service-worker PDF cache
-`prks-pdf-v1` (keyed by `/api/pdfs/<basename>`).
+`prks-pdf-v2:<scope>` (keyed by `/api/pdfs/<basename>`).
 
 ### 1.3 How the model is used, by subsystem
 
@@ -261,7 +261,7 @@ exported.
 identity is canonicalized, so two spellings of one YouTube ID are recognized
 as the same **within one Work**, but not across Works.
 
-**Offline and durable operation.** Durable intent in `prks-local-v1` is kept
+**Offline and durable operation.** Durable intent in `prks-local-v2:<scope>` is kept
 apart from the disposable acknowledged cache. Server revisions are
 per-scope. PDF binary ingestion and replacement require a connection.
 Annotation metadata can be edited offline when the PDF bytes are cached
@@ -1764,7 +1764,7 @@ for the fixture library. The legacy dict gains only **additive** fields:
 | `POST /api/works/:id/pdf` (materialization) | the **working slot** of the primary Asset (§9.4). The client must send `asset_id` once more than one exists. Without it the request is refused (`ASSET_AMBIGUOUS`) rather than guessed. |
 | Annotation endpoints | the annotation's own Asset. A new annotation needs the displayed `asset_id`, which defaults to the primary only while exactly one PDF Asset exists. |
 | `/api/bibtex/:id` | `citation_record(citation_target(work))`, which is the primary while `citation_manifestation_id` is NULL (§8.3, §8.6) |
-| Argument sources `[{work_id, pages}]` (HTTP and `argument-sources` sync) | kept pins are preserved. Otherwise a new entry is pinned to the only Manifestation, or refused with `ARGUMENT_SOURCE_VERSION_REQUIRED` when the Work has several (§8.5) |
+| Argument sources `[{work_id, pages}]` (HTTP and `argument-sources` sync) | kept pins are preserved. Otherwise a new entry is pinned to the only Manifestation, or refused with `ARGUMENT_SOURCE_VERSION_REQUIRED` when the Work has several (§8.5). The Version-aware shape `[{work_id, manifestation_id, pages}]` names each pin explicitly (`null` = the Work in general); on PostgreSQL it is accepted by the same facade methods and sync operations (L-R-1 PR 6, `backend/domain/research/arguments.py`) |
 
 ### 13.3 New API surface (typed, #185 pattern)
 

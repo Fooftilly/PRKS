@@ -33,7 +33,7 @@ let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 16; i++) await tick(); }
-const newStore = () => createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+const newStore = () => createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
 
 function baseAt(revisions, values) {
     const base = {};
@@ -511,7 +511,7 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
 
 async function anOlderSessionCannotCommitAMembershipDuringTheRead() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     runtimeForStore(store);
     const absent = { present: false, revision: 0 };
     const seeded = await store.setPersonGroupMember("PG-1", "P-A", true, absent);
@@ -578,7 +578,7 @@ async function anOlderSessionCannotCommitAMembershipDuringTheRead() {
 
 async function anOlderSessionCannotCommitAHalfAppliedMembershipReplacement() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     runtimeForStore(store);
     const seeded = await store.setPersonGroupMember("PG-1", "P-A", true,
         { present: false, revision: 0 });
@@ -613,7 +613,7 @@ async function anOlderSessionCannotCommitAHalfAppliedMembershipReplacement() {
 
 async function aCommittedMembershipWriteStillNotifiesAfterTheEditorMovesOn() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     const runtime = runtimeForStore(store);
     await store.listOperations();
     const session = { owned: true };
@@ -630,7 +630,7 @@ async function aCommittedMembershipWriteStillNotifiesAfterTheEditorMovesOn() {
 
 async function anOlderSessionCannotCommitAGroupFieldDuringTheRead() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     runtimeForStore(store);
     const base = baseAt({ name: 1 }, { name: "Analysts", description: "Engine" });
     const seeded = await store.savePersonGroupFields("PG-1", { name: "Engineers" }, base);
@@ -652,7 +652,7 @@ async function anOlderSessionCannotCommitAGroupFieldDuringTheRead() {
 
 async function anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     runtimeForStore(store);
     const base = baseAt({ name: 1 }, { name: "Analysts" });
     await store.savePersonGroupFields("PG-1", { name: "Engineers" }, base);
@@ -683,7 +683,7 @@ async function anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement() {
 
 async function aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     const runtime = runtimeForStore(store);
     await store.listOperations();
     const session = { owned: true };
@@ -701,7 +701,7 @@ async function aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn() {
 
 async function aStaleGroupEditDoesNotCreateATypedParent() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     const runtime = runtimeForStore(store);
     await store.listOperations();
     const previous = {
@@ -806,7 +806,7 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
 
 async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     const runtime = runtimeForStore(store);
     const base = baseAt(
         { name: 1, description: 1, parent_id: 3 },

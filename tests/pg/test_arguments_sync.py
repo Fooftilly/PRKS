@@ -3,7 +3,8 @@
 ``tests/test_arguments_parity.py`` proves each operation answers as on
 SQLite. These tests cover what only PostgreSQL has: a refused create that
 leaves nothing although its refusal is ledgered, ids of another Library,
-citations a legacy list cannot pin (§8.5) and Works merged away (§14.2),
+citations a legacy list cannot pin and Version-aware lists (§8.5), Works
+merged away (§14.2),
 the isolation of the two families that add citations (§7.1), races, and a
 stale operation after a record was deleted and created again under its id.
 """
@@ -21,7 +22,8 @@ from backend.entity_ids import generate
 from backend.sync import protocol
 from backend.sync.families import FamilyHandler
 from backend.sync.handlers import argument as argument_handlers
-from tests.pg.test_arguments import ResearchTestCase, source, target
+from backend import argument_sync
+from tests.pg.test_arguments import ResearchTestCase, pinned, source, target
 from tests.pg.test_works_sync import SyncTestCase
 
 
@@ -202,6 +204,95 @@ class ArgumentListTests(ResearchSyncTestCase):
                                       lambda: self.send(self.sources_op(a, [source(work)], 0)))
         self.assertIsNotNone(holder)
         self.assertEqual(contender, (404, {"argument_id": a, "code": "WORK_NOT_FOUND"}))
+
+
+class VersionAwareSourcesTests(ResearchSyncTestCase):
+    """``{work_id, manifestation_id, pages}`` entries in ``CREATE_ARGUMENT`` and ``SET_ARGUMENT_SOURCES``."""
+
+    def test_the_envelope_of_a_version_aware_list(self) -> None:
+        work = self.library.add_work("W")
+        only = self.primary(work)
+        a = self.sent(self.create_argument_op())
+        bad: list[list[Any]] = [
+            [pinned(work, only), source(work, "2")],                    # the two shapes mixed
+            [{**pinned(work, only), "extra": 1}],
+            [pinned(work, 3)],
+            [pinned(work, "")], [pinned(work, f" {only}")], [pinned(f" {work}", only)],
+            [pinned(work, only, 5)],
+            [pinned(work, only, "\x07")],
+            [pinned(work, only, "2"), pinned(work, only, "2")],          # an exact repeat
+            [pinned(work, None)] * 2,
+            [pinned(work, None, str(n)) for n in range(argument_sync.MAX_SOURCES + 1)],
+        ]
+        for sources in bad:
+            with self.subTest(sources=str(sources)[:60]):
+                self.assertEqual(self.send(self.sources_op(a, sources, 0)), (400, {"code": "INVALID_ENVELOPE"}))
+                self.assertEqual(self.send(self.create_argument_op(sources=sources)),
+                                 (400, {"code": "INVALID_ENVELOPE"}))
+        extra = self.envelope("SET_ARGUMENT_SOURCES", a, {"sources": [pinned(work, only)], "x": 1}, 0)
+        self.assertEqual(self.send(extra), (400, {"code": "INVALID_ENVELOPE"}))
+        unbased = self.envelope("SET_ARGUMENT_SOURCES", a, {"sources": [pinned(work, only)]})
+        self.assertEqual(self.send(unbased)[1]["code"], "INVALID_BASE_REVISION")
+        bad_field = self.envelope("CREATE_ARGUMENT", generate("A"), {
+            "name": " ", "kind": "argument", "main_text": "", "sources": [pinned(work, only)], "targets": []})
+        self.assertEqual(self.send(bad_field), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual((self.citations(a), self.count("arguments")), ([], 1))
+
+    def test_create_and_replace_with_pins_and_the_decision_table(self) -> None:
+        work = self.library.add_work("W")
+        first, second = self.primary(work), self.add_manifestation(work)
+        a = self.sent(self.create_argument_op(sources=[pinned(work, second, "5"), pinned(work, None)]))
+        self.assertEqual(self.citations(a), [(0, work, second, "5"), (1, work, None, "")])
+        wanted = [pinned(work, None), pinned(work, second, "5"), pinned(work, first, "5")]
+        self.assertEqual(self.send(self.sources_op(a, wanted, 0))[1],
+                         {"argument_id": a, "code": "ACKNOWLEDGED", "changed": True, "server_revision": 1})
+        # A stale base converges on the same pins, and conflicts when only a pin differs.
+        self.assertEqual(self.send(self.sources_op(a, wanted, 0))[1]["changed"], False)
+        repinned = [pinned(work, None), pinned(work, first, "5"), pinned(work, second, "5")]
+        self.assertEqual(self.send(self.sources_op(a, repinned, 0))[1],
+                         {"argument_id": a, "code": "REVISION_CONFLICT", "current_revision": 1,
+                          "current_count": 3, "requested_count": 3})
+        # At the current base a pin change is a change.
+        self.assertEqual(self.send(self.sources_op(a, repinned, 1))[1]["server_revision"], 2)
+        self.assertEqual(self.citations(a), [(0, work, None, ""), (1, work, first, "5"), (2, work, second, "5")])
+
+    def test_a_version_refusal_is_ledgered_and_changes_nothing(self) -> None:
+        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        a = self.sent(self.create_argument_op(sources=[pinned(w1, None, "1")]))
+        for code, status, sources in (
+                ("ARGUMENT_SOURCE_VERSION_MISMATCH", 409, [pinned(w2, self.primary(w1))]),
+                ("ARGUMENT_SOURCE_VERSION_NOT_FOUND", 404, [pinned(w1, generate("MF"))]),
+                ("WORK_NOT_FOUND", 404, [pinned(generate("W"), None)])):
+            with self.subTest(code=code):
+                self.assertEqual(self.send(self.sources_op(a, sources, 0)), (status, {"argument_id": a, "code": code}))
+                self.assertEqual(self.ledger()[-1]["status"], code)
+                created = self.create_argument_op(sources=sources)
+                self.assertEqual(self.send(created), (status, {"argument_id": created["entity_id"], "code": code}))
+        self.assertEqual((self.citations(a), self.revisions("argument-sources"), self.count("arguments")),
+                         ([(0, w1, None, "1")], {}, 1))
+
+    def test_a_pin_of_a_merged_away_work_is_refused(self) -> None:
+        source_work, target_work = self.library.add_work("Source"), self.library.add_work("Target")
+        a = self.sent(self.create_argument_op())
+
+        def merge_away(scope: Any) -> None:
+            commands.delete_work(scope, source_work)
+            lifecycle.mark_merged(scope, source_work, target_work)
+
+        self.run_command(merge_away)
+        self.assertEqual(self.send(self.sources_op(a, [pinned(source_work, None, "1")], 0)),
+                         (409, {"code": "WORK_MERGED", "work_id": source_work, "target_work_id": target_work}))
+
+    def test_two_lists_on_one_base_one_lands_the_other_conflicts(self) -> None:
+        work = self.library.add_work("W")
+        second = self.add_manifestation(work)
+        a = self.sent(self.create_argument_op())
+        holder, contender = self.race(
+            self.applying(argument_handlers.SOURCES_HANDLER, self.sources_op(a, [pinned(work, second, "1")], 0)),
+            lambda: self.send(self.sources_op(a, [pinned(work, None)], 0)), serializable=True)
+        self.assertEqual(holder[1]["server_revision"], 1)
+        self.assertEqual(contender[1]["code"], "REVISION_CONFLICT")
+        self.assertEqual(self.citations(a), [(0, work, second, "1")])
 
 
 class ArgumentDeleteTests(ResearchSyncTestCase):

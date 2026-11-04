@@ -33,11 +33,12 @@ same rules:
   the same row; the detail's ``playlist_id`` and ``playlist_title`` likewise
   from its ``playlist_items`` row and Playlist.
 
-Fields owned by lanes that have not landed (annotations, Research
-references) are rendered as the empty value SQLite gives a Work
-that has none; those lanes add them to this projection. The detail's
-``tags`` are the Organization lane's: ``get_work`` reads them in the same
-snapshot (``backend.domain.organization.links``).
+Fields owned by lanes that have not landed (Research references) are
+rendered as the empty value SQLite gives a Work that has none; those lanes
+add them to this projection. The detail's ``tags`` are the Organization
+lane's and its ``annotations`` the Annotations lane's: ``get_work`` reads
+them in the same snapshot (``backend.domain.organization.links``,
+``backend.domain.annotations.store``).
 The facade adds ``file_size_bytes`` and ``html_content``, which come from the
 file system and the wiki-link resolver rather than from these tables.
 """

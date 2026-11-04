@@ -34,7 +34,6 @@ import {
   MAX_WRITE_WAIT_MS,
   RETRY_FIRST_MS,
   RETRY_MAX_MS,
-  SUPERSEDED_KEY_PREFIX,
   UNKNOWN_BASE,
   emergencyKeyOf,
   reservationKeyOf,
@@ -74,7 +73,7 @@ export type WriterEvent =
 
 export interface WriterRegistryOptions {
   store: RecoveryStore
-  identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'setLineageResponder'> & Partial<Pick<PageIdentity, 'setContestListener'>>
+  identity: Pick<PageIdentity, 'pageInstanceId' | 'names' | 'current' | 'setLineageResponder'> & Partial<Pick<PageIdentity, 'setContestListener'>>
   scheduler?: Scheduler
   now?: () => number
   random?: RandomSource
@@ -134,6 +133,15 @@ export interface WriterRegistry {
   emergencyListenersActive(): boolean
   /** The synchronous unload write, also callable directly by tests. */
   writeEmergencyNow(): EmergencyWriteResult | 'nothing-pending' | 'unavailable'
+  /**
+   * The browser scope was signed out or replaced (#629): later edits, writers
+   * and adoptions are ignored; text already typed is written once more to the
+   * emergency key and every pending write is finished, so no text typed under
+   * the account is lost, even one too large for the emergency key. A write
+   * that fails keeps its retries and the leave guard; the registry disposes
+   * only once nothing is pending, so this resolves only then. Never rejects.
+   */
+  retire(): Promise<void>
   dispose(): void
 }
 
@@ -165,8 +173,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const doc = options.document === undefined ? (typeof document !== 'undefined' ? document : null) : options.document
   const storage = options.emergencyStorage === undefined ? defaultLocalStorage() : options.emergencyStorage
   const emit = options.onEvent || (() => {})
-  const emergencyKey = emergencyKeyOf(identity.pageInstanceId)
-  const reservationKey = reservationKeyOf(identity.pageInstanceId)
+  const names = identity.names
+  const supersededPrefix = names.supersededPrefix
+  const emergencyKey = emergencyKeyOf(names, identity.pageInstanceId)
+  const reservationKey = reservationKeyOf(names, identity.pageInstanceId)
 
   const live = new Set<WriterImpl>()
   /** Writers whose body the budget plan puts in the emergency entry. */
@@ -200,6 +210,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const tombstoned = new Set<string>()
   let refreshingEmergency = false
   let disposed = false
+  /** Retiring: text typed so far is finished, nothing new is taken. */
+  let frozen = false
+  /** A retirement waiting for every pending write to commit. */
+  let drained: (() => void) | null = null
   /**
    * Stored generations known to be superseded by the server, still waiting
    * for their removal: never adopted, so never restored. A removal storage
@@ -234,7 +248,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
 
   function readSupersededMark(draftId: string): SupersededMark | null {
     try {
-      return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null
+      return storage ? parseSupersededMark(draftId, storage.getItem(supersededPrefix + draftId)) : null
     } catch {
       return null
     }
@@ -247,7 +261,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       const ids: string[] = []
       for (let i = 0; i < storage.length; i++) {
         const key = storage.key(i)
-        if (key && key.startsWith(SUPERSEDED_KEY_PREFIX)) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length))
+        if (key && key.startsWith(supersededPrefix)) ids.push(key.slice(supersededPrefix.length))
       }
       for (const id of ids) {
         const mark = readSupersededMark(id)
@@ -265,7 +279,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (prior && prior.generation >= mark.generation) return
     try {
       if (!storage) throw new Error('no localStorage')
-      storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
+      storage.setItem(supersededPrefix + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
     } catch {
       // Only this page can suppress it now: guard leaving until it is deleted.
       unrecorded.add(mark.draftId)
@@ -279,7 +293,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     const mark = readSupersededMark(draftId)
     if (!mark || mark.generation > generation) return
     try {
-      if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId)
+      if (storage) storage.removeItem(supersededPrefix + draftId)
     } catch {
       // Left for a later sweep, which finds the record gone and clears it.
     }
@@ -358,6 +372,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function changed(): void {
     if (disposed) return
     const pending = pendingWriters()
+    if (drained && !pending.length) drained()
     planHeld(pending)
     setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0)
     setEmergencyListeners(pending.length > 0)
@@ -713,7 +728,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
 
     edit(generation: number, body: string): void {
-      if (this.released || disposed) return
+      if (this.released || disposed || frozen) return
       if (!(generation > this.lastSeen)) return
       this.lastSeen = generation
       if (!this.lineageId) this.startLineage()
@@ -1012,12 +1027,20 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
 
   function openWriter(input: OpenWriterInput): DraftWriter {
     const writer = new WriterImpl(input)
+    // Retiring or disposed: a writer that takes nothing.
+    if (frozen || disposed) {
+      writer.dispose()
+      return writer
+    }
     live.add(writer)
     return writer
   }
 
   /** Draft ids with an adoption in progress on this page. */
   const adopting = new Set<string>()
+  /** Adoptions in progress: a retirement settles them before it disposes. */
+  const adoptions = new Set<Promise<unknown>>()
+  let retiring: Promise<void> | null = null
 
   async function adopt(
     record: DraftRecord,
@@ -1025,7 +1048,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   ): Promise<DraftWriter | null> {
     // One live writer per lineage on this page: a second adoption of the same
     // draft, concurrent or after the first, is refused.
-    if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
+    if (disposed || frozen || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
     // Another page may have marked it after this one started: read the marks again.
     if (!superseded.has(record.draftId)) {
       const mark = readSupersededMark(record.draftId)
@@ -1037,10 +1060,13 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
     if ((superseded.get(record.draftId) || 0) >= record.generation) return null
     adopting.add(record.draftId)
+    const adoption = adoptReserved(record, input)
+    adoptions.add(adoption)
     try {
-      return await adoptReserved(record, input)
+      return await adoption
     } finally {
       adopting.delete(record.draftId)
+      adoptions.delete(adoption)
     }
   }
 
@@ -1065,6 +1091,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (result.outcome !== 'ok' || disposed) return null
     writer.adoptRecord(result.record)
     live.add(writer)
+    // Claimed while retiring: kept as this page's lineage until the
+    // retirement disposes it, but nothing is restored after a sign-out.
+    if (frozen) return null
     return writer
   }
 
@@ -1072,7 +1101,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   // never restored, and their removal resumes here.
   sweepSuperseded(readSupersededMarks(), 0)
 
-  return {
+  const registry: WriterRegistry = {
     openWriter,
     adopt,
     ownerOf,
@@ -1080,6 +1109,32 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     leaveGuardActive: () => guardOn,
     emergencyListenersActive: () => emergencyOn,
     writeEmergencyNow,
+    retire() {
+      if (retiring) return retiring
+      if (disposed) return (retiring = Promise.resolve())
+      frozen = true
+      retiring = (async () => {
+        // An adoption already claiming a lineage finishes first, so its
+        // writer is among those finished and disposed below.
+        await Promise.all([...adoptions].map((a) => a.catch(() => undefined)))
+        try {
+          writeEmergencyNow()
+        } catch {
+          /* whatever was written already stays */
+        }
+        await Promise.all([...live].map((w) => w.flush().catch(() => undefined)))
+        // A write that failed is retried by its writer, guarded meanwhile;
+        // the text is only let go once it is in the database.
+        if (pendingWriters().length) {
+          await new Promise<void>((resolve) => {
+            drained = resolve
+          })
+        }
+        drained = null
+        registry.dispose()
+      })()
+      return retiring
+    },
     dispose() {
       // Stops timers and listeners. An emergency key already written stays:
       // it may hold the only copy of unsaved text.
@@ -1102,6 +1157,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (identity.setContestListener) identity.setContestListener(null)
     },
   }
+  return registry
 }
 
 function defaultLocalStorage(): EmergencyStorage | null {

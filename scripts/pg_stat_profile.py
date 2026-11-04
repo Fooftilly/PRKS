@@ -35,6 +35,18 @@ WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 ORDER BY total_exec_time DESC, calls DESC
 LIMIT 5
 """
+# Aggregate ALL distinct statements, not merely the top five expensive ones.
+# The profiler connection has tracking disabled, so these reads do not skew
+# the counted workload; the query text column is never requested.
+_ROLLUP_SQL = """
+SELECT COUNT(*)::bigint AS distinct_statement_count,
+       COALESCE(SUM(calls), 0)::bigint AS total_sql_calls,
+       COALESCE(SUM(total_exec_time), 0) AS total_exec_time
+FROM public.pg_stat_statements(false)
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+  AND userid = (SELECT usesysid FROM pg_user WHERE usename = current_user)
+  AND queryid IS NOT NULL AND calls > 0
+"""
 _RESET_SQL = """
 SELECT public.pg_stat_statements_reset(
     0::oid, (SELECT oid FROM pg_database WHERE datname = current_database()), 0::bigint
@@ -88,6 +100,18 @@ def snapshot(stats: Any) -> list[dict[str, Any]]:
     return [project_statement(row) for row in stats.execute(_SNAPSHOT_SQL).fetchall()]
 
 
+def statement_rollup(stats: Any) -> dict[str, Any]:
+    """Numeric totals across ALL recorded workload SQL, including statements
+    outside the top-five ranking. No raw SQL, query IDs, or literals are read.
+    """
+    row = stats.execute(_ROLLUP_SQL).fetchone()
+    return {
+        "distinct_statement_count": int(row["distinct_statement_count"]),
+        "total_sql_calls": int(row["total_sql_calls"]),
+        "total_exec_ms": round(float(row["total_exec_time"]), 3),
+    }
+
+
 def benchmark(
     stats: Any, operation: Any, repetitions: int, verify_result: Any
 ) -> dict[str, Any]:
@@ -115,6 +139,10 @@ def benchmark(
     statements = snapshot(stats)
     if not statements:
         raise RuntimeError("profile contained no observed workload SQL")
+    totals = statement_rollup(stats)
+    if (totals["distinct_statement_count"] < len(statements)
+            or totals["total_sql_calls"] < sum(row["calls"] for row in statements)):
+        raise RuntimeError("incomplete SQL statement accounting")
     return {
         "repetitions": repetitions,
         "completed_samples": len(durations),
@@ -125,6 +153,7 @@ def benchmark(
         "call_wall_p50_ms": percentile(durations, 0.5),
         "call_wall_p95_ms": percentile(durations, 0.95),
         "top_statements": statements,
+        "sql_rollup": totals,
     }
 
 
@@ -192,6 +221,85 @@ def assert_ordered_work_ids(value: Any, expected: tuple[str, ...]) -> None:
         raise RuntimeError("synthetic batch lookup returned wrong or reordered IDs")
 
 
+def assert_concept_parent_graph(value: Any, concept_ids: Sequence[str]) -> None:
+    """A complete, correctly linked PG concept hierarchy, not an empty graph.
+
+    The synthetic Concept count matches the current Work tier. We verify all
+    node IDs, order by known fixture labels, every parent edge and the absence
+    of invented Work/people/mention nodes.
+    """
+    if not (isinstance(getattr(value, "nodes", None), list)
+            and isinstance(getattr(value, "edges", None), list)
+            and getattr(value, "people_included", None) is False
+            and getattr(value, "derived_note_edges_available", None) is True):
+        raise RuntimeError("synthetic Research Graph has invalid snapshot metadata")
+    expected_nodes = [f"concept:{cid}" for cid in concept_ids]
+    actual_nodes = value.nodes
+    if len(actual_nodes) != len(expected_nodes) or [
+        node.get("id") if isinstance(node, dict) else None for node in actual_nodes
+    ] != expected_nodes:
+        raise RuntimeError("synthetic Research Graph nodes are missing, duplicated or out of order")
+    for i, node in enumerate(actual_nodes):
+        if (node.get("type") != "concept" or node.get("record_id") != concept_ids[i]
+                or node.get("label") != f"Profile Concept {i:04d}"):
+            raise RuntimeError("synthetic Research Graph node identity is incorrect")
+    expected_edges = {
+        (f"concept:{child}", f"concept:{parent}")
+        for child, parent in zip(concept_ids[1:], concept_ids)
+    }
+    edges = value.edges
+    actual_edges = [
+        (edge.get("source"), edge.get("target"))
+        if isinstance(edge, dict) and edge.get("type") == "concept_parent"
+        else (None, None) for edge in edges
+    ]
+    if len(edges) != len(expected_edges) or set(actual_edges) != expected_edges:
+        raise RuntimeError("synthetic Research Graph hierarchy is incorrect")
+
+
+def assert_indexed_note_graph(
+    value: Any, concept_ids: Sequence[str], work_ids: Sequence[str]
+) -> None:
+    """Verify the actual indexed note-to-Concept graph, not just graph size.
+
+    Both IDs and labels must match the synthetic fixture, and every Work
+    must have precisely one indexed concept edge. Reject missing or duplicate
+    mentions and an unexpected parent/citation/author relation.
+    """
+    if len(concept_ids) != len(work_ids) or not concept_ids:
+        raise RuntimeError("synthetic indexed graph fixture is incomplete")
+    if not (isinstance(getattr(value, "nodes", None), list)
+            and isinstance(getattr(value, "edges", None), list)
+            and getattr(value, "people_included", None) is False
+            and getattr(value, "derived_note_edges_available", None) is True):
+        raise RuntimeError("synthetic indexed graph snapshot metadata is invalid")
+    expected_nodes = [
+        ("concept:" + cid, cid, "concept", f"Profile Indexed Concept {i:04d}")
+        for i, cid in enumerate(concept_ids)
+    ] + [
+        ("work:" + wid, wid, "work", f"Profile Indexed Work {i:04d}")
+        for i, wid in enumerate(work_ids)
+    ]
+    observed_nodes = [
+        (node.get("id"), node.get("record_id"), node.get("type"), node.get("label"))
+        if isinstance(node, dict) else (None, None, None, None)
+        for node in value.nodes
+    ]
+    if observed_nodes != expected_nodes:
+        raise RuntimeError("synthetic indexed graph has missing or misordered nodes")
+    expected_edges = {
+        ("mentions_concept", "work:" + wid, "concept:" + cid, 1)
+        for wid, cid in zip(work_ids, concept_ids)
+    }
+    observed_edges = [
+        (edge.get("type"), edge.get("source"), edge.get("target"), edge.get("count"))
+        if isinstance(edge, dict) else (None, None, None, None)
+        for edge in value.edges
+    ]
+    if len(observed_edges) != len(expected_edges) or set(observed_edges) != expected_edges:
+        raise RuntimeError("synthetic indexed graph has wrong or missing mention edges")
+
+
 def verify_disposable_cluster(stats: Any, nonce: str) -> int:
     """Refuse an unproven server before profile DDL, resets or test DB creation."""
     cluster = stats.execute("SHOW cluster_name").fetchone()["cluster_name"]
@@ -232,11 +340,20 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     import psycopg
     from psycopg.rows import dict_row
 
+    from datetime import timedelta
+
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
     from backend.pg_facade import PostgresLibrary
     from backend.pg_facade import context as facade_context
+    from backend.pg_facade.research_index import PostgresResearchIndex
     from backend.storage.config import StorageConfig
+    from backend.domain.identity.authorization import Capability
+    from backend.domain.identity.library_scope import library_command
+    from backend.domain.research import reindex
+    from backend.domain.works import notes
+    from backend.jobs import queue
+    from backend.jobs.runner import Outcome, run_job
     from tests.pg.facade_context import provision_actor
     from tests.pg.harness import get_harness
 
@@ -262,17 +379,28 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                     storage = StorageConfig.for_testing(temp)
                     os.makedirs(storage.pdfs_dir, exist_ok=True)
                     library = PostgresLibrary(database, storage=storage)
+                    research_index = PostgresResearchIndex(database)
                     fixture_ids: list[str] = []
+                    concept_ids: list[str] = []
                     output = []
                     with facade_context.acting_as(actor.context):
                         for size in sizes:
                             for i in range(len(fixture_ids), size):
                                 fixture_ids.append(library.add_work(f"Fixture Work {i:04d}"))
-                            # These are real PG facade read paths. The fixture is
+                            # Same-sized connected synthetic Concept network.
+                            # Seed before reset; all graph reads below use the
+                            # genuinely ported PG adapter, never the SQLite graph.
+                            for i in range(len(concept_ids), size):
+                                cid = library.create_concept(f"Profile Concept {i:04d}")["id"]
+                                if concept_ids:
+                                    library.replace_concept_parents(cid, [concept_ids[-1]])
+                                concept_ids.append(cid)
+                            # These are real PG adapter reads. The fixture is
                             # deterministic, isolated, synthetic and disposable.
                             work_id = fixture_ids[-1]
-                            # T07: only profile read paths already ported to the PG facade.
-                            # Search, graph and generic offset pagination are NOT ported.
+                            # T07: only real PostgreSQL reads. Graph has been
+                            # ported as a ResearchIndex adapter (PR #946);
+                            # search and generic offset pagination are not ported.
                             bounded_limit = min(size, 10)
                             # Capture the already-timed first list result in its
                             # verifier: do not pre-read the catalog and turn the
@@ -311,18 +439,68 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                 ("works_batch_by_ids",
                                  lambda: library.get_work_summaries_by_ids_ordered(list(batch_ids)),
                                  lambda value: assert_ordered_work_ids(value, batch_ids)),
+                                ("concept_hierarchy_graph",
+                                 research_index.build_graph,
+                                 lambda value: assert_concept_parent_graph(value, concept_ids)),
                             )
                             for label, operation, verify in workloads:
                                 result = benchmark(stats, operation, repetitions, verify)
                                 output.append({"fixture_works": size, "operation": label, **result})
+
+                    # A separate synthetic Library per tier keeps the already
+                    # measured bare Concept hierarchy unchanged. It also
+                    # prevents seeded notes from leaking into the Work reads.
+                    # Reindex all notes through the actual job handler, outside
+                    # the timed window. The graph reads use the real PG adapter.
+                    lease = timedelta(seconds=30)
+                    for size in sizes:
+                        mention_actor = provision_actor(database, name="Indexed Graph Fixture")
+                        indexed_concepts: list[str] = []
+                        indexed_works: list[str] = []
+                        with facade_context.acting_as(mention_actor.context):
+                            for i in range(size):
+                                name = f"Profile Indexed Concept {i:04d}"
+                                indexed_concepts.append(library.create_concept(name)["id"])
+                                wid = library.add_work(f"Profile Indexed Work {i:04d}")
+                                indexed_works.append(wid)
+                                changed = library_command(
+                                    database, mention_actor.context, Capability.EDIT_LIBRARY,
+                                    lambda scope, work_id=wid, concept_name=name: notes.set_note(
+                                        scope, work_id, notes.RESEARCH,
+                                        f"[[concept:{concept_name}]]"
+                                    ),
+                                )
+                                if changed is None or not changed[0]:
+                                    raise RuntimeError("synthetic indexed graph note was not saved")
+                            # Each note write enqueues one reindex. Never silently
+                            # time an unindexed graph, a failed job, or a partial
+                            # fixture. Only this disposable profile DB is touched.
+                            for _ in range(size):
+                                job = queue.claim(database, "profile-reindex", lease=lease)
+                                if (job is None or job.kind != reindex.KIND
+                                        or job.library_id != mention_actor.library_id):
+                                    raise RuntimeError("synthetic indexed graph job inventory is incomplete")
+                                if run_job(database, job, lease=lease) is not Outcome.SUCCEEDED:
+                                    raise RuntimeError("synthetic indexed graph reindex failed")
+                            # The graph's exact nodes/edges are checked on every
+                            # call, not only after seeding or during warmup.
+                            result = benchmark(
+                                stats, research_index.build_graph, repetitions,
+                                lambda value: assert_indexed_note_graph(
+                                    value, indexed_concepts, indexed_works
+                                ),
+                            )
+                            output.append({
+                                "fixture_works": size, "operation": "indexed_note_graph", **result
+                            })
                     return {
                         "tool": "pg_stat_statements",
                         "server_version_num": int(version),
-                        "fixture": "synthetic_works_only",
-                        "fixture_version": "works-v1",
+                        "fixture": "synthetic_works_concepts_and_indexed_mentions",
+                        "fixture_version": "works-concepts-mentions-v3",
                         "fixture_tiers": list(sizes),
-                        "backend": "postgresql_facade",
-                        "measurement": "warm_facade_calls_not_http",
+                        "backend": "postgresql_read_adapters",
+                        "measurement": "warm_pg_read_adapter_calls_not_http",
                         "readiness": "disposable_pg18_identity_verified",
                         "query_fingerprints": "run_local_only; no SQL text is collected",
                         "profiles": output,

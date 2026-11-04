@@ -10,6 +10,7 @@ const api = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
 
 const {
     createPrksRequestCoordinator,
+    createPrksLibraryEpoch,
     prksIsAbortError,
     PRKS_REQUEST_BURST_FRESH_MS,
 } = api;
@@ -449,6 +450,88 @@ async function testMutationFifo() {
     box.calls[2].resolve(jsonResponse({ n: 3 }));
     await Promise.all([a, b, c]);
     record('mutation peak never exceeds 1', peakMut === 1, 'peak=' + peakMut);
+}
+
+async function testOptInCancellableMutation() {
+    // A queued PDF adoption is dropped if its network state changes while a
+    // different mutation owns the single FIFO slot. The durable foreground
+    // mutation is never cancelled or reordered.
+    const box = makeDeferredFetch();
+    const coord = makeCoordinator({ fetchBundle: box });
+    const first = coord.prksRequest('/api/normal', { method: 'POST' });
+    const controller = new AbortController();
+    const adopted = coord.prksRequest('/api/works/W/annotations/adopt',
+        { method: 'POST', signal: controller.signal },
+        { cancellableMutation: true });
+    controller.abort();
+    box.calls[0].resolve(jsonResponse({ ok: true }));
+    await first;
+    record('aborted queued adoption rejects without transport',
+        await expectAbort(adopted) && box.calls.length === 1
+        && coord.snapshot().counts.aborted >= 1, String(box.calls.length));
+
+    // Cancellation after transport starts must also be classified as abort,
+    // not as a reachability failure that could trigger a reconnect loop.
+    try {
+        const reports = installReachabilitySpies();
+        const held = makeDeferredFetch();
+        const running = makeCoordinator({ fetchBundle: held });
+        const abortRunning = new AbortController();
+        const started = running.prksRequest('/api/works/W/annotations/adopt',
+            { method: 'POST', signal: abortRunning.signal },
+            { cancellableMutation: true });
+        await waitUntil(() => held.calls.length === 1);
+        abortRunning.abort();
+        record('cancelling in-flight adoption is not a reachability failure',
+            await expectAbort(started) && reports.success === 0
+            && reports.failure === 0 && running.snapshot().counts.aborted === 1,
+            'success=' + reports.success + ' failure=' + reports.failure);
+    } finally {
+        clearReachabilitySpies();
+    }
+
+    // Even the first mutation may be waiting on the async Library epoch
+    // lookup. Cancellation must propagate through that adapter before fetch.
+    let sessionStarted = false;
+    let finishSession;
+    const dispatched = [];
+    const epoch = createPrksLibraryEpoch({
+        sessionTimeoutMs: 60000,
+        fetchImpl: function (url, init) {
+            if (url === '/api/session') {
+                sessionStarted = true;
+                return new Promise(function (resolve) { finishSession = resolve; });
+            }
+            dispatched.push({ url, init });
+            return Promise.resolve(jsonResponse({ ok: true }));
+        },
+    });
+    const gated = makeCoordinator({ fetchImpl: epoch.fetch });
+    const abortEpoch = new AbortController();
+    const pending = gated.prksRequest('/api/works/W/annotations/adopt',
+        { method: 'POST', signal: abortEpoch.signal },
+        { cancellableMutation: true });
+    await waitUntil(() => sessionStarted);
+    abortEpoch.abort();
+    const didAbort = await expectAbort(pending);
+    record('epoch-header wait cannot dispatch an aborted adoption',
+        didAbort && dispatched.length === 0, JSON.stringify(dispatched));
+    finishSession(jsonResponse({ library: { epoch: '3' } }));
+    await flush();
+    record('late epoch read cannot re-dispatch cancelled adoption',
+        dispatched.length === 0, String(dispatched.length));
+
+    // Default durable mutations intentionally ignore post-enqueue cancellation.
+    const durable = makeDeferredFetch();
+    const defaultCoord = makeCoordinator({ fetchBundle: durable });
+    const defaultSignal = new AbortController();
+    const normal = defaultCoord.prksRequest('/api/sync/operations',
+        { method: 'POST', signal: defaultSignal.signal });
+    defaultSignal.abort();
+    record('durable mutation signal remains unmanaged by default',
+        durable.calls.length === 1 && !durable.calls[0].init.signal, '');
+    durable.calls[0].resolve(jsonResponse({ ok: true }));
+    await normal;
 }
 
 async function testDedupe() {
@@ -1307,6 +1390,76 @@ async function testReachabilitySignalling() {
     } finally {
         clearReachabilitySpies();
     }
+    // A late response from an earlier reachability generation must identify
+    // WHEN its fetch began, for both GET and durable POST. The runtime can
+    // therefore ignore it after a newer confirmed disconnect.
+    try {
+        const oldGeneration = global.prksOfflineRuntimeGeneration;
+        const oldSuccess = global.prksOfflineNoteRequestSuccess;
+        let generation = 7;
+        const observed = [];
+        global.prksOfflineRuntimeGeneration = () => generation;
+        global.prksOfflineNoteRequestSuccess = token => { observed.push(token); };
+        try {
+            const box = makeDeferredFetch();
+            const coord = makeCoordinator({ fetchBundle: box });
+            const read = coord.prksRequest('/api/works', {}, { dedupe: false, retry: false });
+            await waitUntil(() => box.calls.length === 1);
+            generation = 8;
+            box.calls[0].resolve(jsonResponse([]));
+            await read;
+            record('late read carries transport start generation',
+                observed.length === 1 && observed[0] === 7, JSON.stringify(observed));
+
+            const write = coord.prksRequest('/api/works/1', { method: 'POST', body: '{}' });
+            await waitUntil(() => box.calls.length === 2);
+            generation = 9;
+            box.calls[1].resolve(jsonResponse({ ok: true }));
+            await write;
+            record('late mutation carries transport start generation',
+                observed.length === 2 && observed[1] === 8, JSON.stringify(observed));
+        } finally {
+            if (oldGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+            else global.prksOfflineRuntimeGeneration = oldGeneration;
+            if (oldSuccess === undefined) delete global.prksOfflineNoteRequestSuccess;
+            else global.prksOfflineNoteRequestSuccess = oldSuccess;
+        }
+    } catch (err) {
+        record('reachability generation regression ran', false, String(err));
+    }
+
+    // Library epoch preflight can outlast an offline transition. The HTTP
+    // POST carries the generation at the true transport boundary, not the
+    // earlier queue/dependency stage.
+    {
+        const previousGeneration = global.prksOfflineRuntimeGeneration;
+        const previousSuccess = global.prksOfflineNoteRequestSuccess;
+        const box = makeDeferredFetch();
+        const epoch = createPrksLibraryEpoch({ fetchImpl: box.fetchImpl });
+        const coord = makeCoordinator({ fetchImpl: epoch.fetch, fetchBundle: box });
+        const tokens = [];
+        let generation = 14;
+        global.prksOfflineRuntimeGeneration = () => generation;
+        global.prksOfflineNoteRequestSuccess = token => tokens.push(token);
+        try {
+            const request = coord.prksRequest('/api/works/W-1', { method: 'POST', body: '{}' });
+            await waitUntil(() => box.calls.length === 1);
+            record('first Library mutation waits on session', box.calls[0].url === '/api/session',
+                box.calls[0].url);
+            generation = 15;
+            box.calls[0].resolve(jsonResponse({ library: { epoch: '7' } }));
+            await waitUntil(() => box.calls.length === 2);
+            box.calls[1].resolve(jsonResponse({ ok: true }));
+            await request;
+            record('epoch preflight does not stale actual HTTP reachability',
+                tokens.length === 1 && tokens[0] === 15, JSON.stringify(tokens));
+        } finally {
+            if (previousGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+            else global.prksOfflineRuntimeGeneration = previousGeneration;
+            if (previousSuccess === undefined) delete global.prksOfflineNoteRequestSuccess;
+            else global.prksOfflineNoteRequestSuccess = previousSuccess;
+        }
+    }
 }
 
 async function testApiWarningOwnership() {
@@ -1344,6 +1497,120 @@ async function testApiWarningOwnership() {
     record('A warning consumed once', sandbox.prksConsumeApiError(ownerA) === null, '');
 }
 
+async function testLibraryEpoch() {
+    // No answer has carried an epoch yet: the session is read once, before the first mutation.
+    const calls = [];
+    let sessionReads = 0;
+    const epoch = createPrksLibraryEpoch({
+        fetchImpl: async function (url, init) {
+            calls.push({ url: url, init: init || {} });
+            if (url === '/api/session') {
+                sessionReads += 1;
+                return jsonResponse({ library: { id: 'LIB-1', epoch: 3 } }, 200);
+            }
+            return jsonResponse({ ok: true }, 200, url === '/api/later' ? { 'PRKS-Library-Epoch': '4' } : {});
+        },
+    });
+    await epoch.fetch('/api/works/W-1', { method: 'GET' });
+    record('a read sends no epoch and reads no session', sessionReads === 0
+        && !('PRKS-Library-Epoch' in (calls[0].init.headers || {})), JSON.stringify(calls));
+    await Promise.all([
+        epoch.fetch('/api/tags', { method: 'POST', headers: { 'Content-Type': 'application/json' } }),
+        epoch.fetch('/api/tags', { method: 'DELETE' }),
+    ]);
+    const mutations = calls.filter(function (c) { return c.url === '/api/tags'; });
+    record('concurrent first mutations share one session read', sessionReads === 1, String(sessionReads));
+    record('each mutation carries the session epoch', mutations.length === 2 && mutations.every(function (c) {
+        return c.init.headers['PRKS-Library-Epoch'] === '3';
+    }), JSON.stringify(mutations));
+    record('the caller headers are kept', mutations[0].init.headers['content-type'] === 'application/json',
+        JSON.stringify(mutations[0].init.headers));
+    await epoch.fetch('/api/later', { method: 'GET' });
+    await epoch.fetch('/api/tags', { method: 'POST' });
+    const last = calls[calls.length - 1];
+    record('a newer epoch in an answer never replaces the page\'s', last.init.headers['PRKS-Library-Epoch'] === '3' && sessionReads === 1,
+        JSON.stringify(last));
+    await epoch.fetch('/api/tags', { method: 'POST', headers: { 'PRKS-Library-Epoch': '2' } });
+    record('an explicit epoch is never replaced', calls[calls.length - 1].init.headers['PRKS-Library-Epoch'] === '2', '');
+    const headers = await epoch.headers();
+    record('headers() names the page\'s epoch', headers['PRKS-Library-Epoch'] === '3', JSON.stringify(headers));
+
+    // Without a session (signed out, unreachable) nothing is invented: the server refuses.
+    for (const answer of [
+        function () { return jsonResponse({ error: 'not_authenticated' }, 401); },
+        function () { throw new TypeError('Failed to fetch'); },
+        function () { return jsonResponse({ library: { epoch: '01' } }, 200); },
+        function () { return jsonResponse({ error: 'API endpoint not found' }, 404); },
+    ]) {
+        const sent = [];
+        const none = createPrksLibraryEpoch({
+            fetchImpl: async function (url, init) {
+                if (url === '/api/session') return answer();
+                sent.push(init || {});
+                return jsonResponse({}, 200);
+            },
+        });
+        await none.fetch('/api/tags', { method: 'POST' });
+        record('no epoch is sent without a valid session answer (' + answer.toString().slice(30, 60) + ')',
+            sent.length === 1 && !('PRKS-Library-Epoch' in (sent[0].headers || {})), JSON.stringify(sent));
+    }
+
+    // A session read that never answers is bounded: the mutation goes without an epoch.
+    const hung = [];
+    let sessionSignal = null;
+    const slow = createPrksLibraryEpoch({
+        sessionTimeoutMs: 30,
+        fetchImpl: function (url, init) {
+            if (url === '/api/session') {
+                sessionSignal = init.signal;
+                return new Promise(function () {});
+            }
+            hung.push(init || {});
+            return Promise.resolve(jsonResponse({}, 200));
+        },
+    });
+    const started = Date.now();
+    await slow.fetch('/api/tags', { method: 'POST' });
+    record('a session read that never answers is bounded', hung.length === 1
+        && !('PRKS-Library-Epoch' in (hung[0].headers || {})) && Date.now() - started < 1000
+        && !!sessionSignal && sessionSignal.aborted, String(Date.now() - started));
+
+    // A read that answers after its deadline cannot replace an epoch a newer answer gave.
+    let lateAnswer = null;
+    const late = createPrksLibraryEpoch({
+        sessionTimeoutMs: 30,
+        fetchImpl: function (url) {
+            if (url === '/api/session') {
+                return new Promise(function (resolve) { lateAnswer = resolve; });
+            }
+            return Promise.resolve(jsonResponse({}, 200, { 'PRKS-Library-Epoch': '2' }));
+        },
+    });
+    await late.fetch('/api/tags', { method: 'POST' });
+    await late.fetch('/api/tags', { method: 'GET' });
+    lateAnswer(jsonResponse({ library: { epoch: '1' } }, 200, { 'PRKS-Library-Epoch': '1' }));
+    await new Promise(function (resolve) { setTimeout(resolve, 10); });
+    record('a session read past its deadline writes no epoch', late.current() === '2', String(late.current()));
+
+    // A caller that aborts while the session is read is answered at once and sends nothing.
+    const kept = [];
+    const waiting = createPrksLibraryEpoch({
+        sessionTimeoutMs: 60000,
+        fetchImpl: function (url, init) {
+            if (url === '/api/session') return new Promise(function () {});
+            kept.push(init || {});
+            return Promise.resolve(jsonResponse({}, 200));
+        },
+    });
+    const controller = new AbortController();
+    const pending = waiting.fetch('/api/tags', { method: 'POST', signal: controller.signal });
+    controller.abort();
+    let abortName = '';
+    try { await pending; } catch (err) { abortName = err && err.name; }
+    record('an aborted caller is answered without waiting for the session', abortName === 'AbortError'
+        && kept.length === 0, abortName);
+}
+
 async function main() {
     record('exports createPrksRequestCoordinator', typeof createPrksRequestCoordinator === 'function', '');
     record('does not monkeypatch fetch', typeof fetch === 'function', '');
@@ -1352,6 +1619,7 @@ async function main() {
     await testBackgroundBoundAndPreferFg();
     await testReadMutationOverlap();
     await testMutationFifo();
+    await testOptInCancellableMutation();
     await testDedupe();
     await testSubscriberAbort();
     await testRetry();
@@ -1361,6 +1629,7 @@ async function main() {
     await testWorkHintStalePublication();
     await testReachabilitySignalling();
     await testApiWarningOwnership();
+    await testLibraryEpoch();
     console.log(passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);
 }

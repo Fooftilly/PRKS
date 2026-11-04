@@ -41,12 +41,15 @@ class FrontendLocalStoreTests(unittest.TestCase):
 
     def test_durable_state_uses_a_separate_database(self):
         """The whole point: physical separation, not a naming convention."""
-        local = _read(_LOCAL)
-        offline = _read(_OFFLINE)
-        self.assertIn("const DB_NAME = 'prks-local-v1';", local)
-        self.assertIn("const DB_NAME = 'prks-offline-v1';", offline)
-        self.assertNotIn("prks-offline-v1", _strip_comments(local))
-        self.assertNotIn("prks-local-v1", _strip_comments(offline))
+        local = _strip_comments(_read(_LOCAL))
+        offline = _strip_comments(_read(_OFFLINE))
+        # Each names its own per-scope database through browser-scope.js.
+        self.assertIn("scope.dbName('local')", local)
+        self.assertIn("scope.dbName('offline')", offline)
+        self.assertNotIn("dbName('offline')", local)
+        self.assertNotIn("dbName('local')", offline)
+        self.assertNotIn("prks-offline", local)
+        self.assertNotIn("prks-local", offline)
 
     def test_cache_clearing_cannot_reach_durable_state(self):
         """`Clear offline cache` must be incapable of deleting the outbox."""
@@ -55,7 +58,8 @@ class FrontendLocalStoreTests(unittest.TestCase):
         for name, src in (("offline-store.js", offline), ("offline-runtime.js", runtime)):
             with self.subTest(module=name):
                 self.assertNotIn("createPrksLocalStore", src)
-                self.assertNotIn("prks-local-v1", src)
+                self.assertNotIn("prks-local", src)
+                self.assertNotIn("dbName('local')", src)
                 self.assertNotIn("resetDurableLocalState", src)
         # The cache-clear entry point itself must not mention local state.
         at = runtime.index("function clearCache(")

@@ -29,6 +29,15 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn('checks passed', proc.stdout)
 
+    def test_playlist_ack_dispatch_keeps_cache_renderable(self):
+        """Exercise real Playlist wrappers, durable sync ACKs and cache coherence."""
+        proc = subprocess.run(
+            ['node', str(ROOT / 'tests' / 'browser'
+                         / 'run_playlist_ack_dispatch_selftest.js')],
+            cwd=ROOT, capture_output=True, text=True, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('Playlist ACK-through-sync checks passed', proc.stdout)
+
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const PLAYLIST_FIELDS =')
         self.assertEqual(sorted(client), sorted(playlist_sync.FIELDS))

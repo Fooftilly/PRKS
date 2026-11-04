@@ -27,6 +27,25 @@ export function isAbortError(error: unknown): boolean {
 type PrksReachabilityRoot = typeof globalThis & {
   prksOfflineNoteRequestSuccess?: unknown
   prksOfflineNoteRequestFailure?: unknown
+  prksOfflineRuntimeGeneration?: unknown
+}
+
+/** The classic request coordinator's Library epoch (frontend/js/request-coordinator.js). */
+type PrksEpochRoot = typeof globalThis & {
+  prksLibraryEpochHeaders?: () => Promise<Record<string, string>>
+  prksNoteLibraryEpoch?: (response: Response) => void
+}
+
+/** The `PRKS-Library-Epoch` header a Library mutation carries (§10.4); none for a read. */
+async function libraryEpochHeaders(method: string): Promise<Record<string, string>> {
+  if (method === 'GET' || method === 'HEAD') return {}
+  const headers = (globalThis as PrksEpochRoot).prksLibraryEpochHeaders
+  return typeof headers === 'function' ? await headers() : {}
+}
+
+function noteLibraryEpoch(response: Response): void {
+  const note = (globalThis as PrksEpochRoot).prksNoteLibraryEpoch
+  if (typeof note === 'function') note(response)
 }
 
 /** Transport failures the query/mutation caches may report once retries stop. */
@@ -38,9 +57,15 @@ function isManagedPdfPath(path: string): boolean {
 
 function callReachabilityHook(
   name: 'prksOfflineNoteRequestSuccess' | 'prksOfflineNoteRequestFailure',
+  issuedAtGeneration?: number,
 ): void {
   const hook = (globalThis as PrksReachabilityRoot)[name]
-  if (typeof hook === 'function') hook()
+  if (typeof hook === 'function') hook(issuedAtGeneration)
+}
+
+function reachabilityGeneration(): number | undefined {
+  const read = (globalThis as PrksReachabilityRoot).prksOfflineRuntimeGeneration
+  return typeof read === 'function' ? (read as () => number)() : undefined
 }
 
 /** Caches call this after retries stop. Only a marked transport error is a reachability failure. */
@@ -88,9 +113,13 @@ export async function prksApiRequest(
 ): Promise<unknown> {
   const apiPath = resolvePrksApiPath(path)
   const search = init.query ? new URLSearchParams(init.query).toString() : ''
-  const method = init.method ?? 'GET'
+  const method = (init.method ?? 'GET').toUpperCase()
   let response: Response
+  let issuedAtGeneration: number | undefined
   try {
+    const epoch = await libraryEpochHeaders(method)
+    // Read the generation after asynchronous Library epoch preflight.
+    issuedAtGeneration = reachabilityGeneration()
     response = await fetch(search ? `${apiPath}?${search}` : apiPath, {
       method,
       body: init.body,
@@ -99,6 +128,7 @@ export async function prksApiRequest(
       headers: {
         Accept: 'application/json',
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...epoch,
       },
     })
   } catch (error) {
@@ -107,7 +137,8 @@ export async function prksApiRequest(
     if (!isManagedPdfPath(apiPath)) reportableTransportFailures.add(transport)
     throw transport
   }
-  if (!isManagedPdfPath(apiPath)) callReachabilityHook('prksOfflineNoteRequestSuccess')
+  if (!isManagedPdfPath(apiPath)) callReachabilityHook('prksOfflineNoteRequestSuccess', issuedAtGeneration)
+  noteLibraryEpoch(response)
 
   const text = await response.text()
   let payload: unknown = null

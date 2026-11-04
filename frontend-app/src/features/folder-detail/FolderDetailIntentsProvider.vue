@@ -17,6 +17,8 @@ provide(folderDetailIntentsKey, {
   owner: () => current.value.owner(),
   remove: (folderId) => current.value.remove(folderId),
   createChild: (folder) => current.value.createChild(folder),
+  readExpanded: () => current.value.readExpanded(),
+  writeExpanded: (ids) => current.value.writeExpanded(ids),
 })
 </script>
 

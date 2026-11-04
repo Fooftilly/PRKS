@@ -554,11 +554,14 @@
             if (!live(ctx, state)) return;
             await root.prksSync.store.saveWorkMetadataFields(workId, changes, observed.fields);
             root.prksSync.changed();
-            if (!sessionOwned()) return;
-            if (!live(ctx, state)) return;
+            // This session already owns the durable write. Commit its baseline
+            // even if a focus switch gave another Work the shared panel while
+            // IndexedDB was resolving. Never paint or update the other panel.
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, snapshot, Object.keys(changes));
             }
+            if (!sessionOwned()) return;
+            if (!live(ctx, state)) return;
             setError(state, group, null);
             await safePaint(ctx, state);
         } catch (error) {

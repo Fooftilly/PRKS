@@ -52,7 +52,7 @@ type Row =
   | { key: string; item: DiagnosticsUnreadableEmergency }
 
 interface PageHelpers {
-  prksEditorRecovery?: { diagnostics?: () => RecoveryDiagnostics }
+  prksEditorRecovery?: { diagnostics?: () => RecoveryDiagnostics | null }
   prksCopyTextToClipboard?: (text: string) => Promise<void>
   prksConfirmDialog?: (options: { title: string; message: string; confirmLabel: string; cancelLabel?: string; danger: boolean }) => Promise<boolean>
   requestModalClose?: (reason: string) => boolean

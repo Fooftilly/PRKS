@@ -257,6 +257,37 @@ def enqueue_library_job(
     return row["id"]
 
 
+def enqueue_instance_job_for_library(
+    scope: LibraryScope,
+    kind: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    *,
+    dedupe_key: Optional[str] = None,
+    singleton_key: Optional[str] = None,
+    priority: int = 0,
+    delay: timedelta = timedelta(0),
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> Optional[uuid.UUID]:
+    """Enqueue an instance job (no Library) inside a ``library_command``.
+
+    For instance maintenance that a Library change makes due, such as an
+    object cleanup pass (cleanup claims span Libraries, §11.2): the job
+    commits with the command, like :func:`enqueue_library_job`, but no
+    restore fences it, because it acts on no Library's rows. The row has no
+    ``library_id``, so the insert is reviewed as unscoped. Returns ``None``
+    on a dedupe hit.
+    """
+    params = _job_params(
+        kind=kind, payload=payload, dedupe_key=dedupe_key, singleton_key=singleton_key,
+        priority=priority, delay=delay, max_attempts=max_attempts, created_by=None,
+    )
+    row = scope.execute_unscoped(_INSERT_SQL, {**params, "library_id": None, "library_epoch": None}).fetchone()
+    if row is None:
+        return None
+    scope.execute_unscoped(_NOTIFY_SQL)
+    return row["id"]
+
+
 # --- claim and reclaim --------------------------------------------------------------
 
 

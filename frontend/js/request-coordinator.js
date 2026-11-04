@@ -7,6 +7,17 @@
  * non-abort transport rejection after retries are exhausted means it did not.
  * Managed PDF GETs (/api/pdfs/...) are excluded: the service worker may
  * resolve those from Cache Storage without the PRKS server answering.
+ *
+ * Library epoch (docs/postgresql-architecture.md §10.4, §11.4): every Library
+ * mutation names the epoch the page loaded in `PRKS-Library-Epoch`. In a
+ * page that is the browser scope's page epoch (browser-scope.js); without a
+ * browser scope (Node tests) the first epoch an answer carries, or one read
+ * from `GET /api/session` before the first mutation. Once known it never
+ * changes: a page loaded before a restore keeps naming the older epoch, and
+ * the server refuses its mutations until a reload. Every answer's header is
+ * reported to the browser scope, which tells the page the Library was
+ * restored. An unknown epoch sends no header, and the server refuses the
+ * mutation.
  */
 (function (root) {
     'use strict';
@@ -55,9 +66,14 @@
         return false;
     }
 
-    function reportPrksReachable() {
+    function reachabilityGeneration() {
+        return typeof root.prksOfflineRuntimeGeneration === 'function'
+            ? root.prksOfflineRuntimeGeneration() : undefined;
+    }
+
+    function reportPrksReachable(issuedAtGeneration) {
         if (typeof root.prksOfflineNoteRequestSuccess === 'function') {
-            root.prksOfflineNoteRequestSuccess();
+            root.prksOfflineNoteRequestSuccess(issuedAtGeneration);
         }
     }
 
@@ -104,6 +120,158 @@
 
     function defaultFetch(url, init) {
         return fetch(url, init);
+    }
+
+    const PRKS_LIBRARY_EPOCH_HEADER = 'PRKS-Library-Epoch';
+    const PRKS_SESSION_PATH = '/api/session';
+    // The server's own grammar for the header: 1 to the largest bigint.
+    const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
+    const PRKS_SESSION_TIMEOUT_MS = 10000;
+
+    function epochOf(value) {
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    function isLibraryMutation(url, init) {
+        const method = methodOf(init);
+        if (method === 'GET' || method === 'HEAD') return false;
+        const path = String(url || '').split(/[?#]/)[0];
+        return path.indexOf('/api/') === 0;
+    }
+
+    function hasHeader(headers, name) {
+        const lower = name.toLowerCase();
+        return Object.prototype.hasOwnProperty.call(headerMap(headers), lower);
+    }
+
+    function withHeader(headers, name, value) {
+        const out = {};
+        const map = headerMap(headers);
+        Object.keys(map).forEach(function (key) { out[key] = map[key]; });
+        out[name] = value;
+        return out;
+    }
+
+    /**
+     * The Library epoch this page acts under. Its `fetch` adds the header to
+     * a Library mutation and notes the header on every answer; `headers()`
+     * resolves to the header for a caller that sends its own request;
+     * `note(response)` records an answer's epoch.
+     */
+    function createPrksLibraryEpoch(deps) {
+        const options = deps && typeof deps === 'object' ? deps : {};
+        const fetchImpl = options.fetchImpl || defaultFetch;
+        // The page's browser scope, looked up when needed (it loads after this file).
+        const scopeOf = typeof options.scope === 'function' ? options.scope : function () { return null; };
+        // The first mutation waits on this read while it holds the mutation
+        // slot, so the read is bounded: past it the mutation goes without.
+        const sessionTimeoutMs = options.sessionTimeoutMs > 0 ? options.sessionTimeoutMs : PRKS_SESSION_TIMEOUT_MS;
+        let epoch = null;
+        let pendingRead = null;
+
+        function note(response) {
+            const headers = response && response.headers;
+            if (!headers || typeof headers.get !== 'function') return;
+            const seen = epochOf(headers.get(PRKS_LIBRARY_EPOCH_HEADER));
+            if (!seen) return;
+            const scope = scopeOf();
+            if (scope && typeof scope.noteEpoch === 'function') {
+                try { scope.noteEpoch(seen); } catch (_e) { /* the scope's own concern */ }
+            } else if (!epoch) {
+                epoch = seen;
+            }
+        }
+
+        function readSession() {
+            if (pendingRead) return pendingRead;
+            const controller = typeof AbortController === 'function' ? new AbortController() : null;
+            const timer = setTimeout(function () { if (controller) controller.abort(); }, sessionTimeoutMs);
+            // A read that loses to its deadline may answer after a newer one: it writes nothing.
+            let expired = false;
+            const read = Promise.resolve()
+                .then(function () {
+                    return fetchImpl(PRKS_SESSION_PATH, {
+                        method: 'GET',
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        headers: { Accept: 'application/json' },
+                        signal: controller ? controller.signal : undefined,
+                    });
+                })
+                .then(function (response) {
+                    if (expired) return;
+                    note(response);
+                    if (epoch || !response.ok) return;
+                    return response.json().then(function (body) {
+                        const library = body && body.library;
+                        const read = epochOf(library && library.epoch);
+                        if (read && !epoch && !expired) epoch = read;
+                    });
+                })
+                .catch(function () { /* unknown: the mutation goes without it */ });
+            // A fetch that ignores its signal still cannot hold the caller past the deadline.
+            let deadlineTimer = null;
+            const deadline = new Promise(function (resolve) {
+                deadlineTimer = setTimeout(function () { expired = true; resolve(); }, sessionTimeoutMs);
+            });
+            pendingRead = Promise.race([read, deadline]).then(function () {
+                clearTimeout(timer);
+                clearTimeout(deadlineTimer);
+                pendingRead = null;
+            });
+            return pendingRead;
+        }
+
+        function untilAborted(signal) {
+            if (!signal || typeof signal.addEventListener !== 'function') return null;
+            return new Promise(function (_resolve, reject) {
+                if (signal.aborted) { reject(makeAbortError()); return; }
+                signal.addEventListener('abort', function () { reject(makeAbortError()); }, { once: true });
+            });
+        }
+
+        function headers() {
+            if (epoch) return Promise.resolve({ [PRKS_LIBRARY_EPOCH_HEADER]: epoch });
+            const scope = scopeOf();
+            const known = scope && typeof scope.pageEpoch === 'function'
+                // The page's epoch is the one its scope bound with.
+                ? Promise.resolve(scope.resolve()).then(function () {
+                    const bound = epochOf(scope.pageEpoch());
+                    if (bound && !epoch) epoch = bound;
+                }, function () { /* no scope: no epoch */ })
+                : readSession();
+            return known.then(function () {
+                return epoch ? { [PRKS_LIBRARY_EPOCH_HEADER]: epoch } : {};
+            });
+        }
+
+        async function epochFetch(url, init, onTransportStart) {
+            let sent = init;
+            if (isLibraryMutation(url, init) && !hasHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER)) {
+                // A caller that gives up while the session is read is answered at once.
+                const aborted = untilAborted(init && init.signal);
+                const extra = await (aborted ? Promise.race([headers(), aborted]) : headers());
+                if (extra[PRKS_LIBRARY_EPOCH_HEADER]) {
+                    sent = Object.assign({}, init, {
+                        headers: withHeader(init && init.headers, PRKS_LIBRARY_EPOCH_HEADER,
+                            extra[PRKS_LIBRARY_EPOCH_HEADER]),
+                    });
+                }
+            }
+            // Library epoch preflight may have awaited /api/session.
+            if (typeof onTransportStart === 'function') onTransportStart();
+            const response = await fetchImpl(url, sent);
+            note(response);
+            return response;
+        }
+
+        return {
+            fetch: epochFetch,
+            headers: headers,
+            note: note,
+            current: function () { return epoch; },
+        };
     }
 
     function defaultOrigin() {
@@ -514,12 +682,16 @@
             while (attempt < 1 + (retryEnabled ? PRKS_REQUEST_RETRY_MAX : 0)) {
                 if (signal.aborted) throw makeAbortError();
                 try {
-                    const response = await fetchImpl(href, networkInit(fetchOptions, signal));
+                    // Snapshot immediately before the real transport attempt.
+                    // Old successful responses cannot undo a newer disconnect.
+                    let issuedAtGeneration = reachabilityGeneration();
+                    const response = await fetchImpl(href, networkInit(fetchOptions, signal),
+                        () => { issuedAtGeneration = reachabilityGeneration(); });
                     // A transport that ignores abort may resolve after a
                     // flight's header deadline. Do not publish late responses
                     // or let them incorrectly mark the server reachable.
                     if (signal.aborted) throw makeAbortError();
-                    if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable();
+                    if (reportReachability && !isManagedPdfHref(href)) reportPrksReachable(issuedAtGeneration);
                     if (retryEnabled && shouldRetryStatus(response.status) && attempt < PRKS_REQUEST_RETRY_MAX) {
                         counts.retries += 1;
                         attempt += 1;
@@ -662,12 +834,20 @@
             let error = null;
             let networkFailed = false;
             try {
-                response = await fetchImpl(job.href, networkInit(job.fetchOptions, undefined));
-                if (!isManagedPdfHref(job.href)) reportPrksReachable();
+                // Only explicitly cancellable, non-durable background writes
+                // honor a caller's signal. Durable sync operations retain their
+                // existing cannot-cancel-on-navigation semantics.
+                const signal = job.cancellable ? job.fetchOptions.signal : undefined;
+                if (signal && signal.aborted) throw makeAbortError();
+                let issuedAtGeneration = reachabilityGeneration();
+                response = await fetchImpl(job.href, networkInit(job.fetchOptions, signal),
+                    () => { issuedAtGeneration = reachabilityGeneration(); });
+                if (signal && signal.aborted) throw makeAbortError();
+                if (!isManagedPdfHref(job.href)) reportPrksReachable(issuedAtGeneration);
             } catch (err) {
                 error = err;
                 networkFailed = !prksIsAbortError(err);
-                if (!isManagedPdfHref(job.href)) reportPrksUnreachable(err);
+                if (networkFailed && !isManagedPdfHref(job.href)) reportPrksUnreachable(err);
             }
             if (response && response.ok) {
                 bumpEpochAndClearCache();
@@ -677,7 +857,8 @@
             const waiters = job.waiters.splice(0, job.waiters.length);
             waiters.forEach(function (waiter) {
                 if (error) {
-                    counts.failed += 1;
+                    if (prksIsAbortError(error)) counts.aborted += 1;
+                    else counts.failed += 1;
                     waiter.reject(error);
                 } else {
                     try {
@@ -724,6 +905,9 @@
                     enqueueMutation({
                         href: href,
                         fetchOptions: opts,
+                        // Opt in only for best-effort writes such as PDF-byte
+                        // adoption. Never abort durable queue submissions.
+                        cancellable: pol.cancellableMutation === true,
                         waiters: [{ resolve: resolve, reject: reject }],
                     });
                 });
@@ -839,8 +1023,13 @@
         };
     }
 
-    const production = createPrksRequestCoordinator({
+    const libraryEpoch = createPrksLibraryEpoch({
         fetchImpl: defaultFetch,
+        scope: function () { return root.prksBrowserScope || null; },
+    });
+
+    const production = createPrksRequestCoordinator({
+        fetchImpl: libraryEpoch.fetch,
         now: defaultNow,
         sleep: defaultSleep,
         random: defaultRandom,
@@ -864,7 +1053,11 @@
         prksRequestCoordinatorSnapshot: prksRequestCoordinatorSnapshot,
         prksResetRequestCoordinatorDiagnostics: prksResetRequestCoordinatorDiagnostics,
         prksIsAbortError: prksIsAbortError,
+        prksLibraryEpochHeaders: libraryEpoch.headers,
+        prksNoteLibraryEpoch: libraryEpoch.note,
         createPrksRequestCoordinator: createPrksRequestCoordinator,
+        createPrksLibraryEpoch: createPrksLibraryEpoch,
+        PRKS_LIBRARY_EPOCH_HEADER: PRKS_LIBRARY_EPOCH_HEADER,
         PRKS_REQUEST_MAX_READS: PRKS_REQUEST_MAX_READS,
         PRKS_REQUEST_BURST_FRESH_MS: PRKS_REQUEST_BURST_FRESH_MS,
     };

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { createRecoveryDiagnostics, DELETED_WORK_MARK_PREFIX, OLD_DRAFT_MS, RECOVERY_WARN_BYTES, type DiagnosticsDraft, type DiscardTarget } from './diagnostics'
+import { createRecoveryDiagnostics, OLD_DRAFT_MS, RECOVERY_WARN_BYTES, type DiagnosticsDraft, type DiscardTarget } from './diagnostics'
 import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
-import { BODIES_STORE, DRAFTS_STORE, EMERGENCY_KEY_PREFIX, RECOVERY_DB_NAME, SUPERSEDED_KEY_PREFIX, UNKNOWN_BASE, type DraftEntityType, type DraftKind } from './schema'
-import { createFakeBrowser, memoryStorage } from './test-support/fake-env'
+import { BODIES_STORE, DRAFTS_STORE, UNKNOWN_BASE, type DraftEntityType, type DraftKind } from './schema'
+import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle, type FakeIdbControls } from './test-support/fake-idb'
 
 function setup(withoutLocks = false) {
@@ -31,7 +31,7 @@ function setup(withoutLocks = false) {
         close: () => channel.close(),
       }
     }
-    const rt = createEditorRecoveryRuntime({
+    const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: withoutLocks ? null : locks, createChannel, claimWaitMs: 20, localStorage: local },
       writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -58,7 +58,7 @@ async function crashedDraft(p: Page, text: string, kind: DraftKind = 'work-resea
 
 async function putRows(idb: FakeIdbControls, store: string, rows: Array<Record<string, unknown>>): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve) => {
-    const req = idb.factory.open(RECOVERY_DB_NAME, 1)
+    const req = idb.factory.open(TEST_NAMES.dbName, 1)
     req.onsuccess = () => resolve(req.result)
   })
   await new Promise<void>((resolve) => {
@@ -70,7 +70,7 @@ async function putRows(idb: FakeIdbControls, store: string, rows: Array<Record<s
 
 async function deleteRows(idb: FakeIdbControls, store: string, keys: string[]): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve) => {
-    const req = idb.factory.open(RECOVERY_DB_NAME, 1)
+    const req = idb.factory.open(TEST_NAMES.dbName, 1)
     req.onsuccess = () => resolve(req.result)
   })
   await new Promise<void>((resolve) => {
@@ -93,7 +93,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const folder = await crashedDraft(page('c'), 'folder reminder', 'folder-private-note', 'f1', 'folder')
     const viewer = page('viewer').rt
     const diag = createRecoveryDiagnostics(viewer, { storage: local })
-    const before = JSON.stringify(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE))
+    const before = JSON.stringify(idb.rows(TEST_NAMES.dbName, DRAFTS_STORE))
     const inv = await diag.inventory()
     expect(inv.storage).toBe('ok')
     expect(inv.drafts.map((d) => [d.draftId, d.kind, d.entityType, d.entityId, d.lineage, d.status]).sort()).toEqual(
@@ -107,7 +107,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(inv.overBudget).toBe(false)
     const d = inv.drafts.find((x) => x.draftId === folder)!
     expect(await diag.readText({ source: 'record', expect: d.expect })).toEqual({ ok: true, text: 'folder reminder' })
-    expect(JSON.stringify(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE))).toBe(before)
+    expect(JSON.stringify(idb.rows(TEST_NAMES.dbName, DRAFTS_STORE))).toBe(before)
     expect(idb.rows('prks-local-v1', 'operations')).toEqual([])
   })
 
@@ -233,7 +233,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     await putRows(idb, DRAFTS_STORE, [{ ...record!, v: 99, generation: record!.generation + 1 }])
     expect(await diag.readText({ source: 'unreadable-record', draftId, snapshot: snapshot(draftId) })).toEqual({ ok: false, code: 'changed' })
     expect((await viewer.store.get(draftId))?.v).toBe(99)
-    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(5)
+    expect(idb.rows(TEST_NAMES.dbName, DRAFTS_STORE)).toHaveLength(5)
   })
 
   it('keeps a record missing only its base or entity key copy-only, never discardable', async () => {
@@ -268,7 +268,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
       expect(await diag.readText({ source: 'unreadable-record', draftId: target.draftId, snapshot: listed.snapshot! })).toEqual({ ok: true, text })
     }
     expect(await bodies(viewer)).toEqual(expect.arrayContaining(['lost its base', 'lost its entity key']))
-    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(2)
+    expect(idb.rows(TEST_NAMES.dbName, DRAFTS_STORE)).toHaveLength(2)
   })
 
   it('lists text only an emergency key holds, without merging a live page, and lists the page\'s own key as open', async () => {
@@ -282,10 +282,10 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     // Started first: a later scan merges only pages proven gone, so these keys stay keys.
     await viewer.start()
     // A key written by a newer PRKS, a damaged one, and one whose newest text was not captured.
-    local.setItem(EMERGENCY_KEY_PREFIX + 'p-newer', JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] }))
-    local.setItem(EMERGENCY_KEY_PREFIX + 'p-broken', '{"v": 1, "entr')
+    local.setItem(TEST_NAMES.emergencyPrefix + 'p-newer', JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] }))
+    local.setItem(TEST_NAMES.emergencyPrefix + 'p-broken', '{"v": 1, "entr')
     local.setItem(
-      EMERGENCY_KEY_PREFIX + 'p-tail',
+      TEST_NAMES.emergencyPrefix + 'p-tail',
       JSON.stringify({
         v: 1, pageInstanceId: 'p-tail', runtimeId: null, at: 5,
         entries: [{ draftId: 'd-tail', kind: 'work-private-note', entityType: 'work', entityId: 'w2', generation: 3, committedGeneration: 2, body: null }],
@@ -301,7 +301,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     // A kept copy that states no size leaves the total a lower bound.
     expect(inv.sizeIncomplete).toBe(true)
     expect(inv.unreadableEmergency.map((u) => [u.pageInstanceId, u.reason]).sort()).toEqual([['p-broken', 'malformed'], ['p-newer', 'newer-version']])
-    const broken = { source: 'unreadable-emergency' as const, key: EMERGENCY_KEY_PREFIX + 'p-broken', raw: '{"v": 1, "entr' }
+    const broken = { source: 'unreadable-emergency' as const, key: TEST_NAMES.emergencyPrefix + 'p-broken', raw: '{"v": 1, "entr' }
     expect(inv.unreadableEmergency.find((u) => u.pageInstanceId === 'p-broken')!.raw).toBe(broken.raw)
     expect(await diag.readText(broken)).toEqual({ ok: true, text: '{"v": 1, "entr' })
     // Rewritten since it was listed: it is listed again before anything is shown.
@@ -312,7 +312,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     expect(await diag.readText({ ...broken, raw: null })).toEqual({ ok: false, code: 'failed' })
     // Nothing was merged or removed: the live page still owns its key.
     expect(await viewer.store.get(w.draftId()!)).toBeNull()
-    expect(local.getItem(EMERGENCY_KEY_PREFIX + 'p-broken')).toBe('{"v": 1, "entr')
+    expect(local.getItem(TEST_NAMES.emergencyPrefix + 'p-broken')).toBe('{"v": 1, "entr')
     // The page lists its own key too while no record holds the text yet (recovery storage refused or behind),
     // as open here: the text is read in its editor.
     const ownDiag = createRecoveryDiagnostics(live, { storage: local })
@@ -424,8 +424,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const [record] = await viewer.store.listAll()
     // A copy that states a size and has no text to measure counts by what it states.
     await putRows(idb, DRAFTS_STORE, [{ ...record!, updatedAt: 1 }, { v: 99, draftId: 'd-huge', bodyLength: RECOVERY_WARN_BYTES }])
-    local.setItem(SUPERSEDED_KEY_PREFIX + draftId, JSON.stringify({ pageInstanceId: record!.owner.pageInstanceId, generation: record!.generation }))
-    local.setItem(DELETED_WORK_MARK_PREFIX + 'w1', JSON.stringify({ marked: 1, tried: 0 }))
+    local.setItem(TEST_NAMES.supersededPrefix + draftId, JSON.stringify({ pageInstanceId: record!.owner.pageInstanceId, generation: record!.generation }))
+    local.setItem(TEST_NAMES.deletedWorkPrefix + 'w1', JSON.stringify({ marked: 1, tried: 0 }))
     const diag = createRecoveryDiagnostics(viewer, { storage: local, now: () => 1 + OLD_DRAFT_MS + 1 })
     const inv = await diag.inventory()
     expect(inv.drafts[0]).toMatchObject<Partial<DiagnosticsDraft>>({ old: true, superseded: true, deletedHere: true })
@@ -437,7 +437,7 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
   it('still lists emergency copies when recovery storage cannot be opened', async () => {
     const { page, idb, local } = setup()
     local.setItem(
-      EMERGENCY_KEY_PREFIX + 'p-x',
+      TEST_NAMES.emergencyPrefix + 'p-x',
       JSON.stringify({
         v: 1, pageInstanceId: 'p-x', runtimeId: null, at: 5,
         entries: [{ draftId: 'd-x', kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: 1, committedGeneration: 0, body: 'kept in localStorage',
@@ -449,8 +449,8 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     const inv = await diag.inventory()
     expect(inv.storage).not.toBe('ok')
     expect(inv.emergency).toEqual([expect.objectContaining({ draftId: 'd-x', bodyLength: 'kept in localStorage'.length })])
-    expect(await diag.readText({ source: 'emergency', key: EMERGENCY_KEY_PREFIX + 'p-x', draftId: 'd-x', generation: 1 })).toEqual({ ok: true, text: 'kept in localStorage' })
-    expect(local.getItem(EMERGENCY_KEY_PREFIX + 'p-x')).not.toBeNull()
+    expect(await diag.readText({ source: 'emergency', key: TEST_NAMES.emergencyPrefix + 'p-x', draftId: 'd-x', generation: 1 })).toEqual({ ok: true, text: 'kept in localStorage' })
+    expect(local.getItem(TEST_NAMES.emergencyPrefix + 'p-x')).not.toBeNull()
   })
 
   it('reports local storage it cannot enumerate instead of failing', async () => {

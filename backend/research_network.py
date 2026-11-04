@@ -1076,9 +1076,17 @@ def save_work_notes(db: PRKSDatabase, work_id: str, text_content) -> None:
     except ValueError as exc:
         if str(exc) != "INVALID_ENVELOPE":
             raise
-        if not isinstance(text_content, str):
-            raise ResearchError("invalid_text", "Research notes must be a string.") from exc
-        if _CONTROL_RE.search(text_content):
-            raise ResearchError(
-                "invalid_text", "Research notes contain invalid characters.") from exc
-        raise ResearchError("invalid_text", "Research notes are too long.") from exc
+        raise research_note_refusal(text_content) from exc
+
+
+def research_note_refusal(text_content) -> ResearchError:
+    """The ``invalid_text`` refusal of a body ``work_note_sync.validate_text`` refused.
+
+    Shared with the PostgreSQL facade's ``save_work_notes``, so both
+    backends refuse a note with the same message.
+    """
+    if not isinstance(text_content, str):
+        return ResearchError("invalid_text", "Research notes must be a string.")
+    if _CONTROL_RE.search(text_content):
+        return ResearchError("invalid_text", "Research notes contain invalid characters.")
+    return ResearchError("invalid_text", "Research notes are too long.")

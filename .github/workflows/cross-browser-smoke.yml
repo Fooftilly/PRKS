@@ -22,8 +22,24 @@ jobs:
   browser-portability:
     name: Isolated Firefox/WebKit route and keyboard smoke
     runs-on: ubuntu-24.04
+    # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
+    # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
+    services:
+      postgres:
+        image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     timeout-minutes: 25
     env:
+      PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
     steps:
       - name: Checkout PRKS

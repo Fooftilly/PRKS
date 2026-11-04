@@ -43,7 +43,7 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
         _server, page, _context = self.start()
         page.evaluate("() => prksNavigate('#/arguments')")
         page.wait_for_selector("#prks-argument-search", timeout=15000)
-        page.wait_for_selector("#prks-argument-rows .prks-research-row", timeout=15000)
+        page.wait_for_selector("[data-prks-argument-rows] .prks-research-row", timeout=15000)
 
         host_before = page.evaluate(
             """() => {
@@ -62,9 +62,9 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
         search = page.locator("#prks-argument-search")
         search.fill("zzz-nonexistent-query")
         page.wait_for_function(
-            "() => document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0"
+            "() => document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 0"
         )
-        self.assertIn("No Arguments or Stances match", page.locator("#prks-argument-rows").inner_text())
+        self.assertIn("No Arguments or Stances match", page.locator("[data-prks-argument-rows]").inner_text())
         self.assertEqual(search.input_value(), "zzz-nonexistent-query")
 
         page.evaluate(
@@ -86,7 +86,7 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
                     host.getAttribute('data-prks-surface-marker') === 'arguments-host' &&
                     search &&
                     search.value === 'zzz-nonexistent-query' &&
-                    document.querySelectorAll('#prks-argument-rows .prks-research-row').length === 0
+                    document.querySelectorAll('[data-prks-argument-rows] .prks-research-row').length === 0
                 );
             }""",
             timeout=15000,
@@ -154,7 +154,7 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
         _server, page, _context = self.start()
         page.evaluate("() => prksNavigate('#/arguments')")
         page.wait_for_selector("#prks-argument-search", timeout=15000)
-        page.wait_for_selector("#prks-argument-rows .prks-research-row", timeout=15000)
+        page.wait_for_selector("[data-prks-argument-rows] .prks-research-row", timeout=15000)
 
         self._seed_stale_provenance_banner(page)
 
@@ -177,7 +177,7 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
         _server, page, context = self.start()
         page.evaluate("() => prksNavigate('#/arguments')")
         page.wait_for_selector("#prks-argument-search", timeout=15000)
-        page.wait_for_selector("#prks-argument-rows .prks-research-row", timeout=15000)
+        page.wait_for_selector("[data-prks-argument-rows] .prks-research-row", timeout=15000)
 
         self._seed_stale_provenance_banner(page)
 
@@ -210,7 +210,7 @@ class ArgumentsRouteSurfaceTests(unittest.TestCase):
         _server, page, _context = self.start()
         page.evaluate("() => prksNavigate('#/arguments')")
         page.wait_for_selector("[data-prks-arguments-index-view]", timeout=15000)
-        page.wait_for_selector("#prks-argument-rows .prks-research-row", timeout=15000)
+        page.wait_for_selector("[data-prks-argument-rows] .prks-research-row", timeout=15000)
 
         def non_404(route):
             path = urlparse(route.request.url).path

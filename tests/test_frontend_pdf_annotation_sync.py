@@ -32,6 +32,19 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_adoption_stays_offline_after_async_pending_check(self):
+        """The actual PDF adoption branch must not POST after an offline flip."""
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" /
+                         "run_pdf_annotation_adopt_offline_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_materialization_handoff_selftests(self):
         proc = subprocess.run(
             ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_handoff_selftest.js")],
@@ -439,7 +452,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("runtime.viewerFilePath", mount_fn)
 
     def test_inplace_materialization_refreshes_whole_file_pdf_cache(self):
-        """Successful POST /pdf refreshes prks-pdf-v1 only on the canonical path.
+        """Successful POST /pdf refreshes the scoped PDF cache only on the canonical path.
 
         The success body always includes file_path. A path that differs from
         this tab retargets; an equal path is the only in-place cache write.
@@ -500,14 +513,14 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("export const PDF_CACHE_INSTALL_ACK_TIMEOUT_MS = 120000;", install_src)
         self.assertIn("throw new Error('PDF cache install unacknowledged')", install_src)
         self.assertIn(
-            "prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome)",
+            "prksPostPdfCacheInstall(controller, pathname, body, { cacheName }).then(prksPdfCacheInstallOutcome)",
             works_pdf,
         )
         self.assertIn("from '/js/pdf-cache-install.js'", works_pdf)
         self.assertIn("PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install'", sw)
-        self.assertIn("advanceWholeFilePdfGeneration(path)", sw)
-        self.assertIn("wholeFilePdfGeneration(path) !== snapshot", sw)
-        self.assertIn("generationAtStart = wholeFilePdfGeneration(pathname)", sw)
+        self.assertIn("advanceWholeFilePdfGeneration(path, cacheName)", sw)
+        self.assertIn("wholeFilePdfGeneration(path, cacheName) !== snapshot", sw)
+        self.assertIn("generationAtStart = wholeFilePdfGeneration(pathname, cacheName)", sw)
 
 
 if __name__ == "__main__":

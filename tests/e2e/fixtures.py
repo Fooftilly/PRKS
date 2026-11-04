@@ -7,6 +7,7 @@ from pathlib import Path
 
 from backend.db_manager import PRKSDatabase
 from backend.research_index import PRKSResearchIndex
+from backend.text_index import PRKSTextIndex
 from backend.research_network import (
     create_argument,
     create_concept,
@@ -68,6 +69,20 @@ def seed_library(storage_root: str) -> dict:
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
     save_work_notes(db, work_a, seed_notes)
     PRKSResearchIndex(storage=cfg).sync_work(work_a, seed_notes, db)
+    # Seed the real *derived* PDF index once in the worker, before the
+    # immutable fixture snapshot is cloned. Every fresh server still opens
+    # the index, scans canonical works, checks fingerprints and repairs stale
+    # or missing rows; unchanged PDFs need no subprocess-local PyMuPDF import.
+    # No PDF search results are mocked or inserted into the canonical DB.
+    text_summary = PRKSTextIndex(storage=cfg).reconcile_all(db)
+    if (
+        text_summary["processed"] != 2
+        or text_summary["indexed"] != 2
+        or text_summary["updated"] != 2
+        or text_summary["failed"]
+        or text_summary["skipped"]
+    ):
+        raise RuntimeError("E2E seed PDF text index did not synchronize")
     return {
         "work_a": work_a,
         "work_b": work_b,

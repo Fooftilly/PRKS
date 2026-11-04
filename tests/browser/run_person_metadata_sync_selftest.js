@@ -31,7 +31,7 @@ const uuid = () => '00000000-0000-4000-8000-' + (++sequence).toString(16).padSta
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
 async function settle() { for (let i = 0; i < 12; i++) await tick(); }
 
-const newStore = () => createPrksLocalStore({ indexedDB: createFakeIndexedDBFactory(), uuid });
+const newStore = () => createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid });
 
 function baseAt(revisions, values) {
     const base = {};
@@ -447,7 +447,7 @@ async function onlyProfileFieldsAreWritable() {
 
 async function anOlderSessionCannotCommitAFieldDuringTheRead() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     runtimeForStore(store);
     const base = baseAt();
     const seeded = await store.savePersonMetadataFields('P-1', { about: 'Kept' }, base);
@@ -472,7 +472,7 @@ async function anOlderSessionCannotCommitAFieldDuringTheRead() {
     assert.equal(omitted.length, 1, 'no predicate keeps the existing write');
 
     const freshIdb = createFakeIndexedDBFactory();
-    const fresh = createPrksLocalStore({ indexedDB: freshIdb, uuid });
+    const fresh = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: freshIdb, uuid });
     runtimeForStore(fresh);
     await fresh.listOperations();
     const insertSession = { owned: true };
@@ -486,7 +486,7 @@ async function anOlderSessionCannotCommitAFieldDuringTheRead() {
 
 async function anOlderSessionCannotCommitAHalfAppliedFieldReplacement() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     runtimeForStore(store);
     const base = baseAt();
     const seeded = await store.savePersonMetadataFields('P-1', { about: 'Old' }, base);
@@ -518,7 +518,7 @@ async function anOlderSessionCannotCommitAHalfAppliedFieldReplacement() {
 
 async function aCommittedFieldWriteStillNotifiesAfterTheEditorMovesOn() {
     const idb = createFakeIndexedDBFactory();
-    const store = createPrksLocalStore({ indexedDB: idb, uuid });
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
     const runtime = runtimeForStore(store);
     await store.listOperations();
     const session = { owned: true };

@@ -1,7 +1,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
-import uiSource from '../../../../frontend/js/ui.js?raw'
+import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import uiClassicSource from '../../../../frontend/js/ui.js?raw'
 import { registerWorkPrivateNotesBridge, resetWorkPrivateNotesForTests } from './private-note-session'
 
 type WorkRecord = {
@@ -75,6 +76,10 @@ type PanelWindow = {
   prksRefreshPendingWorkNotes: () => Promise<void>
   prksSync?: { subscribe: (listener: () => void) => () => void }
 }
+
+// Execute the real classic Work-notes dependency before UI in the existing
+// single-script test harness. No extra dynamic evaluation or test-only guard.
+const uiSource = workNotesStateSource + '\n' + uiClassicSource
 
 const panelWindow = window as unknown as PanelWindow
 

@@ -96,6 +96,23 @@ class ConceptFacadeParityTests(ConceptParityTestCase):
         self.same_concept("get_concept_sync_state", both(_MISSING))
         self.same("list_concepts")
 
+    def test_research_note_save(self) -> None:
+        """``save_work_notes`` (the Work PATCH's note): Concepts it names, revisions, refusals."""
+        self.concept_both("Ethics")
+        work = self.work_both("W")
+        self.same_concept("save_work_notes", work, both("On [[concept:ethics]] and [[concept:Logic]]."))
+        self.same("list_concepts")
+        self.same_concept("get_work_notes_state", work)
+        self.same_concept("save_work_notes", work, both("On [[concept:ethics]] and [[concept:Logic]]."))
+        self.same_concept("get_work_notes_state", work)
+        for text in (None, 7, "a\x01b"):
+            with self.subTest(text=text):
+                self.refused_concept("save_work_notes", work, both(text))
+        self.refused_concept("save_work_notes", both("W-" + "0" * 32), both("[[concept:Gone]]"))
+        self.refused_concept("save_work_notes", both("  "), both("text"))
+        self.same("list_concepts")
+        self.same_concept("get_work_notes_state", work)
+
     def test_identity_and_definition(self) -> None:
         ethics, logic = self.concept_both("Ethics"), self.concept_both("Logic")
         self.same_concept("replace_concept_aliases", ethics, both(["Morals", "morals", "ethics", "Moral  code"]))

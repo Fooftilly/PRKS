@@ -19,7 +19,6 @@ import { mayHoldUnreadable, readEmergencyKeys, type EmergencyStorage, type Store
 import type { LineageClass } from './lineage'
 import type { EditorRecoveryRuntime, ReviewedRecord } from './runtime'
 import {
-  SUPERSEDED_KEY_PREFIX,
   entityKeyOf,
   isDraftKind,
   isSupportedRecord,
@@ -27,11 +26,10 @@ import {
   type DraftEntityType,
   type DraftKind,
   type DraftRecord,
+  type RecoveryNames,
 } from './schema'
 import { forkedDraftId } from './store'
 
-/** Per-Work cleanup marks of `work-lifecycle-state.js` (#533): this device confirmed that Work deleted. */
-export const DELETED_WORK_MARK_PREFIX = 'prks.workRecoveryCleanup.v1.'
 /** A draft not touched for this long is flagged as old. Flagged only: nothing is removed for its age. */
 export const OLD_DRAFT_MS = 30 * 24 * 60 * 60 * 1000
 /** Diagnostics warns when recovery copies together exceed this (design §9). */
@@ -163,6 +161,8 @@ function isLive(lineage: LineageClass): boolean {
 function storageState(error: unknown): StorageState {
   const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
   if (code === 'unavailable' || code === 'blocked') return code
+  // Signed out or replaced (#629): nothing of that account is readable here.
+  if (code === 'retired') return 'unavailable'
   return 'failed'
 }
 
@@ -178,8 +178,8 @@ function readKey(storage: EmergencyStorage | null, key: string): string | null {
   }
 }
 
-function supersededGeneration(storage: EmergencyStorage | null, draftId: string): number {
-  const raw = readKey(storage, SUPERSEDED_KEY_PREFIX + draftId)
+function supersededGeneration(storage: EmergencyStorage | null, names: RecoveryNames, draftId: string): number {
+  const raw = readKey(storage, names.supersededPrefix + draftId)
   if (!raw) return 0
   try {
     const value = JSON.parse(raw) as { generation?: unknown } | null
@@ -360,8 +360,27 @@ function enumerable(storage: EmergencyStorage | null): boolean {
   }
 }
 
+/** What a signed-out or replaced account's diagnostics show: nothing of its drafts. */
+function retiredInventory(): RecoveryInventory {
+  return {
+    storage: 'unavailable',
+    emergencyStorage: 'unavailable',
+    drafts: [],
+    unreadable: [],
+    emergency: [],
+    unreadableEmergency: [],
+    totalChars: 0,
+    approxBytes: 0,
+    sizeIncomplete: false,
+    overBudget: false,
+  }
+}
+
 export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: RecoveryDiagnosticsOptions = {}): RecoveryDiagnostics {
-  const storage = options.storage === undefined ? defaultLocalStorage() : options.storage
+  // The runtime's localStorage view: it refuses every access once the
+  // account is signed out or replaced (#629), like the store does.
+  const storage = options.storage === undefined ? rt.emergencyStorage : options.storage
+  const names = rt.names
   const now = options.now || Date.now
 
   async function classifySafely(record: Pick<DraftRecord, 'draftId' | 'owner'>): Promise<LineageClass> {
@@ -390,8 +409,8 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       baseSource: record.base ? record.base.source : 'unknown',
       pipelineState: record.pipeline ? record.pipeline.state : null,
       old: !isLive(lineage) && at - record.updatedAt > OLD_DRAFT_MS,
-      superseded: supersededGeneration(storage, record.draftId) >= record.generation,
-      deletedHere: record.entityType === 'work' && readKey(storage, DELETED_WORK_MARK_PREFIX + record.entityId) !== null,
+      superseded: supersededGeneration(storage, names, record.draftId) >= record.generation,
+      deletedHere: record.entityType === 'work' && readKey(storage, names.deletedWorkPrefix + record.entityId) !== null,
       fromEmergency: typeof record.emergencySource === 'string',
       expect: { draftId: record.draftId, pageInstanceId: record.owner.pageInstanceId, generation: record.generation, status: record.status },
     }
@@ -503,7 +522,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     }
     const unreadableEmergency: DiagnosticsUnreadableEmergency[] = []
     const pending: Array<Promise<DiagnosticsEmergency>> = []
-    for (const stored of storage ? readEmergencyKeys(storage) : []) {
+    for (const stored of storage ? readEmergencyKeys(storage, names) : []) {
       const payload = stored.payload
       if (!payload) {
         if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored))
@@ -555,6 +574,9 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     ]
     const totalChars = sizes.reduce<number>((sum, n) => sum + (n ?? 0), 0)
     const approxBytes = totalChars * 2
+    // Signed out or replaced while this was listing (#629): what was read
+    // before belongs to that account and is dropped, never shown.
+    if (rt.isRetired()) return retiredInventory()
     return {
       storage: state,
       emergencyStorage: enumerable(storage) ? 'ok' : 'unavailable',
@@ -609,7 +631,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   }
 
   async function readEmergencyText(key: string, draftId: string, generation: number): Promise<TextResult> {
-    const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : undefined
+    const stored = storage ? readEmergencyKeys(storage, names).find((s) => s.key === key) : undefined
     const payload = stored ? stored.payload : null
     if (!stored || !payload) return { ok: false, code: 'changed' }
     const entry = payload.entries.find((e) => e.draftId === draftId && e.generation === generation)
@@ -634,18 +656,24 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     }
   }
 
+  async function readTextOf(target: TextTarget): Promise<TextResult> {
+    switch (target.source) {
+      case 'record':
+        return await readRecordText(target.expect)
+      case 'unreadable-record':
+        return await readUnreadableText(target.draftId, target.snapshot)
+      case 'emergency':
+        return await readEmergencyText(target.key, target.draftId, target.generation)
+      case 'unreadable-emergency':
+        return readRawEmergency(target.key, target.raw)
+    }
+  }
+
   async function readText(target: TextTarget): Promise<TextResult> {
     try {
-      switch (target.source) {
-        case 'record':
-          return await readRecordText(target.expect)
-        case 'unreadable-record':
-          return await readUnreadableText(target.draftId, target.snapshot)
-        case 'emergency':
-          return await readEmergencyText(target.key, target.draftId, target.generation)
-        case 'unreadable-emergency':
-          return readRawEmergency(target.key, target.raw)
-      }
+      const result = await readTextOf(target)
+      // Text read before a sign-out or account switch is never handed out after it (#629).
+      return rt.isRetired() ? { ok: false, code: 'failed' } : result
     } catch {
       return { ok: false, code: 'failed' }
     }
@@ -676,12 +704,4 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   }
 
   return { inventory, readText, discard }
-}
-
-function defaultLocalStorage(): EmergencyStorage | null {
-  try {
-    return typeof localStorage !== 'undefined' ? localStorage : null
-  } catch {
-    return null
-  }
 }

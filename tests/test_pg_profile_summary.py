@@ -27,6 +27,7 @@ def fixture() -> dict:
         for name in (
             "works_list", "works_browse", "work_detail",
             "works_recent_bounded", "works_batch_by_ids",
+            "concept_hierarchy_graph", "indexed_note_graph",
         ):
             rows.append({
                 "fixture_works": n, "operation": name,
@@ -36,15 +37,20 @@ def fixture() -> dict:
                 "first_call_context": "first_call_of_operation_not_cold_start",
                 "call_wall_p50_ms": 1.7, "call_wall_p95_ms": 2.2,
                 "top_statements": [dict(_STAT)],
+                "sql_rollup": {
+                    "distinct_statement_count": 2,
+                    "total_sql_calls": 8,
+                    "total_exec_ms": 4.68,
+                },
             })
     return {
         "tool": "pg_stat_statements",
         "server_version_num": 180006,
-        "fixture": "synthetic_works_only",
-        "fixture_version": "works-v1",
+        "fixture": "synthetic_works_concepts_and_indexed_mentions",
+        "fixture_version": "works-concepts-mentions-v3",
         "fixture_tiers": [12, 48],
-        "backend": "postgresql_facade",
-        "measurement": "warm_facade_calls_not_http",
+        "backend": "postgresql_read_adapters",
+        "measurement": "warm_pg_read_adapter_calls_not_http",
         "readiness": "disposable_pg18_identity_verified",
         "query_fingerprints": "run_local_only; no SQL text is collected",
         "profiles": rows,
@@ -52,14 +58,19 @@ def fixture() -> dict:
 
 
 class PGProfileSummaryTests(unittest.TestCase):
-    def test_valid_fixture_reports_all_ten_reads_without_raw_sql(self):
+    def test_valid_fixture_reports_all_fourteen_reads_without_raw_sql(self):
         data = fixture()
-        self.assertEqual(len(validate(data)), 10)
+        self.assertEqual(len(validate(data)), 14)
         report = render(data)
         self.assertIn("| 48 | works_browse |", report)
         self.assertIn("| 48 | works_recent_bounded |", report)
         self.assertIn("| 48 | works_batch_by_ids |", report)
+        self.assertIn("| 48 | concept_hierarchy_graph |", report)
+        self.assertIn("| 48 | indexed_note_graph |", report)
+        self.assertIn("indexed Work Research Notes", report)
         self.assertIn("not authenticated HTTP/API", report)
+        self.assertIn("SQL calls/read", report)
+        self.assertIn("| 2.00 | 2 |", report)
         self.assertIn("none is a process/DB cold start", report)
         self.assertNotIn("abcdef0123456789", report)
         self.assertNotIn("postgresql://", report)
@@ -79,6 +90,23 @@ class PGProfileSummaryTests(unittest.TestCase):
                 modify(data)
                 with self.assertRaises(ValueError):
                     render(data)
+
+    def test_rollup_must_cover_all_top_statement_calls_and_hide_unknown_fields(self):
+        def reject(change):
+            data = fixture()
+            change(data["profiles"][0]["sql_rollup"])
+            with self.assertRaises(ValueError):
+                validate(data)
+
+        reject(lambda row: row.update(total_sql_calls=3))
+        reject(lambda row: row.update(distinct_statement_count=0))
+        reject(lambda row: row.update(total_sql_calls=True))
+        reject(lambda row: row.update(total_exec_ms=float("nan")))
+        reject(lambda row: row.update(query="SELECT private_data"))
+        data = fixture()
+        data["profiles"][0].pop("sql_rollup")
+        with self.assertRaises(ValueError):
+            validate(data)
 
     def test_sql_text_disclosure_is_never_published(self):
         data = fixture()

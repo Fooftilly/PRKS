@@ -1,7 +1,7 @@
 # Classic-script production distribution (Issue #736)
 
-PRKS's source checkout retains its 84 individually ordered classic JavaScript
-files (five in the HTML head and 79 in the body). This preserves simple
+PRKS's source checkout retains its 85 individually ordered classic JavaScript
+files (five in the HTML head and 80 in the body). This preserves simple
 development, the existing dependency-manifest checks and the documented
 source/reference assets. The **Docker image** now builds a separate frontend
 distribution: two concatenated classic scripts at the same parser positions.
@@ -63,7 +63,7 @@ python -m scripts.build_classic_distribution --root . --output dist/frontend
 The destination must not already exist and must not be within the source
 `frontend/` tree. The generator never rewrites the checked-out source.
 Its inputs are the same strict head/body inventory and candidate builder
-used by the earlier benchmark. It validates 5 head and 79 body classic
+used by the earlier benchmark. It validates 5 head and 80 body classic
 sources and every matching required service-worker precache entry.
 Unsupported/new/missing source markup or manifest drift **fails the build**.
 
@@ -73,14 +73,14 @@ substitutes the two HTML script tags while leaving the existing module tags
 at their original positions, and updates the **packaged** service worker to:
 
 - precache both new bundles as required static files in place of the
-  84 separately fetched originals, avoiding needless offline-install requests;
+  85 separately fetched originals, avoiding needless offline-install requests;
 - keep the canonical vendor dependency revision unchanged, but append a
   16-hex SHA-256-derived `CLASSIC_BUNDLE_REVISION` to the shell and static
   cache identities, so new bundle/index bytes cannot reuse the old cache;
 - retain the existing staging-cache install and promotion rules, static
   `/js/` eligibility, old-version retirement, and PDF cache isolation.
 
-All 84 original JS source files remain available in the distribution for
+All 85 original JS source files remain available in the distribution for
 non-shell consumers and rollback. The build uses a temporary sibling directory
 and renames it into place only after all artifacts are generated; failures do
 not modify the checkout or publish a partial output. No CDN requests or

@@ -7,13 +7,19 @@
   <Teleport v-if="recoveryHostReady" to="#prks-settings-recovery-root">
     <EditorRecoveryDiagnostics />
   </Teleport>
+  <CommandPalette />
+  <ModalHost />
   <WorkspaceShell />
+  <AppChrome />
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import AppChrome from './app-shell/AppChrome.vue'
 import EditorRecoveryDiagnostics from './features/editor-recovery/EditorRecoveryDiagnostics.vue'
 import PerformanceDiagnostics from './features/performance-diagnostics/PerformanceDiagnostics.vue'
+import CommandPalette from './palette/CommandPalette.vue'
+import ModalHost from './modal/ModalHost.vue'
 import WorkspaceShell from './workspace-shell/WorkspaceShell.vue'
 
 const PERF_HOST_ID = 'prks-settings-perf-root'

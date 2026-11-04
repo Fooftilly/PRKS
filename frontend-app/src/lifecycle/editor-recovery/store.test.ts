@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { BODIES_STORE, DRAFTS_STORE, RECOVERY_DB_NAME, UNKNOWN_BASE, type DraftOwner, type DraftPipeline, type DraftRecord } from './schema'
+import { BODIES_STORE, DRAFTS_STORE, UNKNOWN_BASE, recoveryNames, type DraftOwner, type DraftPipeline, type DraftRecord } from './schema'
 import { createRecoveryStore, forkedDraftId, type CreateLineage, type RecoveryStore } from './store'
 import { createFakeIdb, type FakeIdbControls } from './test-support/fake-idb'
+import { TEST_NAMES } from './test-support/fake-env'
 
 const owner = (pageInstanceId: string, runtimeId = 'r-1'): DraftOwner => ({ runtimeId, pageInstanceId, paneId: 'tab-1', claimedAt: 1 })
 const lineage = (pageInstanceId: string): CreateLineage => ({
@@ -12,9 +13,9 @@ const lineage = (pageInstanceId: string): CreateLineage => ({
   base: { revision: 3, length: 4, fingerprint: 'f'.repeat(32), source: 'server' },
 })
 
-function setup(extra: Parameters<typeof createRecoveryStore>[0] = {}): { idb: FakeIdbControls; store: RecoveryStore } {
+function setup(extra: Partial<Parameters<typeof createRecoveryStore>[0]> = {}): { idb: FakeIdbControls; store: RecoveryStore } {
   const idb = createFakeIdb()
-  return { idb, store: createRecoveryStore({ indexedDB: idb.factory, now: () => 1000, ...extra }) }
+  return { idb, store: createRecoveryStore({ indexedDB: idb.factory, now: () => 1000, ...extra, name: TEST_NAMES.dbName }) }
 }
 
 async function seed(store: RecoveryStore, draftId = 'd-a', page = 'p-a', generation = 1, body = 'body one'): Promise<void> {
@@ -27,12 +28,30 @@ describe('recovery store', () => {
     ;(globalThis as { IDBTransaction?: unknown }).IDBTransaction = originalTx
   })
 
-  it('uses its own database, never prks-local-v1', async () => {
+  it("uses its scope's own database, never the queue's", async () => {
     const { idb, store } = setup()
     await seed(store)
-    expect(RECOVERY_DB_NAME).toBe('prks-editor-recovery-v1')
-    expect(idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE)).toHaveLength(1)
-    expect(idb.rows('prks-local-v1', 'operations')).toEqual([])
+    expect(TEST_NAMES.dbName).toBe('prks-editor-recovery-v2:IN-test.LIB-test.U-test')
+    expect(idb.rows(TEST_NAMES.dbName, DRAFTS_STORE)).toHaveLength(1)
+    expect(idb.rows('prks-local-v2:IN-test.LIB-test.U-test', 'operations')).toEqual([])
+  })
+
+  it("never shows one account's drafts to another account in the same browser", async () => {
+    const idb = createFakeIdb()
+    const a = createRecoveryStore({ indexedDB: idb.factory, name: recoveryNames('IN-1.LIB-1.U-a').dbName })
+    const b = createRecoveryStore({ indexedDB: idb.factory, name: recoveryNames('IN-1.LIB-1.U-b').dbName })
+    await seed(a, 'd-a', 'p-a', 1, 'account A text')
+    expect(await a.listAll()).toHaveLength(1)
+    expect(await b.listAll()).toEqual([])
+    a.close()
+    b.close()
+  })
+
+  it('has no unscoped database: a store without a name refuses to exist', () => {
+    expect(() => createRecoveryStore({ indexedDB: createFakeIdb().factory, name: '' })).toThrow(/signed-in scope/)
+    expect(() => recoveryNames('')).toThrow(/signed-in scope/)
+    expect(() => recoveryNames('IN-1.LIB-1')).toThrow(/signed-in scope/)
+    expect(() => recoveryNames('IN-1.LIB-1.U a')).toThrow(/signed-in scope/)
   })
 
   it('writes metadata and body together with matching generations', async () => {
@@ -160,11 +179,11 @@ describe('recovery store', () => {
     const { idb, store } = setup()
     await seed(store)
     // Simulate a newer PRKS having rewritten the record.
-    const newer = createRecoveryStore({ indexedDB: idb.factory })
+    const newer = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: idb.factory })
     await newer.writeGeneration({ draftId: 'd-new', pageInstanceId: 'p-a', generation: 1, body: 'b', create: lineage('p-a') })
-    const raw = idb.rows(RECOVERY_DB_NAME, DRAFTS_STORE).find((r) => r.draftId === 'd-new') as Record<string, unknown>
+    const raw = idb.rows(TEST_NAMES.dbName, DRAFTS_STORE).find((r) => r.draftId === 'd-new') as Record<string, unknown>
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const req = idb.factory.open(RECOVERY_DB_NAME, 1)
+      const req = idb.factory.open(TEST_NAMES.dbName, 1)
       req.onsuccess = () => resolve(req.result)
     })
     await new Promise<void>((resolve) => {
@@ -182,7 +201,7 @@ describe('recovery store', () => {
   it('has no age-based deletion', async () => {
     let clock = 0
     const idb = createFakeIdb()
-    const store = createRecoveryStore({ indexedDB: idb.factory, now: () => clock })
+    const store = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: idb.factory, now: () => clock })
     await store.writeGeneration({ draftId: 'd-old', pageInstanceId: 'p-a', generation: 1, body: 'old', create: lineage('p-a') })
     clock = 10 * 365 * 24 * 3600 * 1000
     await store.writeGeneration({ draftId: 'd-new', pageInstanceId: 'p-b', generation: 1, body: 'new', create: lineage('p-b') })
@@ -256,7 +275,7 @@ describe('recovery store', () => {
     const { createFakeIndexedDBFactory } = require('../../../../tests/browser/lib/fake_indexeddb.js') as {
       createFakeIndexedDBFactory: () => IDBFactory
     }
-    const store = createRecoveryStore({ indexedDB: createFakeIndexedDBFactory() })
+    const store = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: createFakeIndexedDBFactory() })
     expect(await store.writeGeneration({ draftId: 'd-r', pageInstanceId: 'p-a', generation: 1, body: 'repo fake', create: lineage('p-a') })).toBe(
       'ok',
     )

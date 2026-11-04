@@ -209,13 +209,12 @@ class FrontendWorkCardTests(unittest.TestCase):
         self.assertNotIn("Added: ${dateLabel}", pane)
 
     def test_empty_folder_library_exposes_new_folder_action(self):
-        src = _read(_FOLDERS)
-        at = src.find("function prksFolderLibraryTreeInnerHtml")
-        self.assertNotEqual(at, -1)
-        block = src[at : at + 700]
-        self.assertIn("No folders yet.", block)
-        self.assertIn("data-prks-create-folder-query", block)
-        self.assertIn("New folder", block)
+        src = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "folder-library", "FolderTree.vue"))
+        self.assertIn("No folders yet.", src)
+        self.assertIn("data-prks-create-folder-query", src)
+        self.assertIn("New folder", src)
+        self.assertNotIn("function prksFolderLibraryTreeInnerHtml", _read(_FOLDERS))
 
     def test_empty_recently_added_exposes_new_file_action(self):
         pane = _read(os.path.join(

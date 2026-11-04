@@ -105,6 +105,50 @@ describe('Positions route bridge', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('searches Positions by name and description and shows the search-only empty state', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    paintHelpers()
+    const pane = owner('search')
+    const el = host()
+    presentPositionsIndex({
+      owner: pane,
+      host: el,
+      items: [
+        { id: 'P1', name: 'Unrelated Position', description: '' },
+        { id: 'P2', name: 'Other Position', description: 'A distinctive research phrase about standardization.' },
+      ],
+      generation: 1,
+    })
+    const search = el.querySelector<HTMLInputElement>('#prks-position-search')
+    expect(search).not.toBeNull()
+    const visibleRows = () => Array.from(el.querySelectorAll('#prks-position-rows .prks-research-row'))
+    expect(visibleRows()).toHaveLength(2)
+
+    search!.value = 'Unrelated Position'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(visibleRows()).toHaveLength(1)
+    expect(visibleRows()[0]?.textContent).toContain('Unrelated Position')
+
+    search!.value = 'standardization'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(visibleRows()).toHaveLength(1)
+    expect(visibleRows()[0]?.textContent).toContain('Other Position')
+
+    search!.value = 'no-such-position-text'
+    search!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(visibleRows()).toHaveLength(0)
+    expect(el.querySelector('#prks-position-rows .prks-research-index__empty .meta-row')?.textContent?.trim()).toBe(
+      'No Positions match “no-such-position-text”.',
+    )
+    expect(el.querySelector('#prks-position-new-empty')).toBeNull()
+    expect(el.querySelector('[data-research-search-clear]')).not.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('does not repaint a dismissed generation and drops the tree on unmount', async () => {
     paintHelpers()
     const pane = owner()
@@ -157,7 +201,25 @@ describe('Positions route bridge', () => {
     expect(el.querySelector('#prks-position-view-graph')).not.toBeNull()
     expect(el.textContent).toContain('Nine')
     expect(el.textContent).toContain('Pending argument name')
-    expect(el.querySelector('[data-prks-role="position-argument-link"]')).not.toBeNull()
+    // The route paints a native, navigable Argument link; it does not impose
+    // a Position-specific offline gate. Real offline navigation remains E2E.
+    const argumentLink = el.querySelector<HTMLAnchorElement>(
+      '[data-prks-role="position-argument-link"]',
+    )
+    expect(argumentLink).not.toBeNull()
+    expect(argumentLink?.getAttribute('href')).toBe('#/arguments/A1')
+    expect(argumentLink?.classList.contains('prks-research-row')).toBe(true)
+    expect(argumentLink?.textContent).toContain('Pending argument name')
+    expect(argumentLink?.textContent).toContain('Argument')
+    expect(argumentLink?.textContent).toContain('Supports')
+    expect(el.querySelector('#prks-position-args-h')?.parentElement?.querySelector('.research-entity__section-count')?.textContent).toBe('1')
+    expect(argumentLink?.getAttribute('aria-disabled')).toBeNull()
+    expect(argumentLink?.getAttribute('title')).toBeNull()
+    expect(argumentLink?.hasAttribute('disabled')).toBe(false)
+    expect(el.querySelector('#prks-position-view-graph')?.hasAttribute('disabled')).toBe(false)
+    expect(Array.from(el.querySelectorAll('*')).some(
+      (node) => '__prksPositionArgumentGuardBound' in node,
+    )).toBe(false)
     expect(el.querySelector('.research-md')?.textContent).toContain('A definition')
     expect(readRouteSurface(pane)?.canonicalHash).toBe('#/positions/P9')
     expect(fetchMock).not.toHaveBeenCalled()

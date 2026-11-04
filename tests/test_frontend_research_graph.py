@@ -79,8 +79,11 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertLess(cy, graph)
         self.assertLess(graph, app)
         self.assertNotIn("cdn.jsdelivr.net/npm/cytoscape", html)
-        self.assertIn('href="#/graph"', html)
-        self.assertIn("Graph", html)
+        catalog = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "catalog.ts"))
+        sidebar = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "SidebarNav.vue"))
+        self.assertIn("href: '#/graph'", catalog)
+        self.assertIn("label: 'Graph'", catalog)
+        self.assertIn("RESEARCH_LINKS", sidebar)
 
     def test_no_cdn_cytoscape_in_graph_module(self):
         src = _read(_GRAPH)

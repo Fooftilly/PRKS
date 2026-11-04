@@ -525,9 +525,17 @@
             {
                 selector: 'node:selected, node.graph-node--selected',
                 style: {
-                    'border-width': 2,
-                    'border-color': token('--border-strong', '#9ca3af'),
-                    'background-color': token('--surface-selected', '#f3f4f6'),
+                    // Cytoscape cannot parse CSS color-mix() tokens. Tint the
+                    // body with its supported opacity instead, and keep the
+                    // per-type border colour from the earlier node selectors.
+                    'background-color': accent,
+                    'background-opacity': 0.24,
+                    'border-width': 4,
+                    'underlay-color': accent,
+                    'underlay-opacity': 0.24,
+                    'underlay-padding': 7,
+                    'underlay-shape': 'ellipse',
+                    'font-weight': 'bold',
                 },
             },
             {

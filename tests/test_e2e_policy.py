@@ -213,6 +213,27 @@ class SmokeSelectionTests(unittest.TestCase):
 
 
 class FeatureSelectionTests(unittest.TestCase):
+    @staticmethod
+    def _is_exact_method_selector(selector: str) -> bool:
+        # A module such as tests.e2e.test_positions_durable also starts with
+        # "test_"; only module.Class.test_method has a method segment.
+        parts = selector.split(".")
+        return len(parts) >= 5 and parts[-1].startswith("test_")
+
+    def test_exact_selector_classification_preserves_broad_feature_prefixes(self):
+        self.assertFalse(self._is_exact_method_selector("tests.e2e.test_positions_durable"))
+        self.assertFalse(
+            self._is_exact_method_selector(
+                "tests.e2e.test_app.ResearchIndexAndDetailPolishTests"
+            )
+        )
+        self.assertTrue(
+            self._is_exact_method_selector(
+                "tests.e2e.test_app.ResearchIndexAndDetailPolishTests"
+                ".test_argument_index_search_respects_kind_filter"
+            )
+        )
+
     def test_graph_feature_selects_app_and_offline_graph(self):
         selected = policy.select_features(FAKE_IDS, ["graph"])
         self.assertTrue(
@@ -227,6 +248,73 @@ class FeatureSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             policy.select_features(FAKE_IDS, ["not-a-real-group"])
         self.assertIn("unknown E2E feature", str(ctx.exception))
+
+    def _assert_feature_selector_source(self, selector, parsed_modules):
+        """Check module/class/method prefixes using source AST, not Playwright."""
+        parts = selector.split(".")
+        self.assertIn(
+            len(parts), (3, 4, 5), f"unsupported E2E selector shape: {selector}"
+        )
+        self.assertEqual(parts[:2], ["tests", "e2e"], selector)
+        self.assertTrue(parts[2].startswith("test_"), selector)
+        path = Path(_PROJECT_DIR, "tests", "e2e", parts[2] + ".py")
+        self.assertTrue(path.is_file(), f"missing E2E module for {selector}")
+        if path not in parsed_modules:
+            parsed_modules[path] = ast.parse(
+                path.read_text(encoding="utf-8"), filename=str(path)
+            )
+        if len(parts) == 3:
+            return  # Module-wide selector: the source module exists.
+        classes = [
+            node for node in parsed_modules[path].body
+            if isinstance(node, ast.ClassDef) and node.name == parts[3]
+        ]
+        self.assertTrue(classes, f"missing E2E class for {selector}")
+        if len(parts) == 4:
+            return  # Class-wide selector: the declared class exists.
+        self.assertTrue(
+            self._is_exact_method_selector(selector),
+            f"invalid E2E method selector: {selector}",
+        )
+        self.assertTrue(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == parts[4]
+                for cls in classes for node in cls.body
+            ),
+            f"stale exact E2E feature selector: {selector}",
+        )
+
+    def test_declared_feature_selectors_point_to_existing_e2e_source(self):
+        """Retired module/class/method selectors must not silently lose coverage.
+
+        Every feature prefix is checked, without importing the browser harness.
+        AST reads are cached per module; unittest discovery stays authoritative
+        for inherited tests and dynamic collection.
+        """
+        parsed_modules = {}
+        checked_kinds = set()
+        for feature, config in policy.FEATURES.items():
+            for selector in config["selectors"]:
+                with self.subTest(feature=feature, selector=selector):
+                    self._assert_feature_selector_source(selector, parsed_modules)
+                checked_kinds.add(len(selector.split(".")))
+        self.assertEqual(checked_kinds, {3, 4, 5})
+
+    def test_missing_module_class_and_exact_method_selectors_fail_closed(self):
+        missing = (
+            "tests.e2e.test_nonexistent_feature_module",
+            "tests.e2e.test_app.NonexistentFeatureClass",
+            "tests.e2e.test_app.AppShellAndNavigationTests.test_deleted_feature_method",
+        )
+        parsed_modules = {}
+        for selector in missing:
+            with self.subTest(selector=selector):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    r"missing E2E module|missing E2E class|stale exact E2E",
+                ):
+                    self._assert_feature_selector_source(selector, parsed_modules)
 
     def test_catalog_lists_every_feature(self):
         text = policy.format_feature_catalog()
@@ -1380,18 +1468,44 @@ class AffectedMappingTests(unittest.TestCase):
         )
         self.assertFalse(early_ptr_fail)
 
-    def test_test_gate_workflow_is_e2e_framework_not_ignored(self):
-        for path in (
-            ".github/workflows/test-gate.yml",
-            ".github/workflows/e2e-gate.yml",
+    def test_ci_workflow_selection_preserves_full_e2e_boundary(self):
+        # Changes to E2E orchestration or its shared Python installer still
+        # require the full browser suite; the independent Test Gate does not.
+        e2e_gate = ".github/workflows/e2e-gate.yml"
+        rule, feats, skip, _note = policy.match_affected_path(e2e_gate)
+        self.assertEqual(rule, "e2e-framework")
+        self.assertFalse(skip)
+        self.assertEqual(feats, ("smoke", "wait-async"))
+        self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+        self.assertEqual(policy.plan_ci_e2e([e2e_gate])["mode"], "full")
+
+        test_gate = ".github/workflows/test-gate.yml"
+        rule, feats, skip, _note = policy.match_affected_path(test_gate)
+        self.assertEqual(rule, "test-gate-workflow-only")
+        self.assertTrue(skip)
+        self.assertEqual(feats, ())
+        only_pg_ci = [
+            test_gate,
+            "scripts/test-postgres",
+            "scripts/ci/pg_test_shards.py",
+            "tests/test_dependency_gate.py",
+        ]
+        plan = policy.plan_ci_e2e(only_pg_ci)
+        self.assertEqual(plan["mode"], "skip")
+        self.assertFalse(plan["run"])
+
+        # A mixed PR cannot hide a production, E2E runner, or shared installer
+        # change behind the Test Gate exemption.
+        for risky in (
+            e2e_gate,
+            "tests/e2e/run.py",
+            "scripts/ci/install_pinned_python.py",
+            "frontend/js/app.js",
         ):
-            with self.subTest(path=path):
-                rule, feats, skip, _note = policy.match_affected_path(path)
-                self.assertEqual(rule, "e2e-framework")
-                self.assertFalse(skip)
-                # wait-async rides with the shared e2e-framework rule (#222).
-                self.assertEqual(feats, ("smoke", "wait-async"))
-                self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+            with self.subTest(risky=risky):
+                mixed = policy.plan_ci_e2e(only_pg_ci + [risky])
+                self.assertEqual(mixed["mode"], "full")
+                self.assertTrue(mixed["run"])
 
     def test_ci_dependency_installer_requires_full_e2e(self):
         plan = policy.plan_ci_e2e(["scripts/ci/install_pinned_python.py"])
@@ -1893,6 +2007,376 @@ class ListChangedPathsRealGitTests(unittest.TestCase):
             self.assertTrue(needed, reason)
 
 
+def _mock_failed_parallel_worker(test_ids, worker_report):
+    """Exercise parent attribution with a completed fake worker, no Chromium."""
+    from tests.e2e import run as runner
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        proc = mock.Mock()
+        proc.poll.return_value = 1
+        proc.returncode = 1
+        worker = {
+            "index": 0,
+            "proc": proc,
+            "handle": io.StringIO(),
+            "shard": test_ids,
+            "started": runner.time.perf_counter(),
+            "report_file": root / "report.json",
+            "log_file": root / "worker.log",
+            "heartbeat_file": root / "heartbeat.json",
+        }
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(runner, "REPO", root))
+            stack.enter_context(mock.patch.object(
+                runner, "apply_e2e_playwright_env", return_value=root
+            ))
+            stack.enter_context(mock.patch.object(
+                runner, "_spawn_worker", return_value=worker
+            ))
+            stack.enter_context(mock.patch.object(
+                runner, "_read_report", return_value=worker_report
+            ))
+            stack.enter_context(mock.patch.object(runner, "_stop_worker"))
+            stack.enter_context(mock.patch.object(
+                runner, "per_test_watchdog_s", return_value=0
+            ))
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    ok, observed, failed, _ = runner.run_parallel(
+                        test_ids, 1, dict.fromkeys(test_ids, 1.0), False
+                    )
+        saved = policy.load_failure_diagnostics(
+            root / ".tests" / "e2e-failure-diagnostics.json"
+        )
+    return ok, observed, failed, saved
+
+
+class UnexpectedE2ESkipGuardTests(unittest.TestCase):
+    """Skipped unittest cases count as run but do not exercise browser contracts."""
+
+    @staticmethod
+    def skipped_result(test_id):
+        case = mock.Mock()
+        case.id.return_value = test_id
+        result = mock.Mock()
+        result.testsRun = 1
+        result.failures = []
+        result.errors = []
+        result.skipped = [(case, "private unsupported-browser detail")]
+        result.timings = {test_id: 0.1}
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        return result
+
+    def test_skips_fail_closed_without_exposing_skip_reasons(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        self.assertIsNone(runner._unexpected_skips_error([]))
+        message = runner._unexpected_skips_error(self.skipped_result(tid).skipped)
+        self.assertIn(tid, message)
+        self.assertIn("skipped 1 selected test", message)
+        self.assertNotIn("private unsupported-browser detail", message)
+
+    def test_serial_green_result_with_skipped_case_fails(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        result = self.skipped_result(tid)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+            stack.enter_context(mock.patch.object(runner, "_suite_for"))
+            stack.enter_context(mock.patch.object(runner, "_write_serial_benchmark_result"))
+            fake_runner = stack.enter_context(mock.patch.object(runner.unittest, "TextTestRunner"))
+            fake_runner.return_value.run.return_value = result
+            stderr = io.StringIO()
+            stack.enter_context(contextlib.redirect_stderr(stderr))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            ok, observed, failures, _phases = runner.run_serial([tid], fail_fast=False)
+        self.assertFalse(ok)
+        self.assertEqual(observed, {tid: 0.1})
+        self.assertEqual(failures, [tid])
+        self.assertIn(tid, stderr.getvalue())
+        self.assertNotIn("private unsupported-browser detail", stderr.getvalue())
+        self.assertEqual(
+            policy.merge_last_failed([], list(observed), failures, known_ids=[tid]),
+            [tid],
+        )
+        self.assertEqual(
+            policy.merge_last_failed([tid], list(observed), failures, known_ids=[tid]),
+            [tid],
+        )
+
+    def test_worker_green_result_with_skipped_case_fails(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        result = self.skipped_result(tid)
+        with tempfile.TemporaryDirectory() as raw:
+            tests_path = Path(raw) / "selected.json"
+            report_path = Path(raw) / "report.json"
+            tests_path.write_text(json.dumps([tid]), encoding="utf-8")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+                stack.enter_context(mock.patch.object(runner, "_install_shutdown_handlers"))
+                stack.enter_context(mock.patch.object(runner, "apply_e2e_playwright_env"))
+                stack.enter_context(mock.patch.object(runner, "_suite_for"))
+                fake_runner = stack.enter_context(mock.patch.object(runner.unittest, "TextTestRunner"))
+                fake_runner.return_value.run.return_value = result
+                rc = runner.run_worker(0, 1, str(tests_path), str(report_path))
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(rc, 1)
+        self.assertEqual(report["kind"], "unexpected-skip")
+        self.assertEqual(report["skipped"], 1)
+        self.assertEqual(report["failed_ids"], [tid])
+        self.assertIn(tid, report["detail"])
+        self.assertNotIn("private unsupported-browser detail", report["detail"])
+
+    def test_skipped_subtests_use_parent_ids_without_parameter_reprs(self):
+        from tests.e2e import run as runner
+
+        class Sample(unittest.TestCase):
+            def test_target(self):
+                pass
+
+        parent = Sample("test_target")
+        subtest = mock.Mock()
+        subtest.test_case = parent
+        subtest.id.return_value = parent.id() + " (private='confidential')"
+        self.assertEqual(runner._skipped_test_ids([(subtest, "secret reason")]), [parent.id()])
+        self.assertNotIn("confidential", runner._unexpected_skips_error([(subtest, "secret reason")]))
+
+    def test_skip_diagnostics_only_include_validated_parent_ids(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        report = {
+            "kind": "unexpected-skip",
+            "detail": "private skip reason not for persistence",
+            "failed_ids": [tid],
+        }
+        self.assertEqual(
+            runner._privacy_safe_detail(report, watchdog=False),
+            "E2E skipped 1 selected test(s): " + tid,
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail({
+                **report, "failed_ids": [tid + " (secret='payload')"]
+            }, watchdog=False),
+            "",
+        )
+
+    def test_parallel_skip_reports_kind_and_retains_rerun_target(self):
+        from tests.e2e import run as runner
+
+        tid = "tests.e2e.test_app.DummyTests.test_skipped"
+        report = {
+            "kind": "unexpected-skip",
+            "tests": 1,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 1,
+            "failed_ids": [tid],
+            "timings": {tid: 0.1},
+            "phase_timings": {},
+            "detail": "untrusted skip reason",
+            "watchdog": False,
+        }
+        ok, observed, failed, saved = _mock_failed_parallel_worker([tid], report)
+        self.assertFalse(ok)
+        self.assertEqual(observed, {tid: 0.1})
+        self.assertEqual(failed, [tid])
+        self.assertEqual(saved["kind"], "unexpected-skip")
+        self.assertEqual(saved["failed_ids"], [tid])
+        self.assertEqual(saved["stuck_test_id"], tid)
+        self.assertEqual(saved["detail"], "E2E skipped 1 selected test(s): " + tid)
+        self.assertNotIn("untrusted skip reason", str(saved))
+        self.assertEqual(policy.merge_last_failed([], [tid], failed, known_ids=[tid]), [tid])
+        self.assertEqual(policy.merge_last_failed([tid], [tid], failed, known_ids=[tid]), [tid])
+
+
+
+
+class ExternalShardCompletionGuardTests(unittest.TestCase):
+    """Green external shards must have a completion for every selected ID."""
+
+    def test_exact_completed_ids_are_accepted(self):
+        from tests.e2e import run as runner
+
+        ids = [
+            "tests.e2e.test_app.FooTests.test_first",
+            "tests.e2e.test_app.FooTests.test_second",
+        ]
+        self.assertIsNone(
+            runner._external_shard_completion_error(ids, {ids[1]: 2.0, ids[0]: 1.0})
+        )
+
+    def test_missing_extra_and_duplicate_ids_fail_closed(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        c = "tests.e2e.test_app.FooTests.test_unselected"
+        missing = runner._external_shard_completion_error([a, b], {a: 1.0})
+        self.assertIn("missing=1", missing)
+        self.assertIn(b, missing)
+        extra = runner._external_shard_completion_error([a], {a: 1.0, c: 2.0})
+        self.assertIn("unexpected=1", extra)
+        self.assertIn(c, extra)
+        duplicate = runner._external_shard_completion_error([a, a], {a: 1.0})
+        self.assertIn("duplicate test IDs", duplicate)
+
+    def test_duplicate_execution_count_fails_despite_matching_timing_keys(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        observed = {a: 1.0, b: 2.0}
+        self.assertIsNone(runner._external_shard_completion_error([a, b], observed))
+        self.assertIn(
+            "selected=2 completed=3", runner._execution_count_error([a, b], 3)
+        )
+        self.assertIsNone(runner._execution_count_error([a, b], 2))
+
+        result = mock.Mock()
+        result.testsRun = 3
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.timings = observed
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        with mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}):
+            with mock.patch.object(runner.unittest, "TextTestRunner") as test_runner:
+                test_runner.return_value.run.return_value = result
+                with mock.patch.object(runner, "_suite_for"):
+                    with mock.patch.object(runner, "_write_serial_benchmark_result"):
+                        with contextlib.redirect_stderr(io.StringIO()) as err:
+                            ok, recorded, failed, _ = runner.run_serial(
+                                [a, b], fail_fast=False
+                            )
+        self.assertFalse(ok)
+        self.assertEqual(recorded, observed)
+        self.assertEqual(failed, [])
+        self.assertIn("execution count mismatch", err.getvalue())
+
+    def test_worker_report_rejects_duplicate_execution_count(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        result = mock.Mock()
+        result.testsRun = 3
+        result.failures = []
+        result.errors = []
+        result.skipped = []
+        result.timings = {a: 1.0, b: 2.0}
+        result.phase_timings = {}
+        result.wasSuccessful.return_value = True
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = Path(tmp) / "selected.json"
+            report_file = Path(tmp) / "report.json"
+            selected.write_text(json.dumps([a, b]), encoding="utf-8")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": ""}))
+                stack.enter_context(mock.patch.object(runner, "_install_shutdown_handlers"))
+                stack.enter_context(mock.patch.object(runner, "apply_e2e_playwright_env"))
+                stack.enter_context(mock.patch.object(runner, "_suite_for"))
+                test_runner = stack.enter_context(
+                    mock.patch.object(runner.unittest, "TextTestRunner")
+                )
+                test_runner.return_value.run.return_value = result
+                rc = runner.run_worker(0, 1, str(selected), str(report_file))
+            report = json.loads(report_file.read_text(encoding="utf-8"))
+        self.assertEqual(rc, 1)
+        self.assertIn("selected=2 completed=3", report["detail"])
+
+
+    def test_worker_count_mismatch_is_not_misreported_as_a_crash(self):
+        from tests.e2e import run as runner
+
+        a = "tests.e2e.test_app.FooTests.test_first"
+        b = "tests.e2e.test_app.FooTests.test_second"
+        detail = runner._execution_count_error([a, b], 3)
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "execution-count-mismatch", "detail": detail},
+                watchdog=False,
+            ),
+            detail,
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "execution-count-mismatch", "detail": "private file content"},
+                watchdog=False,
+            ),
+            "",
+        )
+        self.assertEqual(
+            runner._privacy_safe_detail(
+                {"kind": "worker-crash", "detail": detail}, watchdog=False
+            ),
+            "",
+        )
+
+        for worker_report, expected_kind in (
+            (
+                {
+                    "kind": "execution-count-mismatch",
+                    "tests": 3,
+                    "failures": 0,
+                    "errors": 0,
+                    "skipped": 0,
+                    "failed_ids": [],
+                    "timings": {a: 1.0, b: 2.0},
+                    "phase_timings": {},
+                    "detail": detail,
+                    "watchdog": False,
+                },
+                "execution-count-mismatch",
+            ),
+            (None, "worker-crash"),
+        ):
+            with self.subTest(kind=expected_kind):
+                ok, _observed, failed, saved = _mock_failed_parallel_worker(
+                    [a, b], worker_report
+                )
+                self.assertFalse(ok)
+                self.assertEqual(failed, [])
+                self.assertEqual(saved["kind"], expected_kind)
+                self.assertEqual(saved["failed_ids"], [])
+                self.assertEqual(saved["stuck_test_id"], "")
+                self.assertEqual(
+                    saved["detail"],
+                    detail if worker_report is not None else "",
+                )
+
+    def test_green_unittest_result_with_missing_completion_fails_shard(self):
+        from tests.e2e import run as runner
+
+        ids = [
+            "tests.e2e.test_app.FooTests.test_first",
+            "tests.e2e.test_app.FooTests.test_second",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(runner, "REPO", Path(tmp)))
+                stack.enter_context(mock.patch.object(runner, "discover_test_ids", return_value=ids))
+                stack.enter_context(mock.patch.object(runner, "full_gate_timeout_s", return_value=0))
+                stack.enter_context(mock.patch.object(runner, "ensure_chromium_installed"))
+                stack.enter_context(mock.patch.object(runner, "run_serial",
+                    return_value=(True, {ids[0]: 1.0}, [], {})))
+                pointer = stack.enter_context(mock.patch.object(runner, "_run_pointer_capture"))
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    code = runner.main(["--shard", "1/1", "--jobs", "1", "--no-pointer-capture"])
+            self.assertEqual(code, 1)
+            self.assertIn("external E2E shard completion mismatch", stderr.getvalue())
+            self.assertIn("missing=1", stderr.getvalue())
+            pointer.assert_not_called()
+
+
 class BenchmarkModeTests(unittest.TestCase):
     """Effective benchmark configuration — CLI flags are exported into env first."""
 
@@ -1924,6 +2408,20 @@ class BenchmarkModeTests(unittest.TestCase):
                 {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "yes"}
             ),
             ("profile", "route-fastpath"),
+        )
+
+    def test_module_affinity_pilot_does_not_train_default_history(self):
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_MODULE_AFFINITY_PILOT": "0"}), ())
+        self.assertEqual(
+            policy.benchmark_modes({"PRKS_E2E_MODULE_AFFINITY_PILOT": "1"}),
+            ("module-affinity",),
+        )
+        self.assertEqual(
+            policy.benchmark_modes({
+                "PRKS_E2E_PROFILE": "1",
+                "PRKS_E2E_MODULE_AFFINITY_PILOT": "yes",
+            }),
+            ("profile", "module-affinity"),
         )
 
     def test_env_truthiness_is_shared_with_the_harness(self):

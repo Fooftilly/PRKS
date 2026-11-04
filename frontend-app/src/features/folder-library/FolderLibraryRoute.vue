@@ -2,17 +2,20 @@
 import { useDebounceFn } from '@vueuse/core'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import FolderIcon from './FolderIcon.vue'
 import FolderTree from './FolderTree.vue'
 import RecentlyAddedPane from './RecentlyAddedPane.vue'
 import {
   folderLibraryIntentsKey,
+  claimInitialLibraryQuery,
   persistFolderFilter,
   persistRecentlyAddedFilter,
-  readFolderFilterFromStorage,
   readFolderLibraryTabFromStorage,
   readRecentlyAddedFilterFromStorage,
 } from './intents'
 import type { FolderLibraryProjection } from './projection'
+import { buildFolderTree, normalizeGlanceParts, type GlancePart } from './tree'
+import { refreshFolderIcons } from './tree-icons'
 import type { FolderLibraryTab, RecentlyAddedWork } from './types'
 import { initLazyWorkThumbs, releaseWorkThumbResources } from './work-thumb-lifecycle'
 
@@ -22,22 +25,35 @@ const props = defineProps<{
 }>()
 
 const intents = inject(folderLibraryIntentsKey)
+const initialChrome = intents?.readTreeChrome?.() ?? { expandedIds: [], libraryQuery: null }
+
+/**
+ * A restored session query has to land on this pane's chrome. Otherwise the
+ * one-time claim is spent on a local ref, and the next mount of the same pane
+ * starts empty.
+ */
+function initialLibraryQuery(): string {
+  if (initialChrome.libraryQuery != null) return initialChrome.libraryQuery
+  const claimed = claimInitialLibraryQuery()
+  if (claimed == null) return ''
+  intents?.writeLibraryQuery?.(claimed)
+  return claimed
+}
 
 const activeTab = ref<FolderLibraryTab>(readFolderLibraryTabFromStorage())
-const folderFilter = ref(readFolderFilterFromStorage())
+const folderFilter = ref(initialLibraryQuery())
+const expandedIds = ref(new Set(initialChrome.expandedIds))
 const filesFilter = ref(readRecentlyAddedFilterFromStorage())
 /** Debounced queries drive expensive tree / card paints (#233 useDebounceFn). */
 const treeFilterQuery = ref(folderFilter.value)
 const filesFilterQuery = ref(filesFilter.value)
-const glanceHost = ref<HTMLElement | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 const modeHost = ref<HTMLElement | null>(null)
 const folderSearchIcon = ref<HTMLElement | null>(null)
 const filesSearchIcon = ref<HTMLElement | null>(null)
-const expandToggleInner = ref<HTMLElement | null>(null)
+const expandToggleBtn = ref<HTMLElement | null>(null)
 const recentlyAddedPane = ref<InstanceType<typeof RecentlyAddedPane> | null>(null)
-/** Bumped after expand toggles so toolbar chrome stays authoritative. */
-const collapseEpoch = ref(0)
+const glanceParts = ref<GlancePart[]>([])
 /** Bumped when pending work-metadata overlay changes while Recently Added is mounted. */
 const overlayRevision = ref(0)
 
@@ -61,25 +77,13 @@ function surfaceStillOwned(): boolean {
   return surfaceAlive && !!rootEl.value?.isConnected
 }
 
-const hasCollapsible = computed(() => {
-  void props.projection.generation
-  void collapseEpoch.value
-  const fn = window.prksFolderTreeHasCollapsibleNodes
-  return typeof fn === 'function' ? fn(folders.value) : false
-})
+const treeView = computed(() => buildFolderTree(folders.value, treeFilterQuery.value, expandedIds.value))
 
-const expandAllCollapsed = computed(() => {
-  void props.projection.generation
-  void collapseEpoch.value
-  const fn = window.prksFolderTreeAllCollapsed
-  return typeof fn === 'function' ? fn(folders.value) : false
-})
+const hasCollapsible = computed(() => treeView.value.hasCollapsible)
 
-const expandToggleLabel = computed(() => {
-  void collapseEpoch.value
-  const fn = window.prksFolderLibraryExpandToggleLabel
-  return typeof fn === 'function' ? fn(folders.value) : 'Expand all'
-})
+const expandAllCollapsed = computed(() => treeView.value.allCollapsed)
+
+const expandToggleLabel = computed(() => (expandAllCollapsed.value ? 'Expand all' : 'Collapse all'))
 
 const foldersActive = computed(() => activeTab.value !== 'recently-added')
 
@@ -92,13 +96,9 @@ const catalogParts = computed(() => {
 let offlineDispose: (() => void) | null = null
 let overlayDispose: (() => void) | null = null
 
-function treeHostEl(): HTMLElement | null {
-  return rootEl.value?.querySelector('[data-prks-folder-tree-host]') as HTMLElement | null
-}
-
 /**
  * Publish a thin bridge for legacy helpers that still read dashboard chrome
- * (offline banner binding, expand-toggle patch). Mark vueOwned so the legacy
+ * (offline banner binding, glance extras). Mark vueOwned so the legacy
  * metadata-sync subscriber does not replace Vue-owned Recently Added DOM.
  * Multi-owner: register per contentRoot so Main/Secondary do not clobber each other.
  */
@@ -131,24 +131,35 @@ function syncLegacyDashboardState(): void {
   }
 }
 
+function rememberExpanded(): void {
+  intents?.writeExpanded?.([...expandedIds.value])
+}
+
+function rememberLibraryQuery(query: string): void {
+  intents?.writeLibraryQuery?.(query)
+  persistFolderFilter(query)
+}
+
 function scheduleOwnerGlance(): void {
   intents?.scheduleGlance(rootEl.value, {
     folders: folders.value,
     recentlyAddedWorks: recentlyAddedWorks.value,
+    onParts: (parts) => {
+      if (!surfaceStillOwned() || unavailable.value) return
+      glanceParts.value = normalizeGlanceParts(parts)
+    },
   })
 }
 
 function paintCatalogGlance(): void {
-  const host = glanceHost.value
-  if (!host || unavailable.value) return
-  const fn = window.prksPaintFolderLibraryGlance
-  if (typeof fn === 'function') fn(host, catalogParts.value)
+  if (unavailable.value) return
+  glanceParts.value = normalizeGlanceParts(catalogParts.value)
 }
 
 const applyFolderFilter = useDebounceFn((query: string, epoch: number) => {
   if (epoch !== folderFilterEpoch || !surfaceStillOwned()) return
   treeFilterQuery.value = query
-  persistFolderFilter(query)
+  rememberLibraryQuery(query)
   syncLegacyDashboardState()
 }, 150)
 
@@ -158,6 +169,10 @@ const applyFilesFilter = useDebounceFn((query: string, epoch: number) => {
   persistRecentlyAddedFilter(query)
   syncLegacyDashboardState()
 }, 150)
+
+watch(hasCollapsible, () => {
+  paintExpandIcon()
+}, { flush: 'post' })
 
 watch(folderFilter, (q) => {
   const epoch = ++folderFilterEpoch
@@ -253,20 +268,28 @@ async function loadRecentlyAdded(force: boolean): Promise<void> {
   }
 }
 
-function onExpandAll(): void {
-  intents?.toggleExpandAll(treeHostEl(), folders.value)
-  collapseEpoch.value += 1
+function onToggleFolder(folderId: string): void {
+  const next = new Set(expandedIds.value)
+  if (next.has(folderId)) next.delete(folderId)
+  else next.add(folderId)
+  expandedIds.value = next
+  rememberExpanded()
 }
 
-function onTreeCollapsedChanged(): void {
-  collapseEpoch.value += 1
+function onExpandAll(): void {
+  expandedIds.value = treeView.value.allCollapsed ? new Set(treeView.value.collapsibleIds) : new Set()
+  rememberExpanded()
+}
+
+function onCreateFolder(query: string): void {
+  intents?.createFolder(query)
 }
 
 function onFolderSearchClear(): void {
   folderFilterEpoch += 1
   folderFilter.value = ''
   treeFilterQuery.value = ''
-  persistFolderFilter('')
+  rememberLibraryQuery('')
   syncLegacyDashboardState()
 }
 
@@ -283,14 +306,6 @@ function paintSearchIcons(): void {
     typeof window.prksTagSearchIconHtml === 'function' ? window.prksTagSearchIconHtml() : ''
   if (folderSearchIcon.value) folderSearchIcon.value.innerHTML = html
   if (filesSearchIcon.value) filesSearchIcon.value.innerHTML = html
-}
-
-function paintExpandToggle(): void {
-  const host = expandToggleInner.value
-  if (!host) return
-  const fn = window.prksFolderLibraryExpandToggleInnerHtml
-  host.innerHTML = typeof fn === 'function' ? fn() : '<span class="ribbon-btn__icon" aria-hidden="true">▾</span>'
-  window.prksRefreshIcons?.(host)
 }
 
 function paintBrowseMode(): void {
@@ -312,7 +327,11 @@ function syncFiltersFromBrandHomeReset(): void {
   folderFilterEpoch += 1
   folderFilter.value = ''
   treeFilterQuery.value = ''
-  persistFolderFilter('')
+  rememberLibraryQuery('')
+}
+
+function paintExpandIcon(): void {
+  refreshFolderIcons(expandToggleBtn.value)
 }
 
 onMounted(() => {
@@ -320,7 +339,7 @@ onMounted(() => {
   syncLegacyDashboardState()
   paintCatalogGlance()
   paintSearchIcons()
-  paintExpandToggle()
+  paintExpandIcon()
   scheduleOwnerGlance()
   offlineDispose = intents?.bindFolderOfflineState(props.contentRoot ?? null) ?? null
   overlayDispose =
@@ -350,7 +369,6 @@ watch(
     if (!surfaceStillOwned()) return
     paintCatalogGlance()
     paintSearchIcons()
-    paintExpandToggle()
     scheduleOwnerGlance()
     paintBrowseMode()
     if (activeTab.value === 'recently-added') {
@@ -358,16 +376,6 @@ watch(
     }
   },
 )
-
-watch(hasCollapsible, async () => {
-  await nextTick()
-  if (surfaceStillOwned()) paintExpandToggle()
-})
-
-watch(collapseEpoch, async () => {
-  await nextTick()
-  if (surfaceStillOwned()) paintExpandToggle()
-})
 
 onBeforeUnmount(() => {
   surfaceAlive = false
@@ -412,7 +420,15 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="prks-page-header page-header prks-folder-library__header">
         <h2 class="prks-page-title">Folder Library</h2>
-        <div ref="glanceHost" data-prks-role="folder-library-glance-host"></div>
+        <div data-prks-role="folder-library-glance-host">
+          <p v-if="glanceParts.length" class="prks-page-summary" aria-label="Library at a glance">
+            <template v-for="(part, index) in glanceParts" :key="`${part.text}:${index}`">
+              <span v-if="index > 0" class="prks-summary-sep" aria-hidden="true"> · </span>
+              <a v-if="part.href" class="prks-summary-link" :href="part.href">{{ part.text }}</a>
+              <template v-else>{{ part.text }}</template>
+            </template>
+          </p>
+        </div>
       </div>
       <div class="tabs prks-folder-library__tabs" role="tablist" aria-label="Folder library views">
         <button
@@ -467,6 +483,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="hasCollapsible" class="prks-folder-library__toolbar-actions">
           <button
+            ref="expandToggleBtn"
             type="button"
             id="prks-folder-library-expand-toggle"
             class="prks-btn prks-btn--secondary prks-folder-library__toolbar-btn"
@@ -475,7 +492,7 @@ onBeforeUnmount(() => {
             :title="expandToggleLabel"
             @click="onExpandAll"
           >
-            <span ref="expandToggleInner"></span>
+            <span class="ribbon-btn__icon"><FolderIcon name="chevron-down" size="sm" /></span>
           </button>
         </div>
       </div>
@@ -516,12 +533,15 @@ onBeforeUnmount(() => {
           role="tabpanel"
           :aria-hidden="foldersActive ? 'false' : 'true'"
         >
-          <FolderTree
-            :folders="folders"
-            :filter-query="treeFilterQuery"
-            :generation="projection.generation"
-            @collapsed-changed="onTreeCollapsedChanged"
-          />
+          <div class="prks-folder-library__scroll" data-prks-folder-tree-host>
+            <FolderTree
+              :folders="folders"
+              :filter-query="treeFilterQuery"
+              :expanded-ids="expandedIds"
+              @toggle="onToggleFolder"
+              @create="onCreateFolder"
+            />
+          </div>
         </div>
         <div
           class="prks-folder-library__pane prks-folder-library__pane--added"

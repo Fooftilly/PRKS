@@ -325,92 +325,34 @@
             assertEq('invalid session ignored', recovered, null);
         }
 
-        if (typeof document !== 'undefined' && document.querySelectorAll && typeof root.prksSyncSidebarActive === 'function') {
-            const links = document.querySelectorAll('.nav-link');
-            if (links.length) {
-                function currentCount() {
-                    return document.querySelectorAll('.nav-link[aria-current="page"]').length;
-                }
-                function currentHref() {
-                    const el = document.querySelector('.nav-link[aria-current="page"]');
-                    return el ? el.getAttribute('href') : null;
-                }
-                root.prksSyncSidebarActive(parse('#/folders/F-1'));
-                assertEq('folder detail → Folders', currentHref(), '#/folders');
-                assertEq('one current folder', currentCount(), 1);
-                root.prksSyncSidebarActive(parse('#/playlists/PL-1'));
-                assertEq('playlist detail → Playlists', currentHref(), '#/playlists');
-                assertEq('one current playlist', currentCount(), 1);
-                root.prksSyncSidebarActive(parse('#/views'));
-                assertEq('saved views current', currentHref(), '#/views');
-                root.prksSyncSidebarActive(parse('#/views/SV-1'));
-                assertEq('saved view detail → Saved Views', currentHref(), '#/views');
-                assertEq('one current saved views', currentCount(), 1);
-                root.prksSyncSidebarActive(parse('#/types/article'));
-                assertEq('type detail → File Types', currentHref(), '#/types');
-                root.prksSyncSidebarActive(parse('#/people/P-1'));
-                assertEq('person → People', currentHref(), '#/people');
-                root.prksSyncSidebarActive(parse('#/people/groups/PG-1'));
-                assertEq('group → Groups', currentHref(), '#/people/groups');
-                root.prksSyncSidebarActive(parse('#/people/role/Author'));
-                assertEq('author role → Authors', currentHref(), '#/people/role/Author');
-                assertEq('author not also People', currentCount(), 1);
-                root.prksSyncSidebarActive(parse('#/progress?status=Paused'));
-                assertEq('paused progress', currentHref(), '#/progress?status=Paused');
-                assertEq('one current paused', currentCount(), 1);
-                root.prksSyncSidebarActive(parse('#/graph'));
-                assertEq('graph current', currentHref(), '#/graph');
-                assertEq('one current graph', currentCount(), 1);
-                root.prksSyncSidebarActive(parse('#/search?q=x'));
-                assertEq('search marks none', currentCount(), 0);
-                root.prksSyncSidebarActive(parse('#/future-feature'));
-                assertEq('unknown marks none', currentCount(), 0);
+        if (typeof root.prksSyncSidebarActive === 'function') {
+            function publishedHref(hash) {
+                root.prksSyncSidebarActive(parse(hash));
+                return root.__prksShellChrome ? root.__prksShellChrome.activeHref : undefined;
             }
-        }
-
-        if (typeof root.prksSetResolvedDocumentTitle === 'function' && typeof document !== 'undefined') {
-            const ctxMain = {
-                tabId: 'selftest',
-                navigation: { routeStates: new Map(), origins: new Map() },
-            };
-            document.title = 'Keep Me — PRKS';
-            root.prksSetResolvedDocumentTitle(null, parse('#/folders'), {});
-            assertEq('stale title ignored', document.title, 'Keep Me — PRKS');
-            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/recent'), {});
-            assertEq('current title applied', document.title, 'Recent — PRKS');
-            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/views'), {});
-            assertEq('saved views title', document.title, 'Saved Views — PRKS');
-            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/views/SV-1'), { entityTitle: 'Critical Theory' });
-            assertEq('saved view entity title', document.title, 'Critical Theory — PRKS');
-            root.prksSetResolvedDocumentTitle(ctxMain, parse('#/views/SV-missing'), {
-                notFound: true,
-                notFoundTitle: 'Saved View not found',
-            });
-            assertEq('saved view missing title', document.title, 'Saved View not found — PRKS');
-        }
-
-        if (typeof root.prksPublishRouteSidebar === 'function') {
-            const ctx = {
-                tabId: 'selftest',
-                navigation: { routeStates: new Map(), origins: new Map() },
-                routeSidebar: { keep: true },
-                isCurrent: function (g) {
-                    return g === 9;
-                },
-            };
-            root.prksPublishRouteSidebar(ctx, { stale: true }, 3);
-            assert('stale sidebar ignored', ctx.routeSidebar && ctx.routeSidebar.keep === true);
-            root.prksPublishRouteSidebar(ctx, { ok: 1 }, 9);
-            assert('current sidebar applied', ctx.routeSidebar && ctx.routeSidebar.ok === 1);
+            assertEq('folder detail → Folders', publishedHref('#/folders/F-1'), '#/folders');
+            assertEq('playlist detail → Playlists', publishedHref('#/playlists/PL-1'), '#/playlists');
+            assertEq('saved views current', publishedHref('#/views'), '#/views');
+            assertEq('saved view detail → Saved Views', publishedHref('#/views/SV-1'), '#/views');
+            assertEq('type detail → File Types', publishedHref('#/types/article'), '#/types');
+            assertEq('person → People', publishedHref('#/people/P-1'), '#/people');
+            assertEq('group → Groups', publishedHref('#/people/groups/PG-1'), '#/people/groups');
+            assertEq('author role → Authors', publishedHref('#/people/role/Author'), '#/people/role/Author');
+            assertEq('paused progress', publishedHref('#/progress?status=Paused'), '#/progress?status=Paused');
+            assertEq('paused status published', root.__prksShellChrome.progressStatus, 'Paused');
+            assertEq('graph current', publishedHref('#/graph'), '#/graph');
+            assertEq('search marks none', publishedHref('#/search?q=x'), null);
+            assertEq('unknown marks none', publishedHref('#/future-feature'), null);
+            const before = root.__prksShellChrome.disclosureRevision || 0;
+            root.prksSyncNavDisclosures(parse('#/folders'));
+            assertEq('disclosure publish bumps revision', root.__prksShellChrome.disclosureRevision, before + 1);
+            assertEq('disclosure publish keeps active href', root.__prksShellChrome.activeHref, null);
         }
 
         if (
             typeof root.prksNavDisclosureExpanded === 'function' &&
             typeof root.prksWriteNavExpandedPref === 'function' &&
-            typeof root.PRKS_NAV_DISCLOSURES === 'object' &&
-            typeof document !== 'undefined' &&
-            document.querySelector &&
-            document.querySelector('[data-nav-disclosure="people"]')
+            typeof root.PRKS_NAV_DISCLOSURES === 'object'
         ) {
             const peopleKey = root.PRKS_NAV_DISCLOSURES.people.prefKey;
             const progressKey = root.PRKS_NAV_DISCLOSURES.progress.prefKey;
@@ -420,169 +362,35 @@
                 root.localStorage.removeItem(progressKey);
                 root.localStorage.removeItem(researchKey);
             } catch (_e) {}
-            if (typeof root.prksInitNavDisclosures === 'function') root.prksInitNavDisclosures();
-
-            // Unset preference: entering a People child route auto-expands People.
             const reviewerRoute = parse('#/people/role/Reviewer');
-            if (root.location) root.location.hash = reviewerRoute.canonicalHash;
             assertEq('unset pref reads unset', root.prksReadNavExpandedPref(peopleKey), 'unset');
             assert('unset + reviewer route auto-expands People', root.prksNavDisclosureExpanded('people', reviewerRoute) === true);
-            root.prksSyncNavDisclosures(reviewerRoute);
-            const peopleWrap = document.querySelector('[data-nav-disclosure="people"]');
-            const peopleList = document.getElementById('prks-nav-people-children');
-            assert('People auto-opens on unset pref', peopleWrap.classList.contains('nav-disclosure--open'));
-            assertEq('People list visible on auto-open', peopleList.hidden, false);
-
-            // Explicit collapse: pressing the toggle while the family route is
-            // active must visibly collapse it and persist the choice — no
-            // forced-open no-op.
-            const peopleToggle = document.querySelector('[data-nav-disclosure-toggle="people"]');
-            peopleToggle.click();
+            root.prksWriteNavExpandedPref(peopleKey, false);
             assertEq('collapse pref persisted', root.prksReadNavExpandedPref(peopleKey), 'collapsed');
-            assert('People collapses immediately on explicit toggle', !peopleWrap.classList.contains('nav-disclosure--open'));
-            assertEq('People list hidden after explicit collapse', peopleList.hidden, true);
-
-            // Re-running sidebar sync (e.g. on subsequent navigations) must not
-            // reopen a family the user explicitly collapsed, even though the
-            // active route still belongs to that family.
-            root.prksSyncNavDisclosures(reviewerRoute);
-            assert('People stays collapsed after re-sync on same family route', !peopleWrap.classList.contains('nav-disclosure--open'));
-
-            // Family navigation: Reviewer -> Author -> Person -> Reviewer,
-            // with People explicitly collapsed throughout.
-            root.prksSyncNavDisclosures(parse('#/people/role/Author'));
-            assert('People stays collapsed on Author', !peopleWrap.classList.contains('nav-disclosure--open'));
-            root.prksSyncNavDisclosures(parse('#/people/P-1'));
-            assert('People stays collapsed on Person detail', !peopleWrap.classList.contains('nav-disclosure--open'));
-            assert('People retains contains-current on Person detail', peopleWrap.classList.contains('nav-disclosure--contains-current'));
-            root.prksSyncNavDisclosures(reviewerRoute);
-            assert('People stays collapsed back on Reviewer', !peopleWrap.classList.contains('nav-disclosure--open'));
-
-            // Active-family indicator: even collapsed, the family row shows a
-            // restrained contains-current state, but the People parent link
-            // itself must not get aria-current="page" — only the exact
-            // destination link does.
-            assert('People family shows contains-current while collapsed', peopleWrap.classList.contains('nav-disclosure--contains-current'));
-            if (typeof root.prksSyncSidebarActive === 'function') {
-                root.prksSyncSidebarActive(reviewerRoute);
-                const linkByHref = (href) => document.querySelectorAll('.nav-link').filter((x) => x.getAttribute('href') === href)[0];
-                assertEq(
-                    'Reviewer link is the exact aria-current destination',
-                    (linkByHref('#/people/role/Reviewer') || {}).getAttribute
-                        ? linkByHref('#/people/role/Reviewer').getAttribute('aria-current')
-                        : null,
-                    'page'
-                );
-                assertEq(
-                    'People parent link has no aria-current while Reviewer is active',
-                    (linkByHref('#/people') || {}).getAttribute ? linkByHref('#/people').getAttribute('aria-current') : null,
-                    null
-                );
-            }
-
-            // Explicit expand overrides the family predicate too: once the
-            // user chooses expanded, leaving the family route must not
-            // collapse it again.
+            assert('explicit collapse beats reviewer route', root.prksNavDisclosureExpanded('people', reviewerRoute) === false);
+            assert('person is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/P-1')) === true);
+            assert('people-role is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/role/Author')) === true);
+            assert('people-groups is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/groups')) === true);
+            assert('person-group-detail is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/groups/PG-1')) === true);
+            assert('folders is not in People family', root.prksNavFamilyForcesOpen('people', parse('#/folders')) === false);
             root.prksWriteNavExpandedPref(peopleKey, true);
-            root.prksSyncNavDisclosures(parse('#/folders'));
-            assert('People stays expanded off-family once explicitly expanded', peopleWrap.classList.contains('nav-disclosure--open'));
-            assert('People has no contains-current off-family', !peopleWrap.classList.contains('nav-disclosure--contains-current'));
+            assert('explicit expand stays off family', root.prksNavDisclosureExpanded('people', parse('#/folders')) === true);
+            try { root.localStorage.removeItem(peopleKey); } catch (_e) {}
+            assert('unset + person route auto-expands People', root.prksNavDisclosureExpanded('people', parse('#/people/P-1')) === true);
 
-            try {
-                root.localStorage.removeItem(peopleKey);
-            } catch (_e) {}
-
-            // A Person detail is still inside the People section even though
-            // it is not one of the sidebar shortcut destinations: with an
-            // unset preference it may auto-expand People, same as a role route.
-            const personRoute = parse('#/people/P-1');
-            assertEq('unset pref reads unset before person check', root.prksReadNavExpandedPref(peopleKey), 'unset');
-            assert('unset + person route auto-expands People', root.prksNavDisclosureExpanded('people', personRoute) === true);
-            if (root.location) root.location.hash = personRoute.canonicalHash;
-            root.prksSyncNavDisclosures(personRoute);
-            assert('People auto-opens on unset pref for Person detail', peopleWrap.classList.contains('nav-disclosure--open'));
-            assertEq('People aria-expanded true on Person detail auto-open', peopleToggle.getAttribute('aria-expanded'), 'true');
-            assert('People has contains-current on Person detail', peopleWrap.classList.contains('nav-disclosure--contains-current'));
-
-            try {
-                root.localStorage.removeItem(peopleKey);
-            } catch (_e) {}
-
-            // People-family route membership, tested directly against the predicate.
-            if (typeof root.prksNavFamilyForcesOpen === 'function') {
-                assert('person is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/P-1')) === true);
-                assert('people-role is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/role/Author')) === true);
-                assert('people-groups is in People family', root.prksNavFamilyForcesOpen('people', parse('#/people/groups')) === true);
-                assert(
-                    'person-group-detail is in People family',
-                    root.prksNavFamilyForcesOpen('people', parse('#/people/groups/PG-1')) === true
-                );
-                assert('folders is not in People family', root.prksNavFamilyForcesOpen('people', parse('#/folders')) === false);
-            }
-
-            // Research / Progress: full-row native buttons, not link+chevron.
-            ['research', 'progress'].forEach(function (which) {
-                const key = root.PRKS_NAV_DISCLOSURES[which].prefKey;
-                try {
-                    root.localStorage.removeItem(key);
-                } catch (_e) {}
-                const familyRoute = which === 'research' ? parse('#/concepts') : parse('#/progress?status=Paused');
-                if (root.location) root.location.hash = familyRoute.canonicalHash;
-                const wrap = document.querySelector('[data-nav-disclosure="' + which + '"]');
-                const list = document.getElementById(root.PRKS_NAV_DISCLOSURES[which].listId);
-                const toggle = document.querySelector('[data-nav-disclosure-toggle="' + which + '"]');
-
-                root.prksSyncNavDisclosures(familyRoute);
-                assert(which + ' auto-expands on unset pref', wrap.classList.contains('nav-disclosure--open'));
-                assertEq(which + ' aria-expanded true on auto-open', toggle.getAttribute('aria-expanded'), 'true');
-
-                toggle.click();
-                assertEq(which + ' collapse pref persisted', root.prksReadNavExpandedPref(key), 'collapsed');
-                assert(which + ' collapses immediately on click', !wrap.classList.contains('nav-disclosure--open'));
-                assertEq(which + ' aria-expanded false after collapse', toggle.getAttribute('aria-expanded'), 'false');
-                assertEq(which + ' list hidden after collapse', list.hidden, true);
-
-                root.prksSyncNavDisclosures(familyRoute);
-                assert(which + ' stays collapsed after re-sync', !wrap.classList.contains('nav-disclosure--open'));
-                assert(which + ' still shows contains-current while collapsed', wrap.classList.contains('nav-disclosure--contains-current'));
-
-                toggle.click();
-                assertEq(which + ' re-expand pref persisted', root.prksReadNavExpandedPref(key), 'expanded');
-                assert(which + ' expands again on second click', wrap.classList.contains('nav-disclosure--open'));
-
-                try {
-                    root.localStorage.removeItem(key);
-                } catch (_e) {}
-            });
-
-            const app = document.getElementById('app-container');
-            const body = document.body;
-            const previousDrawerToggle = root.prksToggleSidebarDrawer;
-            let drawerOpenCalls = 0;
-            root.prksToggleSidebarDrawer = function (forceOpen) {
-                if (forceOpen !== true) return;
-                drawerOpenCalls += 1;
-                body.classList.add('prks-sidebar-open');
-            };
-            app.classList.add('app-container--tiled');
-            ['research', 'progress'].forEach(function (which) {
-                const key = root.PRKS_NAV_DISCLOSURES[which].prefKey;
-                const list = document.getElementById(root.PRKS_NAV_DISCLOSURES[which].listId);
-                const toggle = document.querySelector('[data-nav-disclosure-toggle="' + which + '"]');
-                body.classList.remove('prks-sidebar-open');
+            [['research', researchKey, '#/concepts'], ['progress', progressKey, '#/progress?status=Paused']].forEach(function (row) {
+                const which = row[0];
+                const key = row[1];
+                const familyRoute = parse(row[2]);
+                try { root.localStorage.removeItem(key); } catch (_e) {}
+                assert(which + ' auto-expands on unset pref', root.prksNavDisclosureExpanded(which, familyRoute) === true);
+                root.prksWriteNavExpandedPref(key, false);
+                assert(which + ' explicit collapse beats family route', root.prksNavDisclosureExpanded(which, familyRoute) === false);
+                assert(which + ' still contains current', root.prksNavFamilyForcesOpen(which, familyRoute) === true);
                 root.prksWriteNavExpandedPref(key, true);
-                root.prksSyncNavDisclosures(parse('#/folders'));
-                const callsBefore = drawerOpenCalls;
-                toggle.click();
-                assert(which + ' rail activation opens navigation', body.classList.contains('prks-sidebar-open'));
-                assertEq(which + ' rail opens drawer once', drawerOpenCalls, callsBefore + 1);
-                assertEq(which + ' rail keeps expanded preference', root.prksReadNavExpandedPref(key), 'expanded');
-                assertEq(which + ' rail leaves aria-expanded true', toggle.getAttribute('aria-expanded'), 'true');
-                assertEq(which + ' rail exposes child list', list.hidden, false);
+                assert(which + ' explicit expand off family', root.prksNavDisclosureExpanded(which, parse('#/recent')) === true);
+                try { root.localStorage.removeItem(key); } catch (_e) {}
             });
-            app.classList.remove('app-container--tiled');
-            body.classList.remove('prks-sidebar-open');
-            root.prksToggleSidebarDrawer = previousDrawerToggle;
         }
 
         if (typeof root.prksContextualBackHtml === 'function') {

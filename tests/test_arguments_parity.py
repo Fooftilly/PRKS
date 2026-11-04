@@ -4,7 +4,8 @@ Each call, and each Position and Argument semantic operation, runs on this
 leg's library and on a reference SQLite library holding the same records,
 and the results must be equal after generated ids and timestamps become
 labels. Inputs avoid the documented differences
-(``backend/pg_facade/research.py``): no Work has a second Version, no
+(``backend/pg_facade/research.py``): no Work has a second Version, a
+citation row's ``manifestation_id`` (PostgreSQL only) is not compared, no
 record is created again under a deleted id, and no revision state is
 compared after a cited Work's delete.
 """
@@ -50,6 +51,10 @@ class ArgumentSide(ConceptSide):
     def normal(self, value: Any) -> Any:
         if isinstance(value, str):
             value = _RESEARCH_ID.sub(lambda match: self.labels.get(match.group(0), "<unknown id>"), value)
+        elif isinstance(value, dict) and {"work_id", "work_title", "pages"} <= set(value):
+            # A citation row: PostgreSQL also names the Version it pins (the
+            # Version-aware extension, backend/pg_facade/research.py).
+            value = {key: item for key, item in value.items() if key != "manifestation_id"}
         return super().normal(value)
 
 

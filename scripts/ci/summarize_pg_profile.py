@@ -14,7 +14,8 @@ from pathlib import Path
 
 OPERATIONS = frozenset((
     "works_list", "works_browse", "work_detail",
-    "works_recent_bounded", "works_batch_by_ids",
+    "works_recent_bounded", "works_batch_by_ids", "concept_hierarchy_graph",
+    "indexed_note_graph",
 ))
 STAT_KEYS = frozenset((
     "query_fingerprint", "calls", "total_exec_ms", "mean_exec_ms", "rows",
@@ -25,8 +26,9 @@ REQUIRED_KEYS = frozenset((
     "fixture_works", "operation", "repetitions", "completed_samples",
     "correctness_checks", "warmup_calls", "first_observed_call_ms",
     "first_call_context", "call_wall_p50_ms", "call_wall_p95_ms",
-    "top_statements",
+    "top_statements", "sql_rollup",
 ))
+ROLLUP_KEYS = frozenset(("distinct_statement_count", "total_sql_calls", "total_exec_ms"))
 
 
 def nonnegative(value: object, label: str) -> float:
@@ -52,10 +54,10 @@ def validate_scope(data: dict) -> list[int]:
     if nonnegative(data.get("server_version_num"), "server_version_num") < 180000:
         raise ValueError("PostgreSQL 18 required")
     expected = {
-        "backend": "postgresql_facade",
-        "fixture": "synthetic_works_only",
-        "fixture_version": "works-v1",
-        "measurement": "warm_facade_calls_not_http",
+        "backend": "postgresql_read_adapters",
+        "fixture": "synthetic_works_concepts_and_indexed_mentions",
+        "fixture_version": "works-concepts-mentions-v3",
+        "measurement": "warm_pg_read_adapter_calls_not_http",
         "readiness": "disposable_pg18_identity_verified",
         "query_fingerprints": "run_local_only; no SQL text is collected",
     }
@@ -106,6 +108,15 @@ def validate_row(record: dict, tiers: list[int]) -> tuple[int, str]:
         raise ValueError("unobserved SQL is not a successful measurement")
     for item in statements:
         validate_statement(item)
+    rollup = record["sql_rollup"]
+    if not isinstance(rollup, dict) or set(rollup) != ROLLUP_KEYS:
+        raise ValueError("incomplete SQL roll-up or possible private field disclosure")
+    count, calls = rollup["distinct_statement_count"], rollup["total_sql_calls"]
+    if type(count) is not int or count < len(statements):
+        raise ValueError("invalid distinct SQL statement count")
+    if type(calls) is not int or calls < 1 or calls < sum(item["calls"] for item in statements):
+        raise ValueError("SQL call roll-up cannot cover reported top statements")
+    nonnegative(rollup["total_exec_ms"], "total_exec_ms")
     return works, operation
 
 
@@ -129,24 +140,30 @@ def render(data: dict) -> str:
     lines = [
         "## Synthetic PostgreSQL application read baseline (advisory)",
         "",
-        "Backend: **PostgreSQL facade**, **not authenticated HTTP/API**. "
-        "All measurements are successful validated synthetic read calls.",
+        "Backend: **PostgreSQL facade and Research Graph read adapter**, **not authenticated HTTP/API**. "
+        "All measurements are successful validated synthetic reads; each Work tier "
+        "includes a same-sized Concept-parent chain and a separate Library "
+        "with indexed Work Research Notes referring to individual Concepts.",
         f"PostgreSQL server version: {data['server_version_num']} · "
         f"Fixture: {data['fixture_version']} · "
         f"Tiers: {', '.join(str(x) for x in data['fixture_tiers'])} Works",
         "",
         "First recorded call is the **first call of each operation**; previous operations and seeding may have warmed caches, so none is a process/DB cold start. "
         "Warm p50/p95 exclude it and two warmups. "
-        "Single-run runner noise is not proof of a regression.",
+        "Single-run runner noise is not proof of a regression. "
+        "SQL calls/read counts all instrumented statements across measured calls, "
+        "not only the five most expensive SQL shapes; it is not HTTP latency.",
         "",
-        "| Works | Facade read | First operation call ms | Warm p50 ms | Warm p95 ms | Samples |",
-        "| ---: | --- | ---: | ---: | ---: | ---: |",
+        "| Works + Concepts | PG read operation | First operation call ms | Warm p50 ms | Warm p95 ms | Samples | SQL calls/read | SQL shapes |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for x in rows:
         lines.append(
             f"| {x['fixture_works']} | {x['operation']} | "
             f"{x['first_observed_call_ms']:.3f} | {x['call_wall_p50_ms']:.3f} | "
-            f"{x['call_wall_p95_ms']:.3f} | {x['completed_samples']} |"
+            f"{x['call_wall_p95_ms']:.3f} | {x['completed_samples']} | "
+            f"{x['sql_rollup']['total_sql_calls'] / x['completed_samples']:.2f} | "
+            f"{x['sql_rollup']['distinct_statement_count']} |"
         )
     lines += ["", "No query text, SQL literals, user documents or DB connection strings were retained."]
     return "\n".join(lines) + "\n"

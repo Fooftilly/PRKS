@@ -10,6 +10,7 @@ thin reconnect conflict park, and browser-local recovery of Research Notes
 (#466 slices 2-3) and Work Reminders (#474) text across a reload or a closed tab.
 """
 import os
+import time
 import unittest
 
 from backend import work_lifecycle_sync, work_note_sync
@@ -552,11 +553,15 @@ class ResearchNotesRecoveryTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(sorted(r['body'][-13:] for r in records), sorted([' From tab one', ' From tab two']))
 
 
+# The runtime exists once browser-scope.js confirmed the signed-in scope (#629).
+_RECOVERY_READY = "() => !!window.prksEditorRecovery && !!window.prksEditorRecovery.runtime()"
+
+
 _WITHOUT_RECOVERY_STORAGE = """
     (() => {
         const open = IDBFactory.prototype.open;
         IDBFactory.prototype.open = function (name) {
-            if (name === 'prks-editor-recovery-v1') throw new DOMException('Recovery storage refused', 'QuotaExceededError');
+            if (String(name).indexOf('prks-editor-recovery-v2:') === 0) throw new DOMException('Recovery storage refused', 'QuotaExceededError');
             return open.apply(this, arguments);
         };
     })();
@@ -1212,18 +1217,17 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             message='recovery drafts outlived the acknowledged delete')
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
         # Only a later load, finding nothing of the Work left, clears its mark.
-        mark = "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)"
+        mark = "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)"
         self.assertIsNotNone(page.evaluate(mark, work))
         page.reload()
         page.wait_for_function(
-            "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId) === null",
+            "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId) === null",
             arg=work, timeout=20000)
 
     def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
         server, page, context = self.start()
-        # The video viewer is loaded on first use; a browser that has used it can open one offline.
-        page.evaluate("() => import('/js/components/works-video.js').then(() => true)")
         # Offline, so the creation is never sent and the delete folds it away.
+        # The video player ships in the Vue bundle, which the app shell already loaded.
         self.offline(page, context)
         page.locator('#prks-ribbon-new-file').click()
         page.wait_for_selector('#work-modal:not(.hidden):not([inert])')
@@ -1272,15 +1276,27 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
 
     def test_an_acknowledged_delete_interrupted_before_cleanup_is_retried_on_a_folders_load(self):
+        self._retry_after_interrupted_cleanup(hold_session=False)
+
+    def test_the_retry_runs_when_the_server_is_reachable_before_the_account_is_known(self):
+        # The marks are the signed-in account's: the retry reads them once the
+        # session answers, which can be after the runtime already went online.
+        self._retry_after_interrupted_cleanup(hold_session=True)
+
+    def test_a_retry_the_server_left_unanswered_runs_again_on_reconnect(self):
+        self._retry_after_interrupted_cleanup(hold_session=False, drop_first_answer=True)
+
+    def _retry_after_interrupted_cleanup(self, hold_session, drop_first_answer=False):
         server, page, context = self.start()
         work = server.ids['work_a']
         # The delete was acknowledged here, but the browser stopped before the cleanup: the Work
         # is still marked, and a tab that closed before its first IndexedDB commit left the draft
         # only in its emergency key.
         page.evaluate("""(workId) => {
-            localStorage.setItem('prks.workRecoveryCleanup.v1.' + workId, JSON.stringify({ marked: 1, tried: 0 }));
+            const names = window.prksEditorRecovery.scopeNames();
+            localStorage.setItem(names.deletedWorkPrefix + workId, JSON.stringify({ marked: 1, tried: 0 }));
             const pageInstanceId = 'p-closed-before-commit';
-            localStorage.setItem('prks.editorRecovery.emergency.v1.' + pageInstanceId, JSON.stringify({
+            localStorage.setItem(names.emergencyPrefix + pageInstanceId, JSON.stringify({
                 v: 1, pageInstanceId, runtimeId: null, at: Date.now(),
                 entries: [{
                     draftId: 'd-closed-before-commit', kind: 'work-private-note', entityType: 'work', entityId: workId,
@@ -1296,17 +1312,48 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.close_tab(page)
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        held = []
+        dropped = []
+        if hold_session:
+            tab.route('**/api/session', lambda route: held.append(route))
+        if drop_first_answer:
+            # The connection drops before the server answers for the marked Work.
+            tab.route('**/notes-state', lambda route: (dropped.append(route.request.url), route.abort()))
         tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        if hold_session:
+            tab.wait_for_function(
+                "() => window.prksOfflineRuntimeState && window.prksOfflineRuntimeState() === 'online'",
+                timeout=20000)
+            self.assertTrue(held, 'the session read was not held')
+            self.assertIsNone(tab.evaluate('() => window.prksEditorRecovery.scopeNames()'))
+            for route in held:
+                route.continue_()
+            tab.unroute('**/api/session')
         tab.wait_for_selector('#sidebar')
+        tab.wait_for_function(_RECOVERY_READY)
+        if drop_first_answer:
+            # Every attempt of the request coordinator (one try and two retries) fails.
+            deadline = time.monotonic() + 20
+            while len(dropped) < 3 and time.monotonic() < deadline:
+                # prks-allow-wait-for-timeout: polling for a route handler to record the aborted attempts
+                tab.wait_for_timeout(100)
+            self.assertEqual(len(dropped), 3, 'the first retry never gave up asking the server')
+            self.assertIsNotNone(tab.evaluate(
+                "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)", work))
+            # Offline before the route is lifted: whether the unanswered pass has ended
+            # yet or not, only the reconnect may run it again.
+            self.offline(tab, context)
+            tab.unroute('**/notes-state')
+            self.reconnect(tab, context)
         wait_for_async(
             tab,
             """(workId) => window.prksEditorRecovery.runtime().store.listAll().then(rows =>
-                Object.keys(localStorage).every(k => k.indexOf('prks.editorRecovery.emergency.v1.p-closed-before-commit') !== 0) &&
+                Object.keys(localStorage).every(k => k.indexOf(window.prksEditorRecovery.scopeNames().emergencyPrefix + 'p-closed-before-commit') !== 0) &&
                 rows.every(r => r.entityId !== workId || r.status === 'discarded'))""",
             arg=work,
             timeout=20000,
             message='a draft only an emergency key held outlived its acknowledged delete')
-        self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)", work))
+        self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)", work))
 
     def test_drafts_of_a_work_missing_on_the_server_are_kept_on_the_next_load(self):
         server, page, context = self.start()
@@ -1327,6 +1374,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
         tab.wait_for_selector('#sidebar')
         tab.wait_for_function("() => window.prksOfflineRuntimeState && window.prksOfflineRuntimeState() === 'online'", timeout=20000)
+        tab.wait_for_function(_RECOVERY_READY)
         self.assertEqual(tab.evaluate(_WORK_RECOVERY_RECORDS, work), ['work-private-note:active'])
         self.assertEqual(probes, [])
 
@@ -1335,8 +1383,9 @@ _DIAG_SEED_UNREADABLE = """
     async () => {
         // A record a newer PRKS wrote (kept for that version) and two emergency
         // keys this build cannot parse: one of a newer schema, one damaged.
+        const names = window.prksEditorRecovery.scopeNames();
         const db = await new Promise((resolve, reject) => {
-            const req = indexedDB.open('prks-editor-recovery-v1', 1);
+            const req = indexedDB.open(names.dbName, 1);
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
         });
@@ -1349,9 +1398,9 @@ _DIAG_SEED_UNREADABLE = """
             tx.onerror = () => reject(tx.error);
         });
         db.close();
-        localStorage.setItem('prks.editorRecovery.emergency.v1.p-newer',
+        localStorage.setItem(names.emergencyPrefix + 'p-newer',
             JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] }));
-        localStorage.setItem('prks.editorRecovery.emergency.v1.p-broken', '{"v": 1, "entr');
+        localStorage.setItem(names.emergencyPrefix + 'p-broken', '{"v": 1, "entr');
     }
 """
 
@@ -1537,8 +1586,8 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(self.rows(section, 'unreadable-record').count(), 1)
         self.assertEqual(self.rows(section, 'unreadable-emergency').count(), 2)
         self.assertEqual(tab.evaluate("""() => [
-            localStorage.getItem('prks.editorRecovery.emergency.v1.p-broken'),
-            !!localStorage.getItem('prks.editorRecovery.emergency.v1.p-newer'),
+            localStorage.getItem(window.prksEditorRecovery.scopeNames().emergencyPrefix + 'p-broken'),
+            !!localStorage.getItem(window.prksEditorRecovery.scopeNames().emergencyPrefix + 'p-newer'),
         ]"""), ['{"v": 1, "entr', True])
         self.assertEqual(tab.evaluate("""() => window.prksEditorRecovery.runtime().store.get('d-from-newer-prks')
             .then(r => r && r.v)"""), 99)

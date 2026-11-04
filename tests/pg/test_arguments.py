@@ -3,18 +3,22 @@
 ``tests/test_arguments_parity.py`` proves the facade returns SQLite's JSON.
 These tests cover what only PostgreSQL has: refused creates that leave
 nothing, scopes a delete moves on, citations pinned to a Version
-(``docs/work-identity-model.md`` §8.5) and the Work delete that removes
-them, Library isolation, and concurrent writers (each race holds one
-transaction open until the other is waiting on it).
+(``docs/work-identity-model.md`` §8.5), legacy or Version-aware, and the
+Work delete that removes them, Library isolation, and concurrent writers
+(each race holds one transaction open until the other is waiting on it;
+the merge race waits on events, never on time).
 """
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Optional
 
+from backend.db.errors import DatabaseError
 from backend.domain.identity.authorization import AccessRefused
+from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.research import arguments, positions
-from backend.domain.works import commands, notes
+from backend.domain.works import commands, merge, notes
 from backend.entity_ids import generate
 from backend.pg_facade import context as facade_context
 from backend.research_network import ResearchError
@@ -60,6 +64,11 @@ def target(kind: str, entity_id: str, verdict: str = "supports") -> dict[str, st
 
 def source(work_id: str, pages: str = "") -> dict[str, str]:
     return {"work_id": work_id, "pages": pages}
+
+
+def pinned(work_id: str, manifestation_id: Any, pages: Any = "") -> dict[str, Any]:
+    """A Version-aware entry; ``None`` cites the Work in general (malformed values are tests' to send)."""
+    return {"work_id": work_id, "manifestation_id": manifestation_id, "pages": pages}
 
 
 class PositionTests(ResearchTestCase):
@@ -113,8 +122,8 @@ class ArgumentTests(ResearchTestCase):
             name=" Reply ", kind="argument", main_text="Body",
             sources=[source(f" {work} ", " 514a ")],
             targets=[target("argument", base, "opposes"), target("position", claim)])
-        self.assertEqual(reply["sources"], [{"work_id": work, "pages": "514a", "order_index": 0,
-                                             "work_title": "Republic", "authors": []}])
+        self.assertEqual(reply["sources"], [{"work_id": work, "manifestation_id": self.primary(work), "pages": "514a",
+                                             "order_index": 0, "work_title": "Republic", "authors": []}])
         self.assertEqual([(t["type"], t["id"], t["order_index"]) for t in reply["targets"]],
                          [("argument", base, 0), ("position", claim, 1)])
         self.assertEqual(self.library.get_argument(base)["responses"],
@@ -289,6 +298,121 @@ class CitationTests(ResearchTestCase):
         self.refused("not_found", self.library.replace_argument_sources, generate("A"), "W")
 
 
+class VersionAwareCitationTests(ResearchTestCase):
+    """The Version-aware list ``[{work_id, manifestation_id, pages}]`` (§8.5)."""
+
+    def read_back(self, argument_id: str) -> list[tuple[str, Optional[str], str]]:
+        return [(row["work_id"], row["manifestation_id"], row["pages"])
+                for row in self.library.get_argument(argument_id)["sources"]]
+
+    def test_a_work_with_one_version(self) -> None:
+        work = self.library.add_work("W")
+        only = self.primary(work)
+        a = self.argument("A", sources=[pinned(work, only, "12"), pinned(work, None, "514a")])
+        self.assertEqual(self.citations(a), [(0, work, only, "12"), (1, work, None, "514a")])
+        self.assertEqual(self.read_back(a), [(work, only, "12"), (work, None, "514a")])
+        self.assertEqual(self.revisions("argument-sources"), {})  # construction advances nothing
+        # The legacy list of one Work names the same rows.
+        b = self.argument("B", sources=[source(work, "12")])
+        self.assertEqual(self.read_back(b), [(work, only, "12")])
+
+    def test_a_work_with_several_versions_is_cited_version_by_version(self) -> None:
+        work = self.library.add_work("W")
+        first, second = self.primary(work), self.add_manifestation(work)
+        a = self.argument("A")
+        wanted = [pinned(work, None), pinned(work, second, "5"), pinned(work, first, "5"), pinned(work, second, "9")]
+        detail = self.library.replace_argument_sources(a, wanted)
+        expected = [(work, None, ""), (work, second, "5"), (work, first, "5"), (work, second, "9")]
+        self.assertEqual([(row["work_id"], row["manifestation_id"], row["pages"]) for row in detail["sources"]],
+                         expected)
+        self.assertEqual([row["order_index"] for row in detail["sources"]], [0, 1, 2, 3])
+        self.assertEqual(self.revisions("argument-sources"), {a: 1})
+        # The same list again changes nothing.
+        self.library.replace_argument_sources(a, wanted)
+        self.assertEqual(self.revisions("argument-sources"), {a: 1})
+        self.assertEqual(self.read_back(a), expected)
+
+    def test_a_non_primary_version_survives_a_change_of_pages_or_order(self) -> None:
+        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        second = self.add_manifestation(w1)
+        a = self.argument("A", sources=[pinned(w1, second, "5"), pinned(w2, None)])
+        self.library.replace_argument_sources(a, [pinned(w2, None), pinned(w1, second, "6-7")])
+        self.assertEqual(self.citations(a), [(0, w2, None, ""), (1, w1, second, "6-7")])
+        self.assertEqual(self.revisions("argument-sources"), {a: 1})
+        # A legacy edit of the same list keeps the pin too.
+        self.library.replace_argument_sources(a, [source(w1, "6-7"), source(w2)])
+        self.assertEqual(self.citations(a), [(0, w1, second, "6-7"), (1, w2, None, "")])
+        # Only the pin changing is a change.
+        self.library.replace_argument_sources(a, [pinned(w1, self.primary(w1), "6-7"), pinned(w2, None)])
+        self.assertEqual(self.citations(a), [(0, w1, self.primary(w1), "6-7"), (1, w2, None, "")])
+        self.assertEqual(self.revisions("argument-sources"), {a: 3})
+
+    def test_a_version_missing_or_of_another_work_or_library_refuses_the_list(self) -> None:
+        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        a = self.argument("A", sources=[pinned(w1, None, "1")])
+        with facade_context.acting_as(self.other_actor().context):
+            foreign_work = self.library.add_work("Theirs")
+            foreign = self.sql("SELECT primary_manifestation_id AS id FROM prks.works WHERE id = %s",
+                               (foreign_work,))[0]["id"]
+        cases = (("argument_source_version_mismatch", 409, [pinned(w1, None), pinned(w2, self.primary(w1))]),
+                 ("argument_source_version_not_found", 404, [pinned(w1, foreign)]),
+                 ("argument_source_version_not_found", 404, [pinned(w1, generate("MF"))]),
+                 ("work_not_found", 404, [pinned(foreign_work, foreign)]))
+        for code, status, sources in cases:
+            with self.subTest(code=code, sources=len(sources)):
+                self.assertEqual(self.refused(code, self.library.replace_argument_sources, a, sources).http_status,
+                                 status)
+                self.refused(code, self.library.create_argument, name="B", kind="argument", sources=sources)
+        # Nothing changed, nothing was left behind.
+        self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([(0, w1, None, "1")], {}))
+        self.assertEqual(self.count("arguments"), 1)
+
+    def test_malformed_version_aware_lists_are_refused(self) -> None:
+        work = self.library.add_work("W")
+        only = self.primary(work)
+        a = self.argument("A")
+        for message, sources in (
+                ("Every source must name its Version, or none may.", [pinned(work, only), source(work, "2")]),
+                ("A source's manifestation_id must be a Version id or null.", [pinned(work, 3)]),
+                ("A source's manifestation_id must be a Version id or null.", [pinned(work, "  ")]),
+                ("Duplicate citation.", [pinned(work, only, "2"), pinned(work, only, " 2 ")]),
+                ("Duplicate citation.", [pinned(work, None), pinned(work, None)])):
+            with self.subTest(message=message):
+                self.assertEqual(str(self.refused("invalid_sources", self.library.replace_argument_sources, a,
+                                                  sources)), message)
+        self.refused("invalid_pages", self.library.replace_argument_sources, a, [pinned(work, only, "\x07")])
+        self.assertEqual(self.citations(a), [])
+
+    def test_a_legacy_list_cannot_rewrite_a_list_citing_one_work_twice(self) -> None:
+        work = self.library.add_work("W")
+        second = self.add_manifestation(work)
+        a = self.argument("A", sources=[pinned(work, None), pinned(work, second, "3")])
+        self.refused("invalid_sources", self.library.replace_argument_sources, a, [source(work), source(work, "3")])
+        # The unambiguous legacy entry still resolves: the stored row it matches keeps its pin.
+        self.library.replace_argument_sources(a, [source(work, "3")])
+        self.assertEqual(self.citations(a), [(0, work, second, "3")])
+        self.refused("argument_source_version_required", self.library.replace_argument_sources, a,
+                     [source(work, "4")])
+        self.library.replace_argument_sources(a, [])
+        self.assertEqual(self.citations(a), [])
+
+    def test_a_pinned_version_cannot_be_deleted_and_follows_a_move(self) -> None:
+        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        moved = self.add_manifestation(origin)
+        a = self.argument("A", sources=[pinned(origin, moved, "7")])
+        with self.assertRaises(DatabaseError) as caught:
+            self.sql("DELETE FROM prks.manifestations WHERE id = %s", (moved,))
+        self.assertEqual((caught.exception.sqlstate, caught.exception.constraint),
+                         ("23503", "argument_sources_manifestation_fkey"))
+        self.sql("UPDATE prks.manifestations SET work_id = %s WHERE id = %s", (other, moved))
+        self.assertEqual(self.read_back(a), [(other, moved, "7")])
+        # A list naming the Version under its old Work is refused; under its new one it is unchanged.
+        self.refused("argument_source_version_mismatch", self.library.replace_argument_sources, a,
+                     [pinned(origin, moved, "7")])
+        self.library.replace_argument_sources(a, [pinned(other, moved, "7")])
+        self.assertEqual(self.revisions("argument-sources"), {})
+
+
 class IsolationTests(ResearchTestCase):
     def test_another_librarys_records_are_invisible_and_untouchable(self) -> None:
         work = self.library.add_work("W")
@@ -381,6 +505,86 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual(holder["sources"][0]["work_id"], new)
         self.assertIsNotNone(contender)
         self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([(0, new, None, "")], {a: 1}))
+
+    def test_a_version_move_waits_for_the_citation_pinning_it(self) -> None:
+        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        moved = self.add_manifestation(origin)
+        a = self.argument("A")
+        holder, contender = self.race(
+            lambda scope: arguments.replace_sources(scope, a, [pinned(origin, moved, "7")]),
+            lambda: self.sql("UPDATE prks.manifestations SET work_id = %s WHERE id = %s", (other, moved)),
+            serializable=True)
+        self.assertEqual(holder["sources"][0]["manifestation_id"], moved)
+        self.assertEqual(contender, [])
+        # The move waited, then carried the citation with it.
+        self.assertEqual(self.citations(a), [(0, other, moved, "7")])
+
+    def test_a_citation_racing_a_move_of_its_version(self) -> None:
+        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        moved = self.add_manifestation(origin)
+        a = self.argument("A")
+        holder, contender = self.race(
+            lambda scope: scope.execute("UPDATE prks.manifestations SET work_id = %(other)s"
+                                        " WHERE library_id = %(library_id)s AND id = %(moved)s",
+                                        {"other": other, "moved": moved}),
+            lambda: self.library.replace_argument_sources(a, [pinned(origin, moved, "7")]))
+        self.assertIsNotNone(holder)
+        self.assertIsInstance(contender, ResearchError)
+        self.assertEqual(contender.code, "argument_source_version_mismatch")
+        self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([], {}))
+
+    def test_a_version_delete_waits_for_the_citation_pinning_it_and_is_refused(self) -> None:
+        work = self.library.add_work("W")
+        second = self.add_manifestation(work)
+        a = self.argument("A")
+        holder, contender = self.race(
+            lambda scope: arguments.replace_sources(scope, a, [pinned(work, second, "1")]),
+            lambda: self.sql("DELETE FROM prks.manifestations WHERE id = %s", (second,)),
+            serializable=True)
+        self.assertEqual(len(holder["sources"]), 1)
+        self.assertIsInstance(contender, DatabaseError)
+        self.assertEqual((contender.sqlstate, contender.constraint), ("23503", "argument_sources_manifestation_fkey"))
+        self.assertEqual(self.citations(a), [(0, work, second, "1")])
+
+    def test_two_version_aware_lists_of_one_argument_queue(self) -> None:
+        work = self.library.add_work("W")
+        second = self.add_manifestation(work)
+        a = self.argument("A")
+        holder, contender = self.race(
+            lambda scope: arguments.replace_sources(scope, a, [pinned(work, second, "1")]),
+            lambda: self.library.replace_argument_sources(a, [pinned(work, None), pinned(work, second, "1")]),
+            serializable=True)
+        self.assertEqual(len(holder["sources"]), 1)
+        self.assertEqual(len(contender["sources"]), 2)
+        self.assertEqual((self.citations(a), self.revisions("argument-sources")),
+                         ([(0, work, None, ""), (1, work, second, "1")], {a: 2}))
+
+    def test_a_citation_after_a_merge_snapshot_fails_the_merge_and_its_retry_sees_it(self) -> None:
+        # §7.1: argument_sources is a peer table of the merge, and its writers are SERIALIZABLE.
+        source_work, target_work = self.library.add_work("S"), self.library.add_work("T")
+        second = self.add_manifestation(source_work)
+        a = self.argument("A")
+        snapshot_taken, cited = threading.Event(), threading.Event()
+        plans: list[merge.MergePlan] = []
+
+        def run(scope: LibraryScope) -> None:
+            if not plans:
+                snapshot_taken.set()
+                cited.wait(30)
+            plans.append(merge.prepare(scope, source_work, target_work))
+            scope.execute("UPDATE prks.works SET updated_at = now() WHERE library_id = %(library_id)s"
+                          " AND id = %(work_id)s", {"work_id": source_work})
+
+        thread = threading.Thread(target=lambda: self.run_command(run, serializable=True))
+        thread.start()
+        try:
+            self.assertTrue(snapshot_taken.wait(30))
+            self.library.replace_argument_sources(a, [pinned(source_work, second, "3")])
+        finally:
+            cited.set()
+            thread.join(60)
+        self.assertEqual(len(plans), 2, "the first attempt must fail with 40001 and be retried")
+        self.assertEqual((plans[0].citing_arguments, plans[1].citing_arguments), ((), (a,)))
 
     def test_an_argument_delete_and_a_research_note_naming_it(self) -> None:
         a, work = self.argument("A"), self.library.add_work("W")

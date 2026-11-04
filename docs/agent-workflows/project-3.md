@@ -22,6 +22,8 @@ Sources: the maintainer's baseline export (44 items, `hasNextPage: false`, taken
 
 **Custom fields (all preserved).** Status; Horizon {Now, Next, Later, Long-term, Exploratory}; Work Type {Epic, Feature, Research, Bug, Infrastructure, Documentation}; Priority {P0, P1, P2, P3}; Commitment {Committed, Research-first, Exploratory}; Agent {Unassigned, Cursor Cloud, Claude Code, Codex, Manual}; Effort {XS, S, M, L, XL}; Roadmap Order (number); Start date, Target date (date). No iteration field. No item has Agent, Effort, dates or assignees set.
 
+**Agent field update (2026-10-29):** The maintainer renamed the existing `Codex` single-select option to `ChatGPT/Codex` and assigned agent ownership for active issues. The line above is a historical 2026-10-10 configuration snapshot, not the current option list. Current Agent choices are `Unassigned`, `Cursor Cloud`, `Claude Code`, `ChatGPT/Codex`, and `Manual`. The read-only queue in `scripts/agent-queue.sh` accepts both `chatgpt` and `codex` command aliases and tolerates legacy `Codex` values in old exports. Project assignment does not imply implementation approval or readiness.
+
 **Status options.**
 
 | Baseline | Live |
@@ -72,7 +74,7 @@ Legacy planning options (Idea, Research / Design, Ready for Agent, Ready to Merg
 
 **Roadmap Stage**, single select {Idea, Research / Design, Planned, Parked}: the planning stage of roadmap items, previously carried by Status. It is separate from Commitment (how firmly PRKS commits: Committed, Research-first, Exploratory) and Horizon (when). These are three different questions. Today Stage and Commitment mostly line up (#472 is Idea + Research-first), but they evolve independently, and Parked has no other home.
 
-**Execution**, single select {Human, Agent, Mixed}: who does the work, as a category. The existing **Agent** field (the specific executor: Cursor Cloud, Claude Code, Codex, Manual) stays. Execution is set by hand and never inferred: no current item has any Agent value, assignee or agent label, so the migration leaves it empty. Execution does not make an item ready. Agent Queue (§7) also requires a lifecycle Status, and a person checks for open prerequisites (§9).
+**Execution**, single select {Human, Agent, Mixed}: who does the work, as a category. The existing **Agent** field (the specific executor: Cursor Cloud, Claude Code, Codex, Manual) stays. Execution is set by hand and never inferred: no current item has any Agent value, assignee or agent label, so the migration leaves it empty. Execution does not make an item ready. Agent Queue (#9) displays ownership across lifecycle statuses; only Ready + Agent/Mixed Execution, acceptance, and no live prerequisites authorize pickup (§7 and §9).
 
 ## 4. Classification comes from repository metadata
 
@@ -147,7 +149,7 @@ Only a review's *first* answer can release Changes requested, and only when it i
 
 `project-sync` never writes an issue item, never moves an item out of Blocked or Done, and leaves any item whose current Status is not in its "allowed from" list unchanged, logging that it did so.
 
-## 7. Views as filtered projections (Proposed)
+## 7. Views as filtered projections (view #9 filter version-controlled; others proposed)
 
 Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`, field names such as `status:`, `work-type:`, `execution:`, `roadmap-stage:`, `has:`/`no:`, `updated:`, `reason:`, `parent-issue:`). `execution:` and `roadmap-stage:` work once those fields exist. **There is no blocked-by filter qualifier**, so views cannot hide items with an open native prerequisite (§9).
 
@@ -157,7 +159,7 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 | Active Work (#7) | table | `is:open -label:dependencies -work-type:Epic status:"In Progress",Review,"Changes requested",Blocked` | Status | Priority ↑ | Title, Status, Assignees, Execution, Agent, Linked pull requests, Parent issue, Labels |
 | Work Board (#8) | board | `-label:dependencies -work-type:Epic -status:Inbox,Backlog,Idea,Parked` | columns: Status (hide Inbox and Backlog columns) | – | Title, Status, Linked pull requests, Parent issue, Execution, Labels |
 | Triage (new, optional) | table | `is:open status:Inbox -label:dependencies` | – | Updated ↓ | Title, Labels, Parent issue, Created |
-| Agent Queue (#9) | table | `is:open is:issue -label:dependencies execution:Agent,Mixed status:Ready,"In Progress"` | Status | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
+| Agent Queue (#9, all ownership) | table | `is:open is:issue agent:"Cursor Cloud","Claude Code","ChatGPT/Codex"` | Status | Priority ↑, Effort ↑ | Title, Status, Execution, Agent, Effort, Parent issue, Labels, Linked pull requests |
 | Research Queue (#10) | table | `is:open label:research -status:Done` | – | Updated ↓ | Title, Status, Assignees, Parent issue, Labels |
 | Roadmap Research (new, optional) | table | `is:open work-type:Epic roadmap-stage:"Research / Design"` | – | Roadmap Order ↑ | Title, Status, Horizon, Commitment, Sub-issues progress |
 | Research History (new) | table | `label:research is:closed` | – | Closed ↓ | Title, Closed, Labels, Linked pull requests |
@@ -167,8 +169,25 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 - **Work Board** keeps Done visible. If the Done column grows too long, add a date bound in the UI and check that the preview shows the expected items, because GitHub documents the `updated:` comparison operators ambiguously. Inbox (hundreds of backfilled findings) and Backlog stay out of it; Inbox has its own Triage view. In a board view, a hidden column is a view setting, not a filter.
 - **Research:** Research Queue holds actual research tasks (the `research` label). Roadmap epics that are still being researched or designed are in Roadmap Research or the Roadmap view, not mixed into Research Queue. Research History holds closed research, including #181, #234 and #246 once they are added (§13).
 - **Dependency PRs** (`dependencies` label: Dependabot, plus the human-authored #335) appear only in Maintenance. Maintenance does not filter on Status, because Dependabot PRs never get a `project-sync` Status (§10).
-- **Agent Queue** cannot exclude items with an open Blocked-by prerequisite, because no filter qualifier exists. Check the issue's Relationships panel before starting work.
+- **Agent Queue (#9) is the ownership inventory, not permission to start work.** It includes open issues owned by coding agents in Inbox, Backlog, Ready, In Progress, Review and Blocked. The existing Status grouping distinguishes actionable Ready issues from planned, blocked or active assignments. The view cannot exclude items with an open native Blocked-by prerequisite; check Relationships and the approved roadmap before starting work.
+- **View #9's filter is now managed as code:** `scripts/project3_view_sync.py` reconciles only the ownership filter on trusted `master` pushes, using the protected `project-automation` token. A daily read-only job fails on drift. No Project issue Status, Execution or Agent values are inferred or changed. Other views and view #9's name, layout, columns, grouping and sort are preserved. See `docs/agent-workflows/agent-queue.md`.
 - **Timeline** stays sparse until Start date and Target date are filled in (no item has them today).
+
+### ChatGPT-compatible comment-free assignment requests
+
+The protected `project3-assignment-request-processor.yml` listens for a successful unprivileged push signal on the dedicated `project3-assignment-requests` branch. ChatGPT can use its existing GitHub plugin to update the single JSON request file on that branch; only the trusted master processor, after independently verifying GitHub's actor, workflow, branch/commit/file and current ref, reads the Project secret and runs the existing triage guard. No issue comments are used, and the public queue remains read-only. See `docs/agent-workflows/project3-assignment-request.md` for the exact protocol and live acceptance gate. The ChatGPT-originated check and live apply acceptance tests passed on 2026-10-30, including one verified Project field change and complete queue publication.
+
+### Authenticated assignment dispatch (comment-free)
+
+The protected `project3-assignment-dispatch.yml` workflow accepts an explicitly owner-dispatched versioned JSON command with a complete expected-before snapshot, then reuses the reviewed triage guards to modify Project V2 fields directly. It records verified results in GitHub Actions run logs/summary, and refreshes the read-only agent queue on successful writes. It defaults to no-write unless `PROJECT3_ASSIGN_DISPATCH_MODE=apply`; the `project-automation` Environment must admit only `master`. See `docs/agent-workflows/project3-assignment-dispatch.md` for activation, guardrails, command format, and bridge retirement criteria. The ChatGPT GitHub connector uses the protected request-branch relay described above instead of workflow dispatch or issue comments.
+
+### Retired issue-comment assignment transport
+
+The issue-comment listener on #982 was removed after the request-branch route passed both check-only and live-apply acceptance with verified Project values and queue publication. #982 remains a historical audit record; use the request branch for ChatGPT and the manual dispatch or reviewed local triage paths for fallback. Assignment does not start agents.
+
+### Reviewed issue triage batches
+
+The maintainer may use `scripts/project3_triage.py` to prepare and explicitly approve batches of **existing issue** Agent, Status and Execution edits. The workflow is separate from `project-sync`'s PR-only transitions and never updates PRs or infers acceptance from assignment. Its default operation is read-only: a proposed plan begins with all rows unapproved, and applying requires the exact reviewed plan SHA-256. It checks candidate acceptance, current issue state and native blockers, plus drift and verification; roadmap/overlapping-PR assessment remains an explicit maintainer review, not an automated claim. See `docs/agent-workflows/project3-triage.md` for commands and safety boundaries. This is an optional manual tool; it does not change the approved native Project workflow policy.
 
 ## 8. Archival
 
@@ -181,7 +200,7 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 
 ## 9. Native issue dependencies
 
-Prerequisites are GitHub's native **Blocked by / Blocking** relationships, recorded only through the maintainer-dispatched writer described in `docs/agent-workflows/issue-dependencies.md`. Project #3 reads them as they are; nothing copies them into labels, comments or Status. A relationship never forces an item's Status backwards. Agent Queue and triage reports treat an issue with an open blocker as not ready (§7).
+Prerequisites are GitHub's native **Blocked by / Blocking** relationships, recorded only through the maintainer-dispatched writer described in `docs/agent-workflows/issue-dependencies.md`. Project #3 reads them as they are; nothing copies them into labels, comments or Status. A relationship never forces an item's Status backwards. Agent Queue still displays owned issues with open blockers; triage reports never treat those as ready (§7).
 
 ## 10. `project-sync` design (approved design; ships in dry-run)
 
@@ -250,7 +269,7 @@ Implementation: `scripts/project_sync.py`, `.github/workflows/project-sync.yml`,
 | Readiness snapshot (`project3-readiness.yml`, §14) | `PROJECT_SYNC_TOKEN` from the `project-automation` environment, passed to the one step that reads | Queries only; the job has `contents: read` and nothing else. |
 | `project-sync` | `PROJECT_SYNC_TOKEN` secret of the `project-automation` environment: a classic personal access token with only the `project` scope (`GITHUB_TOKEN` cannot reach Projects) | Project read/write. Repository data it reads is public. |
 
-- **Where the token lives (#597).** `PROJECT_SYNC_TOKEN` is a secret of the GitHub Environment `project-automation`, whose deployment branch rule admits only `master`. Both jobs that read it (`project-sync.yml` job `sync`, `project3-readiness.yml` job `snapshot`) declare `environment: project-automation`. A repository-level secret would reach any workflow that anyone with write access pushes on any branch, and a job's `if` cannot stop that, because a branch can edit its own copy of the file. The environment rule is checked by GitHub against the run's ref, so workflow code on any other branch cannot get the secret. Both jobs also carry `github.ref == 'refs/heads/master'` in their `if`, so a run the environment would refuse is skipped instead of failing. `project-sync` is unaffected in practice: since GitHub's 2025-12-08 change, a `pull_request_target` run always runs as the default branch (`github.ref` is `refs/heads/master` whatever the PR's base; `github.base_ref` holds the target), and environment rules are evaluated against it too, so PRs into other branches, such as stacked PRs, are still synced with `master`'s code. A relayed review's `workflow_run` also runs on the default branch. The check matters for the readiness snapshot's manual dispatch, and as a guard if the default branch ever changes. `PROJECT_SYNC_MODE` stays a repository variable.
+- **Where the token lives (#597).** `PROJECT_SYNC_TOKEN` is a secret of the GitHub Environment `project-automation`, whose deployment branch rule admits only `master`. Every job that reads it (`project-sync.yml`, `project3-readiness.yml`, `project3-assignment-dispatch.yml`, `project3-assignment-request-processor.yml`, `project3-agent-queue.yml`, and `project3-view-sync.yml`) declares `environment: project-automation`. A repository-level secret would reach any workflow that anyone with write access pushes on any branch, and a job's `if` cannot stop that, because a branch can edit its own copy of the file. The environment rule is checked by GitHub against the run's ref, so workflow code on any other branch cannot get the secret. Each protected-token job also carries `github.ref == 'refs/heads/master'` in its `if`, so a run the environment would refuse is skipped instead of failing. `project-sync` is unaffected in practice: since GitHub's 2025-12-08 change, a `pull_request_target` run always runs as the default branch (`github.ref` is `refs/heads/master` whatever the PR's base; `github.base_ref` holds the target), and environment rules are evaluated against it too, so PRs into other branches, such as stacked PRs, are still synced with `master`'s code. A relayed review's `workflow_run` also runs on the default branch. The check matters for the readiness snapshot's manual dispatch, and as a guard if the default branch ever changes. `PROJECT_SYNC_MODE` stays a repository variable.
 - The token has an expiration date. To rotate it, create a new token with the same single scope, replace the environment secret, then revoke the old token.
 - To revoke it, delete the token in the account's developer settings and delete the environment secret. `project-sync` then fails closed without writing.
 - The token never appears in repository files, workflow logs, PR comments or documentation. Only the job that needs it receives it, as an environment variable.
@@ -420,7 +439,95 @@ Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub inte
 - Reject the snapshot unless `schema` is `prks-project3-readiness/v1`, `complete` is `true`, and `project.id`, `project.number`, `project.owner` and `repository` match the values above, and unless every row has exactly the keys shown with valid types (`project_item_id` and `archived` set when `in_project` is true; every Project value `null` and `state` `OPEN` when it is false), rows are sorted by number without duplicates, and `counts` agree with the rows. One invalid row rejects the whole snapshot.
 - Reject it when it is older than 30 hours by the consumer's own clock (`now - generated_at > 30 h`) or dated more than 5 minutes in the future. Do not rely on the run's date or on the artifact still existing. `check` applies the same rules.
 - Without a usable snapshot, report every issue's readiness as **unknown**. Never fall back to an older snapshot or infer readiness from labels.
-- **New agent-ready work** (the Agent Queue rule, §7): recommend an issue only when all of these hold. In the snapshot: `in_project` is `true`, `archived` is `false`, `state` is `OPEN`, `status` is `Ready`, and `execution` is `Agent` or `Mixed`. Live at triage time: the issue is still open, and it has no open native blocker (`GET /repos/Fooftilly/PRKS/issues/{n}/dependencies/blocked_by`; blockers never come from the snapshot). And the work is accepted and cleared for an agent to take: nobody else owns it, and nothing in the issue says to wait.
-- `In Progress` means the work is already owned. Report it for coordination, never as new work to assign. `execution: Human` never enters the agent queue. `Agent` names a specific executor; it never makes an issue ready by itself.
+- **New actionable work** (readiness criteria distinct from Agent Queue's ownership view, §7): recommend an issue only when all of these hold. In the snapshot: `in_project` is `true`, `archived` is `false`, `state` is `OPEN`, `status` is `Ready`, and `execution` is `Agent` or `Mixed`. Live at triage time: the issue is still open, and it has no open native blocker (`GET /repos/Fooftilly/PRKS/issues/{n}/dependencies/blocked_by`; blockers never come from the snapshot). And the work is accepted and cleared for an agent to take: nobody else owns it, and nothing in the issue says to wait.
+- `In Progress` means the work is already owned. Report it for coordination, never as new work to assign. `execution: Human` does not authorize agent pickup even if a named agent makes the issue visible in view #9. `Agent` names a specific executor; it never makes an issue ready by itself.
 - Inbox, Backlog and every other Status are not ready. An issue with `in_project: false` is not on Project #3 and is not ready. A `null` field and an issue not listed are **unknown**; neither is ever promoted to ready.
 - Re-read an issue's live state before acting: the snapshot can be up to 30 hours old.
+
+## 15. Cloud agent assignment queue (read-only; Project #3 remains authoritative)
+
+Cloud agent sessions may have a working Git remote but no `gh` Project V2
+GraphQL authentication. Do not copy the classic `project`-scoped
+`PROJECT_SYNC_TOKEN` into an agent session solely to read assignments.
+
+`.github/workflows/project3-agent-queue.yml` uses the protected
+`project-automation` environment and the existing token on `master`.
+Its `scripts/project3_agent_queue.py publish-live` path queries the same
+Project metadata and **every Project item page** as the full readiness
+collector in §14, but deliberately skips the separate scan of all open
+repository issues. The queue also omits assignee connections from its
+Project item query: agent ownership does not use GitHub issue assignees or
+the full snapshot's per-issue assignee pagination limit.
+
+The publisher retains the read-only GraphQL guard, exact Project/repository
+identity and public-visibility checks, Status/Execution/Agent field-type
+checks, complete bounded pagination and duplicate guards. It explicitly
+verifies the PRKS repository's identity and `isPrivate: false` separately
+from Project issue content, both before and after reading all item pages.
+This works even when no PRKS issue items are readable or the Project has
+zero items. The publisher rechecks Project identity and public visibility
+after reading every item page and fails closed if either the repository
+or Project becomes private or unreadable. The separate
+full-readiness collector and the backwards-compatible
+`project3_agent_queue.py publish --snapshot` interface are unchanged.
+
+The output contains only open, non-archived Project #3 PRKS issues with
+a recognized coding-agent value (explicitly excluding `Manual` and
+`Unassigned`), their `number`, `agent`, `status`, and `execution`,
+together with Project identity, completeness, generation time, expiry, count
+and optional originating workflow run ID. It publishes no Project mutations,
+assignees, issue descriptions, hidden fields, project item IDs or private data.
+
+A different, job-scoped `GITHUB_TOKEN` with `contents: write` publishes
+**only** `agent-queue.json` to the dedicated orphan branch
+`project3-agent-queue`, using trusted `master` workflow code. The Project
+token is available only in the protected **read-and-build** step; it is not
+passed to Git or the data-branch push step. After a successful assignment
+request or manual dispatch that changes Project fields (or a possibly partial
+failed write), the corresponding trusted writer triggers the publisher via
+`workflow_dispatch` using its job-scoped `GITHUB_TOKEN` (`actions: write`).
+Check-only assignments do not need to trigger a refresh. The queue publisher
+itself has no `workflow_run` hook, untrusted checkout, upstream artifacts,
+external payloads or new Project token.
+Publisher runs also occur hourly at minute 13 UTC to reconcile manual
+Project changes, on relevant `master` changes and on manual dispatch. GitHub scheduled workflows are
+best effort; the consumer enforces expiry independently. The data branch is
+not the Project's assignment store and must never be edited manually.
+
+Public endpoint after the first successful publish:
+
+`https://raw.githubusercontent.com/Fooftilly/PRKS/project3-agent-queue/agent-queue.json`
+
+Agent usage from an ordinary PRKS checkout:
+
+```bash
+bash scripts/agent-queue.sh claude
+bash scripts/agent-queue.sh cursor
+bash scripts/agent-queue.sh chatgpt
+```
+
+The script first uses the live `gh project item-list` when available. If
+that cannot run or gives an incomplete response, it obtains the public
+snapshot via the existing Git remote (`git fetch` + `git show FETCH_HEAD`),
+then falls back to HTTPS `curl` for environments without Git remote access.
+Neither fallback requires `gh auth` or a Project token. It validates the
+strict schema, complete marker, Project identity/public flag, exact counts,
+unique sorted issue numbers, canonical agent options and generation/expiry
+timestamps using `python3` before displaying any rows. The published
+snapshot expires **12 hours** after its generation; a stale, missing,
+corrupt, private or unrecognized queue fails closed and is not interpreted
+as an empty work list. Published queues omit title text; issue URLs remain
+available for live inspection. GitHub raw-content caching may briefly lag
+the more direct Git remote.
+
+Assignments are **ownership only**. Before beginning a task, read the live
+issue, verify it is open, verify the live native blocker relationships, avoid
+overlapping PRs, require the appropriate Status/Execution readiness and the
+maintainer's go-ahead where specified. A stale snapshot cannot silently
+authorize work. If publishing fails, inspect the **Project 3 agent queue
+publisher** Actions run: the protected environment must admit `master`,
+`PROJECT_SYNC_TOKEN` must be valid, and the workflow must be permitted to
+push with its job-scoped `contents: write` token. Do not weaken the
+private-project guard to work around missing permission. The first
+successful run creates `project3-agent-queue` automatically. Test with
+`python3 -m unittest discover -s tests -p 'test_project3_agent_queue.py'`.

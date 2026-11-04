@@ -94,6 +94,14 @@ class IdentityTests(OrganizationTestCase):
         self.assertEqual(again, {"id": first["id"], "name": "Ethics", "color": "#222222", "existed": True})
         self.assertEqual(self.library.add_tag("Blank", "  ")["color"], tags.DEFAULT_COLOR)
 
+    def test_untrusted_tag_color_is_rejected_on_postgresql(self) -> None:
+        for value in ("red;position:fixed", "x;background:url(https://example.test)",
+                      "#12345", "javascript:alert(1)"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.library.add_tag("Untrusted", value)
+        self.assertEqual(self.count("tags"), 0)
+        self.assertEqual(self.library.add_tag("Safe", "#AABBCC")["color"], "#AABBCC")
+
     def test_names_and_aliases_share_one_namespace(self) -> None:
         ethics, logic = self.tag("Ethics"), self.tag("Logic")
         self.library.add_tag_alias(ethics, "Morals")

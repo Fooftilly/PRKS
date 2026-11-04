@@ -2,10 +2,10 @@
  * PRKS local store -- DURABLE user-owned local state, IndexedDB only.
  *
  * This is NOT the offline cache. `offline-store.js` holds downloaded server
- * data in `prks-offline-v1`, which is deliberately disposable: it may be
+ * data in `prks-offline-v2:<scope key>`, which is deliberately disposable: it may be
  * discarded when corrupt, and "Clear offline cache" empties it. Unsynchronized
  * user work cannot share that lifecycle, so it lives in a **separate database**
- * (`prks-local-v1`). The separation is physical, not a convention: even a bug
+ * (`prks-local-v2:<scope key>`). The separation is physical, not a convention: even a bug
  * in `offline-store.clearAll()` cannot reach another database.
  *
  * Scope:
@@ -24,9 +24,26 @@
  * a request's `onsuccess` -- a request can succeed and its transaction still
  * abort, rolling the row back.
  *
- * Schema ("prks-local-v1", version 1):
+ * One database per signed-in scope, `prks-local-v2:<scope key>`
+ * (browser-scope.js): an account's queue is never opened by another.
+ *
+ * Schema (version 2):
  *   operations -- keyPath "op_id"  immutable semantic envelope + mutable sync state
- *   metadata   -- keyPath "key"    durable local identity/bookkeeping (device_id, sequence)
+ *   metadata   -- keyPath "key"    durable local identity/bookkeeping (device_id,
+ *                                  sequence, the Library epoch of the operations)
+ *   restored   -- keyPath "op_id"  review-only: operations made before the
+ *                                  Library was restored (§10.4), never sent
+ *
+ * Library epoch (docs/postgresql-architecture.md §10.4, §11.4). Every
+ * operation records the epoch it was made under (`library_epoch`), the page's
+ * epoch, and is sent under it. The store keeps one epoch for all its
+ * operations (metadata `library_epoch`): when a newer one is known
+ * (`advanceEpoch`, or a write from a page of a newer epoch), every operation
+ * of an older epoch leaves the queue in the same transaction for `restored`,
+ * where its text is kept for review until the user discards it. Nothing there
+ * is sent or reapplied. A page of an older epoch than the store's (loaded
+ * before the restore) records nothing: its writes are refused
+ * `library_restored` until a reload.
  *
  * Milestone 2A: persistence foundation only. No mutation UI consumes this yet;
  * PRKS remains read-only while the server is unreachable.
@@ -34,10 +51,13 @@
 (function (root) {
     'use strict';
 
-    const DB_NAME = 'prks-local-v1';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
     const STORE_OPERATIONS = 'operations';
     const STORE_METADATA = 'metadata';
+    const STORE_RESTORED = 'restored';
+    const META_LIBRARY_EPOCH = 'library_epoch';
+    // The server's grammar for an epoch: 1 to the largest bigint, in decimal.
+    const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
 
     const META_DEVICE_ID = 'device_id';
     const META_SEQUENCE = 'op_sequence';
@@ -437,6 +457,18 @@
         return typeof v === 'string' && UUID_RE.test(v);
     }
 
+    /** A Library epoch as its canonical decimal string, or null. */
+    function epochOf(value) {
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    /** Orders two canonical epochs (they may exceed a double's integers). */
+    function compareEpochs(a, b) {
+        if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
+    }
+
     /** An ISO-8601 string that names a real instant. */
     function isParsableTimestamp(v) {
         if (typeof v !== 'string' || !v.trim()) return false;
@@ -757,6 +789,11 @@
         if (!isNonBlankString(ctx.deviceId)) {
             throw localStoreError('invalid_envelope', 'device_id is required.');
         }
+        // Nor one that cannot be fenced: the store supplies the page's epoch.
+        const libraryEpoch = epochOf(ctx.libraryEpoch);
+        if (!libraryEpoch) {
+            throw localStoreError('invalid_envelope', 'library_epoch is required.');
+        }
         const baseRevision = Object.prototype.hasOwnProperty.call(input, 'base_revision')
             ? input.base_revision
             : null;
@@ -790,6 +827,7 @@
             created_at: ctx.createdAt,
             sequence: ctx.sequence,
             depends_on: dependsOn.slice(),
+            library_epoch: libraryEpoch,
             // --- mutable synchronization state ---
             status: STATUS_PENDING,
             attempt_count: 0,
@@ -807,14 +845,52 @@
             : defaultIndexedDB();
         const now = options.now || defaultNow;
         const uuid = options.uuid || defaultUuid;
-        const dbName = options.dbName || DB_NAME;
+        // A name the caller gives (tests), or the signed-in scope's database
+        // (`prks-local-v2:<scope key>`, browser-scope.js). There is no
+        // unscoped default: without a scope the store opens nothing.
+        const scope = options.dbName ? null : (options.scope || root.prksBrowserScope || null);
         const dbVersion = options.dbVersion || DB_VERSION;
+        // The Library epoch this page acts under: its scope's page epoch. A
+        // caller naming its own database (tests) acts under epoch 1 unless it
+        // names a function.
+        const pageEpoch = typeof options.libraryEpoch === 'function'
+            ? options.libraryEpoch
+            : options.dbName
+                ? function () { return '1'; }
+                : function () { return scope && typeof scope.pageEpoch === 'function' ? scope.pageEpoch() : null; };
 
         let dbPromise = null;
         // The live connection, so a durable reset can close OUR handle before
         // deleting. IndexedDB blocks a delete on any open connection --
         // including this store's own.
         let openDbHandle = null;
+        // Bumped when the scope retires: an open still in flight then closes
+        // its connection on arrival instead of handing it to its caller.
+        let openGeneration = 0;
+
+        function closeHandle() {
+            openGeneration += 1;
+            if (openDbHandle) {
+                try {
+                    openDbHandle.close();
+                } catch (_e) {
+                    /* ignore */
+                }
+                openDbHandle = null;
+            }
+            dbPromise = null;
+        }
+
+        // Another account signed in: this page's database closes for good.
+        if (scope && typeof scope.subscribe === 'function') {
+            scope.subscribe(function (event) { if (event && event.type === 'retired') closeHandle(); });
+        }
+
+        function resolveDbName() {
+            if (options.dbName) return Promise.resolve(options.dbName);
+            if (!scope || typeof scope.dbName !== 'function') return Promise.resolve(null);
+            return scope.dbName('local');
+        }
 
         function ensureStores(db) {
             if (!db.objectStoreNames.contains(STORE_OPERATIONS)) {
@@ -822,6 +898,9 @@
             }
             if (!db.objectStoreNames.contains(STORE_METADATA)) {
                 db.createObjectStore(STORE_METADATA, { keyPath: 'key' });
+            }
+            if (!db.objectStoreNames.contains(STORE_RESTORED)) {
+                db.createObjectStore(STORE_RESTORED, { keyPath: 'op_id' });
             }
         }
 
@@ -832,7 +911,12 @@
          */
         function openDb() {
             if (dbPromise) return dbPromise;
-            dbPromise = new Promise(function (resolve, reject) {
+            const generation = openGeneration;
+            dbPromise = resolveDbName().then(function (dbName) { return new Promise(function (resolve, reject) {
+                if (!dbName || generation !== openGeneration) {
+                    reject(localStoreError('unavailable', 'Sign in to keep changes on this device.'));
+                    return;
+                }
                 if (!idbFactory) {
                     reject(localStoreError('unavailable', 'IndexedDB is unavailable.'));
                     return;
@@ -857,6 +941,16 @@
                         reject(localStoreError('unavailable', 'Could not open local storage.'));
                         return;
                     }
+                    if (generation !== openGeneration) {
+                        // The scope retired while this open was in flight.
+                        try {
+                            db.close();
+                        } catch (_e) {
+                            /* ignore */
+                        }
+                        reject(localStoreError('unavailable', 'Sign in to keep changes on this device.'));
+                        return;
+                    }
                     openDbHandle = db;
                     db.onversionchange = function () {
                         try {
@@ -875,7 +969,7 @@
                 req.onblocked = function () {
                     reject(localStoreError('blocked', 'Local storage is blocked by another tab.'));
                 };
-            });
+            }); });
             // A failed open must not be cached forever: a later attempt (after
             // the blocking tab closes, or quota is freed) should retry.
             dbPromise.catch(function () {
@@ -985,6 +1079,112 @@
         }
 
         /**
+         * Moves every operation of an epoch older than `epoch` to `restored`
+         * and records `epoch` as the store's, inside the caller's transaction.
+         * An acknowledged row is residue the server already answered and is
+         * dropped; Work lifecycle markers belong to the rows that left.
+         * Resolves the number of operations kept for review.
+         */
+        async function advanceEpochIn(request, epoch) {
+            const at = nowIso();
+            const rows = await request(STORE_OPERATIONS, s => s.getAll());
+            let kept = 0;
+            for (const row of (Array.isArray(rows) ? rows : [])) {
+                if (!row) continue;
+                const own = epochOf(row.library_epoch);
+                if (own && compareEpochs(own, epoch) >= 0) continue;
+                if (row.status !== STATUS_ACKNOWLEDGED) {
+                    await request(STORE_RESTORED, s => s.put(Object.assign({}, row, {
+                        restored_at: at, superseded_by_epoch: epoch,
+                    })));
+                    kept += 1;
+                }
+                await request(STORE_OPERATIONS, s => s.delete(row.op_id));
+            }
+            const meta = await request(STORE_METADATA, s => s.getAll());
+            for (const entry of (Array.isArray(meta) ? meta : [])) {
+                if (entry && typeof entry.key === 'string' && entry.key.indexOf(META_WORK_LIFECYCLE_PREFIX) === 0) {
+                    const owner = entry.value && entry.value.op_id;
+                    if (!owner || !(await request(STORE_OPERATIONS, s => s.get(owner)))) {
+                        await request(STORE_METADATA, s => s.delete(entry.key));
+                    }
+                }
+            }
+            await request(STORE_METADATA, s => s.put({ key: META_LIBRARY_EPOCH, value: epoch }));
+            return kept;
+        }
+
+        async function storeEpochIn(request) {
+            const row = await request(STORE_METADATA, s => s.get(META_LIBRARY_EPOCH));
+            return row ? epochOf(row.value) : null;
+        }
+
+        /**
+         * A transaction that records the user's intent. It runs under the
+         * page's epoch: a newer one first moves the older operations out of
+         * the queue; an older one (a page loaded before a restore) is
+         * refused. `request.libraryEpoch` names it for the rows written.
+         */
+        function runIntent(fn) {
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA, STORE_RESTORED], 'readwrite', async (request, setResult) => {
+                const epoch = epochOf(pageEpoch());
+                if (!epoch) throw localStoreError('unavailable', 'Sign in to keep changes on this device.');
+                const stored = await storeEpochIn(request);
+                if (stored && compareEpochs(epoch, stored) < 0) {
+                    throw localStoreError('library_restored',
+                        'This library was restored on the server. Reload the page to keep working.');
+                }
+                if (!stored || compareEpochs(epoch, stored) > 0) await advanceEpochIn(request, epoch);
+                request.libraryEpoch = epoch;
+                return fn(request, setResult);
+            });
+        }
+
+        /**
+         * The server named `epoch` for this Library. When it is newer than the
+         * store's, every older operation leaves the queue for review.
+         * Resolves the number of operations moved (0 when nothing changed).
+         */
+        function advanceEpoch(value) {
+            const epoch = epochOf(value);
+            if (!epoch) return Promise.reject(localStoreError('invalid_epoch', 'Not a Library epoch.'));
+            return runTransaction([STORE_OPERATIONS, STORE_METADATA, STORE_RESTORED], 'readwrite', async (request, setResult) => {
+                const stored = await storeEpochIn(request);
+                if (stored && compareEpochs(epoch, stored) <= 0) { setResult(0); return; }
+                setResult(await advanceEpochIn(request, epoch));
+            });
+        }
+
+        /** The operations kept for review after a restore, oldest first. */
+        function listRestored() {
+            return runTransaction(STORE_RESTORED, 'readonly', async (request, setResult) => {
+                const rows = await request(STORE_RESTORED, s => s.getAll());
+                setResult((Array.isArray(rows) ? rows : []).filter(Boolean).sort(function (a, b) {
+                    const sa = Number.isInteger(a.sequence) ? a.sequence : 0;
+                    const sb = Number.isInteger(b.sequence) ? b.sequence : 0;
+                    return sa !== sb ? sa - sb : String(a.op_id).localeCompare(String(b.op_id));
+                }));
+            });
+        }
+
+        /** The user discarded one reviewed operation. */
+        function discardRestored(opId) {
+            return runTransaction(STORE_RESTORED, 'readwrite', async (request, setResult) => {
+                const row = await request(STORE_RESTORED, s => s.get(String(opId)));
+                if (!row) throw localStoreError('not_restored', 'That change is no longer kept.');
+                await request(STORE_RESTORED, s => s.delete(row.op_id));
+                setResult(true);
+            });
+        }
+
+        /** The store's Library epoch, or null before the first write. */
+        function libraryEpoch() {
+            return runTransaction(STORE_METADATA, 'readonly', async (request, setResult) => {
+                setResult(await storeEpochIn(request));
+            });
+        }
+
+        /**
          * Stable per-device identity, created once and persisted durably.
          *
          * This is a SYNCHRONIZATION and DIAGNOSTICS identity only -- never
@@ -1052,9 +1252,7 @@
                 isPlainObject(envelope) && isNonBlankString(envelope.op_id)
                     ? envelope.op_id
                     : uuid();
-            return runTransaction(
-                [STORE_OPERATIONS, STORE_METADATA],
-                'readwrite',
+            return runIntent(
                 function (request, setResult) {
                     return resolveDeviceIdIn(request)
                         .then(function (deviceId) {
@@ -1067,6 +1265,7 @@
                                     deviceId: deviceId,
                                     createdAt: nowIso(),
                                     sequence: next,
+                                    libraryEpoch: request.libraryEpoch,
                                 });
                                 return assertDependenciesUsableIn(request, prepared).then(function () {
                                     return request(STORE_OPERATIONS, function (store) {
@@ -1152,7 +1351,7 @@
             abandonUnownedWrite(stillOwns, true);
             const sequence = (row ? row.value : 0) + 1;
             const prepared = normalizeOperationEnvelope(envelope, {
-                opId: uuid(), deviceId, sequence, createdAt: nowIso(),
+                opId: uuid(), deviceId, sequence, createdAt: nowIso(), libraryEpoch: request.libraryEpoch,
             });
             await assertDependenciesUsableIn(request, prepared);
             abandonUnownedWrite(stillOwns, true);
@@ -1306,7 +1505,7 @@
                 return Promise.reject(localStoreError('name_taken',
                     'A tag called ' + name + ' already exists.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'CREATE_TAG', entity_type: 'tag',
@@ -1330,7 +1529,7 @@
             if (!isNonBlankString(tagId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid tag.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = rows.filter(r => r && r.status !== STATUS_ACKNOWLEDGED &&
@@ -1378,7 +1577,7 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'Cannot merge a tag into itself.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertTagIsNotBeingDeleted(rows, sourceTagId, 'merged');
@@ -1412,7 +1611,7 @@
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'tagged');
                 assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
@@ -1446,7 +1645,7 @@
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertTagIsNotBeingDeleted(rows, tagId, 'attached or removed');
                 assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
@@ -1508,7 +1707,7 @@
                 row.payload.person_id === link.person_id &&
                 row.payload.role_type === link.role_type &&
                 row.status !== STATUS_ACKNOWLEDGED;
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(allRows, workId, 'credited');
                 assertPersonIsNotBeingDeleted(allRows, link.person_id, 'credited on a file');
@@ -1649,7 +1848,7 @@
                 }
                 return 0;
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(allRows, workId, 'annotated');
                 const rows = allRows.filter(matches)
@@ -1813,6 +2012,8 @@
                             'An operation waiting on this successor has already been sent.'
                         );
                     }
+                    // The successor keeps the epoch it was made under.
+                    request.libraryEpoch = row.library_epoch;
                     const replacement = await insertEnvelopeIn(request, {
                         operation: row.operation,
                         entity_type: row.entity_type,
@@ -1896,7 +2097,7 @@
                     return Promise.reject(localStoreError('invalid_base', 'Invalid observed field state.'));
                 }
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 /* The read above is the gap a check before this call cannot
                  * see. Leave every operation row as it was. */
@@ -1944,7 +2145,7 @@
         }
 
         function createPerson(fields) {
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 setResult(await insertEnvelopeIn(request, {
                     operation: 'CREATE_PERSON',
                     entity_type: 'person',
@@ -1984,7 +2185,7 @@
             if (!isNonBlankString(personId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid person.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingPerson(rows, personId);
@@ -2118,7 +2319,7 @@
                 return Promise.reject(e);
             }
             const tagSpecs = options && Array.isArray(options.tags) ? options.tags : [];
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const deps = [];
@@ -2204,7 +2405,7 @@
             if (!isNonBlankString(workId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid file.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingWork(rows, workId);
@@ -2267,7 +2468,7 @@
         function createFolder(fields) {
             const payload = canonicalFolderPayload(fields);
             if (!payload.title) payload.title = 'Untitled Folder';
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     /* A folder created INSIDE one this device also created
@@ -2323,7 +2524,7 @@
                         'Invalid observed field state.'));
                 }
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertFolderIsNotBeingDeleted(rows, folderId, 'edited');
@@ -2387,7 +2588,7 @@
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid filing.'));
             }
             const desired = folderId.trim();
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertWorkIsNotBeingDeleted(rows, workId, 'filed');
@@ -2428,7 +2629,7 @@
             if (!isNonBlankString(folderId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid folder.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingFolder(rows, folderId);
@@ -2485,7 +2686,7 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'A position needs a name.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'CREATE_POSITION', entity_type: 'position',
@@ -2519,7 +2720,7 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'A position needs a name.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertPositionIsNotBeingDeleted(rows, positionId, 'edited');
@@ -2566,7 +2767,7 @@
             if (!isNonBlankString(positionId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid position.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingPosition(rows, positionId);
@@ -2624,7 +2825,7 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'A concept needs a name.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'CREATE_CONCEPT', entity_type: 'concept',
@@ -2672,7 +2873,7 @@
                         'Invalid observed field state.'));
                 }
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertConceptIsNotBeingDeleted(rows, conceptId, 'edited');
@@ -2755,7 +2956,7 @@
                 otherName === desiredName &&
                 otherAliases.length === desiredAliases.length &&
                 otherAliases.every((a, i) => a === desiredAliases[i]);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertConceptIsNotBeingDeleted(rows, conceptId, 'renamed');
@@ -2823,7 +3024,7 @@
              * chose the same parents made the same choice. */
             const sameSet = list => list.length === desired.length &&
                 desired.every(id => list.indexOf(id) !== -1);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertConceptIsNotBeingDeleted(rows, conceptId, 'reparented');
@@ -2875,7 +3076,7 @@
             if (!isNonBlankString(conceptId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid concept.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingConcept(rows, conceptId);
@@ -3030,7 +3231,7 @@
                 return Promise.reject(error);
             }
             const argumentId = generateEntityId('A', uuid);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const waitFor = argumentTargetDependencies(rows, targets, []);
@@ -3072,7 +3273,7 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'Kind must be argument or stance.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertArgumentIsNotBeingDeleted(rows, argumentId, 'edited');
@@ -3130,7 +3331,7 @@
             const same = list => Array.isArray(list) && list.length === desired.length &&
                 desired.every((row, i) => list[i] && list[i].work_id === row.work_id &&
                     (list[i].pages == null ? '' : String(list[i].pages)) === row.pages);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertArgumentIsNotBeingDeleted(rows, argumentId, 'cited');
@@ -3185,7 +3386,7 @@
             const same = list => Array.isArray(list) && list.length === desired.length &&
                 desired.every((row, i) => list[i] && list[i].type === row.type &&
                     list[i].id === row.id && list[i].verdict_id === row.verdict_id);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertArgumentIsNotBeingDeleted(rows, argumentId, 'retargeted');
@@ -3226,7 +3427,7 @@
             if (!isNonBlankString(argumentId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid argument.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingArgument(rows, argumentId);
@@ -3274,7 +3475,7 @@
         function createPlaylist(fields) {
             const payload = canonicalPlaylistPayload(fields);
             if (!payload.title) payload.title = 'Untitled playlist';
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'CREATE_PLAYLIST', entity_type: 'playlist',
@@ -3303,7 +3504,7 @@
                         'Invalid observed field state.'));
                 }
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertPlaylistIsNotBeingDeleted(rows, playlistId, 'edited');
@@ -3353,7 +3554,7 @@
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid filing.'));
             }
             const desired = playlistId.trim();
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertWorkIsNotBeingDeleted(rows, workId, 'added to a playlist');
@@ -3417,7 +3618,7 @@
             }
             const same = list => list.length === desired.length &&
                 list.every((id, index) => id === desired[index]);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertPlaylistIsNotBeingDeleted(rows, playlistId, 'reordered');
@@ -3459,7 +3660,7 @@
             if (!isNonBlankString(playlistId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid playlist.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = operationsNamingPlaylist(rows, playlistId);
@@ -3498,7 +3699,7 @@
                 return Promise.reject(localStoreError('invalid_envelope',
                     'A group needs a name.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     /* The catalogue await and this read can both outlive the
@@ -3575,7 +3776,7 @@
                         'Invalid observed field state.'));
                 }
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     /* The read above is the gap a check before this call cannot
@@ -3664,7 +3865,7 @@
                     'Invalid membership change.'));
             }
             const desired = !!present;
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     /* Same gap as a profile field: the read yields, and the
@@ -3745,7 +3946,7 @@
             if (!isNonBlankString(groupId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid group.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite',
+            return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     const mine = rows.filter(r => r &&
@@ -3798,7 +3999,7 @@
                 return Promise.reject(localStoreError('invalid_envelope', 'occurred_at must be an ISO timestamp.'));
             }
             const at = Date.parse(occurredAt);
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'opened');
                 const existing = rows.find(r => r.operation === 'MARK_WORK_OPENED' &&
@@ -3841,7 +4042,7 @@
                     return Promise.reject(localStoreError('invalid_base', 'Invalid observed field state.'));
                 }
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const written = [];
@@ -3922,7 +4123,7 @@
                 typeof options.cancelPendingText !== 'string' || text !== observed.value)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid carried reminder cancellation.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const active = rows.filter(r => r.operation === operation &&
@@ -3964,7 +4165,7 @@
                 !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid observed source state.'));
             }
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const rows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(rows, workId, 'edited');
                 const active = rows.filter(r => r.operation === 'SET_WORK_SOURCE' &&
@@ -4166,7 +4367,7 @@
          *               retired.
          */
         function resolveConflict(opId, apply) {
-            return runTransaction([STORE_OPERATIONS, STORE_METADATA], 'readwrite', async (request, setResult) => {
+            return runIntent(async (request, setResult) => {
                 const row = await request(STORE_OPERATIONS, s => s.get(opId));
                 if (!row || row.status !== STATUS_CONFLICT) throw localStoreError('not_conflict', 'Conflict no longer available.');
                 const all = await request(STORE_OPERATIONS, s => s.getAll());
@@ -4232,6 +4433,40 @@
                 row.last_attempt_at = nowIso();
                 await request(STORE_OPERATIONS, s => s.put(row));
                 setResult(row);
+            });
+        }
+
+        /* Connectivity can disappear while claimOperation commits its IDB
+         * transaction. Before any HTTP dispatch, and only while this caller
+         * still owns the exact claimed revision, restore the operation's
+         * original attempt count and timestamp. Never release a sent claim. */
+        function releaseClaimBeforeDispatch(claimed, before) {
+            if (!claimed || !before || typeof claimed.op_id !== 'string' ||
+                claimed.op_id !== before.op_id || claimed.status !== STATUS_SYNCING ||
+                before.status !== STATUS_PENDING ||
+                !Number.isInteger(before.attempt_count) || before.attempt_count < 0 ||
+                claimed.attempt_count !== before.attempt_count + 1 ||
+                typeof claimed.last_attempt_at !== 'string' ||
+                claimed.sequence !== before.sequence ||
+                claimed.created_at !== before.created_at) {
+                return Promise.resolve(false);
+            }
+            return runTransaction(STORE_OPERATIONS, 'readwrite', async (request, setResult) => {
+                const row = await request(STORE_OPERATIONS, s => s.get(claimed.op_id));
+                if (!row || row.status !== STATUS_SYNCING ||
+                    row.attempt_count !== claimed.attempt_count ||
+                    row.last_attempt_at !== claimed.last_attempt_at ||
+                    row.sequence !== before.sequence ||
+                    row.created_at !== before.created_at) {
+                    setResult(false);
+                    return;
+                }
+                await request(STORE_OPERATIONS, s => s.put(Object.assign({}, row, {
+                    status: STATUS_PENDING,
+                    attempt_count: before.attempt_count,
+                    last_attempt_at: before.last_attempt_at,
+                })));
+                setResult(true);
             });
         }
 
@@ -4448,7 +4683,11 @@
          * explicit, separately-confirmed user action.
          */
         function resetDurableLocalState() {
-            return new Promise(function (resolve, reject) {
+            return resolveDbName().then(function (dbName) { return new Promise(function (resolve, reject) {
+                if (!dbName) {
+                    reject(localStoreError('unavailable', 'Sign in to reset this device\'s changes.'));
+                    return;
+                }
                 if (!idbFactory) {
                     reject(localStoreError('unavailable', 'IndexedDB is unavailable.'));
                     return;
@@ -4484,7 +4723,7 @@
                 req.onblocked = function () {
                     reject(localStoreError('blocked', 'Local state is in use by another tab.'));
                 };
-            });
+            }); });
         }
 
         return {
@@ -4530,13 +4769,17 @@
             savePersonGroupFields: savePersonGroupFields,
             setPersonGroupMember: setPersonGroupMember,
             deletePersonGroup: deletePersonGroup,
-            resolveConflict, claimOperation,
+            resolveConflict, claimOperation, releaseClaimBeforeDispatch,
             markDependentsFailed: markDependentsFailed,
             getOperation: getOperation,
             listOperations: listOperations,
             updateOperationSyncState: updateOperationSyncState,
             deleteAcknowledgedOperation: deleteAcknowledgedOperation,
             stats: stats,
+            advanceEpoch: advanceEpoch,
+            libraryEpoch: libraryEpoch,
+            listRestored: listRestored,
+            discardRestored: discardRestored,
             isAvailable: isAvailable,
             resetDurableLocalState: resetDurableLocalState,
         };
@@ -4546,7 +4789,7 @@
         createPrksLocalStore: createPrksLocalStore,
         prksNormalizeOperationEnvelope: normalizeOperationEnvelope,
         prksUnresolvedDependentClosure: unresolvedDependentClosure,
-        PRKS_LOCAL_DB_NAME: DB_NAME,
+        prksCompareLibraryEpochs: compareEpochs,
         PRKS_LOCAL_DB_VERSION: DB_VERSION,
         PRKS_LOCAL_OPERATION_TYPES: OPERATION_TYPES,
         PRKS_LOCAL_OPERATION_STATUSES: STATUSES,

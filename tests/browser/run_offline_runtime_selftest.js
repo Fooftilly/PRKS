@@ -10,6 +10,7 @@
 const path = require('path');
 const rootDir = path.resolve(__dirname, '../..');
 const mod = require(path.join(rootDir, 'frontend/js/offline-runtime.js'));
+require(path.join(rootDir, 'frontend/js/folder-state.js'));
 
 let passed = 0;
 let failed = 0;
@@ -138,7 +139,405 @@ function domainErrorResponse(status) {
     return { ok: false, status: status };
 }
 
+async function verifyCanonicalFolderFieldAcknowledgements() {
+    // These are cache ACK paths, not pending drafts: server canonical_wire
+    // strips Python whitespace and substitutes a title for an empty result.
+    const store = makeFakeStore({ isAvailable: async () => true });
+    const runtime = mod.createPrksOfflineRuntime({
+        store, prksRequest: () => Promise.reject(Error('offline')),
+        setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+        window: null, caches: null, navigator: null,
+    });
+    const id = 'F-CANONICAL';
+    const untouched = { id: 'F-OTHER', title: 'Unchanged', description: 'Keep' };
+    const cases = [
+        ['title', ' \t Reading list \u00a0 ', 'Reading list'],
+        ['title', ' \u001c \u001f ', 'Untitled Folder'],
+        ['description', ' \u001c Description \u001f ', 'Description'],
+        ['description', ' \t \u00a0 ', ''],
+        ['private_notes', ' \t Notes \u00a0 ', 'Notes'],
+    ];
+    for (const [field, raw, expected] of cases) {
+        const base = { id, title: 'Old title', description: 'Old description',
+            private_notes: 'Old notes', parent_id: null };
+        // List and detail are distinct snapshots: an accidental in-place
+        // mutation in one projection must not satisfy the other's assertion.
+        await store.putList('folders:index', [{ ...base }, { ...untouched }], '');
+        await store.putEntity('folder', id, { ...base }, '');
+        const reconciled = await runtime.reconcileFolderField({
+            code: 'ACKNOWLEDGED', folder_id: id, field,
+            server_revision: 7, member_work_ids: [],
+        }, { payload: { value: raw } });
+        assertEq(field + ' canonical ACK applied', reconciled, true);
+        const list = (await store.getList('folders:index')).value;
+        assertEq(field + ' canonical Folder list row', list[0][field], expected);
+        assertEq(field + ' other Folder untouched', list[1], untouched);
+        const detail = (await store.getEntity('folder', id)).value;
+        assertEq(field + ' canonical Folder detail', detail[field], expected);
+    }
+    // Parent IDs are pointers, not text; the ACK invalidates stale parent
+    // objects in the detail cache instead of treating their ID as a title.
+    await store.putList('folders:index', [{ id, parent_id: null }], '');
+    await store.putEntity('folder', id, { id, parent: { id: 'F-OLD' } }, '');
+    const moved = await runtime.reconcileFolderField({
+        code: 'ACKNOWLEDGED', folder_id: id,
+        field: 'parent_id', server_revision: 8,
+    }, { payload: { value: 'F-PARENT' } });
+    assertEq('parent-id ACK applied', moved, true);
+    assertEq('parent-id list row retains the pointer',
+        (await store.getList('folders:index')).value[0].parent_id, 'F-PARENT');
+    assertEq('parent-id ACK invalidates stale detail', await store.getEntity('folder', id), null);
+}
+
+
+/* Extract the shipped Folder read validators, not a test-authored parallel
+ * acceptance policy: a patched cache that cannot render is not coherent. */
+function folderReadValidators() {
+    const fs = require('fs');
+    const source = fs.readFileSync(path.join(rootDir, 'frontend/js/app.js'), 'utf8');
+    const names = [
+        'prksHasUsableRowId', 'prksIsOptionalString',
+        'prksIsFolderCount', 'prksIsFolderParentId',
+        'prksIsFolderSummaryShape', 'prksIsFoldersIndexShape',
+        'prksIsWorkCardRowShape', 'prksIsFolderTagRowShape', 'prksIsFolderShape',
+    ];
+    const declarations = names.map(function (name) {
+        const marker = 'function ' + name + '(';
+        const at = source.indexOf(marker);
+        if (at < 0 || source.indexOf(marker, at + marker.length) !== -1) {
+            throw new Error('missing or ambiguous production Folder validator: ' + name);
+        }
+        const end = source.indexOf('\n}', at);
+        if (end < 0) throw new Error('unclosed production Folder validator: ' + name);
+        return source.slice(at, end + 2);
+    });
+    return new Function(declarations.join('\n') +
+        '\nreturn {' + names.join(', ') + '};')();
+}
+
+/* Folder ACK read-model coherence. These deterministic cases previously each
+ * started Chromium and a seeded server only to call a canonical Folder
+ * wrapper and inspect cache generations/contents. Use the same production
+ * reconciler and domain gate as the shipped runtime, not a test-side policy.
+ * Retain browser tests for real UI, offline reload and selective title ACK. */
+async function verifyFolderAckCacheFootprint() {
+    const store = makeFakeStore({isAvailable: async () => true});
+    const runtime = mod.createPrksOfflineRuntime({
+        store, prksRequest: () => Promise.reject(Error('unexpected transport')),
+        setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+        window: null, caches: null, navigator: null,
+    });
+    const validators = folderReadValidators();
+    const parent = {id: 'F-PARENT', title: 'Reading', description: 'Original',
+        parent_id: null, work_count: 1, child_count: 1};
+    const child = {id: 'F-CHILD', title: 'Child', description: '',
+        parent_id: 'F-PARENT', work_count: 1, child_count: 0};
+    const detail = (row, owner) => ({...row, private_notes: '',
+        parent: owner || null, children: [], works: [], tags: []});
+    const untouchedWork = {id: 'W-CHILD', folder_id: child.id, folder_title: child.title};
+    const memberWork = {id: 'W-PARENT', folder_id: parent.id, folder_title: parent.title};
+    const control = {id: 'CONTROL', title: 'Do not evict'};
+    const others = [
+        ['concepts', 'concept', 'concepts:index'],
+        ['positions', 'position', 'positions:index'],
+        ['arguments', 'argument', 'arguments:index'],
+        ['people', 'person', 'people:index'],
+        ['person-groups', 'person-group', 'person-groups:index'],
+        ['playlists', 'playlist', 'playlists:index'],
+    ];
+    await store.putList('folders:index', [{...parent}, {...child}], '');
+    await store.putEntity('folder', parent.id, detail(parent), '');
+    await store.putEntity('folder', child.id, detail(child, {id: parent.id, title: parent.title}), '');
+    await store.putEntity('work', memberWork.id, {...memberWork}, '');
+    await store.putEntity('work', untouchedWork.id, {...untouchedWork}, '');
+    for (const [, kind, listKey] of others) {
+        await store.putEntity(kind, control.id, {...control}, '');
+        await store.putList(listKey, [{...control}], '');
+    }
+    const list = async () => (await store.getList('folders:index')).value;
+    const row = async id => (await list()).find(folder => folder.id === id);
+    const validSnapshots = async label => {
+        assertEq(label + ' Folder index passes the real cache validator',
+            validators.prksIsFoldersIndexShape(await list()), true);
+        for (const id of [parent.id, child.id]) {
+            const cached = await store.getEntity('folder', id);
+            if (cached) {
+                assertEq(label + ' Folder detail ' + id + ' is render-safe',
+                    validators.prksIsFolderShape(cached.value, id), true);
+            }
+        }
+    };
+    assertEq('malformed Folder index is rejected by production validator',
+        validators.prksIsFoldersIndexShape([{id: 'F-MISSING', parent_id: null}]), false);
+    assertEq('malformed Folder detail is rejected by production validator',
+        validators.prksIsFolderShape({...parent, private_notes: ''}, parent.id), false);
+    await validSnapshots('seeded');
+
+    const baseline = Object.fromEntries(
+        others.map(([domain]) => [domain, runtime.currentDomainGeneration(domain)]));
+    const preserved = async label => {
+        for (const [domain, kind, listKey] of others) {
+            assertEq(label + ' ' + domain + ' generation isolated',
+                runtime.currentDomainGeneration(domain), baseline[domain]);
+            assertEq(label + ' ' + domain + ' entity cached',
+                (await store.getEntity(kind, control.id)).value, control);
+            assertEq(label + ' ' + domain + ' index cached',
+                (await store.getList(listKey)).value, [control]);
+        }
+        assertEq(label + ' unrelated member Work kept',
+            (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
+        assertEq(label + ' hierarchy index never discarded', Array.isArray(await list()), true);
+        await validSnapshots(label);
+    };
+    let foldersGeneration = runtime.currentDomainGeneration('folders');
+
+    // A server-accepted new Folder is inserted into the *existing* cached
+    // hierarchy; only this domain advances, no unrelated Work is evicted.
+    const added = {id: 'F-NEW', title: 'Coherence New', description: '',
+        parent_id: null, work_count: 0, child_count: 0};
+    assertEq('create ACK applied', await runtime.reconcileCreatedFolder({
+        changed: true, folder_id: added.id, folder: added,
+    }), true);
+    assertEq('create ACK changes Folder generation exactly once',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('create ACK patches new row into hierarchy', await row(added.id), added);
+    assertEq('create ACK keeps old Folder row', await row(parent.id), parent);
+    assertEq('create ACK retains parent Work',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('create ACK');
+
+    // Description is not embedded in any Work. The reconciler patches both
+    // Folder projections and changes only Folder's domain generation.
+    assertEq('description ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: parent.id, field: 'description',
+        server_revision: 2, member_work_ids: [memberWork.id],
+    }, {payload: {value: 'Edited.'}}), true);
+    assertEq('description ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('description ACK patches index', (await row(parent.id)).description, 'Edited.');
+    assertEq('description ACK patches detail',
+        (await store.getEntity('folder', parent.id)).value.description, 'Edited.');
+    assertEq('description ACK leaves member Work intact',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('description ACK');
+
+    // Reparenting means the cached parent *object* is no longer authoritative;
+    // the index has the canonical pointer, but cached member Work cards
+    // depend on Folder title, not the hierarchy.
+    assertEq('reparent ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: child.id, field: 'parent_id',
+        server_revision: 3, member_work_ids: [],
+    }, {payload: {value: ''}}), true);
+    assertEq('reparent ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('reparent ACK updates index pointer', (await row(child.id)).parent_id, null);
+    assertEq('reparent ACK drops stale Folder detail',
+        await store.getEntity('folder', child.id), null);
+    assertEq('reparent ACK preserves Work in changed Folder',
+        (await store.getEntity('work', untouchedWork.id)).value, untouchedWork);
+    assertEq('reparent ACK preserves Work in other Folder',
+        (await store.getEntity('work', memberWork.id)).value, memberWork);
+    await preserved('reparent ACK');
+
+    // Keep the stronger browser rename test, but assert the exact selective
+    // Work eviction policy here too so the negative Work-cache contract
+    // remains sensitive to a wrong ACK implementation.
+    assertEq('rename ACK applied', await runtime.reconcileFolderField({
+        changed: true, folder_id: parent.id, field: 'title',
+        server_revision: 4, member_work_ids: [memberWork.id],
+    }, {payload: {value: 'Renamed Parent'}}), true);
+    assertEq('rename ACK increments only Folder generation',
+        runtime.currentDomainGeneration('folders'), ++foldersGeneration);
+    assertEq('rename ACK patches list', (await row(parent.id)).title, 'Renamed Parent');
+    assertEq('rename ACK patches detail',
+        (await store.getEntity('folder', parent.id)).value.title, 'Renamed Parent');
+    assertEq('rename ACK evicts exactly affected member Work',
+        await store.getEntity('work', memberWork.id), null);
+    await preserved('rename ACK');
+}
+
+
+/* End-to-end in the *fast layer*: real patchFolder -> durable local queue ->
+ * actual sync coordinator/Folder field isResult handler -> ACK reconciliation.
+ * Replacing fieldHandler.reconcile with a no-op makes this check fail. Browser
+ * tests remain responsible for actual server, page, and IndexedDB persistence. */
+async function verifyFolderFieldAckDispatch() {
+    const { createFakeIndexedDBFactory } = require('./lib/fake_indexeddb.js');
+    const { createPrksLocalStore } = require(path.join(rootDir, 'frontend/js/local-store.js'));
+    require(path.join(rootDir, 'frontend/js/sync-runtime.js'));
+    const fs = require('fs');
+    const api = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
+    // The browser bootstraps the production coordinator registry after its
+    // document gate. This Node runner instantiates the same coordinator with
+    // the real exported handler, so also pin the shipped registry wiring:
+    // otherwise removing that registration would silently bypass this test.
+    const syncSource = fs.readFileSync(path.join(rootDir, 'frontend/js/sync-runtime.js'), 'utf8');
+    const registryStart = syncSource.indexOf('runtime = createRuntime({ store, online,');
+    const registryEnd = syncSource.indexOf('\n        lock:', registryStart);
+    if (registryStart < 0 || registryEnd < registryStart) {
+        throw new Error('production sync coordinator registry not found');
+    }
+    const registry = syncSource.slice(registryStart, registryEnd);
+    const entries = registry.match(/\bSET_FOLDER_FIELD:\s*root\.prksFolderFieldSyncHandler\s*,/g) || [];
+    assertEq('production sync registry maps SET_FOLDER_FIELD to Folder field handler',
+        entries.length, 1);
+    const marker = 'async function patchFolder(folderId, updates) {';
+    const start = api.indexOf(marker);
+    if (start < 0 || api.indexOf(marker, start + marker.length) !== -1) {
+        throw new Error('production patchFolder wrapper absent or ambiguous');
+    }
+    const end = api.indexOf('\n}', start);
+    if (end < 0) throw new Error('unclosed production patchFolder wrapper');
+    const patchFolder = new Function('return (' + api.slice(start, end + 2) + ');')();
+    const validators = folderReadValidators();
+    const names = [
+        'prksSync', 'prksOfflineReadEntity', 'prksOfflineReconcileFolderField',
+        'prksDurableOperationsOrNone',
+    ];
+    const originals = names.map(name => ({
+        name, has: Object.prototype.hasOwnProperty.call(globalThis, name),
+        value: globalThis[name],
+    }));
+    let sequence = 0;
+    const uuid = () => '00000000-0000-4000-8000-' +
+        (++sequence).toString(16).padStart(12, '0');
+    try {
+        for (const spec of [
+            {field: 'description', input: '  Edited.  ', stored: 'Edited.', parent: 'F-OLD'},
+            {field: 'parent_id', input: null, stored: null, parent: 'F-OLD'},
+        ]) {
+            const folderId = 'F-SYNC';
+            const folderRow = {id: folderId, title: 'Reading', description: 'Original',
+                private_notes: '', parent_id: spec.parent, work_count: 1, child_count: 0};
+            const oldDetail = {...folderRow, parent: {id: spec.parent, title: 'Old'},
+                children: [], works: [], tags: []};
+            const unrelatedWork = {id: 'W-UNCHANGED', folder_id: folderId,
+                folder_title: folderRow.title};
+            const cache = makeFakeStore({isAvailable: async () => true});
+            await cache.putList('folders:index', [{...folderRow}], '');
+            await cache.putEntity('folder', folderId, {...oldDetail}, '');
+            await cache.putEntity('folder-state', folderId,
+                globalThis.prksNewFolderState(folderId), '');
+            await cache.putEntity('work', unrelatedWork.id, {...unrelatedWork}, '');
+            const offline = mod.createPrksOfflineRuntime({
+                store: cache, prksRequest: () => Promise.reject(Error('unexpected request')),
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+            const local = createPrksLocalStore({
+                dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid,
+            });
+            const envelope = [];
+            let dispatched = 0;
+            globalThis.prksOfflineReadEntity = async (kind, id) => {
+                const cached = await cache.getEntity(kind, id);
+                return {value: cached ? cached.value : null,
+                    source: cached ? 'cache' : 'unavailable'};
+            };
+            globalThis.prksDurableOperationsOrNone = () => local.listOperations();
+            globalThis.prksOfflineReconcileFolderField = async (ack, op) => {
+                dispatched++;
+                return offline.reconcileFolderField(ack, op);
+            };
+            let acknowledgement;
+            const acked = new Promise(resolve => { acknowledgement = resolve; });
+            const sync = globalThis.createPrksSyncRuntime({
+                store: local, online: () => true,
+                handlers: {SET_FOLDER_FIELD: globalThis.prksFolderFieldSyncHandler},
+                request: async (_url, opts) => {
+                    const op = JSON.parse(opts.body);
+                    envelope.push(op);
+                    return {ok: true, status: 200, json: async () => ({
+                        code: 'ACKNOWLEDGED', changed: true,
+                        folder_id: op.entity_id, field: op.payload.field,
+                        value_omitted: true, server_revision: 1,
+                        member_work_ids: [],
+                    })};
+                },
+            });
+            globalThis.prksSync = sync;
+            const unsubscribe = sync.subscribe(event => {
+                if (event.acknowledged) acknowledgement(event);
+            });
+            try {
+                assertEq(spec.field + ' seed index is render-safe',
+                    validators.prksIsFoldersIndexShape(
+                        (await cache.getList('folders:index')).value), true);
+                assertEq(spec.field + ' seed detail is render-safe',
+                    validators.prksIsFolderShape(oldDetail, folderId), true);
+                assertEq(spec.field + ' rejects malformed field ACK',
+                    globalThis.prksFolderFieldSyncHandler.isResult({
+                        code: 'ACKNOWLEDGED', folder_id: folderId,
+                        field: spec.field, changed: true,
+                        server_revision: 1, value_omitted: false,
+                    }, {entity_id: folderId, payload: {field: spec.field}}), false);
+                await patchFolder(folderId, {[spec.field]: spec.input});
+                // The production writer calls runtime.changed(), starting the
+                // real drain. Observe its ACK event, not just an enqueued row.
+                let timeoutId;
+                const timeout = new Promise((_resolve, reject) => {
+                    timeoutId = setTimeout(() =>
+                        reject(Error(spec.field + ' ACK did not reach the sync coordinator')), 3000);
+                });
+                try {
+                    await Promise.race([acked, timeout]);
+                } finally {
+                    clearTimeout(timeoutId);
+                }
+                assertEq(spec.field + ' one canonical sync envelope', envelope.length, 1);
+                assertEq(spec.field + ' actual operation family',
+                    envelope[0] && envelope[0].operation, 'SET_FOLDER_FIELD');
+                assertEq(spec.field + ' actual payload field',
+                    envelope[0] && envelope[0].payload.field, spec.field);
+                assertEq(spec.field + ' actual payload value',
+                    envelope[0] && envelope[0].payload.value,
+                    spec.input == null ? '' : spec.input);
+                assertEq(spec.field + ' field handler dispatch called', dispatched, 1);
+                assertEq(spec.field + ' ACK event carries the real operation',
+                    envelope[0].op_id, (await acked).op.op_id);
+                assertEq(spec.field + ' canonical index is patched',
+                    (await cache.getList('folders:index')).value[0][spec.field], spec.stored);
+                const cachedDetail = await cache.getEntity('folder', folderId);
+                if (spec.field === 'parent_id') {
+                    assertEq('parent ACK discards stale Folder detail', cachedDetail, null);
+                } else {
+                    assertEq('description ACK patches Folder detail',
+                        cachedDetail && cachedDetail.value.description, spec.stored);
+                    assertEq('description ACK detail remains render-safe',
+                        validators.prksIsFolderShape(cachedDetail.value, folderId), true);
+                }
+                assertEq(spec.field + ' patched index remains render-safe',
+                    validators.prksIsFoldersIndexShape(
+                        (await cache.getList('folders:index')).value), true);
+                assertEq(spec.field + ' Work snapshot untouched',
+                    (await cache.getEntity('work', unrelatedWork.id)).value, unrelatedWork);
+                assertEq(spec.field + ' Folder generation advanced once',
+                    offline.currentDomainGeneration('folders'), 1);
+                assertEq(spec.field + ' sync base revision advanced',
+                    (await cache.getEntity('folder-state', folderId)).value
+                        .fields[spec.field].revision, 1);
+                for (let i = 0; i < 30 && (await local.listOperations()).length; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 1));
+                }
+                assertEq(spec.field + ' acknowledged operation retired',
+                    (await local.listOperations()).length, 0);
+            } finally {
+                unsubscribe();
+                sync.stop();
+            }
+        }
+    } finally {
+        for (const entry of originals) {
+            if (entry.has) globalThis[entry.name] = entry.value;
+            else delete globalThis[entry.name];
+        }
+    }
+}
+
 async function run() {
+    await verifyCanonicalFolderFieldAcknowledgements();
+    await verifyFolderAckCacheFootprint();
+    await verifyFolderFieldAckDispatch();
     /* Fifth-domain cleanup is audited: no sweep may touch another domain. */
     {
         const domains = ['concepts', 'positions', 'arguments', 'people', 'person-groups'];
@@ -716,8 +1115,12 @@ async function run() {
             });
             const originalSuccess = global.prksOfflineNoteRequestSuccess;
             const originalFailure = global.prksOfflineNoteRequestFailure;
+            const originalGeneration = global.prksOfflineRuntimeGeneration;
             global.prksOfflineNoteRequestSuccess = runtime.noteRequestSuccess;
             global.prksOfflineNoteRequestFailure = runtime.noteRequestFailure;
+            // This integration uses the real coordinator with a synthetic root:
+            // wire the same generation hook as the browser bootstrap.
+            global.prksOfflineRuntimeGeneration = runtime.getConnectivityGeneration;
             try {
                 runtime.noteRequestFailure();
                 timers.flushAll();
@@ -758,6 +1161,8 @@ async function run() {
                 else global.prksOfflineNoteRequestSuccess = originalSuccess;
                 if (originalFailure === undefined) delete global.prksOfflineNoteRequestFailure;
                 else global.prksOfflineNoteRequestFailure = originalFailure;
+                if (originalGeneration === undefined) delete global.prksOfflineRuntimeGeneration;
+                else global.prksOfflineRuntimeGeneration = originalGeneration;
             }
         }
         await integratedProbeCase(false);
@@ -1500,6 +1905,212 @@ async function run() {
         assertEq('list fallback returns the cached snapshot', result.value, { ids: ['W-1', 'W-2'] });
     }
 
+
+    /* ---- confirmed-offline cache-first LIST reads: Recently Added only ---- */
+    {
+        const key = 'recently-added:index';
+        const path = '/api/recently-added';
+        const domain = 'recently-added';
+        const rows = [{ id: 'W-1', title: 'Acknowledged Work' }];
+        const validate = value => Array.isArray(value) &&
+            value.every(row => row && typeof row.id === 'string');
+        const readOpts = { domain, validate, preferCacheWhenOffline: true };
+        function makeRuntime(store, request) {
+            return mod.createPrksOfflineRuntime({
+                store, prksRequest: request,
+                setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+                window: null, caches: null, navigator: null,
+            });
+        }
+
+        // A real request failure confirms offline; subsequent validated reads
+        // use the stored projection and do not enter the coordinator retry lane.
+        {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.reject(new Error('network unreachable'));
+            });
+            runtime.noteRequestFailure();
+            const cached = await runtime.readThroughList(key, path, readOpts);
+            assertEq('confirmed-offline Recently Added comes from validated cache', cached.source, 'cache');
+            assertEq('confirmed-offline Recently Added preserves rows', cached.value, rows);
+            assertEq('confirmed-offline Recently Added makes no request', requests, 0);
+            assertEq('confirmed-offline Recently Added preserves provenance timestamp', cached.cachedAt, 9999);
+            const normal = await runtime.readThroughList(key, path, { domain, validate });
+            assertEq('non-opt-in list stays server-first offline', requests, 1);
+            assertEq('non-opt-in list can still fall back to cache', normal.source, 'cache');
+            const cold = await runtime.readThroughList('recently-added:missing', path, readOpts);
+            assertEq('missing list still makes normal network attempt', requests, 2);
+            assertEq('missing list is unavailable, not fabricated', cold.source, 'unavailable');
+        }
+
+        // Initial/reconnecting/online reads never trust even a valid cache.
+        {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.resolve(okJsonResponse([{ id: 'W-fresh', title: 'Server Work' }]));
+            });
+            const online = await runtime.readThroughList(key, path, readOpts);
+            assertEq('initial online list remains server-first', online.source, 'server');
+            assertEq('initial online list uses server version', online.value[0].id, 'W-fresh');
+            assertEq('initial online list performs request', requests, 1);
+        }
+
+        // Invalid cached shape cannot skip the server, and a reachable 4xx
+        // remains a domain error rather than becoming cached success.
+        {
+            const store = makeFakeStore();
+            await store.putList(key, [{ title: 'invalid, missing ID' }], '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.resolve(domainErrorResponse(403));
+            });
+            runtime.noteRequestFailure();
+            let error = null;
+            try { await runtime.readThroughList(key, path, readOpts); }
+            catch (err) { error = err; }
+            assertEq('malformed cache goes through server-first path', requests, 1);
+            assert('malformed cache does not mask HTTP 403', error && error.status === 403);
+            assertEq('HTTP domain error proves server reachability', runtime.getState(), 'online');
+        }
+
+        // Failed cache access must not prevent an authoritative server read.
+        {
+            const store = makeFakeStore({ getList: () => Promise.reject(Error('IDB failure')) });
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.resolve(okJsonResponse(rows));
+            });
+            runtime.noteRequestFailure();
+            const result = await runtime.readThroughList(key, path, readOpts);
+            assertEq('IndexedDB error falls back to authoritative request', result.source, 'server');
+            assertEq('IndexedDB error does not block server request', requests, 1);
+        }
+
+        // A blocked domain must refuse its old row even when a failed sweep
+        // leaves bytes present on disk.
+        {
+            const store = makeFakeStore({ deleteList: async () => false });
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.reject(new Error('offline'));
+            });
+            runtime.noteRequestFailure();
+            runtime.markDomainChanged(domain, { listKeys: [key] });
+            await runtime._domainCleanup(domain);
+            const blocked = await runtime.readThroughList(key, path, readOpts);
+            assertEq('failed domain sweep leaves list blocked', runtime.isDomainBlocked(domain), true);
+            assertEq('blocked list cannot render old snapshot', blocked.source, 'unavailable');
+            assertEq('blocked list uses normal request attempt', requests, 1);
+        }
+
+        // Pause precisely after IndexedDB captures an acknowledged row.
+        // Every asynchronous completion must re-evaluate connectivity,
+        // coherence and route cancellation before releasing that row.
+        async function pausedFastList(request, extraOpts) {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            const originalGet = store.getList.bind(store);
+            let resume = null;
+            let cacheReads = 0;
+            store.getList = function (k) {
+                cacheReads++;
+                if (cacheReads !== 1) return originalGet(k);
+                const snapshot = originalGet(k);
+                return new Promise(resolve => {
+                    resume = () => { void snapshot.then(resolve); };
+                });
+            };
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return request();
+            });
+            runtime.noteRequestFailure();
+            const pending = runtime.readThroughList(key, path,
+                Object.assign({}, readOpts, extraOpts || {}));
+            assert('cache-first list enters asynchronous IDB read', typeof resume === 'function');
+            return { runtime, store, resume, pending, getRequests: () => requests };
+        }
+        {
+            const f = await pausedFastList(() => Promise.reject(Error('offline')));
+            f.resume();
+            const result = await f.pending;
+            assertEq('stable paused list returns cached projection', result.source, 'cache');
+            assertEq('stable paused list never requests server', f.getRequests(), 0);
+        }
+        {
+            const f = await pausedFastList(() => Promise.reject(Error('offline')));
+            f.runtime.markDomainChanged(domain, { listKeys: [key] });
+            await f.runtime._domainCleanup(domain);
+            f.resume();
+            const result = await f.pending;
+            assertEq('completed sweep cannot resurrect pending list read', result.source, 'unavailable');
+            assertEq('invalidated pending list uses normal transport', f.getRequests(), 1);
+        }
+        {
+            const f = await pausedFastList(() =>
+                Promise.resolve(okJsonResponse([{ id: 'W-live', title: 'Fresh' }])));
+            f.runtime.noteRequestSuccess();
+            f.resume();
+            const result = await f.pending;
+            assertEq('reconnection during IDB read returns server row', result.value[0].id, 'W-live');
+            assertEq('reconnection during IDB read keeps server provenance', result.source, 'server');
+            assertEq('reconnection during IDB read requests server', f.getRequests(), 1);
+        }
+        {
+            const f = await pausedFastList(() =>
+                Promise.resolve(okJsonResponse([{ id: 'W-cycle', title: 'New' }])));
+            f.runtime.noteRequestSuccess();
+            f.runtime.noteRequestFailure();
+            f.resume();
+            const result = await f.pending;
+            assertEq('online/offline cycle fences stale list cache', result.value[0].id, 'W-cycle');
+            assertEq('online/offline cycle invokes server read', f.getRequests(), 1);
+        }
+        {
+            const controller = new AbortController();
+            const f = await pausedFastList(() => Promise.reject(Error('must not request')),
+                { signal: controller.signal });
+            controller.abort();
+            f.resume();
+            let error = null;
+            try { await f.pending; } catch (err) { error = err; }
+            assertEq('route abort while IndexedDB pending rejects AbortError',
+                error && error.name, 'AbortError');
+            assertEq('aborted list does not send request', f.getRequests(), 0);
+        }
+        {
+            const store = makeFakeStore();
+            await store.putList(key, rows, '');
+            let requests = 0;
+            const runtime = makeRuntime(store, () => {
+                requests++;
+                return Promise.reject(Error('must not request'));
+            });
+            runtime.noteRequestFailure();
+            const controller = new AbortController();
+            controller.abort();
+            let error = null;
+            try {
+                await runtime.readThroughList(key, path,
+                    Object.assign({}, readOpts, { signal: controller.signal }));
+            } catch (err) { error = err; }
+            assertEq('pre-aborted list read returns AbortError', error && error.name, 'AbortError');
+            assertEq('pre-aborted list read does not reach network', requests, 0);
+        }
+    }
+
     /* ---- mutation guard: blocked while offline, shows the standard message, never queues ---- */
     {
         const alerts = [];
@@ -1589,10 +2200,19 @@ async function run() {
             window: null,
             caches: fakeCaches,
             navigator: null,
+            scope: { dbName: async (kind) => (kind === 'pdf' ? 'prks-pdf-v2:S' : null) },
         });
         const ok = await runtime.clearCache();
         assert('clearCache resolves true', ok === true);
-        assertEq('clearCache removes the pdf cache by its documented name', deletedCacheName, mod.PRKS_OFFLINE_PDF_CACHE_NAME);
+        assertEq('clearCache removes the signed-in scope\'s pdf cache', deletedCacheName, 'prks-pdf-v2:S');
+        deletedCacheName = null;
+        const unscoped = mod.createPrksOfflineRuntime({
+            prksRequest: null, store: makeFakeStore(), setTimeout: noopSetTimeout,
+            clearTimeout: noopClearTimeout, window: null, caches: fakeCaches, navigator: null,
+            scope: { dbName: async () => null },
+        });
+        await unscoped.clearCache();
+        assertEq('without a scope no pdf cache is touched', deletedCacheName, null);
         assertEq('clearCache actually empties the store', store._entities.size, 0);
     }
 
@@ -3100,6 +3720,25 @@ async function run() {
             assertEq('pre-aborted reconnecting Person read rejects AbortError', error && error.name, 'AbortError');
             assertEq('pre-aborted Person request causes zero fetches', c.attempts.length, 0);
         }
+    }
+
+    // A response started before a confirmed disconnect is stale evidence.
+    // Fresh results are still permitted, and an unversioned explicit
+    // success retains its legacy behavior for callers without a token.
+    {
+        const runtime = mod.createPrksOfflineRuntime({
+            store: makeFakeStore(), prksRequest: () => Promise.reject(Error('offline')),
+            setTimeout: noopSetTimeout, clearTimeout: noopClearTimeout,
+            window: null, caches: null, navigator: null,
+        });
+        const before = runtime.getConnectivityGeneration();
+        runtime.noteRequestFailure();
+        assert('confirmed failure advances reachability generation',
+            runtime.getConnectivityGeneration() !== before);
+        runtime.noteRequestSuccess(before);
+        assertEq('old successful response cannot reopen offline sync gate', runtime.getState(), 'offline');
+        runtime.noteRequestSuccess(runtime.getConnectivityGeneration());
+        assertEq('new successful response can reopen sync gate', runtime.getState(), 'online');
     }
 
     if (failed) {

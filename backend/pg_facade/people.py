@@ -39,9 +39,10 @@ deliberate:
   §7.5).
 - A Work delete tombstones every role scope of the Work and its
   Manifestations, and a Person delete every role scope naming the Person.
-- ``delete_person_if_unlinked`` leaves the cached portrait file in place:
-  stored bytes belong to the objects lane (L-A-1), and a post-commit side
-  effect is a job, never inline (§5.2).
+- ``delete_person_if_unlinked``, and a change of ``image_url``, never delete
+  the cached portrait's bytes: they drop its reference and record a cleanup
+  claim in the same transaction (``backend.domain.objects.portraits``), and
+  settling the claim is maintenance, never inline (§5.2).
 """
 
 from __future__ import annotations

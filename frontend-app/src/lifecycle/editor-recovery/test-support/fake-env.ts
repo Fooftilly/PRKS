@@ -3,7 +3,11 @@
  * models one origin: locks and channels are shared by every page created from it.
  */
 import type { EmergencyStorage } from '../emergency'
+import { recoveryNames } from '../schema'
 import type { ChannelLike, LockManagerLike } from '../identity'
+
+/** One signed-in browser scope's recovery names, for tests that do not exercise scoping. */
+export const TEST_NAMES = recoveryNames('IN-test.LIB-test.U-test')
 
 export function createFakeBrowser() {
   const held = new Map<string, string>()

@@ -437,6 +437,74 @@ assert(
     styles.some((s) => s.selector === 'edge.graph-edge--label-on' && s.style.label === 'data(canvasLabel)')
 );
 
+// Use the pinned Cytoscape parser, not only the fake runtime, to catch
+// unsupported CSS colors in the final computed selected-node stylesheet.
+const actualCytoscape = require(path.join(__dirname, '..', '..', 'frontend', 'vendor', 'cytoscape', 'cytoscape.min.js'));
+for (const theme of [
+    { name: 'light', accent: '#6d6cf7', surface: '#f8fafc', percent: '12%' },
+    { name: 'dark', accent: '#818cf8', surface: '#1f2937', percent: '16%' },
+]) {
+    sandbox.document = { documentElement: {} };
+    sandbox.getComputedStyle = function () {
+        const tokens = {
+            '--accent': theme.accent,
+            '--surface': theme.surface,
+            '--surface-selected': 'color-mix(in srgb, ' + theme.accent + ' ' + theme.percent + ', ' + theme.surface + ')',
+            '--status-progress-border': '#ca8a04',
+        };
+        return { getPropertyValue: function (name) { return tokens[name] || ''; } };
+    };
+    const palette = g.cytoscapeStyle();
+    const selection = palette.find((rule) => rule.selector === 'node:selected, node.graph-node--selected');
+    assert(rows, theme.name + ' selected palette exists', !!selection);
+    assert(rows, theme.name + ' preserves the type border', !Object.prototype.hasOwnProperty.call(selection.style, 'border-color'));
+    assertEq(rows, theme.name + ' selected fill is an ordinary Cytoscape color', selection.style['background-color'], theme.accent);
+    assert(rows, theme.name + ' selected fill is visible', selection.style['background-opacity'] > 0);
+    assert(rows, theme.name + ' accent halo is visible', selection.style['underlay-opacity'] > 0 && selection.style['underlay-padding'] > 0);
+    assert(rows, theme.name + ' no CSS color-mix passes to Cytoscape',
+        !palette.some((rule) => Object.values(rule.style).some((value) =>
+            typeof value === 'string' && value.includes('color-mix('))));
+
+    const warnings = [];
+    const oldWarn = console.warn;
+    let cy = null;
+    try {
+        console.warn = function () { warnings.push(Array.from(arguments).join(' ')); };
+        cy = actualCytoscape({
+            headless: true,
+            styleEnabled: true,
+            layout: { name: 'preset' },
+            style: palette,
+            elements: [
+                { data: { id: 'regular', label: 'Ordinary Argument' }, classes: 'graph-node--argument' },
+                { data: { id: 'selected', label: 'Selected Argument' },
+                    classes: 'graph-node--argument graph-node--selected' },
+            ],
+        });
+        const ordinary = cy.getElementById('regular');
+        const selected = cy.getElementById('selected');
+        assertEq(rows, theme.name + ' selected Argument retains type border',
+            selected.style('border-color'), ordinary.style('border-color'));
+        assertEq(rows, theme.name + ' selected Argument keeps amber type',
+            selected.style('border-color'), 'rgb(202,138,4)');
+        assert(rows, theme.name + ' selected background differs from unselected',
+            selected.style('background-color') !== ordinary.style('background-color'));
+        assert(rows, theme.name + ' selected border is thicker',
+            parseFloat(selected.style('border-width')) > parseFloat(ordinary.style('border-width')));
+        assert(rows, theme.name + ' renderer sees a filled selection',
+            parseFloat(selected.style('background-opacity')) > 0);
+        assert(rows, theme.name + ' renderer sees a selected halo',
+            parseFloat(selected.style('underlay-opacity')) > 0);
+    } finally {
+        if (cy) cy.destroy();
+        console.warn = oldWarn;
+    }
+    assert(rows, theme.name + ' selection emits no invalid-style warnings',
+        !warnings.some((warning) => /invalid|color-mix/i.test(warning)), warnings.join('; '));
+}
+delete sandbox.document;
+delete sandbox.getComputedStyle;
+
 g.openSelectedRecord(fixture.nodes[0]);
 assertEq(rows, 'open concept navigates', navigated[navigated.length - 1], '#/concepts/C-1');
 g.openSelectedRecord(fixture.nodes[1]);

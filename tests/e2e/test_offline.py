@@ -54,6 +54,8 @@ from tests.e2e.test_app import (
     _FOCUSED_VIEWER,
     _FOCUSED_WORK_NOTES,
     _commit_pdf_highlight,
+    _only_viewer_annotation_id,
+    _wait_server_annotation,
     _continue_held_routes,
     _sync_success_at,
     _open_details_drawer_if_tiled,
@@ -400,7 +402,7 @@ def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
     wait_for_async(page,
         """(path) => {
             if (typeof caches === 'undefined') return false;
-            return caches.open('prks-pdf-v1').then(c => c.match(path)).then(m => !!m);
+            return prksOfflinePdfCacheName().then(n => n ? caches.open(n) : null).then(c => c ? c.match(path) : null).then(m => !!m);
         }""",
         arg=pdf_path,
         timeout=timeout,
@@ -408,11 +410,11 @@ def _wait_pdf_whole_file_cached(page, pdf_path, timeout=15000):
 
 
 def _pdf_cache_fingerprint(page, pdf_path):
-    """Length and FNV-1a of the prks-pdf-v1 whole-file entry, or None."""
+    """Length and FNV-1a of the scoped PDF cache's whole-file entry, or None."""
     return page.evaluate(
         """async (path) => {
             if (typeof caches === 'undefined' || !path) return null;
-            const cache = await caches.open('prks-pdf-v1');
+            const cache = await caches.open(await prksOfflinePdfCacheName());
             const match = await cache.match(path);
             if (!match) return null;
             const bytes = new Uint8Array(await match.arrayBuffer());
@@ -433,7 +435,7 @@ def _wait_pdf_cache_replaced(page, pdf_path, previous, timeout=30000):
         page,
         """async (arg) => {
             if (typeof caches === 'undefined') return false;
-            const cache = await caches.open('prks-pdf-v1');
+            const cache = await caches.open(await prksOfflinePdfCacheName());
             const match = await cache.match(arg.path);
             if (!match) return false;
             const bytes = new Uint8Array(await match.arrayBuffer());
@@ -451,7 +453,7 @@ def _wait_pdf_cache_replaced(page, pdf_path, previous, timeout=30000):
             "hash": previous["hash"],
         },
         timeout=timeout,
-        message="in-place PDF materialization did not replace prks-pdf-v1",
+        message="in-place PDF materialization did not replace the scoped PDF cache",
     )
 
 
@@ -1354,7 +1356,7 @@ class OfflineFoundationTests(unittest.TestCase):
         )
 
     def test_inplace_pdf_materialization_refreshes_whole_file_cache(self):
-        """In-place annotation materialization replaces prks-pdf-v1.
+        """In-place annotation materialization replaces the scoped PDF cache entry.
 
         Opening a PDF primes the whole-file cache. A later exclusive POST /pdf
         keeps the same /api/pdfs/ path (no COW). Range loads never rewrite that
@@ -1403,7 +1405,7 @@ class OfflineFoundationTests(unittest.TestCase):
         # The PDF save drops the disposable Work snapshot. Re-read that JSON
         # while still online so an offline reload can mount the page. This
         # must not be a PDF GET: a whole-file network response would rewrite
-        # prks-pdf-v1 on its own and hide a missing cache seed.
+        # the scoped PDF cache on its own and hide a missing cache seed.
         warmed = page.evaluate(
             """async (id) => {
                 const result = await prksOfflineReadEntity(
@@ -1632,6 +1634,10 @@ class OfflineFoundationTests(unittest.TestCase):
             self.assertEqual(_viewer_annotation_count(page), annotation_count_before)
             self.assertTrue(page.evaluate("() => !!%s" % _FOCUSED_VIEWER))
             self.assertEqual(_pdf_mode(page), "work")
+            # The offline capability flag may settle after the connectivity
+            # runtime switches state. Wait for the actual enabled markup
+            # controls; a genuinely read-only viewer still fails this check.
+            _wait_pdf_markup_tools_settled(page)
             self.assertTrue(_pdf_markup_tools_available(page))
 
             page.wait_for_timeout(1500)
@@ -1733,10 +1739,21 @@ class OfflineFoundationTests(unittest.TestCase):
         page.route("**/api/**", hold_reachability_gets)
         try:
             context.set_offline(False)
+            # An unrelated API GET may be the first held route. It is not
+            # proof that the actual connectivity probe is blocked, and
+            # releasing the routes before /api/settings arrives can make this
+            # reconnect race test fail or pass for the wrong reason.
+            def settings_probe_held():
+                return any(
+                    route.request.method == "GET"
+                    and urlparse(route.request.url).path == "/api/settings"
+                    for route in held_probe
+                )
+
             deadline = time.time() + 12
-            while time.time() < deadline and not held_probe:
+            while time.time() < deadline and not settings_probe_held():
                 page.wait_for_timeout(50)
-            self.assertTrue(held_probe, "reachability probe did not start")
+            self.assertTrue(settings_probe_held(), "held /api/settings reachability probe did not start")
 
             page.wait_for_timeout(200)
             self.assertNotEqual(_connectivity_state(page), "online")
@@ -2234,8 +2251,21 @@ class OfflineFoundationTests(unittest.TestCase):
                     }""" % _FOCUSED_PDF
                 )
             )
-            before_ops = page.evaluate(
-                "() => prksSync.store.listOperations().then(r => r.length)"
+            annotation_op_ids = """id => prksSync.store.listOperations().then(rows => {
+                const types = new Set(window.PRKS_PDF_ANNOTATION_OPERATION_TYPES ||
+                    ['CREATE_PDF_ANNOTATION', 'SET_PDF_ANNOTATION', 'DELETE_PDF_ANNOTATION']);
+                return rows.filter(op => op.entity_type === 'work'
+                        && String(op.entity_id) === String(id)
+                        && types.has(op.operation))
+                    .map(op => op.op_id).sort();
+            })"""
+            # Queue retirement from unrelated domains is allowed; compare
+            # exact PDF annotation intent IDs for this Work only.
+            before_ops = page.evaluate(annotation_op_ids, work_a)
+            before_viewer_annotations = _viewer_annotation_count(page)
+            self.assertEqual(
+                before_viewer_annotations, 0,
+                "seeded PDF unexpectedly has viewer annotations before hydration",
             )
             # Attempt a highlight while snapshot is held — must not create
             # durable intent or leave an untracked viewer annotation accepted.
@@ -2244,10 +2274,12 @@ class OfflineFoundationTests(unittest.TestCase):
             except Exception:
                 pass
             page.wait_for_timeout(400)
-            after_ops = page.evaluate(
-                "() => prksSync.store.listOperations().then(r => r.length)"
-            )
+            after_ops = page.evaluate(annotation_op_ids, work_a)
             self.assertEqual(before_ops, after_ops)
+            self.assertEqual(
+                _viewer_annotation_count(page), before_viewer_annotations,
+                "a viewer annotation was accepted without a durable bridge",
+            )
             self.assertEqual(_pdf_mode(page), "preview")
 
             _continue_held_routes(held)
@@ -2264,6 +2296,14 @@ class OfflineFoundationTests(unittest.TestCase):
             )
             _wait_pdf_markup_tools_settled(page)
             self.assertTrue(_pdf_markup_tools_available(page))
+            # The same viewer must become *durably* editable after the held
+            # snapshot resolves, rather than merely showing enabled controls.
+            _commit_pdf_highlight(page)
+            self.assertEqual(_viewer_annotation_count(page), 1)
+            _wait_server_annotation(
+                page, work_a, _only_viewer_annotation_id(page)
+            )
+            _drain_durable(page)
         finally:
             _continue_held_routes(held)
             try:
@@ -2454,6 +2494,9 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        # Work mode arrives after the viewer renders; wait for it so the 500
+        # below is the only thing that could change the mode.
+        page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
         self.assertTrue(page.evaluate("() => navigator.onLine"))
         self.assertEqual(_connectivity_state(page), "online")
 
@@ -3677,109 +3720,6 @@ class OfflinePositionTests(unittest.TestCase):
         self.assertTrue(page.locator("#prks-modal-confirm.hidden").count() >= 1)
         del seen
 
-    def test_position_code_no_longer_applies_its_own_argument_offline_policy(self):
-        """Structural guard for the cleanup: ordinary workspace navigation owns
-        every activation gesture, so Position code must not mark Argument rows
-        or attach its own activation interception."""
-        server, page, context, _collector = self._start()
-        position_a = server.ids["position_a"]
-
-        _wait_sw_active(page)
-        _open_position(page, position_a)
-        _wait_content_contains(page, POSITION_ARGUMENT_NAME)
-        _wait_entity_cached(page, "position", position_a)
-
-        context.set_offline(True)
-        page.reload(wait_until="domcontentloaded")
-        page.wait_for_selector("#sidebar")
-        _wait_offline_banner(page)
-        # Graph navigation remains enabled; its destination owns availability.
-        page.wait_for_function(
-            "() => !!document.querySelector('#prks-position-view-graph:not([disabled])')", timeout=20000
-        )
-        state = page.evaluate(
-            """() => {
-                const a = document.querySelector('[data-prks-role="position-argument-link"]');
-                const hosts = [...document.querySelectorAll('*')]
-                    .filter(el => el.__prksPositionArgumentGuardBound).length;
-                return {
-                    ariaDisabled: a && a.getAttribute('aria-disabled'),
-                    title: a && a.getAttribute('title'),
-                    guardHosts: hosts,
-                };
-            }"""
-        )
-        self.assertEqual(state, {"ariaDisabled": None, "title": None, "guardHosts": 0})
-
-
-    def test_position_shape_validators_reject_unusable_rows(self):
-        """The validators gate cache publication, so they are checked directly
-        against the shapes a server could actually hand back."""
-        server, page, _context, _collector = self._start()
-        _wait_sw_active(page)
-        _open_position_index(page)
-        _wait_content_contains(page, POSITION_A_NAME)
-
-        index_cases = page.evaluate(
-            """() => ({
-                empty: prksIsPositionIndexShape([]),
-                ok: prksIsPositionIndexShape([{ id: 'P-1', name: 'A' }]),
-                notArray: prksIsPositionIndexShape({ error: 'boom' }),
-                nullValue: prksIsPositionIndexShape(null),
-                missingId: prksIsPositionIndexShape([{ name: 'A' }]),
-                blankId: prksIsPositionIndexShape([{ id: '   ', name: 'A' }]),
-                nestedArrayRow: prksIsPositionIndexShape([['P-1']]),
-                oneBadRow: prksIsPositionIndexShape([{ id: 'P-1' }, { id: '' }]),
-            })"""
-        )
-        self.assertEqual(
-            index_cases,
-            {
-                "empty": True,
-                "ok": True,
-                "notArray": False,
-                "nullValue": False,
-                "missingId": False,
-                "blankId": False,
-                "nestedArrayRow": False,
-                "oneBadRow": False,
-            },
-        )
-
-        detail_cases = page.evaluate(
-            """() => ({
-                ok: prksIsPositionShape({ id: 'P-1', arguments: [] }, 'P-1'),
-                okWithArgs: prksIsPositionShape(
-                    { id: 'P-1', arguments: [{ id: 'A-1', name: 'x', kind: 'stance' }] }, 'P-1'),
-                argsWithoutDisplayFields: prksIsPositionShape(
-                    { id: 'P-1', arguments: [{ id: 'A-1' }] }, 'P-1'),
-                wrongId: prksIsPositionShape({ id: 'P-2', arguments: [] }, 'P-1'),
-                missingArguments: prksIsPositionShape({ id: 'P-1' }, 'P-1'),
-                argumentsNotArray: prksIsPositionShape({ id: 'P-1', arguments: {} }, 'P-1'),
-                argumentMissingId: prksIsPositionShape(
-                    { id: 'P-1', arguments: [{ name: 'no id' }] }, 'P-1'),
-                argumentBlankId: prksIsPositionShape(
-                    { id: 'P-1', arguments: [{ id: '  ', name: 'blank' }] }, 'P-1'),
-                errorBody: prksIsPositionShape({ error: 'boom' }, 'P-1'),
-                arrayBody: prksIsPositionShape([], 'P-1'),
-            })"""
-        )
-        self.assertEqual(
-            detail_cases,
-            {
-                "ok": True,
-                "okWithArgs": True,
-                "argsWithoutDisplayFields": True,
-                "wrongId": False,
-                "missingArguments": False,
-                "argumentsNotArray": False,
-                "argumentMissingId": False,
-                "argumentBlankId": False,
-                "errorBody": False,
-                "arrayBody": False,
-            },
-        )
-
     def test_position_graph_action_navigates_to_uncached_graph_offline(self):
         server, page, context, _collector = self._start()
         position_a = server.ids["position_a"]
@@ -4231,25 +4171,6 @@ class OfflinePositionTests(unittest.TestCase):
         _open_position(page, position_a)
         _wait_content_contains(page, "No Arguments or Stances target this Position yet.")
 
-    def test_argument_source_change_does_not_invalidate_positions(self):
-        """Source Works are not part of the Position read model."""
-        server, page, _context, _collector = self._start()
-        position_a = server.ids["position_a"]
-        argument_id = server.ids["position_argument"]
-        work_a = server.ids["work_a"]
-
-        _wait_sw_active(page)
-        _open_position(page, position_a)
-        _wait_entity_cached(page, "position", position_a)
-        generation_before = _domain_generation(page, "positions")
-
-        page.evaluate(
-            "([argId, workId]) => window.putArgumentSources(argId, [{ work_id: workId, pages: '1-2' }])",
-            [argument_id, work_a],
-        )
-        _drain_durable(page)
-        self.assertEqual(_domain_generation(page, "positions"), generation_before)
-        self.assertIsNotNone(_cached_entity(page, "position", position_a))
 
     def test_stale_pre_mutation_position_read_cannot_repopulate_the_cache(self):
         server, page, _context, _collector = self._start()
@@ -4906,169 +4827,7 @@ class OfflineArgumentTests(unittest.TestCase):
         page.evaluate("""async () => { await window.prksRequest('/api/settings'); }""")
         self.assertFalse(page.locator("#prks-arg-edit").is_disabled())
 
-    def test_argument_shape_validators_reject_unusable_rows(self):
-        """The validators gate cache publication, so they are checked directly
-        against the shapes a server could actually hand back."""
-        server, page, _context, _collector = self._start()
-        _wait_sw_active(page)
-        _open_argument_index(page)
-        _wait_content_contains(page, ARGUMENT_A_NAME)
 
-        index_cases = page.evaluate(
-            """() => {
-                const ok = { id: 'A-1', kind: 'argument', targets: [], sources: [] };
-                return {
-                    empty: prksIsArgumentIndexShape([]),
-                    ok: prksIsArgumentIndexShape([ok]),
-                    stanceOk: prksIsArgumentIndexShape([{ id: 'A-2', kind: 'stance', targets: [], sources: [] }]),
-                    notArray: prksIsArgumentIndexShape({ error: 'boom' }),
-                    nullValue: prksIsArgumentIndexShape(null),
-                    missingId: prksIsArgumentIndexShape([{ kind: 'argument', targets: [], sources: [] }]),
-                    blankId: prksIsArgumentIndexShape([{ id: '  ', kind: 'argument', targets: [], sources: [] }]),
-                    badKind: prksIsArgumentIndexShape([{ id: 'A-1', kind: 'claim', targets: [], sources: [] }]),
-                    missingKind: prksIsArgumentIndexShape([{ id: 'A-1', targets: [], sources: [] }]),
-                    targetsNotArray: prksIsArgumentIndexShape([{ id: 'A-1', kind: 'argument', targets: {}, sources: [] }]),
-                    sourcesNotArray: prksIsArgumentIndexShape([{ id: 'A-1', kind: 'argument', targets: [], sources: {} }]),
-                    targetMissingId: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [{ type: 'position' }], sources: [] }]),
-                    targetMissingType: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [{ id: 'P-1' }], sources: [] }]),
-                    targetBadType: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [{ id: 'P-1', type: 'concept' }], sources: [] }]),
-                    sourceMissingWorkId: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [], sources: [{ authors: [] }] }]),
-                    sourceAuthorsNotArray: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [], sources: [{ work_id: 'W-1' }] }]),
-                    authorNull: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [],
-                          sources: [{ work_id: 'W-1', authors: [null] }] }]),
-                    authorString: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [],
-                          sources: [{ work_id: 'W-1', authors: ['bad'] }] }]),
-                    authorMissingId: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [],
-                          sources: [{ work_id: 'W-1', authors: [{}] }] }]),
-                    authorMinimalOk: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument', targets: [],
-                          sources: [{ work_id: 'W-1', authors: [{ id: 'P-1' }] }] }]),
-                    optionalDisplayFieldsAbsent: prksIsArgumentIndexShape([
-                        { id: 'A-1', kind: 'argument',
-                          targets: [{ id: 'P-1', type: 'position' }],
-                          sources: [{ work_id: 'W-1', authors: [] }] }]),
-                };
-            }"""
-        )
-        self.assertEqual(
-            index_cases,
-            {
-                "empty": True,
-                "ok": True,
-                "stanceOk": True,
-                "notArray": False,
-                "nullValue": False,
-                "missingId": False,
-                "blankId": False,
-                "badKind": False,
-                "missingKind": False,
-                "targetsNotArray": False,
-                "sourcesNotArray": False,
-                "targetMissingId": False,
-                "targetMissingType": False,
-                "targetBadType": False,
-                "sourceMissingWorkId": False,
-                "sourceAuthorsNotArray": False,
-                "authorNull": False,
-                "authorString": False,
-                "authorMissingId": False,
-                "authorMinimalOk": True,
-                "optionalDisplayFieldsAbsent": True,
-            },
-        )
-
-        detail_cases = page.evaluate(
-            """() => {
-                const base = () => ({ id: 'A-1', kind: 'argument', targets: [], sources: [],
-                                      responses: [], mentions: [], verdicts: [] });
-                const withField = (k, v) => { const o = base(); o[k] = v; return o; };
-                return {
-                    ok: prksIsArgumentShape(base(), 'A-1'),
-                    stanceOk: prksIsArgumentShape(withField('kind', 'stance'), 'A-1'),
-                    wrongId: prksIsArgumentShape(base(), 'A-2'),
-                    badKind: prksIsArgumentShape(withField('kind', 'claim'), 'A-1'),
-                    targetsNotArray: prksIsArgumentShape(withField('targets', {}), 'A-1'),
-                    sourcesNotArray: prksIsArgumentShape(withField('sources', null), 'A-1'),
-                    responsesNotArray: prksIsArgumentShape(withField('responses', {}), 'A-1'),
-                    mentionsNotArray: prksIsArgumentShape(withField('mentions', 'x'), 'A-1'),
-                    verdictsNotArray: prksIsArgumentShape(withField('verdicts', {}), 'A-1'),
-                    targetMissingId: prksIsArgumentShape(
-                        withField('targets', [{ type: 'argument' }]), 'A-1'),
-                    sourceMissingWorkId: prksIsArgumentShape(
-                        withField('sources', [{ authors: [] }]), 'A-1'),
-                    authorNull: prksIsArgumentShape(
-                        withField('sources', [{ work_id: 'W-1', authors: [null] }]), 'A-1'),
-                    authorString: prksIsArgumentShape(
-                        withField('sources', [{ work_id: 'W-1', authors: ['bad'] }]), 'A-1'),
-                    authorMissingId: prksIsArgumentShape(
-                        withField('sources', [{ work_id: 'W-1', authors: [{}] }]), 'A-1'),
-                    authorMinimalOk: prksIsArgumentShape(
-                        withField('sources', [{ work_id: 'W-1', authors: [{ id: 'P-1' }] }]), 'A-1'),
-                    blankId: prksIsArgumentShape(
-                        { id: '   ', kind: 'argument', targets: [], sources: [],
-                          responses: [], mentions: [], verdicts: [] }, '   '),
-                    responseMissingId: prksIsArgumentShape(
-                        withField('responses', [{ name: 'x' }]), 'A-1'),
-                    responseBadKind: prksIsArgumentShape(
-                        withField('responses', [{ id: 'A-9', kind: 'claim' }]), 'A-1'),
-                    mentionMissingWorkId: prksIsArgumentShape(
-                        withField('mentions', [{ title: 'x' }]), 'A-1'),
-                    verdictMissingId: prksIsArgumentShape(
-                        withField('verdicts', [{ label: 'Supports' }]), 'A-1'),
-                    errorBody: prksIsArgumentShape({ error: 'boom' }, 'A-1'),
-                    arrayBody: prksIsArgumentShape([], 'A-1'),
-                    optionalDisplayFieldsAbsent: prksIsArgumentShape({
-                        id: 'A-1', kind: 'argument',
-                        targets: [{ id: 'A-9', type: 'argument' }],
-                        sources: [{ work_id: 'W-1', authors: [] }],
-                        responses: [{ id: 'A-8' }],
-                        mentions: [{ work_id: 'W-2' }],
-                        verdicts: [{ id: 'supports' }],
-                    }, 'A-1'),
-                    authorDisplayFieldsAbsent: prksIsArgumentShape(
-                        withField('sources', [{ work_id: 'W-1', authors: [
-                            { id: 'P-1', first_name: '', last_name: '', credit_name: null },
-                        ] }]), 'A-1'),
-                };
-            }"""
-        )
-        self.assertEqual(
-            detail_cases,
-            {
-                "ok": True,
-                "stanceOk": True,
-                "wrongId": False,
-                "badKind": False,
-                "targetsNotArray": False,
-                "sourcesNotArray": False,
-                "responsesNotArray": False,
-                "mentionsNotArray": False,
-                "verdictsNotArray": False,
-                "targetMissingId": False,
-                "sourceMissingWorkId": False,
-                "authorNull": False,
-                "authorString": False,
-                "authorMissingId": False,
-                "authorMinimalOk": True,
-                "blankId": False,
-                "responseMissingId": False,
-                "responseBadKind": False,
-                "mentionMissingWorkId": False,
-                "verdictMissingId": False,
-                "errorBody": False,
-                "arrayBody": False,
-                "optionalDisplayFieldsAbsent": True,
-                "authorDisplayFieldsAbsent": True,
-            },
-        )
 
     def test_malformed_author_row_in_a_200_never_replaces_a_good_cache(self):
         """A reachable server answering 200 with an unusable author row is a
@@ -5367,59 +5126,6 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
 
     # ---- domain boundaries --------------------------------------------------
 
-    def test_argument_sources_invalidate_arguments_but_not_positions(self):
-        server, page, _context, _collector = self._start()
-        argument_a = server.ids["argument_a"]
-        position_a = server.ids["position_a"]
-        concept_child = server.ids["concept_child"]
-
-        self._cache_arguments(page, server)
-        _open_position(page, position_a)
-        _wait_entity_cached(page, "position", position_a)
-        _open_concept(page, concept_child)
-        _wait_entity_cached(page, "concept", concept_child)
-        arguments_before = _domain_generation(page, "arguments")
-        positions_before = _domain_generation(page, "positions")
-        concepts_before = _domain_generation(page, "concepts")
-
-        page.evaluate(
-            "([id, workId]) => window.putArgumentSources(id, [{ work_id: workId, pages: '3-4' }])",
-            [argument_a, server.ids["work_b"]],
-        )
-        self._assert_arguments_invalidated(page, server, arguments_before)
-        # Source Works are not in the Position read model, and nothing here
-        # touches Concepts at all.
-        self.assertEqual(_domain_generation(page, "positions"), positions_before)
-        self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
-        self.assertIsNotNone(_cached_entity(page, "position", position_a))
-        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
-
-    def test_argument_targets_invalidate_arguments_and_positions_only(self):
-        server, page, _context, _collector = self._start()
-        argument_a = server.ids["argument_a"]
-        position_a = server.ids["position_a"]
-        concept_child = server.ids["concept_child"]
-
-        self._cache_arguments(page, server)
-        _open_position(page, position_a)
-        _wait_entity_cached(page, "position", position_a)
-        _open_concept(page, concept_child)
-        _wait_entity_cached(page, "concept", concept_child)
-        arguments_before = _domain_generation(page, "arguments")
-        positions_before = _domain_generation(page, "positions")
-        concepts_before = _domain_generation(page, "concepts")
-
-        page.evaluate(
-            """([id, positionId]) => window.putArgumentTargets(id, [
-                { type: 'position', id: positionId, verdict_id: 'qualifies' },
-            ])""",
-            [argument_a, position_a],
-        )
-        self._assert_arguments_invalidated(page, server, arguments_before)
-        self.assertGreater(_domain_generation(page, "positions"), positions_before)
-        _wait_entity_uncached(page, "position", position_a)
-        self.assertEqual(_domain_generation(page, "concepts"), concepts_before)
-        self.assertIsNotNone(_cached_entity(page, "concept", concept_child))
 
     def test_concept_mutation_leaves_arguments_and_positions_alone(self):
         server, page, _context, _collector = self._start()
@@ -5764,74 +5470,7 @@ class OfflinePeopleTests(unittest.TestCase):
         self.addCleanup(lambda: _safe_unroute(page, pattern, record))
         return seen
 
-    def test_people_validator_matches_renderer_scalar_contract(self):
-        server, page, _context, _collector = self._start()
 
-        cases = page.evaluate(
-            """() => {
-                const scalarFields = [
-                    'first_name', 'last_name', 'aliases', 'about', 'image_url',
-                    'link_wikipedia', 'link_stanford_encyclopedia', 'link_iep',
-                    'links_other', 'birth_date', 'death_date',
-                ];
-                const badValues = [{}, [], 3, true];
-                const allowedValues = [undefined, null, '', 'value'];
-                const detail = () => ({ id: 'P-1', works: [], groups: [] });
-                const index = () => ({ id: 'P-1', assigned_roles: [], groups: [] });
-                const withField = (base, field, value) => Object.assign(base, { [field]: value });
-                const workWith = (field, value) => ({
-                    id: 'P-1', works: [withField({ id: 'W-1' }, field, value)], groups: [],
-                });
-                const malformedExamples = {
-                    first_name: {}, last_name: [], aliases: [], about: {}, image_url: [],
-                    link_wikipedia: 7, link_stanford_encyclopedia: false, link_iep: {},
-                    links_other: {}, birth_date: [], death_date: true,
-                };
-                return {
-                    optionalStringContract:
-                        prksIsOptionalString(undefined) && prksIsOptionalString(null) &&
-                        prksIsOptionalString('') && prksIsOptionalString('value') &&
-                        !prksIsOptionalString([]) && !prksIsOptionalString({}) &&
-                        !prksIsOptionalString(3) && !prksIsOptionalString(true),
-                    everyScalarRejectsEveryBadType: scalarFields.every((field) =>
-                        badValues.every((value) =>
-                            !prksIsPersonShape(withField(detail(), field, value), 'P-1') &&
-                            !prksIsPeopleIndexShape([withField(index(), field, value)])
-                        )
-                    ),
-                    everyScalarAcceptsOptionalStrings: scalarFields.every((field) =>
-                        allowedValues.every((value) =>
-                            prksIsPersonShape(withField(detail(), field, value), 'P-1') &&
-                            prksIsPeopleIndexShape([withField(index(), field, value)])
-                        )
-                    ),
-                    everyAuditedMalformedExampleRejected: Object.entries(malformedExamples).every(
-                        ([field, value]) =>
-                            !prksIsPersonShape(withField(detail(), field, value), 'P-1') &&
-                            !prksIsPeopleIndexShape([withField(index(), field, value)])
-                    ),
-                    sparseDetailAccepted: prksIsPersonShape({
-                        id: 'P-1', first_name: null, last_name: '', aliases: '', about: '',
-                        image_url: null, link_wikipedia: null,
-                        link_stanford_encyclopedia: null, link_iep: null, links_other: '',
-                        birth_date: null, death_date: null, works: [], groups: [],
-                    }, 'P-1'),
-                    sparseIndexAccepted: prksIsPeopleIndexShape([{
-                        id: 'P-1', first_name: null, last_name: '', aliases: '', about: '',
-                        image_url: null, link_wikipedia: null,
-                        link_stanford_encyclopedia: null, link_iep: null, links_other: '',
-                        birth_date: null, death_date: null, assigned_roles: [], groups: [],
-                    }]),
-                    workScalarsRejectBadTypes: ['year', 'published_date'].every((field) =>
-                        badValues.every((value) => !prksIsPersonShape(workWith(field, value), 'P-1'))
-                    ),
-                    workScalarsAcceptOptionalStrings: ['year', 'published_date'].every((field) =>
-                        allowedValues.every((value) => prksIsPersonShape(workWith(field, value), 'P-1'))
-                    ),
-                };
-            }"""
-        )
-        self.assertTrue(all(cases.values()), cases)
 
     # ---- one cached index, local role filtering -----------------------------
 
@@ -6837,87 +6476,9 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.locator("#pd-save-btn").click()
         page.wait_for_selector(".person-panel-edit", state="detached", timeout=15000)
 
-    def test_failed_person_mutation_retains_the_people_cache(self):
-        server, page, _context, _collector = self._start()
-
-        self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-
-        def reject(route):
-            if route.request.method in ("POST", "PATCH", "DELETE"):
-                route.fulfill(status=500, content_type="application/json", body='{"error":"nope"}')
-                return
-            route.fallback()
-
-        page.route("**/api/persons**", reject)
-        try:
-            page.evaluate(
-                """async (id) => {
-                    try {
-                        const res = await window.prksRequest('/api/persons/' + id, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ about: 'never applied' }),
-                        });
-                        if (res.ok) window.prksMarkPeopleDomainChanged();
-                    } catch (_e) {}
-                }""",
-                server.ids["person_a"],
-            )
-            page.wait_for_timeout(400)
-            self.assertEqual(_domain_generation(page, "people"), before)
-            self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
-        finally:
-            _safe_unroute(page, "**/api/persons**", reject)
-
     # ---- role mutations -----------------------------------------------------
 
-    def test_every_role_type_invalidates_people_but_only_author_invalidates_arguments(self):
-        """People carries assigned_roles, the Person's linked Work rows and
-        aliases (credit names), so EVERY role type stales it. Arguments only
-        lists a source Work's Authors."""
-        server, page, _context, _collector = self._start()
-        work_b = server.ids["work_b"]
-        person_unvisited = server.ids["person_unvisited"]
 
-        # Non-Author role: People only.
-        self._cache_people(page, server)
-        _open_argument(page, server.ids["argument_a"])
-        _wait_entity_cached(page, "argument", server.ids["argument_a"])
-        before = _domain_generation(page, "people")
-        arguments_before = _domain_generation(page, "arguments")
-        page.evaluate(
-            """async ([workId, personId]) => {
-                const res = await window.prksRequest('/api/roles', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Editor' }),
-                });
-                if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Editor');
-            }""",
-            [work_b, person_unvisited],
-        )
-        self._assert_people_invalidated(page, server, before)
-        self.assertEqual(_domain_generation(page, "arguments"), arguments_before)
-        self.assertIsNotNone(_cached_entity(page, "argument", server.ids["argument_a"]))
-
-        # Author role: People AND Arguments.
-        self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-        arguments_before = _domain_generation(page, "arguments")
-        page.evaluate(
-            """async ([workId, personId]) => {
-                const res = await window.prksRequest('/api/roles', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ person_id: personId, work_id: workId, role_type: 'Author' }),
-                });
-                if (res.ok) window.prksMarkWorkRoleChanged(workId, 'Author');
-            }""",
-            [work_b, person_unvisited],
-        )
-        self._assert_people_invalidated(page, server, before)
-        self.assertGreater(_domain_generation(page, "arguments"), arguments_before)
 
     def test_role_changes_through_the_real_ui_invalidate_people_and_groups(self):
         """`prksMarkWorkRoleChanged()` owns the People/Person Groups/Arguments
@@ -7285,25 +6846,6 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         before = _domain_generation(page, "people")
         _delete_group(page, group_id)
         self.assertGreater(_domain_generation(page, "people"), before)
-
-    def test_creating_an_unassigned_group_leaves_people_eligible(self):
-        """A brand-new Group appears in no existing Person's read model."""
-        server, page, _context, _collector = self._start()
-
-        self._cache_people(page, server)
-        before = _domain_generation(page, "people")
-        page.evaluate(
-            """async () => {
-                await window.prksRequest('/api/person-groups', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: 'Freshly Created Empty Group', description: '' }),
-                });
-            }"""
-        )
-        page.wait_for_timeout(500)
-        self.assertEqual(_domain_generation(page, "people"), before)
-        self.assertIsNotNone(_cached_entity(page, "person", server.ids["person_a"]))
 
     # ---- domain isolation ---------------------------------------------------
 

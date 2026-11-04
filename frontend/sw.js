@@ -25,10 +25,30 @@
     // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'eaf658178b39';
+    const DEPENDENCY_REVISION = 'd57aada4955e';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
-    const PDF_CACHE = 'prks-pdf-v1';
+    // Managed PDFs are cached per signed-in scope, `prks-pdf-v2:<scope key>`
+    // (frontend/js/browser-scope.js). Each page tells the worker which scope
+    // it is bound to (PRKS_SCOPE_BIND_MESSAGE); the worker keeps that per
+    // client in the scope database, so a page is only ever served its own
+    // scope's cache, and a retired page none. A request from a client that
+    // never bound (a dedicated worker, a page still loading) gets the last
+    // confirmed scope only when every live page bound to a scope agrees with
+    // it; otherwise, and with no record at all, the worker neither reads nor
+    // writes any PDF cache. The unscoped cache of earlier builds is retired.
+    const PDF_CACHE_BASE = 'prks-pdf-v2';
+    const RETIRED_PDF_CACHE = 'prks-pdf-v1';
+    const SCOPE_POINTER_DB = 'prks-browser-scope-v1';
+    const SCOPE_POINTER_DB_VERSION = 2;
+    const SCOPE_POINTER_STORE = 'pointer';
+    const SCOPE_CLIENTS_STORE = 'clients';
+    const SCOPE_POINTER_KEY = 'current';
+    const SCOPE_BIND_MESSAGE = 'prks-scope-bind';
+    const SESSION_PATH = '/api/session';
+    // How long a page's PDF request waits for that page's own binding.
+    const BIND_WAIT_MS = 3000;
+    const SCOPE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
     // unable to poison the active shell cache"): a currently-active worker
     // may still be serving fetches out of SHELL_CACHE/STATIC_CACHE while a
@@ -41,7 +61,7 @@
     // into the live cache names and deletes the staging buckets.
     const SHELL_STAGING_CACHE = SHELL_CACHE + '-staging';
     const STATIC_STAGING_CACHE = STATIC_CACHE + '-staging';
-    const CURRENT_CACHES = [SHELL_CACHE, STATIC_CACHE, PDF_CACHE];
+    const CURRENT_CACHES = [SHELL_CACHE, STATIC_CACHE];
     const RETIRE_PREFIXES = ['prks-shell-', 'prks-static-'];
 
     // Navigation-fallback entry points only. handleNavigation() falls back to
@@ -116,6 +136,7 @@
         '/js/tab-leave.js',
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
+        '/js/browser-scope.js',
         '/vendor/idb/idb.min.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
@@ -151,8 +172,8 @@
         '/js/api.js',
         '/js/doc-types.js',
         '/js/overview-primitives.js',
+        '/js/combobox-keys.js',
         '/js/ui.js',
-        '/js/ribbon-create.js',
         '/js/components/work-cards.js',
         '/js/folder-hierarchy-nav.js',
         '/js/components/folders.js',
@@ -261,28 +282,35 @@
         return true;
     }
 
-    // Per-path generation for prks-pdf-v1 whole-file writes. The page and the
-    // network GET do not share a heap, so every whole-file put goes through
-    // this worker: a post-save install advances the generation before its
-    // put, and a network GET that snapshotted an older generation skips its
-    // put. A per-path chain keeps those puts from interleaving.
+    // Per-cache, per-path generation for whole-file writes into a scoped PDF
+    // cache. The page and the network GET do not share a heap, so every
+    // whole-file put goes through this worker: a post-save install advances
+    // the generation before its put, and a network GET that snapshotted an
+    // older generation skips its put. A chain per cache and path keeps those
+    // puts from interleaving. Each account has its own cache, so one
+    // account's install never cancels another account's write at the same
+    // path.
     const PDF_CACHE_INSTALL_MESSAGE = 'prks-pdf-cache-install';
     const pdfWholeFileGeneration = Object.create(null);
     const pdfWholeFileWriteChain = Object.create(null);
 
-    function wholeFilePdfGeneration(pathname) {
-        const n = pdfWholeFileGeneration[pathname];
+    function wholeFilePdfKey(cacheName, pathname) {
+        return String(cacheName || '') + '\n' + String(pathname || '');
+    }
+
+    function wholeFilePdfGeneration(pathname, cacheName) {
+        const n = pdfWholeFileGeneration[wholeFilePdfKey(cacheName, pathname)];
         return Number.isSafeInteger(n) && n >= 0 ? n : 0;
     }
 
-    function advanceWholeFilePdfGeneration(pathname) {
-        const next = wholeFilePdfGeneration(pathname) + 1;
-        pdfWholeFileGeneration[pathname] = next;
+    function advanceWholeFilePdfGeneration(pathname, cacheName) {
+        const next = wholeFilePdfGeneration(pathname, cacheName) + 1;
+        pdfWholeFileGeneration[wholeFilePdfKey(cacheName, pathname)] = next;
         return next;
     }
 
-    function enqueueWholeFilePdfWrite(pathname, task) {
-        const key = String(pathname || '');
+    function enqueueWholeFilePdfWrite(pathname, cacheName, task) {
+        const key = wholeFilePdfKey(cacheName, pathname);
         const prev = pdfWholeFileWriteChain[key] || Promise.resolve();
         const run = prev.then(task, task);
         pdfWholeFileWriteChain[key] = run.then(function () {
@@ -293,8 +321,8 @@
         return run;
     }
 
-    function settleWholeFilePdfWrites(pathname) {
-        return pdfWholeFileWriteChain[String(pathname || '')] || Promise.resolve();
+    function settleWholeFilePdfWrites(pathname, cacheName) {
+        return pdfWholeFileWriteChain[wholeFilePdfKey(cacheName, pathname)] || Promise.resolve();
     }
 
     function copyPdfBytes(buffer) {
@@ -321,12 +349,12 @@
     }
 
     /** Post-save bytes. Generation advances before the put, on the path's chain. */
-    function installAuthoritativeWholeFilePdf(cache, pathname, bytes) {
+    function installAuthoritativeWholeFilePdf(cache, pathname, bytes, cacheName) {
         const path = String(pathname || '');
         const body = copyPdfBytes(bytes);
         if (!cache || !isManagedPdfPath(path) || !body) return Promise.resolve(false);
-        return enqueueWholeFilePdfWrite(path, function () {
-            advanceWholeFilePdfGeneration(path);
+        return enqueueWholeFilePdfWrite(path, cacheName, function () {
+            advanceWholeFilePdfGeneration(path, cacheName);
             return cache.put(path, wholeFilePdfResponse(body)).then(function () {
                 return true;
             });
@@ -337,11 +365,11 @@
      * Network whole-file GET. `generationAtStart` is the value observed before
      * the fetch. A newer post-save install skips this put.
      */
-    function commitNetworkWholeFilePdf(cache, pathname, response, generationAtStart) {
+    function commitNetworkWholeFilePdf(cache, pathname, response, generationAtStart, cacheName) {
         const path = String(pathname || '');
         const snapshot = generationAtStart;
-        return enqueueWholeFilePdfWrite(path, function () {
-            if (wholeFilePdfGeneration(path) !== snapshot) return false;
+        return enqueueWholeFilePdfWrite(path, cacheName, function () {
+            if (wholeFilePdfGeneration(path, cacheName) !== snapshot) return false;
             return cache.put(path, response).then(function () {
                 return true;
             });
@@ -351,16 +379,40 @@
     /**
      * Page → worker install. Returns null for any other message so the
      * listener can ignore it. Resolves false when the bytes were not stored.
+     *
+     * The bytes come from a save the page made over the network, under
+     * whichever session the browser holds now. They enter the sender's cache
+     * only when `confirmScope` shows that session is still the cache's own
+     * scope. Without that check (another account signed in, the session
+     * expired, or the server cannot be reached) nothing is stored. A refused
+     * install still advances the path's generation, so a network GET that
+     * started before the save cannot put older bytes back afterwards.
      */
-    function handlePdfCacheMessage(data, cachesApi) {
+    function handlePdfCacheMessage(data, cachesApi, pdfCacheName, clientId, confirmScope) {
         if (!data || data.type !== PDF_CACHE_INSTALL_MESSAGE) return null;
         if (!cachesApi || typeof cachesApi.open !== 'function') return Promise.resolve(false);
         const pathname = typeof data.pathname === 'string' ? data.pathname : '';
         if (!isManagedPdfPath(pathname)) return Promise.resolve(false);
         const bytes = copyPdfBytes(data.buffer);
         if (!bytes) return Promise.resolve(false);
-        return cachesApi.open(PDF_CACHE).then(function (cache) {
-            return installAuthoritativeWholeFilePdf(cache, pathname, bytes);
+        const wanted = typeof data.cacheName === 'string' ? data.cacheName : '';
+        return Promise.resolve(pdfCacheName ? pdfCacheName(clientId || '', true) : null).then(function (name) {
+            // Only into the sending page's own scope cache, and only the one it named.
+            if (!name || name !== wanted) return false;
+            const confirm = typeof confirmScope === 'function'
+                ? Promise.resolve(confirmScope(name)).catch(function () { return false; })
+                : Promise.resolve(false);
+            return confirm.then(function (confirmed) {
+                if (confirmed !== true) {
+                    return enqueueWholeFilePdfWrite(pathname, name, function () {
+                        advanceWholeFilePdfGeneration(pathname, name);
+                        return false;
+                    });
+                }
+                return cachesApi.open(name).then(function (cache) {
+                    return installAuthoritativeWholeFilePdf(cache, pathname, bytes, name);
+                });
+            });
         }).then(function (ok) {
             return !!ok;
         }, function () {
@@ -379,10 +431,151 @@
     }
 
     function shouldRetireCache(name) {
+        if (name === RETIRED_PDF_CACHE) return true;
         if (CURRENT_CACHES.indexOf(name) !== -1) return false;
         return RETIRE_PREFIXES.some(function (prefix) {
             return name.indexOf(prefix) === 0;
         });
+    }
+
+    function validScopeKey(key) {
+        if (typeof key !== 'string') return false;
+        const ids = key.split('.');
+        return ids.length === 3 && ids.every(function (id) { return SCOPE_ID_PATTERN.test(id); });
+    }
+
+    /** Opens the scope database (the page's version), or resolves null. */
+    function openScopeDb(idbFactory) {
+        return new Promise(function (resolve) {
+            if (!idbFactory || typeof idbFactory.open !== 'function') {
+                resolve(null);
+                return;
+            }
+            let req;
+            try {
+                req = idbFactory.open(SCOPE_POINTER_DB, SCOPE_POINTER_DB_VERSION);
+            } catch (_e) {
+                resolve(null);
+                return;
+            }
+            req.onupgradeneeded = function () {
+                const db = req.result;
+                if (!db.objectStoreNames.contains(SCOPE_POINTER_STORE)) {
+                    db.createObjectStore(SCOPE_POINTER_STORE, { keyPath: 'key' });
+                }
+                if (!db.objectStoreNames.contains(SCOPE_CLIENTS_STORE)) {
+                    db.createObjectStore(SCOPE_CLIENTS_STORE, { keyPath: 'clientId' });
+                }
+            };
+            req.onerror = req.onblocked = function () { resolve(null); };
+            req.onsuccess = function () { resolve(req.result); };
+        });
+    }
+
+    /**
+     * The last confirmed scope and every client binding:
+     * { pointerKey: string|null, bindings: Map<clientId, { key, retired }> }.
+     * Resolves, never rejects: any failure reads as nothing recorded.
+     */
+    function readScopeState(idbFactory) {
+        const empty = { pointerKey: null, bindings: new Map() };
+        return openScopeDb(idbFactory).then(function (db) {
+            if (!db) return empty;
+            return new Promise(function (resolve) {
+                let tx;
+                try {
+                    tx = db.transaction([SCOPE_POINTER_STORE, SCOPE_CLIENTS_STORE], 'readonly');
+                } catch (_e) {
+                    db.close();
+                    resolve(empty);
+                    return;
+                }
+                const state = { pointerKey: null, bindings: new Map() };
+                const get = tx.objectStore(SCOPE_POINTER_STORE).get(SCOPE_POINTER_KEY);
+                get.onsuccess = function () {
+                    const scope = get.result && get.result.scope;
+                    const key = scope ? [scope.instanceId, scope.libraryId, scope.userId].join('.') : null;
+                    state.pointerKey = validScopeKey(key) ? key : null;
+                };
+                const all = tx.objectStore(SCOPE_CLIENTS_STORE).getAll();
+                all.onsuccess = function () {
+                    (all.result || []).forEach(function (row) {
+                        if (!row || typeof row.clientId !== 'string') return;
+                        state.bindings.set(row.clientId, {
+                            key: validScopeKey(row.key) ? row.key : null,
+                            retired: row.retired === true,
+                        });
+                    });
+                };
+                tx.oncomplete = function () { db.close(); resolve(state); };
+                tx.onabort = tx.onerror = function () { db.close(); resolve(empty); };
+            });
+        });
+    }
+
+    /**
+     * Records which scope `clientId` is bound to (null key: none) and drops
+     * the bindings of clients that are gone. Resolves true when written.
+     */
+    function writeClientBinding(idbFactory, clientId, key, retired, liveClientIds) {
+        if (typeof clientId !== 'string' || !clientId) return Promise.resolve(false);
+        return openScopeDb(idbFactory).then(function (db) {
+            if (!db) return false;
+            return new Promise(function (resolve) {
+                let tx;
+                try {
+                    tx = db.transaction(SCOPE_CLIENTS_STORE, 'readwrite');
+                } catch (_e) {
+                    db.close();
+                    resolve(false);
+                    return;
+                }
+                const store = tx.objectStore(SCOPE_CLIENTS_STORE);
+                store.put({ clientId: clientId, key: validScopeKey(key) && !retired ? key : null, retired: retired === true });
+                if (liveClientIds) {
+                    const rows = store.getAll();
+                    rows.onsuccess = function () {
+                        (rows.result || []).forEach(function (row) {
+                            const id = row && row.clientId;
+                            if (typeof id === 'string' && id !== clientId && !liveClientIds.has(id)) store.delete(id);
+                        });
+                    };
+                }
+                tx.oncomplete = function () { db.close(); resolve(true); };
+                tx.onabort = tx.onerror = function () { db.close(); resolve(false); };
+            });
+        });
+    }
+
+    /**
+     * The PDF cache a request from `clientId` may use, or null.
+     * - A bound client: its own scope's cache; a retired or unscoped one none.
+     * - `strict` (installs): only a bound client's own cache.
+     * - Any other client: the last confirmed scope, only when every live page
+     *   that has bound agrees with it (none retired, none on another scope).
+     */
+    function selectPdfCacheName(state, clientId, liveWindowIds, strict) {
+        const own = clientId ? state.bindings.get(clientId) : null;
+        if (own) return own.key && !own.retired ? PDF_CACHE_BASE + ':' + own.key : null;
+        if (strict || !state.pointerKey || !clientId) return null;
+        const live = liveWindowIds || new Set();
+        // An unbound page has no identity of its own: never another one's cache.
+        if (live.has(clientId)) return null;
+        // Any other client (a dedicated worker) borrows the last confirmed
+        // scope only when every live page is bound to it.
+        let agreed = live.size > 0;
+        live.forEach(function (id) {
+            const binding = state.bindings.get(id);
+            if (!binding || binding.retired || binding.key !== state.pointerKey) agreed = false;
+        });
+        return agreed ? PDF_CACHE_BASE + ':' + state.pointerKey : null;
+    }
+
+    /** The scope key a GET /api/session body names, or null (the page's own check, browser-scope.js). */
+    function sessionScopeKey(body) {
+        if (!body || typeof body !== 'object') return null;
+        const key = [body.instance_id, body.library && body.library.id, body.user && body.user.id].join('.');
+        return validScopeKey(key) ? key : null;
     }
 
     /**
@@ -392,11 +585,23 @@
     function createHandlers(env) {
         const cachesApi = env.caches;
         const fetchImpl = env.fetchImpl;
+        const pdfCacheName = env.pdfCacheName || function () { return Promise.resolve(null); };
+        // Whether the server's session is still the scope of `cacheName`. A
+        // network PDF is written into a cache only when it is, before and
+        // after the fetch: a tab whose account changed under it must not
+        // store the new account's bytes under the old scope.
+        const confirmScope = env.confirmScope || function () { return Promise.resolve(true); };
 
         async function handleNavigation(request) {
             try {
                 const res = await fetchImpl(request);
-                if (isCacheableStaticResponse(res)) {
+                // Only an actual HTML shell response can refresh the offline shell.
+                // Navigation to API or non-shell paths must not poison '/'.
+                const path = pathnameOf(request.url, env.origin || 'http://localhost/');
+                const type = res && res.headers && typeof res.headers.get === 'function'
+                    ? (res.headers.get('Content-Type') || '') : '';
+                if ((path === '/' || path === '/index.html') &&
+                    /^text\/html(?:\s*;|$)/i.test(type) && isCacheableStaticResponse(res)) {
                     const cache = await cachesApi.open(SHELL_CACHE);
                     cache.put('/', res.clone()).catch(function () {});
                 }
@@ -450,11 +655,22 @@
             });
         }
 
-        async function handlePdfRequest(request, pathname) {
-            // Snapshot before any await so an install that lands while this
-            // GET is still draining is visible at put time.
-            const generationAtStart = wholeFilePdfGeneration(pathname);
-            const cache = await cachesApi.open(PDF_CACHE);
+        async function handlePdfRequest(request, pathname, clientId) {
+            const cacheName = await pdfCacheName(clientId || '', false);
+            // Snapshot this cache's generation before the fetch starts, so an
+            // install into the same cache that lands while this GET is still
+            // draining is visible at put time. Installs into another
+            // account's cache do not touch it.
+            const generationAtStart = wholeFilePdfGeneration(pathname, cacheName);
+            if (!cacheName) {
+                // No signed-in scope: the network only, no cache read or write.
+                try {
+                    return await fetchImpl(request);
+                } catch (_e) {
+                    return new Response(null, { status: 503, statusText: 'PDF is not available offline.' });
+                }
+            }
+            const cache = await cachesApi.open(cacheName);
             if (hasRangeHeader(request)) {
                 // Range requests never write to the whole-file cache entry -- only a complete
                 // 200 response (below) may do that. Offline, a Range request is instead served
@@ -475,6 +691,7 @@
                 }
             }
             try {
+                const confirmedBefore = Promise.resolve(confirmScope(cacheName)).catch(function () { return false; });
                 const res = await fetchImpl(request);
                 if (isWholeFilePdfResponse(request, res)) {
                     let cloned = null;
@@ -484,9 +701,10 @@
                         cloned = null;
                     }
                     if (cloned) {
-                        commitNetworkWholeFilePdf(
-                            cache, pathname, cloned, generationAtStart
-                        ).catch(function () {});
+                        Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
+                            if (!checks[0] || !checks[1]) return false;
+                            return commitNetworkWholeFilePdf(cache, pathname, cloned, generationAtStart, cacheName);
+                        }).catch(function () {});
                     }
                 }
                 return res;
@@ -631,11 +849,69 @@
         if (!scope || typeof scope.addEventListener !== 'function') return;
 
         const origin = (scope.location && scope.location.origin) || '';
+        function liveClientIds(type) {
+            if (!scope.clients || typeof scope.clients.matchAll !== 'function') return Promise.resolve(new Set());
+            return scope.clients.matchAll({ type: type, includeUncontrolled: true }).then(function (list) {
+                return new Set((list || []).map(function (c) { return c.id; }));
+            }, function () {
+                return new Set();
+            });
+        }
+        // A page that is still binding: its request waits briefly for its own
+        // binding instead of borrowing any other scope.
+        const bindWaiters = new Map();
+        function waitForBinding(clientId) {
+            return new Promise(function (resolve) {
+                let timer = null;
+                function settle() {
+                    clearTimeout(timer);
+                    const left = (bindWaiters.get(clientId) || []).filter(function (fn) { return fn !== settle; });
+                    if (left.length) bindWaiters.set(clientId, left);
+                    else bindWaiters.delete(clientId);
+                    resolve();
+                }
+                bindWaiters.set(clientId, (bindWaiters.get(clientId) || []).concat([settle]));
+                timer = setTimeout(settle, BIND_WAIT_MS);
+            });
+        }
+        function bindingWritten(clientId) {
+            (bindWaiters.get(clientId) || []).slice().forEach(function (settle) { settle(); });
+        }
+        function selectNow(clientId, strict) {
+            return Promise.all([readScopeState(scope.indexedDB), liveClientIds('window')]).then(function (parts) {
+                return { state: parts[0], live: parts[1], name: selectPdfCacheName(parts[0], clientId, parts[1], strict) };
+            });
+        }
+        const pdfCacheName = function (clientId, strict) {
+            return selectNow(clientId, strict).then(function (first) {
+                const unboundPage = !!clientId && first.live.has(clientId) && !first.state.bindings.has(clientId);
+                if (!unboundPage) return first.name;
+                return waitForBinding(clientId).then(function () {
+                    return selectNow(clientId, strict).then(function (again) { return again.name; });
+                });
+            });
+        };
+        const confirmScope = function (cacheName) {
+            if (!cacheName) return Promise.resolve(false);
+            return scope.fetch(SESSION_PATH, {
+                method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' },
+            }).then(function (response) {
+                if (!response || response.status !== 200) return false;
+                return response.json().then(function (body) {
+                    const key = sessionScopeKey(body);
+                    return !!key && PDF_CACHE_BASE + ':' + key === cacheName;
+                });
+            }).catch(function () {
+                return false;
+            });
+        };
         const handlers = createHandlers({
             caches: scope.caches,
             fetchImpl: function (request) {
                 return scope.fetch(request);
             },
+            pdfCacheName: pdfCacheName,
+            confirmScope: confirmScope,
         });
 
         scope.addEventListener('install', function (event) {
@@ -668,7 +944,7 @@
             const pathname = pathnameOf(url, origin);
 
             if (isManagedPdfPath(pathname)) {
-                event.respondWith(handlers.handlePdfRequest(request, pathname));
+                event.respondWith(handlers.handlePdfRequest(request, pathname, event.clientId || ''));
                 return;
             }
             if (pathname === '/' || pathname === '/index.html' || isNavigationRequest(request)) {
@@ -682,8 +958,20 @@
         });
 
         scope.addEventListener('message', function (event) {
+            const sourceId = event.source && typeof event.source.id === 'string' ? event.source.id : '';
+            const data = event.data;
+            if (data && data.type === SCOPE_BIND_MESSAGE) {
+                const bind = liveClientIds('all').then(function (live) {
+                    return writeClientBinding(scope.indexedDB, sourceId, data.key, data.retired === true, live);
+                }).then(function (written) {
+                    bindingWritten(sourceId);
+                    return written;
+                });
+                if (typeof event.waitUntil === 'function') event.waitUntil(bind);
+                return;
+            }
             if (!scope.caches) return;
-            const done = handlePdfCacheMessage(event.data, scope.caches);
+            const done = handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId, confirmScope);
             if (!done) return;
             const port = event.ports && event.ports[0];
             const task = Promise.resolve(done).then(function (ok) {
@@ -724,7 +1012,18 @@
         PDF_CACHE_INSTALL_MESSAGE: PDF_CACHE_INSTALL_MESSAGE,
         PRKS_SW_SHELL_CACHE: SHELL_CACHE,
         PRKS_SW_STATIC_CACHE: STATIC_CACHE,
-        PRKS_SW_PDF_CACHE: PDF_CACHE,
+        PRKS_SW_PDF_CACHE_BASE: PDF_CACHE_BASE,
+        PRKS_SW_RETIRED_PDF_CACHE: RETIRED_PDF_CACHE,
+        PRKS_SW_SCOPE_POINTER_DB: SCOPE_POINTER_DB,
+        PRKS_SW_SCOPE_POINTER_STORE: SCOPE_POINTER_STORE,
+        PRKS_SW_SCOPE_POINTER_KEY: SCOPE_POINTER_KEY,
+        readScopeState: readScopeState,
+        writeClientBinding: writeClientBinding,
+        selectPdfCacheName: selectPdfCacheName,
+        sessionScopeKey: sessionScopeKey,
+        PRKS_SW_SCOPE_BIND_MESSAGE: SCOPE_BIND_MESSAGE,
+        PRKS_SW_SCOPE_CLIENTS_STORE: SCOPE_CLIENTS_STORE,
+        PRKS_SW_SCOPE_POINTER_DB_VERSION: SCOPE_POINTER_DB_VERSION,
         PRKS_SW_SHELL_STAGING_CACHE: SHELL_STAGING_CACHE,
         PRKS_SW_STATIC_STAGING_CACHE: STATIC_STAGING_CACHE,
         PRKS_SW_SHELL_PRECACHE_PATHS: SHELL_PRECACHE_PATHS,

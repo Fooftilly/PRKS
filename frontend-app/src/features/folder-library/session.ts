@@ -9,7 +9,7 @@ import {
 } from '../../route-surface/lifecycle'
 import FolderLibraryIntentsProvider from './FolderLibraryIntentsProvider.vue'
 import FolderLibraryRoute from './FolderLibraryRoute.vue'
-import type { FolderIntentOwner } from './intents'
+import { resetSessionFolderFilterClaimForTests, type FolderIntentOwner } from './intents'
 import {
   buildFolderLibraryProjection,
   type FolderLibraryProjection,
@@ -96,6 +96,7 @@ export function presentFolderLibrary(input: FolderLibraryPresentInput): void {
 }
 
 export function resetFolderLibrarySessionForTests(): void {
+  resetSessionFolderFilterClaimForTests()
   resetRouteSurfaceForTests()
 }
 

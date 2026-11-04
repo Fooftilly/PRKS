@@ -79,7 +79,10 @@
         const api = root.prksEditorRecovery;
         if (!api || typeof api.runtime !== 'function' || typeof api.planResearchNotesRestore !== 'function') return null;
         try {
-            return { api: api, rt: api.runtime() };
+            /* No runtime until the page has a confirmed browser scope: the
+             * editor then opens as it would without recovery. */
+            const rt = api.runtime();
+            return rt ? { api: api, rt: rt } : null;
         } catch (_e) {
             return null;
         }
@@ -411,8 +414,9 @@
          * reviewed, so every pane that mounts this editor re-plans for review only.
          */
         function watchClosedPages(r) {
-            /* Another tab's final pagehide writes one key per page under this prefix (editor-recovery/schema.ts). */
-            const prefix = r.api.CLOSED_PAGE_KEY_PREFIX;
+            /* Another tab's final pagehide writes one key per page under this
+             * scope's prefix (editor-recovery/schema.ts `RecoveryNames`). */
+            const prefix = r.rt.names && r.rt.names.closedPagePrefix;
             if (stopClosedPages || typeof prefix !== 'string' || typeof root.addEventListener !== 'function') return;
             let timers = [];
             const refreshAll = function () {

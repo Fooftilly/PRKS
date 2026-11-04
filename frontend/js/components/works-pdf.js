@@ -1826,10 +1826,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // widgets stay out of the annotations table. Offline skips (server needed).
     // Never adopt from known-stale PDF bytes, and never while unresolved PDF
     // annotation ops exist (pending local intent is not adoption authority).
-    const onlineForAdopt =
-        typeof window.prksOfflineRuntimeState !== 'function' ||
-        window.prksOfflineRuntimeState() === 'online';
-    if (onlineForAdopt && typeof viewer.getAnnotations === 'function') {
+    if (isOnlineRuntime() && typeof viewer.getAnnotations === 'function') {
         try {
             let adoptBlocked = false;
             const canon = runtime.acknowledgedAnnotationSetRevision;
@@ -1851,18 +1848,36 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 abandonSetup();
                 return;
             }
-            if (!adoptBlocked) {
-                const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
-                const adoptRes = await prksRequest(
+            // The unresolved-op read above yields to IndexedDB: connectivity
+            // can change while it is pending. Never send a byte-adoption write
+            // after transitioning offline/reconnecting, even when this viewer
+            // was initially opened online and its setup identity remains live.
+            if (!adoptBlocked && isOnlineRuntime()) {
+                // The request coordinator serializes mutations, and the Library
+                // epoch adapter may await /api/session before transport. A
+                // synchronous online check alone cannot protect that later
+                // dispatch. Abort this *non-durable* adoption if reachability
+                // changes while either queue is waiting.
+                const controller = new AbortController();
+                const unsubscribe = typeof window.prksOfflineRuntimeSubscribe === 'function'
+                    ? window.prksOfflineRuntimeSubscribe(function () {
+                        if (!isOnlineRuntime()) controller.abort();
+                    }) : null;
+                try {
+                    if (!isOnlineRuntime()) controller.abort();
+                    if (!controller.signal.aborted) {
+                        const viewerItems = prksViewerAnnotationObjects(viewer).filter(isLikelyAnnotationObject);
+                        const adoptRes = await prksRequest(
                     `/api/works/${workId}/annotations/adopt`,
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ viewer_annotations: viewerItems }),
+                        signal: controller.signal,
                     },
-                    { dedupe: false, retry: false, freshForMs: 0 }
+                    { dedupe: false, retry: false, freshForMs: 0, cancellableMutation: true }
                 );
-                if (setupEligible() && adoptRes && adoptRes.ok) {
+                if (!controller.signal.aborted && setupEligible() && adoptRes && adoptRes.ok) {
                     const adoptBody = await adoptRes.json().catch(function () { return null; });
                     if (
                         adoptBody &&
@@ -1885,6 +1900,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                             }
                         }
                     }
+                }
+                    }
+                } finally {
+                    if (typeof unsubscribe === 'function') unsubscribe();
                 }
             }
         } catch (_eAdopt) {
@@ -1953,11 +1972,11 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
     // per-path generation with an in-flight prime GET. No controller means
     // that GET is not being cached by sw.js, so a direct put cannot race it.
     // `body` is an ArrayBuffer this page already copied; it is transferred.
-    function installPdfBytesThroughController(pathname, body) {
+    function installPdfBytesThroughController(pathname, body, cacheName) {
         const controller = pdfCacheController();
         if (!controller || typeof MessageChannel === 'undefined') return null;
         if (!(body instanceof ArrayBuffer)) return null;
-        return prksPostPdfCacheInstall(controller, pathname, body).then(prksPdfCacheInstallOutcome);
+        return prksPostPdfCacheInstall(controller, pathname, body, { cacheName }).then(prksPdfCacheInstallOutcome);
     }
 
     function pdfCacheInstallBody(buffer) {
@@ -1974,14 +1993,30 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!path || !buffer || !buffer.byteLength) return false;
         const body = pdfCacheInstallBody(buffer);
         if (!body) return false;
-        const viaController = installPdfBytesThroughController(path, body);
+        const cacheName = typeof window.prksOfflinePdfCacheName === 'function'
+            ? await window.prksOfflinePdfCacheName()
+            : null;
+        // No signed-in scope: this page has no PDF cache, so no earlier
+        // whole-file entry can be served to it.
+        if (!cacheName) return true;
+        const viaController = installPdfBytesThroughController(path, body, cacheName);
         if (viaController) return viaController;
         if (typeof caches === 'undefined' || !caches || typeof caches.open !== 'function') {
             // Nothing can be serving a previous whole-file entry.
             return true;
         }
+        // No worker to check the session, so the page does it: the save ran
+        // under whichever session the browser holds now, and another
+        // account's bytes must never enter this page's cache.
+        const scope = window.prksBrowserScope;
+        let sessionState = '';
         try {
-            const cacheName = window.PRKS_OFFLINE_PDF_CACHE_NAME || 'prks-pdf-v1';
+            sessionState = scope && typeof scope.verify === 'function' ? await scope.verify() : '';
+        } catch (_eVerify) {
+            sessionState = '';
+        }
+        if (sessionState !== 'same') return false;
+        try {
             const cache = await caches.open(cacheName);
             const response = new Response(body, {
                 status: 200,
@@ -2300,7 +2335,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
         // Every successful replacement names the canonical managed path.
         // Retarget when it differs from this tab (another tab may already
-        // have moved the Work off a shared key). Refresh prks-pdf-v1 in
+        // have moved the Work off a shared key). Refresh the scoped PDF cache in
         // place only when it matches — never under a stale runtime.filePath.
         // Range loads do not replace that whole-file entry. A failed cache
         // write throws before pendingMaterializationRevision is cleared.

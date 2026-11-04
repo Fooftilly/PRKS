@@ -356,63 +356,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
 
     # ---- validators ---------------------------------------------------------
 
-    def test_predicates_protect_every_rendered_field(self):
-        server, page, context = self.start()
-        self.index(page)
-        o._wait_list_cached(page, 'playlists:index')
-        cases = page.evaluate(
-            """() => ({
-                indexEmpty: prksIsPlaylistsIndexShape([]),
-                indexOk: prksIsPlaylistsIndexShape([{ id: 'PL-1', title: 'A', item_count: 0 }]),
-                indexSparse: prksIsPlaylistsIndexShape([{ id: 'PL-1', item_count: 3 }]),
-                indexNotArray: prksIsPlaylistsIndexShape({ error: 'boom' }),
-                indexNull: prksIsPlaylistsIndexShape(null),
-                indexMissingId: prksIsPlaylistsIndexShape([{ title: 'A', item_count: 0 }]),
-                indexBlankId: prksIsPlaylistsIndexShape([{ id: '  ', title: 'A', item_count: 0 }]),
-                indexNestedArrayRow: prksIsPlaylistsIndexShape([['PL-1']]),
-                indexCountMissing: prksIsPlaylistsIndexShape([{ id: 'PL-1', title: 'A' }]),
-                indexCountString: prksIsPlaylistsIndexShape([{ id: 'PL-1', item_count: '3' }]),
-                indexCountNegative: prksIsPlaylistsIndexShape([{ id: 'PL-1', item_count: -1 }]),
-                indexTitleNumber: prksIsPlaylistsIndexShape([{ id: 'PL-1', title: 7, item_count: 0 }]),
-                indexUrlObject: prksIsPlaylistsIndexShape([{ id: 'PL-1', original_url: {}, item_count: 0 }]),
 
-                detailOk: prksIsPlaylistShape({ id: 'PL-1', title: 'A', items: [] }, 'PL-1'),
-                detailWithItem: prksIsPlaylistShape({ id: 'PL-1', items: [
-                    { id: 'W-1', title: 'V', author_text: 'C', published_date: '2020-01-01', position: 0 }] }, 'PL-1'),
-                detailSparseItem: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', position: 0 }] }, 'PL-1'),
-                detailWrongId: prksIsPlaylistShape({ id: 'PL-2', items: [] }, 'PL-1'),
-                detailNull: prksIsPlaylistShape(null, 'PL-1'),
-                detailArray: prksIsPlaylistShape([], 'PL-1'),
-                detailItemsMissing: prksIsPlaylistShape({ id: 'PL-1' }, 'PL-1'),
-                detailItemsNotArray: prksIsPlaylistShape({ id: 'PL-1', items: {} }, 'PL-1'),
-                detailItemNull: prksIsPlaylistShape({ id: 'PL-1', items: [null] }, 'PL-1'),
-                detailItemBlankId: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: '', position: 0 }] }, 'PL-1'),
-                detailItemNestedArray: prksIsPlaylistShape({ id: 'PL-1', items: [['W-1']] }, 'PL-1'),
-                detailItemBadTitle: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', title: 3, position: 0 }] }, 'PL-1'),
-                detailItemBadChannel: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', author_text: [], position: 0 }] }, 'PL-1'),
-                detailItemBadDate: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', published_date: 2020, position: 0 }] }, 'PL-1'),
-                detailItemNoPosition: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1' }] }, 'PL-1'),
-                detailItemFractionalPosition: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', position: 1.5 }] }, 'PL-1'),
-                detailItemNegativePosition: prksIsPlaylistShape({ id: 'PL-1', items: [{ id: 'W-1', position: -1 }] }, 'PL-1'),
-                detailOneBadItem: prksIsPlaylistShape({ id: 'PL-1', items: [
-                    { id: 'W-1', position: 0 }, { id: 'W-2' }] }, 'PL-1'),
-            })"""
-        )
-        self.assertEqual(cases, {
-            'indexEmpty': True, 'indexOk': True, 'indexSparse': True,
-            'indexNotArray': False, 'indexNull': False, 'indexMissingId': False,
-            'indexBlankId': False, 'indexNestedArrayRow': False,
-            'indexCountMissing': False, 'indexCountString': False,
-            'indexCountNegative': False, 'indexTitleNumber': False, 'indexUrlObject': False,
-            'detailOk': True, 'detailWithItem': True, 'detailSparseItem': True,
-            'detailWrongId': False, 'detailNull': False, 'detailArray': False,
-            'detailItemsMissing': False, 'detailItemsNotArray': False,
-            'detailItemNull': False, 'detailItemBlankId': False,
-            'detailItemNestedArray': False, 'detailItemBadTitle': False,
-            'detailItemBadChannel': False, 'detailItemBadDate': False,
-            'detailItemNoPosition': False, 'detailItemFractionalPosition': False,
-            'detailItemNegativePosition': False, 'detailOneBadItem': False,
-        })
 
     def test_malformed_authoritative_index_preserves_the_cache(self):
         server, page, context = self.start()
@@ -862,53 +806,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
                 wid)
             o._wait_entity_cached(page, 'work-playlist-state', wid)
 
-    def test_a_description_edit_keeps_member_work_caches(self):
-        """Only `title` is embedded in Work detail as playlist_title, so a
-        description edit must not cost the user their cached member Works."""
-        server, page, context = self.start()
-        ids = server.ids
-        self.cache(page, ids)
-        self.cache_member_work(page, ids)
-        self.prepare_bases(page, ids)
-        page.evaluate(
-            """async ids => { await updatePlaylist(ids.playlist_a,
-                { title: %s, description: 'Changed description' }); }"""
-            % json.dumps(PLAYLIST_A_TITLE),
-            ids,
-        )
-        self.drained(page)
-        self.assertIsNotNone(o._cached_entity(page, 'work', ids['playlist_video_one']))
-        # And the acknowledgement PATCHED the description in rather than
-        # dropping the playlist this device is looking at.
-        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
-        self.assertEqual(playlist['value']['description'], 'Changed description')
 
-    def test_a_title_edit_stales_member_work_snapshots_only(self):
-        server, page, context = self.start()
-        ids = server.ids
-        self.cache(page, ids)
-        self.cache_member_work(page, ids)
-        self.prepare_bases(page, ids)
-        # work_a is deliberately in no Playlist.
-        o._open_work_from_home(page, o.WORK_A_TITLE)
-        o._wait_entity_cached(page, 'work', ids['work_a'])
-        page.evaluate(
-            """async ids => { await updatePlaylist(ids.playlist_a,
-                { title: 'Renamed playlist', description: '' }); }""",
-            ids,
-        )
-        self.drained(page)
-        wait_for_async(page,
-            "id => window.createPrksOfflineStore().getEntity('work', id).then(r => r === null)",
-            arg=ids['playlist_video_one'], timeout=15000,
-        )
-        self.assertIsNotNone(
-            o._cached_entity(page, 'work', ids['work_a']),
-            'a Work outside the Playlist keeps its cached snapshot',
-        )
-        # The playlist itself is patched, not discarded.
-        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
-        self.assertEqual(playlist['value']['title'], 'Renamed playlist')
 
     def test_membership_changes_patch_the_affected_work(self):
         """The acknowledgement states the playlist and its title exactly, so
@@ -960,27 +858,6 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertIsNotNone(cached)
         self.assertEqual(cached['value']['playlist_id'], ids['playlist_b'])
 
-    def test_a_reorder_keeps_member_work_caches_and_reorders_the_detail(self):
-        server, page, context = self.start()
-        ids = server.ids
-        self.cache(page, ids)
-        self.cache_member_work(page, ids)
-        self.prepare_bases(page, ids)
-        page.evaluate(
-            """async ids => { await reorderPlaylist(ids.playlist_a,
-                [ids.playlist_video_two, ids.playlist_video_one]); }""",
-            ids,
-        )
-        self.drained(page)
-        self.assertIsNotNone(
-            o._cached_entity(page, 'work', ids['playlist_video_one']),
-            'Work detail carries no Playlist position',
-        )
-        # The cached detail is reordered IN PLACE: the answer names the order
-        # the server ended with, so there is nothing to re-download.
-        playlist = o._cached_entity(page, 'playlist', ids['playlist_a'])
-        self.assertEqual([w['id'] for w in playlist['value']['items']],
-                         [ids['playlist_video_two'], ids['playlist_video_one']])
 
     def test_a_refused_playlist_operation_retains_good_caches(self):
         """A durable operation that the server rejects is retried, not lost --

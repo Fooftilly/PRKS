@@ -1,7 +1,8 @@
 name: E2E Flake Acceptance Stress
 
-# Opt-in 20x acceptance for #456, #457, #458. One automatic validation
-# when this workflow itself changes; no extra matrix on ordinary PRs/master.
+# Opt-in 20x acceptance for #456, #457, #458 and current flaky
+# candidates #1007, #1008, #1009. One automatic validation when this
+# workflow or its negative-control helper changes; no extra matrix on ordinary PRs/master.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +16,7 @@ on:
       - master
     paths:
       - .github/workflows/e2e-flake-stress.yml
+      - .github/scripts/e2e_flake_negative_controls.py
 
 permissions:
   contents: read
@@ -27,6 +29,23 @@ jobs:
   stress:
     name: Stress ${{ matrix.case }}
     runs-on: ubuntu-latest
+    # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
+    # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
+    services:
+      postgres:
+        image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
     timeout-minutes: 50
     strategy:
       fail-fast: false
@@ -40,6 +59,12 @@ jobs:
             test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_responsive_narrow_category_strip
           - case: settings-viewport-458
             test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_nav_orientation_updates_on_runtime_viewport_transition
+          - case: pdf-recovery-1007
+            test_id: tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
+          - case: pdf-reconnect-probe-1008
+            test_id: tests.e2e.test_offline.OfflineFoundationTests.test_reconnect_probe_race_settles_pdf_to_online_work_capable_state
+          - case: person-membership-1009
+            test_id: tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -106,8 +131,25 @@ jobs:
           echo "PASS: ${PRKS_E2E_TEST_ID}, ${PRKS_E2E_STRESS_ITERATIONS}/${PRKS_E2E_STRESS_ITERATIONS} consecutive targeted runs" | tee -a "$GITHUB_STEP_SUMMARY"
 
   negative-control:
-    name: Divider drag reload must fail the oracle
+    name: Divider, PDF and Person negative controls
     runs-on: ubuntu-latest
+    # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
+    # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
+    services:
+      postgres:
+        image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -151,6 +193,7 @@ jobs:
           set -euo pipefail
           target=tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests
           cp tests/e2e/test_app.py "$RUNNER_TEMP/prks-divider-original-test.py"
+          trap 'cp "$RUNNER_TEMP/prks-divider-original-test.py" tests/e2e/test_app.py' EXIT
           for mode in during-drag after-release; do
             # Each control runs INDEPENDENTLY so the first injected request
             # cannot conceal a false negative in the delayed-request case.
@@ -219,3 +262,65 @@ jobs:
           printf 'Tested code: base %s, head %s, checkout %s\n' \
             "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo 'Both independent negative controls correctly rejected deliberate Work GETs'
+
+      - name: Verify PDF recovery and Person generation oracles reject regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Each mutation changes only this CI job's checkout. Restore both
+          # original files even on assertion failure or runner interruption.
+          cp tests/e2e/test_app.py "$RUNNER_TEMP/prks-pdf-original-test.py"
+          cp tests/e2e/test_person_groups_offline.py "$RUNNER_TEMP/prks-person-original-test.py"
+          trap 'cp "$RUNNER_TEMP/prks-pdf-original-test.py" tests/e2e/test_app.py; cp "$RUNNER_TEMP/prks-person-original-test.py" tests/e2e/test_person_groups_offline.py' EXIT
+
+          for case in pdf person; do
+            case "$case" in
+              pdf)
+                target=tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
+                source_file=tests/e2e/test_app.py
+                sentinel=PRKS_NC_PDF_RECOVERY_OMITTED
+                evidence="server never stored comment 'recovered highlight'"
+                ;;
+              person)
+                target=tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
+                source_file=tests/e2e/test_person_groups_offline.py
+                sentinel=PRKS_NC_PERSON_GROUP_INVALIDATION_SUPPRESSED
+                evidence="page.wait_for_function(delete_invalidated, arg=before, timeout=2500)"
+                ;;
+            esac
+
+            # The helper only emits source; this CI step alone applies it.
+            python .github/scripts/e2e_flake_negative_controls.py "$case" > "$RUNNER_TEMP/prks-mutated-$case.py"
+            cp "$RUNNER_TEMP/prks-mutated-$case.py" "$source_file"
+            log="$RUNNER_TEMP/prks-oracle-$case.log"
+            if timeout --kill-after=5s 180s python tests/e2e/run.py --jobs 1 --no-pointer-capture "$target" > "$log" 2>&1; then
+              cat "$log"
+              echo "::error::$case oracle accepted an injected data-safety defect"
+              exit 1
+            else
+              status=$?
+            fi
+            # GNU timeout reaps the command's process group on expiry. Never
+            # treat watchdog/timeout or unrelated failures as valid evidence.
+            if (( status == 124 || status == 137 )) ||
+               ! grep -Fq "$sentinel" "$log" ||
+               ! grep -Fq "$evidence" "$log" ||
+               ! grep -Fq 'FAILED (' "$log"; then
+              cat "$log"
+              echo "::error::$case did not fail for its injected oracle violation (exit $status)"
+              exit 1
+            fi
+
+            if [[ "$case" == person ]] &&
+               { ! grep -Fq 'PRKS_NC_PERSON_PEOPLE_ADVANCED' "$log" ||
+                 ! grep -Fq 'Timeout 2500ms exceeded' "$log"; }; then
+              cat "$log"
+              echo "::error::Person control failed to prove People advanced before Person Groups readiness timed out"
+              exit 1
+            fi
+
+            printf 'PASS (expected rejection): %s %s\n' "$case" "$target" | tee -a "$GITHUB_STEP_SUMMARY"
+            # Restore the original file before starting the next control.
+            cp "$RUNNER_TEMP/prks-pdf-original-test.py" tests/e2e/test_app.py
+            cp "$RUNNER_TEMP/prks-person-original-test.py" tests/e2e/test_person_groups_offline.py
+          done

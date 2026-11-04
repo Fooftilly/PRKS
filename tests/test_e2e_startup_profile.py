@@ -156,6 +156,86 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         self.assertEqual({mode for mode, _ in targets}, {"create", "edit"})
         self.assertEqual(len(targets), 2)
         names = set(re.findall(r'"(person_(?:create|edit)_[a-z_]+)"', workflow))
+        helper_tree = ast.parse(
+            (root / "tests/e2e/test_app.py").read_text(encoding="utf-8")
+        )
+        nav_helpers = [
+            node for node in helper_tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_open_work_from_home"
+        ]
+        self.assertEqual(len(nav_helpers), 1)
+        # ast.walk visits nested calls breadth-first, not in source order.
+        # Sort the stage calls by their locations before asserting the real
+        # interaction sequence; the separate check below asserts that the
+        # click/card timers and the opt-in trial stay inside inclusive recent.
+        helper_stages = [
+            call.args[0].value
+            for call in sorted(
+                (
+                    node for node in ast.walk(nav_helpers[0])
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "stage"
+                    and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Constant)
+                ),
+                key=lambda node: (node.lineno, node.col_offset),
+            )
+        ]
+        self.assertEqual(
+            helper_stages,
+            ["folders", "recent", "recent_trial", "recent_click", "recent_card", "card_click", "work_ready"],
+        )
+        recent_scopes = [
+            node for node in ast.walk(nav_helpers[0])
+            if isinstance(node, ast.With)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+                and len(item.context_expr.args) == 1
+                and isinstance(item.context_expr.args[0], ast.Constant)
+                and item.context_expr.args[0].value == "recent"
+                for item in node.items
+            )
+        ]
+        self.assertEqual(len(recent_scopes), 1)
+        self.assertEqual(
+            [
+                item.context_expr.args[0].value
+                for node in recent_scopes[0].body
+                if isinstance(node, ast.With)
+                for item in node.items
+                if isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+            ],
+            ["recent_click", "recent_card"],
+        )
+        # Only the manual probe enters this conditional; ordinary navigation
+        # still runs the original click and card assertion unmodified.
+        trial_scopes = [
+            node for stmt in recent_scopes[0].body
+            if isinstance(stmt, ast.If)
+            for node in ast.walk(stmt)
+            if isinstance(node, ast.With)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Name)
+                and item.context_expr.func.id == "stage"
+                and len(item.context_expr.args) == 1
+                and isinstance(item.context_expr.args[0], ast.Constant)
+                and item.context_expr.args[0].value == "recent_trial"
+                for item in node.items
+            )
+        ]
+        self.assertEqual(len(trial_scopes), 1)
+        self.assertLess(
+            trial_scopes[0].lineno,
+            next(node.lineno for node in recent_scopes[0].body
+                 if isinstance(node, ast.With)),
+        )
         for mode, target in targets:
             module, class_name, method_name = target.rsplit(".", 2)
             file = root.joinpath(*module.split(".")).with_suffix(".py")
@@ -223,8 +303,50 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 and call.args
                 and isinstance(call.args[0], ast.Constant)
             }
+            nav_names = {
+                name for name in names
+                if name.startswith(f"person_{mode}_link_nav_")
+            }
             self.assertEqual(
-                phases, {name for name in names if name.startswith(f"person_{mode}_")},
+                nav_names,
+                {
+                    f"person_{mode}_link_nav_{stage}"
+                    for stage in ("folders", "recent", "recent_trial", "recent_click", "recent_card", "card_click", "work_ready")
+                },
+                target,
+            )
+            # The helper constructs its stage names from the opt-in prefix, so
+            # their literals live in test_app rather than either test method.
+            self.assertEqual(
+                phases,
+                {name for name in names if name.startswith(f"person_{mode}_")} - nav_names,
+                target,
+            )
+            nav_scopes = [
+                node for parent in nodes for node in ast.walk(parent)
+                if isinstance(node, ast.With)
+                and any(
+                    isinstance(item.context_expr, ast.Call)
+                    and isinstance(item.context_expr.func, ast.Name)
+                    and item.context_expr.func.id == "profile_e2e_phase"
+                    and len(item.context_expr.args) == 1
+                    and isinstance(item.context_expr.args[0], ast.Constant)
+                    and item.context_expr.args[0].value == f"person_{mode}_link_nav"
+                    for item in node.items
+                )
+            ]
+            self.assertEqual(len(nav_scopes), 1, target)
+            nav_calls = [
+                call for stmt in nav_scopes[0].body for call in ast.walk(stmt)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "_open_work_from_home"
+            ]
+            self.assertEqual(len(nav_calls), 1, target)
+            self.assertEqual(
+                [(kw.arg, kw.value.value) for kw in nav_calls[0].keywords
+                 if isinstance(kw.value, ast.Constant)],
+                [("profile_prefix", f"person_{mode}")],
                 target,
             )
 
@@ -239,12 +361,18 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         }), 3.0)
 
 
+def _fake_library(_storage_root, **_kwargs):
+    """Stands in for the disposable PostgreSQL Library these timing tests never reach."""
+    return mock.Mock(server_env=mock.Mock(return_value={}))
+
+
 class StartupReadinessProfileTests(unittest.TestCase):
     def test_server_subphases_keep_http_readiness_and_inclusive_total(self):
         with mock.patch.dict(os.environ, {"PRKS_E2E_PROFILE": "1"}):
             with (
                 mock.patch.object(harness, "find_free_port", return_value=42002),
                 mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness, "provision_library", _fake_library),
                 mock.patch.object(harness.AppServer, "_spawn") as spawn,
                 mock.patch.object(harness, "wait_http") as wait_http,
             ):
@@ -253,7 +381,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     harness.start_test_profile("server-profile")
                     try:
                         with mock.patch.object(
-                            harness.time, "perf_counter", side_effect=[100, 102, 107]
+                            harness.time, "perf_counter", side_effect=[90, 91, 100, 102, 107]
                         ):
                             self.assertIs(server.start(), server)
                         phases = harness.finish_test_profile("server-profile")
@@ -263,6 +391,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     wait_http.assert_called_once_with(
                         "http://127.0.0.1:42002/api/works"
                     )
+                    self.assertEqual(phases["postgres_provision"], 1.0)
                     self.assertEqual(phases["server_spawn"], 2.0)
                     self.assertEqual(phases["server_http_ready"], 5.0)
                     self.assertEqual(phases["server_start"], 7.0)
@@ -281,6 +410,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     harness, "find_free_port", side_effect=[42002, 42004]
                 ),
                 mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness, "provision_library", _fake_library),
                 mock.patch.object(harness.AppServer, "_spawn") as spawn,
                 mock.patch.object(
                     harness, "wait_http", side_effect=[RuntimeError("bind"), None]
@@ -294,7 +424,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                         with mock.patch.object(
                             harness.time,
                             "perf_counter",
-                            side_effect=[100, 102, 105, 110, 112, 117],
+                            side_effect=[90, 91, 100, 102, 105, 110, 112, 117],
                         ):
                             self.assertIs(server.start(), server)
                         phases = harness.finish_test_profile("server-retry")
@@ -303,6 +433,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
                     self.assertEqual(spawn.call_count, 2)
                     self.assertEqual(wait_http.call_count, 2)
                     self.assertEqual(server.port, 42004)
+                    self.assertEqual(phases["postgres_provision"], 1.0)
                     self.assertEqual(phases["server_spawn"], 2.0)
                     self.assertEqual(phases["server_http_ready"], 5.0)
                     self.assertEqual(phases["server_start"], 7.0)
@@ -538,6 +669,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
             with (
                 mock.patch.object(harness, "find_free_port", return_value=42004),
                 mock.patch.object(harness, "apply_playwright_browser_env"),
+                mock.patch.object(harness, "provision_library", _fake_library),
                 mock.patch.object(harness.AppServer, "_spawn"),
                 mock.patch.object(harness, "wait_http"),
             ):

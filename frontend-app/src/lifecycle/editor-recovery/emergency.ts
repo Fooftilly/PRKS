@@ -14,14 +14,13 @@
 import { forkedDraftId, type RecoveryStore, type EmergencyOutcome } from './store'
 import {
   EMERGENCY_BODY_CHARS,
-  EMERGENCY_KEY_PREFIX,
-  RESERVATION_KEY_PREFIX,
   reservationRuntimeOf,
   EMERGENCY_PAGE_CHARS,
   EMERGENCY_VERSION,
   isDraftKind,
   type EmergencyEntry,
   type EmergencyPayload,
+  type RecoveryNames,
 } from './schema'
 
 export type EmergencyStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>
@@ -137,18 +136,19 @@ export function mayHoldUnreadable(stored: StoredEmergency): boolean {
 }
 
 /** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
-export function readEmergencyKeys(storage: EmergencyStorage): StoredEmergency[] {
+export function readEmergencyKeys(storage: EmergencyStorage, names: RecoveryNames): StoredEmergency[] {
+  const prefix = names.emergencyPrefix
   const keys: string[] = []
   try {
     for (let i = 0; i < storage.length; i++) {
       const key = storage.key(i)
-      if (key && key.startsWith(EMERGENCY_KEY_PREFIX)) keys.push(key)
+      if (key && key.startsWith(prefix)) keys.push(key)
     }
   } catch {
     return []
   }
   return keys.map((key) => {
-    const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length)
+    const pageInstanceId = key.slice(prefix.length)
     let raw: string | null = null
     let readFailed = false
     try {
@@ -163,6 +163,8 @@ export function readEmergencyKeys(storage: EmergencyStorage): StoredEmergency[] 
 
 export interface MergeEnv {
   storage: EmergencyStorage
+  /** The scope whose emergency keys are merged; another scope's are never read. */
+  names: RecoveryNames
   store: Pick<RecoveryStore, 'applyEmergencyEntry'> & Partial<Pick<RecoveryStore, 'clearTombstone'>>
   /** This page; its own key is never merged. */
   pageInstanceId: string
@@ -254,7 +256,7 @@ async function mergeKey(env: MergeEnv, stored: StoredEmergency, payload: Emergen
 
 export async function mergeEmergencyEntries(env: MergeEnv): Promise<MergeReport[]> {
   const reports: MergeReport[] = []
-  for (const stored of readEmergencyKeys(env.storage)) {
+  for (const stored of readEmergencyKeys(env.storage, env.names)) {
     if (!(await mergeable(env, stored))) continue
     reports.push(await mergeKey(env, stored, stored.payload as EmergencyPayload))
   }
@@ -273,6 +275,7 @@ export async function mergeEmergencyEntries(env: MergeEnv): Promise<MergeReport[
  */
 export async function releaseDeadReservations(env: {
   storage: EmergencyStorage
+  names: RecoveryNames
   pageInstanceId: string
   isPageGone(pageInstanceId: string): Promise<boolean>
   /** This page's runtime id when its claim was verified (lock or channel); else null. */
@@ -282,14 +285,14 @@ export async function releaseDeadReservations(env: {
   try {
     for (let i = 0; i < env.storage.length; i++) {
       const key = env.storage.key(i)
-      if (key && key.startsWith(RESERVATION_KEY_PREFIX)) keys.push(key)
+      if (key && key.startsWith(env.names.reservationPrefix)) keys.push(key)
     }
   } catch {
     return []
   }
   const removed: string[] = []
   for (const key of keys) {
-    const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length)
+    const pageInstanceId = key.slice(env.names.reservationPrefix.length)
     if (pageInstanceId === env.pageInstanceId) continue
     if (!(await env.isPageGone(pageInstanceId)) && !claimedRuntimeOf(env, key)) continue
     try {

@@ -29,13 +29,87 @@
     const PROTOCOL_ERRORS = ['OP_ID_REUSE', 'INVALID_ENVELOPE', 'INVALID_BASE_REVISION',
         'UNSUPPORTED_DEPENDENCIES', 'UNSATISFIED_DEPENDENCY'];
     const MAX_DISCARD_NOTES = 10;
+    /* Refusals the server answers before any route runs (backend/api/session.py
+     * admission): the operation was never executed, so it is HELD -- kept
+     * pending, never settled or retired -- until the session is good again.
+     * An expired session pauses the queue; it never drops it (§10.4). */
+    const HOLD_RETRY_MS = 30000;
+    const HOLD_LABELS = {
+        signed_out: 'Waiting for sign-in.',
+        refused: 'Refused for this account; waiting.',
+        epoch: 'Waiting for the Library to be confirmed.',
+    };
+    const EPOCH_HEADER = 'PRKS-Library-Epoch';
+    function admissionHold(response, data) {
+        const code = data && (data.code || data.error);
+        if (response.status === 401) return 'signed_out';
+        if (response.status === 403) return 'refused';
+        if (response.status === 400 && code === 'LIBRARY_EPOCH_REQUIRED') return 'epoch';
+        if (response.status === 409 && code === 'LIBRARY_EPOCH_CHANGED') return 'epoch';
+        return null;
+    }
+    function newerEpoch(a, b) {
+        if (a.length !== b.length) return a.length > b.length;
+        return a > b;
+    }
     function createRuntime(deps) {
         const store = deps.store;
         const handlers = deps.handlers || {};
         const supported = op => Object.prototype.hasOwnProperty.call(handlers, op.operation);
         const listeners = new Set();
         const discarded = [];
+        // Why delivery is paused, or null. 'changed', 'logged_out' and
+        // 'unbound' last for the page: its store belongs to a scope that is
+        // no longer signed in here.
+        const PERMANENT = ['changed', 'logged_out', 'unbound'];
+        let held = null;
         let running = false, timer = null, recovered = false;
+        function hold(reason) {
+            const changed = held !== reason;
+            held = reason;
+            if (changed) emit({ held: reason });
+            if (PERMANENT.indexOf(reason) === -1) schedule(HOLD_RETRY_MS);
+        }
+        function release() {
+            if (held === null) return;
+            held = null;
+            emit({ held: null });
+        }
+        function permanentlyHeld() {
+            return PERMANENT.indexOf(held) !== -1;
+        }
+        // Another account signed in here, or this one signed out: nothing
+        // more is sent from this page.
+        if (deps.session && typeof deps.session.subscribe === 'function') {
+            deps.session.subscribe(event => {
+                if (event && event.type === 'epoch') { void wake(); return; }
+                hold(event && event.reason === 'logged_out' ? 'logged_out' : 'changed');
+            });
+        }
+        /* The Library was restored (§10.4, §11.4): the server named a newer
+         * epoch than the queue's. Every operation of an older epoch leaves the
+         * queue for review before anything else is sent. */
+        async function fenceEpoch() {
+            const latest = deps.session && typeof deps.session.latestEpoch === 'function'
+                ? deps.session.latestEpoch() : null;
+            if (!latest || typeof store.advanceEpoch !== 'function') return;
+            const moved = await store.advanceEpoch(latest);
+            if (moved > 0) emit({ restored: moved });
+        }
+        function retiredReason() {
+            const reason = typeof deps.session.retiredReason === 'function' ? deps.session.retiredReason() : null;
+            return reason === 'logged_out' ? 'logged_out' : 'changed';
+        }
+        /* Before a send: is the session still this store's scope? Without a
+         * session check (Node tests) every send is allowed. */
+        async function sessionAllowsSend() {
+            if (!deps.session) return true;
+            const state = await deps.session.verify();
+            if (state === 'same') { release(); return true; }
+            if (state === 'unreachable') { schedule(5000); return false; }
+            hold(PERMANENT.indexOf(state) !== -1 ? state : 'signed_out');
+            return false;
+        }
         function emit(event) {
             listeners.forEach(fn => { try { fn(event || {}); } catch (_) { /* subscriber isolation */ } });
         }
@@ -187,6 +261,13 @@
             }
         }
         async function drain() {
+            if (permanentlyHeld()) return;
+            if (deps.session) {
+                const bound = await deps.session.resolve();
+                if (deps.session.isRetired()) { hold(retiredReason()); return; }
+                if (!bound) { hold('unbound'); return; }
+            }
+            await fenceEpoch();
             if (!recovered) await recover();
             await repairTerminalConflictDependents();
             while (deps.online()) {
@@ -199,8 +280,45 @@
                 const backoff = Math.min(60000, 1000 * 2 ** Math.min(candidate.attempt_count, 6));
                 const elapsed = Date.now() - Date.parse(candidate.last_attempt_at || '1970-01-01');
                 if (candidate.attempt_count && elapsed < backoff) { schedule(backoff - elapsed + Math.random() * 500); break; }
+                // Checked before the claim, so a held row's attempt count
+                // stays where it was.
+                if (!await sessionAllowsSend()) break;
+                const priorAttempts = candidate.attempt_count || 0;
+                // The async IndexedDB inventory above may have begun while
+                // online and finished after a disconnection. Do not claim a
+                // never-sent row after reachability was lost: claimOperation
+                // increments attempt_count and irrevocably prevents safe
+                // local coalescing even when no request left this browser.
+                if (!deps.online()) break;
+                // listOperations() may return references to mutable row objects
+                // (notably in the in-memory IDB harness). claimOperation()
+                // changes status and attempt_count: retain an immutable
+                // pre-claim snapshot BEFORE awaiting that transaction, rather
+                // than relying on candidate to retain its original values.
+                const beforeClaim = {
+                    op_id: candidate.op_id,
+                    status: candidate.status,
+                    attempt_count: candidate.attempt_count,
+                    last_attempt_at: candidate.last_attempt_at,
+                    sequence: candidate.sequence,
+                    created_at: candidate.created_at,
+                };
                 const op = await store.claimOperation(candidate.op_id);
                 if (!op) continue;
+                // The IDB claim may finish after connectivity closes. At this
+                // boundary NO transport has started, so restoring the exact
+                // previous row retains the right to coalesce never-sent edits.
+                // Never undo a claim after request() begins: the server might
+                // already have recorded this operation ID.
+                if (!deps.online()) {
+                    const restored = await store.releaseClaimBeforeDispatch(op, beforeClaim);
+                    if (restored) emit();
+                    // A rapid reconnect may have notified a running wake().
+                    // One reschedule closes that lost notification without
+                    // spinning or attempting a send while disconnected.
+                    schedule(0);
+                    break;
+                }
                 const family = handlers[op.operation];
                 emit();
                 try {
@@ -208,13 +326,31 @@
                     const timeout = setTimeout(() => controller.abort(), 20000);
                     let response;
                     try {
+                        // Sent under the epoch it was made under, never the page's latest.
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (op.library_epoch) headers[EPOCH_HEADER] = op.library_epoch;
                         response = await deps.request('/api/sync/operations', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            method: 'POST', headers,
                             body: JSON.stringify(Object.fromEntries(fields.map(k => [k, op[k]]))), signal: controller.signal,
                         });
                     } finally { clearTimeout(timeout); }
                     if (response.status >= 500) throw new Error('server_unavailable');
-                    const data = await response.json();
+                    const data = await response.json().catch(() => null);
+                    const heldBy = admissionHold(response, data);
+                    if (heldBy) {
+                        // An admission refusal proves this attempt never ran,
+                        // so the claim's attempt is given back: a never-sent
+                        // row can still be revised or cancelled locally.
+                        await store.updateOperationSyncState(op.op_id, {
+                            status: 'pending', attempt_count: priorAttempts, last_error: HOLD_LABELS[heldBy],
+                        });
+                        // Another epoch: the session names the Library's, and
+                        // a newer one sends this row to review on the next pass.
+                        if (heldBy === 'epoch' && await epochMoved(op)) continue;
+                        hold(heldBy);
+                        break;
+                    }
+                    if (data === null) throw new Error('invalid_response');
                     if (!family.isResult(data, op)) {
                         if (response.status >= 400 && data && PROTOCOL_ERRORS.includes(data.code)) {
                             await settle(op, family.terminal({ code: data.code }, op));
@@ -244,6 +380,15 @@
                 }
             }
         }
+        /** After an epoch refusal: did a session read find a newer epoch than `op`'s? */
+        async function epochMoved(op) {
+            if (!deps.session || typeof deps.session.latestEpoch !== 'function' || !op.library_epoch) return false;
+            await deps.session.verify();
+            const latest = deps.session.latestEpoch();
+            if (!latest || !newerEpoch(latest, op.library_epoch)) return false;
+            await fenceEpoch();
+            return true;
+        }
         async function wake() {
             if (running) return;
             running = true;
@@ -261,7 +406,7 @@
         }
         return { wake, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
             store, changed() { emit(); void wake(); }, stop() { clearTimeout(timer); },
-            discarded: () => discarded.slice() };
+            discarded: () => discarded.slice(), held: () => held };
     }
     /* Reachability is OBSERVED, never assumed. The offline runtime starts in a
      * provisional `online` state before any probe has answered, and
@@ -283,7 +428,7 @@
     let runtime = null;
     const online = createConnectivityGate(root.prksOfflineRuntimeSubscribe,
         root.prksOfflineRuntimeState, () => { if (runtime) runtime.changed(); });
-    runtime = createRuntime({ store, online,
+    runtime = createRuntime({ store, online, session: root.prksBrowserScope,
         request: (...args) => root.prksRequest(...args),
         // The registry, in one readable place. Families share a handler
         // when they share meaning, not when they share a code path.
@@ -363,7 +508,8 @@
     root.prksSync = runtime;
     root.addEventListener('focus', () => runtime.changed());
     // Durable rows, including conflicts, are discoverable after cache clearing.
-    root.prksSyncDiagnostics = async () => Object.assign(await store.stats(), { discarded: runtime.discarded() });
+    root.prksSyncDiagnostics = async () => Object.assign(await store.stats(),
+        { discarded: runtime.discarded(), held: runtime.held() });
     if (typeof root.prksArmLiveWorkLifecycleHydration === 'function') {
         root.prksArmLiveWorkLifecycleHydration();
     }

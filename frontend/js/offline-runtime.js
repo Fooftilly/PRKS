@@ -55,7 +55,18 @@
     const PLAYLISTS_LIST_KEY = 'playlists:index';
     const PROBE_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
     const PROBE_TIMEOUT_MS = 15000; // Dedicated health check only, not ordinary API requests.
-    const PDF_CACHE_NAME = 'prks-pdf-v1';
+
+    /**
+     * The signed-in scope's PDF cache (`prks-pdf-v2:<scope key>`), or null
+     * without a scope: then no page code reads or writes a PDF cache.
+     */
+    function pdfCacheName(scope) {
+        const source = scope || root.prksBrowserScope;
+        if (!source || typeof source.dbName !== 'function') return Promise.resolve(null);
+        return source.dbName('pdf').catch(function () {
+            return null;
+        });
+    }
 
     function defaultNow() {
         return Date.now();
@@ -104,6 +115,10 @@
             : typeof navigator !== 'undefined'
               ? navigator
               : null;
+
+        function pdfCacheNameFor() {
+            return pdfCacheName(options.scope || null);
+        }
 
         let state = STATE_ONLINE;
         // Monotonic transition token guards cache reads that outlive an
@@ -278,7 +293,13 @@
             );
         }
 
-        function noteRequestSuccess() {
+        function noteRequestSuccess(issuedAtGeneration) {
+            // A response issued before an offline/reconnecting transition is
+            // not proof of CURRENT reachability. It may finish after a newer
+            // failed request and must not reopen the durable-sync claim gate.
+            // Legacy explicit callers without a token keep their semantics.
+            if (Number.isSafeInteger(issuedAtGeneration) &&
+                issuedAtGeneration !== connectivityGeneration) return;
             probeAttempt = 0;
             clearProbeTimer();
             if (state !== STATE_ONLINE) setState(STATE_ONLINE);
@@ -404,6 +425,10 @@
                 }
             }
 
+            // Capture reachability at real network start, after optional
+            // IndexedDB cache lookup. The earlier connectionToken still
+            // guards a stale cached result across offline transitions.
+            const networkToken = connectivityGeneration;
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -411,7 +436,7 @@
                 const kindOfError = classifyError(err);
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
-                    noteRequestSuccess();
+                    noteRequestSuccess(networkToken);
                     if (err.status === 404) {
                         return { value: null, source: 'server', cachedAt: null };
                     }
@@ -444,7 +469,7 @@
                 }
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
-            noteRequestSuccess();
+            noteRequestSuccess(networkToken);
             // Validate before publishing: a malformed 200 must never replace a
             // good cached entity.
             assertAcceptableShape(options2.validate, raw);
@@ -1536,12 +1561,14 @@
             if (!root.prksIsSupportedFolderField ||
                 !root.prksIsSupportedFolderField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
-            /* Reminders are cached as the server stores them (trimmed): a
-             * recovery base read from this cache is compared exactly with the
-             * server's body (#534). */
+            /* All Folder text fields use backend/folder_sync.py canonical_wire:
+             * Python str.strip() semantics, and the empty title placeholder.
+             * Applying this on ACK keeps cached list and detail rows consistent
+             * with the server (including the Reminders recovery base). */
+            if (field !== 'parent_id' &&
+                typeof root.prksCanonicalFolderFieldValue !== 'function') return false;
             const value = field === 'parent_id' ? (raw || null)
-                : field === 'private_notes' && typeof root.prksCanonicalFolderFieldValue === 'function'
-                    ? root.prksCanonicalFolderFieldValue(field, raw) : raw;
+                : root.prksCanonicalFolderFieldValue(field, raw);
             await patchEntity('folder-state', id, function (state) {
                 if (typeof root.prksIsFolderStateShape === 'function' &&
                     !root.prksIsFolderStateShape(state, id)) return null;
@@ -3027,6 +3054,41 @@
             const options2 = opts && typeof opts === 'object' ? opts : {};
             const domain = options2.domain ? String(options2.domain) : '';
             const domainToken = currentDomainGeneration(domain);
+            const connectionToken = connectivityGeneration;
+            throwIfSignalAborted(options2.signal);
+
+            // Explicit opt-in for a validated browse projection, never the default.
+            // A CONFIRMED offline state can use a previously acknowledged list
+            // without repeatedly retrying an already-failing request. Recheck
+            // every fence after IndexedDB: a reconnect, domain mutation/sweep,
+            // or abort while the cache read is pending must not show stale rows.
+            if (options2.preferCacheWhenOffline === true &&
+                state === STATE_OFFLINE && store &&
+                typeof store.getList === 'function' &&
+                typeof options2.validate === 'function' &&
+                !(options2.signal && options2.signal.aborted) &&
+                !isDomainBlocked(domain)) {
+                let cached = null;
+                try { cached = await store.getList(listKey); }
+                catch (_e) { /* Cache failure keeps the normal server-first path. */ }
+                throwIfSignalAborted(options2.signal);
+                let valid = false;
+                if (cached) {
+                    try { valid = !!options2.validate(cached.value); }
+                    catch (_e) { /* Corrupt snapshots never take the fast path. */ }
+                }
+                if (valid && state === STATE_OFFLINE &&
+                    connectivityGeneration === connectionToken &&
+                    currentDomainGeneration(domain) === domainToken &&
+                    !isDomainBlocked(domain)) {
+                    return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
+                }
+            }
+
+            // Capture reachability at real network start, after optional
+            // IndexedDB cache lookup. The earlier connectionToken still
+            // guards a stale cached result across offline transitions.
+            const networkToken = connectivityGeneration;
             let raw;
             try {
                 raw = await fetchJsonStrict(path, options2);
@@ -3034,7 +3096,7 @@
                 const kindOfError = classifyError(err);
                 if (kindOfError === 'abort') throw err;
                 if (kindOfError === 'domain') {
-                    noteRequestSuccess();
+                    noteRequestSuccess(networkToken);
                     if (err.status === 404) {
                         return { value: null, source: 'server', cachedAt: null };
                     }
@@ -3062,7 +3124,7 @@
                 }
                 return { value: null, source: 'unavailable', cachedAt: null };
             }
-            noteRequestSuccess();
+            noteRequestSuccess(networkToken);
             // Validate before publishing: a malformed 200 must never replace a
             // good cached list snapshot.
             assertAcceptableShape(options2.validate, raw);
@@ -3099,9 +3161,12 @@
             let pdfCount = 0;
             if (cachesApi) {
                 try {
-                    const c = await cachesApi.open(PDF_CACHE_NAME);
-                    const keys = await c.keys();
-                    pdfCount = keys.length;
+                    const name = await pdfCacheNameFor();
+                    if (name) {
+                        const c = await cachesApi.open(name);
+                        const keys = await c.keys();
+                        pdfCount = keys.length;
+                    }
                 } catch (_e) {
                     pdfCount = 0;
                 }
@@ -3135,7 +3200,8 @@
             }
             if (cachesApi) {
                 try {
-                    await cachesApi.delete(PDF_CACHE_NAME);
+                    const name = await pdfCacheNameFor();
+                    if (name) await cachesApi.delete(name);
                 } catch (_e) {
                     ok = false;
                 }
@@ -3159,6 +3225,7 @@
         return {
             init: init,
             getState: getState,
+            getConnectivityGeneration: () => connectivityGeneration,
             subscribe: subscribe,
             noteRequestSuccess: noteRequestSuccess,
             noteRequestFailure: noteRequestFailure,
@@ -3246,11 +3313,14 @@
     function prksOfflineRuntimeState() {
         return production.getState();
     }
+    function prksOfflineRuntimeGeneration() {
+        return production.getConnectivityGeneration();
+    }
     function prksOfflineRuntimeSubscribe(fn) {
         return production.subscribe(fn);
     }
-    function prksOfflineNoteRequestSuccess() {
-        production.noteRequestSuccess();
+    function prksOfflineNoteRequestSuccess(issuedAtGeneration) {
+        production.noteRequestSuccess(issuedAtGeneration);
     }
     function prksOfflineNoteRequestFailure() {
         production.noteRequestFailure();
@@ -3409,6 +3479,7 @@
         prksOfflineFormatCachedAt: formatCachedAt,
         prksOfflineRuntimeInit: prksOfflineRuntimeInit,
         prksOfflineRuntimeState: prksOfflineRuntimeState,
+        prksOfflineRuntimeGeneration: prksOfflineRuntimeGeneration,
         prksOfflineRuntimeSubscribe: prksOfflineRuntimeSubscribe,
         prksOfflineNoteRequestSuccess: prksOfflineNoteRequestSuccess,
         prksOfflineNoteRequestFailure: prksOfflineNoteRequestFailure,
@@ -3504,7 +3575,9 @@
         PRKS_OFFLINE_STATE_ONLINE: STATE_ONLINE,
         PRKS_OFFLINE_STATE_OFFLINE: STATE_OFFLINE,
         PRKS_OFFLINE_STATE_RECONNECTING: STATE_RECONNECTING,
-        PRKS_OFFLINE_PDF_CACHE_NAME: PDF_CACHE_NAME,
+        prksOfflinePdfCacheName: function () {
+            return pdfCacheName(null);
+        },
         PRKS_OFFLINE_DOMAIN_CONCEPTS: DOMAIN_CONCEPTS,
         PRKS_OFFLINE_CONCEPTS_LIST_KEY: CONCEPTS_LIST_KEY,
         PRKS_OFFLINE_DOMAIN_POSITIONS: DOMAIN_POSITIONS,

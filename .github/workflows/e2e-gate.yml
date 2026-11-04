@@ -17,6 +17,10 @@ on:
         description: "Benchmark same-origin routing fast path (experimental)"
         type: boolean
         default: false
+      module_affinity:
+        description: "Manual soft module-affinity scheduling pilot (default gates unchanged)"
+        type: boolean
+        default: false
       shard_count:
         description: "Manual full-suite shard-width pilot; normal PR/master gates stay at six"
         type: choice
@@ -112,6 +116,12 @@ jobs:
               raise SystemExit("malformed ci-plan run/pointer_capture must be booleans")
           if mode not in ("skip", "affected", "full"):
               raise SystemExit("malformed ci-plan mode: %r" % mode)
+          if (mode == "skip") != (not plan["run"]):
+              raise SystemExit("malformed ci-plan: skip and run disagree")
+          if mode == "full" and not plan["pointer_capture"]:
+              raise SystemExit("malformed ci-plan: full mode requires pointer capture")
+          if mode == "skip" and plan["pointer_capture"]:
+              raise SystemExit("malformed ci-plan: skip mode forbids pointer capture")
           if mode == "affected":
               features = plan.get("features") or []
               if not features:
@@ -123,7 +133,9 @@ jobs:
                   )
           matrix = plan.get("matrix") or {}
           include = matrix.get("include") or []
-          if plan.get("run") and mode != "skip" and not include:
+          if mode == "skip" and include:
+              raise SystemExit("skipped plan must not schedule matrix shards")
+          if plan["run"] and not include:
               raise SystemExit("runnable plan missing matrix.include (fail closed)")
           run = "true" if plan.get("run") else "false"
           pointer = "true" if plan.get("pointer_capture") else "false"
@@ -164,6 +176,23 @@ jobs:
     needs: e2e-plan
     if: needs.e2e-plan.outputs.run == 'true'
     runs-on: ubuntu-latest
+    # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
+    # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
+    services:
+      postgres:
+        image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
     # FULL_GATE_EXTERNAL_SHARDS in tests/e2e/policy.py is the full-mode width.
     # Affected mode sizes matrix.include from selected test count via --ci-plan.
     strategy:
@@ -214,6 +243,7 @@ jobs:
           # Manual benchmark only. Normal PR/master gates still persist timing history.
           PRKS_E2E_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile && '1' || '0' }}
           PRKS_E2E_ROUTE_FASTPATH: ${{ github.event_name == 'workflow_dispatch' && inputs.route_fastpath && '1' || '0' }}
+          PRKS_E2E_MODULE_AFFINITY_PILOT: ${{ github.event_name == 'workflow_dispatch' && inputs.module_affinity && '1' || '0' }}
           PRKS_E2E_MODE: ${{ needs.e2e-plan.outputs.mode }}
           PRKS_E2E_FEATURES: ${{ needs.e2e-plan.outputs.features }}
           # Use typed matrix values through the environment, rather than
@@ -226,6 +256,13 @@ jobs:
           set -euo pipefail
           mode="${PRKS_E2E_MODE}"
           args=(python tests/e2e/run.py --jobs "${PRKS_E2E_SHARD_JOBS}" --no-pointer-capture)
+          if [[ "${PRKS_E2E_MODULE_AFFINITY_PILOT}" == "1" ]]; then
+            if [[ "$mode" != "full" ]]; then
+              echo "::error::module affinity pilot requires full suite"
+              exit 1
+            fi
+            args+=(--module-affinity-pilot)
+          fi
           if [[ "${PRKS_E2E_SHARD_TOTAL}" -gt 1 ]]; then
             args+=(--shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}")
           fi
@@ -242,10 +279,30 @@ jobs:
             echo "::error::unexpected E2E mode for matrix runner: $mode"
             exit 1
           fi
+          # The profile report is aggregate-only and stays in runner.temp.
+          # Never enable it for ordinary PR/push gates or upload fixture paths.
+          if [[ "${PRKS_E2E_PROFILE}" == "1" ]]; then
+            export PRKS_E2E_BENCHMARK_RESULT="$RUNNER_TEMP/prks-e2e-manual-profile.json"
+          fi
           printf 'Running:';
           printf ' %q' "${args[@]}"
           printf '\n'
           "${args[@]}"
+
+      - name: Summarize manual E2E infrastructure profile
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.profile &&
+          steps.tests.outcome == 'success'
+        env:
+          PROFILE_SHARD: ${{ matrix.shard }}
+          PROFILE_TOTAL: ${{ matrix.total }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/e2e_profile_summary.py \
+            "$RUNNER_TEMP/prks-e2e-manual-profile.json" \
+            --shard "${PROFILE_SHARD}/${PROFILE_TOTAL}" >> "$GITHUB_STEP_SUMMARY"
 
       # E2E runs Python unittest cases through Playwright, not Playwright Test.
       # Upload privacy-limited JUnit suites from each worker; never traces/logs.
@@ -272,6 +329,7 @@ jobs:
         if: >-
           github.event_name == 'workflow_dispatch' &&
           !inputs.profile && !inputs.route_fastpath &&
+          !inputs.module_affinity &&
           needs.e2e-plan.outputs.mode == 'full' &&
           steps.tests.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

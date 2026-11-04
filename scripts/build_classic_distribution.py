@@ -17,6 +17,7 @@ import tempfile
 from .benchmark_classic_script_bundle import (
     BODY_URL,
     CLASSIC_PREFIX,
+    EXPECTED_CLASSIC_COUNTS,
     HEAD_URL,
     _source_from_tag,
     build_candidate,
@@ -125,7 +126,7 @@ def render_assets(root: Path) -> tuple[str, dict[str, str], str]:
     groups = _classic_groups(original)
     if counts != {group: len(paths) for group, paths in groups.items()}:
         raise ValueError("benchmark candidate and source inventory disagree")
-    if counts != {"head": 5, "body": 79}:
+    if counts != EXPECTED_CLASSIC_COUNTS:
         raise ValueError(f"classic inventory has changed: {counts}; review before packaging")
     html = candidate.replace(HEAD_URL, HEAD_BUNDLE).replace(BODY_URL, BODY_BUNDLE)
     if HEAD_URL in html or BODY_URL in html:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { projectWorkPanelRead, refreshWorkPanelDisplay, workPanelBibFields } from './panel-read'
+import { projectWorkPanelRead, refreshWorkPanelDisplay, safeHttpUrl, safeTagColorCss, workPanelBibFields } from './panel-read'
 
 const server = {
   id: 'w1',
@@ -15,6 +15,39 @@ const server = {
   file_path: 'files/a.pdf',
   roles: [{ id: 'person-server', role_type: 'Author', first_name: 'Ada', last_name: 'Lovelace' }],
 }
+
+describe('untrusted presentation fields', () => {
+  it('links only parsed http(s) URLs; preserves raw metadata without a dangerous href', () => {
+    expect(safeHttpUrl('https://example.test/a.pdf')).toBe('https://example.test/a.pdf')
+    expect(safeHttpUrl('http://localhost/doc')).toBe('http://localhost/doc')
+    for (const raw of ['javascript:alert(1)', 'data:text/html,<script>', 'vbscript:msgbox(1)',
+                       'file:///tmp/a.pdf', 'relative/file.pdf', '//example.test/a.pdf']) {
+      expect(safeHttpUrl(raw)).toBe('')
+      const model = projectWorkPanelRead({
+        ownerTabId: 'main', ownerGeneration: 1, workId: 'w',
+        work: { id: 'w' }, effectiveWork: { source_url: raw },
+        sourceKind: 'pdf', tags: [],
+      })
+      expect(model.display.sourceUrl).toBe(raw)
+      expect(model.display.sourceUrlHref).toBe('')
+    }
+  })
+
+  it('limits Tag accents to CSS hex colors even for imported records', () => {
+    for (const good of ['#abc', '#abcd', '#abcdef', '#AABBCCDD']) {
+      expect(safeTagColorCss(good)).toBe(good)
+    }
+    for (const bad of ['red;position:fixed;inset:0', 'x;background:url(https://example.test)',
+                       'red', '#12345', '#abcdefg', '']) {
+      expect(safeTagColorCss(bad)).toBe('#6d6cf7')
+      const model = projectWorkPanelRead({
+        ownerTabId: 'main', ownerGeneration: 1, workId: 'w',
+        work: { id: 'w' }, tags: [{ id: 'tag-1', name: 'Tag', color: bad }],
+      })
+      expect(model.display.tags[0].color).toBe('#6d6cf7')
+    }
+  })
+})
 
 describe('projectWorkPanelRead', () => {
   it('keeps the editor base separate from metadata and role overlays', () => {

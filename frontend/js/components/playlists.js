@@ -934,3 +934,9 @@ window.prksClearPlaylistRenameState = prksClearPlaylistRenameState;
 window.renderPlaylistAttachControlsHtml = renderPlaylistAttachControlsHtml;
 window.mountPlaylistAttachControls = mountPlaylistAttachControls;
 window.prksApplyWorkPlaylistOfflineState = prksApplyWorkPlaylistOfflineState;
+
+// Node's module loader exposes these same production mutation wrappers to
+// contract tests; the classic browser continues using its window bindings.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { updatePlaylist, reorderPlaylist };
+}

@@ -480,13 +480,25 @@ async function prksLinearizeExistingPdfs(unlinearizedOnly = true) {
     return data;
 }
 
+// The reviewed raw-fetch backup routes are Library mutations: they carry the
+// epoch the request coordinator adds to the others (§10.4).
+async function prksBackupEpochHeaders(headers) {
+    const epoch = await window.prksLibraryEpochHeaders();
+    return Object.assign({}, headers, epoch);
+}
+
+function prksNoteBackupEpoch(res) {
+    window.prksNoteLibraryEpoch(res);
+    return res;
+}
+
 async function prksStartBackupProgress(signal) {
-    const res = await fetch('/api/backups/progress', {
+    const res = prksNoteBackupEpoch(await fetch('/api/backups/progress', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await prksBackupEpochHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({}),
         signal,
-    });
+    }));
     if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Backup could not be created.');
@@ -495,22 +507,22 @@ async function prksStartBackupProgress(signal) {
 }
 
 async function prksStageBackup(file) {
-    const res = await fetch('/api/backups/stage', {
+    const res = prksNoteBackupEpoch(await fetch('/api/backups/stage', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: await prksBackupEpochHeaders({ 'Content-Type': 'application/octet-stream' }),
         body: file,
-    });
+    }));
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Backup could not be verified. Current PRKS data was not changed.');
     return data;
 }
 
 async function prksRestoreBackup(token) {
-    const res = await fetch('/api/backups/restore', {
+    const res = prksNoteBackupEpoch(await fetch('/api/backups/restore', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await prksBackupEpochHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ token, confirm: 'RESTORE' }),
-    });
+    }));
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Restore failed. Current PRKS data was not changed.');
     return data;

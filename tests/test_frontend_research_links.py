@@ -93,12 +93,14 @@ class FrontendResearchLinksTests(unittest.TestCase):
         self.assertIn("case 'position-detail':", app)
         self.assertIn("head === 'concepts'", _read(_ROUTE_MODEL))
         self.assertIn("prks.nav.researchExpanded", nav)
-        html = _read(_INDEX)
+        html = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "SidebarNav.vue"))
+        catalog = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "catalog.ts"))
         self.assertIn('data-nav-disclosure="research"', html)
         self.assertIn('id="prks-nav-research-children"', html)
-        self.assertIn('href="#/concepts"', html)
-        self.assertIn('href="#/arguments"', html)
-        self.assertIn('href="#/graph"', html)
+        self.assertIn("RESEARCH_LINKS", html)
+        self.assertIn("href: '#/concepts'", catalog)
+        self.assertIn("href: '#/arguments'", catalog)
+        self.assertIn("href: '#/graph'", catalog)
 
     def test_parser_module_exists(self):
         src = _read(_LINKS)
@@ -108,9 +110,13 @@ class FrontendResearchLinksTests(unittest.TestCase):
 
     def test_research_create_edit_use_in_app_prompt(self):
         ui = _read(_UI)
+        host = _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "modal", "ModalHost.vue"
+        ))
         self.assertIn("function prksPromptTextDialog", ui)
         self.assertIn("window.prksPromptTextDialog", ui)
-        self.assertIn("prks-modal-prompt__input--multiline", ui)
+        self.assertIn("host.prompt(options || {})", ui)
+        self.assertIn("prks-modal-prompt__input--multiline", host)
         for path in (_CONCEPTS, _POSITIONS, _ARGS):
             src = _read(path)
             self.assertNotIn("window.prompt", src, path)

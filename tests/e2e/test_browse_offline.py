@@ -219,7 +219,18 @@ class BrowseOfflineTests(unittest.TestCase):
         tab = page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]')
         self.assertFalse(tab.is_disabled(), 'Recently added is cached now')
         page.evaluate("() => prksSwitchFolderLibraryTab('recently-added')")
-        page.wait_for_timeout(700)
+        # Wait for the actual cached Recently Added pane, not a fixed 700ms
+        # after the tab switch. The visible title and Added label must both
+        # appear inside that pane before checking the page as a whole.
+        page.wait_for_function(
+            """title => {
+                const pane = document.querySelector('[data-pane="recently-added"]');
+                const text = pane && pane.textContent || '';
+                return !!pane && pane.getAttribute('aria-hidden') === 'false'
+                    && text.includes(title) && text.includes('Added');
+            }""",
+            arg=WORK_A_TITLE,
+        )
         text = o._content_text(page)
         self.assertIn(WORK_A_TITLE, text)
         self.assertIn('Added', text)
@@ -336,26 +347,30 @@ class BrowseOfflineTests(unittest.TestCase):
                         if (!rows.some(op => op.status !== 'conflict')) break;
                         await new Promise(r => setTimeout(r, 100));
                     }
+                    const remaining = await prksSync.store.listOperations();
+                    if (remaining.length) throw new Error('Folder mutation did not acknowledge');
                     await fetchWorkDetails(wid);
                 }""", ['work_a', 'folder_child']),
             ('tag add', """async ([wid, tid]) => {
-                    await prksRequest('/api/works/' + encodeURIComponent(wid) + '/tags', {
+                    const response = await prksRequest('/api/works/' + encodeURIComponent(wid) + '/tags', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ tag_id: tid }),
                     });
+                    if (!response.ok) throw new Error('Tag add returned HTTP ' + response.status);
                     await fetchWorkDetails(wid);
                 }""", ['work_a', None]),
             # Patch `status`, not `title`: renaming would break the
             # title-based card lookup the next iteration uses.
             ('metadata save', """async ([wid]) => {
-                    await prksRequest('/api/works/' + encodeURIComponent(wid), {
+                    const response = await prksRequest('/api/works/' + encodeURIComponent(wid), {
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ status: 'Paused' }),
                     });
+                    if (!response.ok) throw new Error('Metadata save returned HTTP ' + response.status);
                     await fetchWorkDetails(wid);
                 }""", ['work_a', None]),
             ('playlist set', """async ([wid, plid]) => {
-                    try { await addWorkToPlaylist(plid, wid); } catch (_) {}
+                    await addWorkToPlaylist(plid, wid);
                     await fetchWorkDetails(wid);
                 }""", ['work_b', 'playlist_b']),
         )
@@ -364,6 +379,13 @@ class BrowseOfflineTests(unittest.TestCase):
         # subtest creates extra MARK_WORK_OPENED intents and can conceal a
         # stale/evicted Recent snapshot caused by an earlier mutation.
         self.cache_all(page, ids)
+        # Playlist membership writes require the acknowledged Work revision.
+        # Prime only that base, using a pure read (never a foreground Work-open).
+        page.evaluate(
+            "id => { void prksReadWorkPlaylistState(id).catch(() => {}); }",
+            ids['work_b'],
+        )
+        o._wait_entity_cached(page, 'work-playlist-state', ids['work_b'])
         initial_recent = o._cached_list(page, 'recent:index')
         self.assertIsNotNone(initial_recent)
         baseline = [
@@ -385,6 +407,25 @@ class BrowseOfflineTests(unittest.TestCase):
                 )
                 arg = [ids.get(keys[0]), tag_id if keys[1] is None else ids.get(keys[1])]
                 page.evaluate(script, arg)
+                o._drain_durable(page, message='%s mutation never acknowledged' % label)
+                # The mutation must actually occur. Otherwise a broken/no-op
+                # wrapper can satisfy every Recent-cache non-invalidation check.
+                updated_work = page.evaluate("id => fetchWorkDetails(id)", arg[0])
+                self.assertIsNotNone(updated_work, label)
+                if label == 'folder move':
+                    self.assertEqual(updated_work.get('folder_id'), ids['folder_child'])
+                elif label == 'tag add':
+                    self.assertTrue(
+                        any(str(tag.get('id')) == str(tag_id)
+                            for tag in updated_work.get('tags', [])),
+                        'tag add did not modify the Work',
+                    )
+                elif label == 'metadata save':
+                    self.assertEqual(updated_work.get('status'), 'Paused')
+                elif label == 'playlist set':
+                    self.assertEqual(updated_work.get('playlist_id'), ids['playlist_b'])
+                # This test also asserts a negative effect (no recent open).
+                # A bounded observation window covers delayed requests/ACKs.
                 page.wait_for_timeout(400)
 
                 # Asserting only on the client generation cannot detect this

@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 # Explicit recognized YouTube hostnames. Never substring-matched: that would
 # accept "notyoutube.com" and "youtube.com.example.org". Shared contract with
-# the frontend's prksIsRecognizedYoutubeHost() and works-video.js.
+# the frontend's prksIsRecognizedYoutubeHost() and video-embed.ts.
 YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"})
 
 # The only provider PRKS supports today. Kept as a set so adding one is a

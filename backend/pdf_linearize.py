@@ -71,18 +71,75 @@ def maybe_linearize_pdf_in_place(pdf_path: str, *, context: str = "") -> tuple[b
         return _maybe_linearize_pdf_in_place_inner(pdf_path, context=context)
 
 
-def _maybe_linearize_pdf_in_place_inner(pdf_path: str, *, context: str = "") -> tuple[bool, str]:
-    """Try qpdf --linearize in-place. Returns (changed, reason)."""
-    ctx = safe_log_label(context, fallback="unknown")
+def _qpdf(ctx: str) -> tuple[str | None, str]:
+    """The qpdf binary to run, or ``(None, reason)`` when linearization is off or impossible."""
     if not _linearize_enabled():
-        return False, "disabled"
+        return None, "disabled"
     qpdf = shutil.which("qpdf")
     if not qpdf:
         global _MISSING_QPDF_WARNED
         if not _MISSING_QPDF_WARNED:
             LOGGER.warning("pdf_linearize_skip_missing_qpdf context=%s", ctx)
             _MISSING_QPDF_WARNED = True
-        return False, "missing-qpdf"
+        return None, "missing-qpdf"
+    return qpdf, ""
+
+
+def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> bool:
+    """Run ``qpdf --linearize src dst``; False (logged) when qpdf fails."""
+    proc = subprocess.run(
+        [qpdf, "--linearize", src_path, dst_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        LOGGER.warning(
+            "pdf_linearize_failed context=%s exit_code=%s",
+            ctx,
+            proc.returncode,
+        )
+        return False
+    return True
+
+
+def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tuple[bool, str]:
+    """Write a linearized copy of ``src_path`` to ``dst_path``. Returns (written, reason).
+
+    For immutable objects (postgresql-architecture §11.2): the source is
+    never touched, and ``dst_path`` is scratch that the caller publishes
+    under a new key through its ``StorageBackend``, which makes it durable,
+    so nothing is synced here. Reasons, with (written) in front: (False)
+    ``disabled`` / ``missing-qpdf`` / ``missing-file`` / ``qpdf-failed`` /
+    ``error``; (True) ``ok``.
+    """
+    with perf_span("pdf_linearize"):
+        ctx = safe_log_label(context, fallback="unknown")
+        qpdf, reason = _qpdf(ctx)
+        if qpdf is None:
+            return False, reason
+        if not src_path or not os.path.exists(src_path):
+            return False, "missing-file"
+        try:
+            if not _run_qpdf(qpdf, src_path, dst_path, ctx):
+                return False, "qpdf-failed"
+        except Exception as e:
+            LOGGER.warning(
+                "pdf_linearize_error context=%s error_type=%s",
+                ctx,
+                safe_error_type(e),
+            )
+            return False, "error"
+        return True, "ok"
+
+
+def _maybe_linearize_pdf_in_place_inner(pdf_path: str, *, context: str = "") -> tuple[bool, str]:
+    """Try qpdf --linearize in-place. Returns (changed, reason)."""
+    ctx = safe_log_label(context, fallback="unknown")
+    qpdf, reason = _qpdf(ctx)
+    if qpdf is None:
+        return False, reason
     if not pdf_path or not os.path.exists(pdf_path):
         return False, "missing-file"
 
@@ -90,19 +147,7 @@ def _maybe_linearize_pdf_in_place_inner(pdf_path: str, *, context: str = "") -> 
     fd, tmp_path = tempfile.mkstemp(prefix=".linearized_", suffix=".pdf", dir=src_dir)
     os.close(fd)
     try:
-        proc = subprocess.run(
-            [qpdf, "--linearize", pdf_path, tmp_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            LOGGER.warning(
-                "pdf_linearize_failed context=%s exit_code=%s",
-                ctx,
-                proc.returncode,
-            )
+        if not _run_qpdf(qpdf, pdf_path, tmp_path, ctx):
             return False, "qpdf-failed"
         # qpdf wrote the temporary in another process, so nothing here has
         # flushed it. Sync it before it becomes the canonical file: a crash

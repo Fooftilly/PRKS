@@ -1,3 +1,5 @@
+import { noFakeWindowResizePlugin } from './scripts/ci/no_fake_window_resize.mjs';
+
 const bugRules = {
   "constructor-super": "error",
   "for-direction": "error",
@@ -63,6 +65,13 @@ export default [
       sourceType: "script",
     },
     rules: bugRules,
+  },
+  {
+    files: ["frontend/**/*.js"],
+    plugins: { prks: noFakeWindowResizePlugin },
+    rules: {
+      "prks/no-synthetic-window-resize": "error",
+    },
   },
   {
     files: [

@@ -21,6 +21,11 @@ web process, on its own ``worker`` connection pool:
   ``shutdown()``.
 - **Isolation.** A worker that cannot start, or fails, is logged as a code
   and shown in the diagnostics; it never stops the web process from serving.
+- **Objects.** ``prks_app`` calls :meth:`WebJobs.bind_root` with the root it
+  opened and leased (anchored, after ``bind_storage``) before serving, which
+  binds the object maintenance jobs (:mod:`backend.domain.objects.jobs`) to
+  that root on the worker's own copy of the registry. A worker whose root
+  was never bound runs without them.
 
 ``PRKS_EMBEDDED_WORKER=0`` runs no worker here (a separate ``prks worker``
 runs the jobs once the cutover allows one beside ``web``). The SQLite
@@ -44,6 +49,7 @@ from typing import Any, Optional, Protocol
 from backend.db.database import Database
 from backend.db.errors import DatabaseError
 from backend.db.migrate import SCHEMA_DIR
+from backend.domain.objects import jobs as object_jobs
 from backend.jobs.diagnostics import queue_depth
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.worker import (
@@ -54,10 +60,17 @@ from backend.jobs.worker import (
     open_worker_database,
     schema_start_check,
 )
+from backend.storage.root_binding import assert_config_matches_bound_root
 
 LOGGER = logging.getLogger("prks.jobs")
 
 EMBEDDED_WORKER_ENV = "PRKS_EMBEDDED_WORKER"
+
+# Use the same 100 ms upper polling interval as the signal watcher when
+# serving HTTP. BaseServer.serve_forever defaults to 500 ms, which causes an
+# avoidable delay in shutdown() even after the stop signal was observed.
+# This changes responsiveness, never the worker drain/grace contract.
+_SERVER_POLL_INTERVAL_S = 0.1
 
 # How much longer than stop_grace a stop waits for the worker thread: the
 # release after the deadline and the listener's close (at most 2 s).
@@ -90,13 +103,21 @@ class EmbeddedWorker:
         schema_dir: str = SCHEMA_DIR,
     ) -> None:
         self.db = db
+        # This worker's handlers; the objects lane is added by attach_objects.
+        self.registry = registry.copy()
         self.worker = Worker(
-            db, registry=registry, settings=settings,
+            db, registry=self.registry, settings=settings,
             start_check=schema_start_check(db, schema_dir=schema_dir),
         )
         self._thread = threading.Thread(target=self._run, name="prks-embedded-worker", daemon=True)
         self._refused: Optional[str] = None
         self._finished = threading.Event()
+
+    def attach_objects(self, root: str) -> None:
+        """Bind the object maintenance jobs to the process's bound data root; before :meth:`start`."""
+        if self._thread.ident is not None:
+            raise RuntimeError("the objects lane must be attached before the worker starts")
+        object_jobs.attach(self.registry, root)
 
     def start(self) -> None:
         LOGGER.info("embedded_worker_starting name=%s", self.worker.name)
@@ -163,8 +184,17 @@ class WebJobs:
         self.db = db  # the web pool; diagnostics read the queue through it
         self.worker = worker
 
+    def bind_root(self, root: str) -> None:
+        """The data root this process opened and leased; its object maintenance runs there.
+
+        Refuses (``StorageRootRefused``) a root other than the leased one.
+        """
+        assert_config_matches_bound_root(root)
+        if self.worker is not None:
+            self.worker.attach_objects(root)
+
     def serve(self, server: Serving, *, check_every: float = 0.1) -> None:
-        """Run ``server.serve_forever()`` with the worker running; stop the worker after it returns.
+        """Serve requests with bounded shutdown polling; drain worker on return.
 
         The listening socket is closed as soon as serving ends, before the
         worker's grace period, so new connections are refused at once rather
@@ -190,7 +220,7 @@ class WebJobs:
             if self.worker is not None:
                 self.worker.start()
             watcher.start()
-            server.serve_forever()
+            server.serve_forever(poll_interval=_SERVER_POLL_INTERVAL_S)
         finally:
             done.set()
             # Requests already being handled keep their threads; a second
