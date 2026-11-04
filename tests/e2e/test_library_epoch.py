@@ -388,6 +388,20 @@ _AFTER = """
     }
 """
 
+_DELETED_RETRY = """
+    async ({ draftId, workId }) => {
+        const key = window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId;
+        localStorage.setItem(key, JSON.stringify({ marked: Date.now(), tried: 0 }));
+        const report = await prksCleanupDeletedWorkRecovery(workId, { retry: true });
+        const rt = window.prksEditorRecovery.runtime();
+        return {
+            restored: report ? report.restored.map((d) => d.draftId || d) : null,
+            marked: localStorage.getItem(key) !== null,
+            draftKept: !!(await rt.store.get(draftId)),
+        };
+    }
+"""
+
 
 class LibraryEpochRecoveryTests(unittest.TestCase):
     """Recovery drafts and the offline cache across a restore (#629 PR 3b)."""
@@ -429,6 +443,13 @@ class LibraryEpochRecoveryTests(unittest.TestCase):
         # What was cached describes the Library the restore replaced: never read, and dropped.
         self.assertIsNone(state["cached"])
         self.assertEqual(state["cachedCount"], 0)
+
+        # Its Work deleted under the restored Library: the confirmed-deletion
+        # cleanup keeps the draft for review, and with it the Work's retry mark.
+        kept = after.evaluate(_DELETED_RETRY, {"draftId": draft["draftId"], "workId": self.work_id})
+        self.assertEqual(kept["restored"], [draft["draftId"]])
+        self.assertTrue(kept["marked"], "the retry mark stays while the draft is kept")
+        self.assertTrue(kept["draftKept"])
 
         # Settings -> Diagnostics marks it, and it can still be copied.
         after.locator("button.settings-btn").click()

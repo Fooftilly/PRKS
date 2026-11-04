@@ -374,9 +374,10 @@
             let report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
             if (report.changed.length) report = await rt.cleanupDeletedEntity(entity, RECOVERY_KINDS);
             /* Only when nothing of the Work is left, readable or not, and no
-             * editor of it remains on this page. */
+             * editor of it remains on this page. A draft typed before a
+             * restore stays for review, and the mark with it. */
             if (!keepMark && !report.live.length && !report.unknown.length && !report.changed.length &&
-                !report.unsupported.length) unmarkDeletedWork(workId);
+                !report.unsupported.length && !(report.restored && report.restored.length)) unmarkDeletedWork(workId);
             return report;
         } catch (_e) {
             /* Left in place and still marked: a later load retries. */

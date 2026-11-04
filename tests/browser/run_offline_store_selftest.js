@@ -437,9 +437,36 @@ async function run() {
         await after.putEntity('work', 'W-3', { title: 'After' }, 'r2');
         assertEq('the new page reads its own', (await after.getEntity('work', 'W-3')).value, { title: 'After' });
         assertEq('and the old page never reads the newer Library', await before.getEntity('work', 'W-3'), null);
+        // Nor does it overwrite what the newer page cached at the same key.
+        assertEq('an old page\'s write over a newer envelope is refused', await before.putEntity('work', 'W-3', { title: 'Old' }, 'r1'), false);
+        assertEq('nor a list', await before.putList('works', [{ id: 'old' }], 'r1'), false);
+        await after.putList('works', [{ id: 'W-3' }], 'r2');
+        assertEq('and the newer envelopes stay', [(await after.getEntity('work', 'W-3')).value, (await after.getList('works')).value], [{ title: 'After' }, [{ id: 'W-3' }]]);
+        assertEq('an old page refused at a list key leaves it', await before.putList('works', [{ id: 'old' }], 'r1'), false);
+        assertEq('the newer list survives', (await after.getList('works')).value, [{ id: 'W-3' }]);
         const stale = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: idb, scope: scopeAt('1') });
         await stale.getEntity('work', 'W-3');
         assertEq('an older page drops nothing of the newer Library', (await after.getEntity('work', 'W-3')).value, { title: 'After' });
+
+        // The first operation may start while the scope still resolves: the
+        // epoch is read once it has, so the fence and the envelope use it.
+        {
+            const lateIdb = createFakeIndexedDBFactory();
+            const name = 'prks-offline-v2:IN-a.LIB-a.U-a';
+            const seed = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: lateIdb, scope: scopeAt('3') });
+            assertEq('a page at epoch 3 caches', await seed.putEntity('work', 'W-9', { title: 'Kept' }, 'r3'), true);
+            let bound = null;
+            const late = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: lateIdb, scope: {
+                dbName: function () { return new Promise(function (r) { setTimeout(function () { bound = '3'; r(name); }, 5); }); },
+                pageEpoch: function () { return bound; },
+                subscribe: function () { return function () {}; },
+            } });
+            assertEq('a write started before the scope resolved commits', await late.putEntity('work', 'W-10', { title: 'Early' }, 'r3'), true);
+            assertEq('under the resolved epoch', (await late.getEntity('work', 'W-10')).libraryEpoch, '3');
+            assertEq('and the fence kept the current epoch\'s entries', (await late.getEntity('work', 'W-9')).value, { title: 'Kept' });
+            const again = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: lateIdb, scope: scopeAt('3') });
+            assertEq('a later store of the same epoch keeps them too', (await again.getEntity('work', 'W-9')).value, { title: 'Kept' });
+        }
 
         const noEpoch = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: createFakeIndexedDBFactory(), scope: scopeAt(null) });
         assertEq('a scope naming no epoch has no cache', await noEpoch.isAvailable(), false);

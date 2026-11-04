@@ -22,7 +22,8 @@
  * envelope records the epoch of the page that cached it
  * (`prksBrowserScope.pageEpoch()`), and a read returns only envelopes of the
  * page's own epoch: what was cached before a restore describes the Library
- * that was replaced, and an old page never feeds a new one. The first use
+ * that was replaced, and an old page never feeds a new one nor overwrites
+ * what a newer page cached at the same key. The first use
  * under a newer epoch than metadata `library_epoch` also drops every older
  * envelope, since nothing can read them again.
  *
@@ -525,26 +526,86 @@
          */
         function fence() {
             if (fenced) return fenced;
-            const epoch = pageEpoch();
-            fenced = !epoch ? Promise.resolve() : runIdbStoreRequest(openDb, STORE_METADATA, 'readonly', function (store) {
-                return store.get(META_LIBRARY_EPOCH);
-            }).then(function (r) {
-                if (!r.ok) return;
-                const seen = r.value ? epochOf(r.value.value) : null;
-                if (seen && compareEpochs(seen, epoch) >= 0) return;
-                return Promise.all([
-                    runIdbStoreRequest(openDb, STORE_ENTITIES, 'readwrite', function (store) { return store.clear(); }),
-                    runIdbStoreRequest(openDb, STORE_LISTS, 'readwrite', function (store) { return store.clear(); }),
-                ]).then(function (results) {
-                    if (!results.every(function (x) { return x.ok; })) return;
-                    return runIdbStoreRequest(openDb, STORE_METADATA, 'readwrite', function (store) {
-                        return store.put({ key: META_LIBRARY_EPOCH, value: epoch });
+            // Opening the cache waits for the scope to resolve, so the page
+            // epoch read after it is the bound one, never a not-yet-known null.
+            const run = openDb().then(function (db) {
+                const epoch = pageEpoch();
+                if (!db || !epoch) {
+                    if (fenced === run) fenced = null;
+                    return;
+                }
+                return runIdbStoreRequest(openDb, STORE_METADATA, 'readonly', function (store) {
+                    return store.get(META_LIBRARY_EPOCH);
+                }).then(function (r) {
+                    if (!r.ok) {
+                        if (fenced === run) fenced = null;
+                        return;
+                    }
+                    const seen = r.value ? epochOf(r.value.value) : null;
+                    if (seen && compareEpochs(seen, epoch) >= 0) return;
+                    return Promise.all([
+                        runIdbStoreRequest(openDb, STORE_ENTITIES, 'readwrite', function (store) { return store.clear(); }),
+                        runIdbStoreRequest(openDb, STORE_LISTS, 'readwrite', function (store) { return store.clear(); }),
+                    ]).then(function (results) {
+                        if (!results.every(function (x) { return x.ok; })) {
+                            if (fenced === run) fenced = null;
+                            return;
+                        }
+                        return runIdbStoreRequest(openDb, STORE_METADATA, 'readwrite', function (store) {
+                            return store.put({ key: META_LIBRARY_EPOCH, value: epoch });
+                        }).then(function (w) {
+                            if (!w.ok && fenced === run) fenced = null;
+                        });
                     });
                 });
             }).then(function () {}, function () {
-                fenced = null;
+                if (fenced === run) fenced = null;
             });
-            return fenced;
+            fenced = run;
+            return run;
+        }
+
+        /**
+         * Writes one envelope under this page's epoch, in one transaction with
+         * the cache's `library_epoch`: a page older than the cache (a tab
+         * loaded before a restore) never replaces what a newer page cached at
+         * the same key. Resolves true only when the write committed.
+         */
+        function putCurrent(storeName, envelope) {
+            return fence().then(openDb).then(function (db) {
+                // A scope without an epoch opens no database (resolveDbName);
+                // only a caller-named one (tests) may cache without an epoch.
+                const epoch = pageEpoch();
+                if (!db) return false;
+                envelope.libraryEpoch = epoch;
+                let tx;
+                try {
+                    tx = db.transaction([storeName, STORE_METADATA], 'readwrite');
+                } catch (_e) {
+                    return false;
+                }
+                const done = tx.done.then(function () { return true; }, function () { return false; });
+                let refused = false;
+                return tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH).then(function (row) {
+                    const seen = row ? epochOf(row.value) : null;
+                    if (epoch && seen && compareEpochs(seen, epoch) > 0) {
+                        refused = true;
+                        return undefined;
+                    }
+                    return tx.objectStore(storeName).put(envelope);
+                }).then(function () {
+                    return done.then(function (ok) { return ok && !refused; });
+                }, function () {
+                    try {
+                        tx.abort();
+                    } catch (_e) {
+                        /* already finished */
+                    }
+                    return done.then(function () { return false; });
+                });
+            }).catch(function () {
+                return false;
+            });
         }
 
         function putEntity(kind, id, value, sourceRevision) {
@@ -554,13 +615,9 @@
                 value: value,
                 cachedAt: now(),
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
-                libraryEpoch: pageEpoch(),
+                libraryEpoch: null,
             };
-            return runRequest(STORE_ENTITIES, 'readwrite', function (store) {
-                return store.put(envelope);
-            }).then(function (r) {
-                return r.ok;
-            });
+            return putCurrent(STORE_ENTITIES, envelope);
         }
 
         function getEntity(kind, id) {
@@ -625,13 +682,9 @@
                 value: value,
                 cachedAt: now(),
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
-                libraryEpoch: pageEpoch(),
+                libraryEpoch: null,
             };
-            return runRequest(STORE_LISTS, 'readwrite', function (store) {
-                return store.put(envelope);
-            }).then(function (r) {
-                return r.ok;
-            });
+            return putCurrent(STORE_LISTS, envelope);
         }
 
         function getList(listKey) {
