@@ -240,14 +240,6 @@ def start_jobs(auth, environ=None):
     raise SystemExit(2)
 
 
-def select_config(args):
-    try:
-        return StorageConfig.from_env(cli_root=args.storage_root)
-    except StorageRootError as exc:
-        print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
-        raise SystemExit(2) from None
-
-
 def run_role(role, argv):
     """``migrate``, ``worker`` or ``admin``: the PostgreSQL roles beside ``serve`` (§12.2)."""
     # Every role fails before any import of the PostgreSQL packages when the
@@ -276,6 +268,15 @@ def run_role(role, argv):
     return process_roles.run_worker(root=root, testing=testing)
 
 
+def select_config(args):
+    """The storage root of a ``migrate`` or ``worker`` role; serve selects its own inline below."""
+    try:
+        return StorageConfig.from_env(cli_root=args.storage_root)
+    except StorageRootError as exc:
+        print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 if __name__ == "__main__":
     from backend.startup_profile import phase as startup_phase, record_imports
 
@@ -294,7 +295,11 @@ if __name__ == "__main__":
         ensure_runtime_or_exit()
 
     with startup_phase("startup_config"):
-        config = select_config(args)
+        try:
+            config = StorageConfig.from_env(cli_root=args.storage_root)
+        except StorageRootError as exc:
+            print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
+            raise SystemExit(2) from None
     # Before the root is opened: the PostgreSQL start check takes the root's
     # shared lease, which the single-process lease below excludes.
     with startup_phase("startup_identity"):
