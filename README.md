@@ -89,40 +89,65 @@ PRKS_PUBLISH_HOST=0.0.0.0 docker compose up -d
 
 Use that override only on a network you already trust, or behind an access layer you control.
 
-### PostgreSQL database container (opt-in, not the active application backend)
+### PostgreSQL deployment (preview)
 
-The PostgreSQL 18 infrastructure preview for [deployment issue #630](https://github.com/Fooftilly/PRKS/issues/630) is **disabled by default**. Normal `docker compose up -d` still runs the existing SQLite-backed web application. The `db` service does not publish a host port, does not open a PRKS storage root and does **not** migrate or switch the PRKS application to PostgreSQL. It only prepares an internal PostgreSQL service for the later, reviewed cutover.
+`docker-compose.postgres.yml` runs PRKS as the PostgreSQL design lays it out ([deployment issue #630](https://github.com/Fooftilly/PRKS/issues/630), [`docs/postgresql-architecture.md`](docs/postgresql-architecture.md) §12.3). It is a **preview**: PostgreSQL is not the production backend until the cutover. Accounts, sign-in, the database/data-root pairing and background jobs live in PostgreSQL, while the Library's content is still the SQLite store in the data root. Plain `docker compose up -d` keeps running the SQLite application above. **Use the PostgreSQL file on its own, never together with `docker-compose.yml`**: both would serve the same `./data`.
 
-Create a private password file outside version control and start only the database:
+Four services:
+
+| Service | What it does |
+| ------- | ------------ |
+| `db` | PostgreSQL 18; named volume `pgdata` at `/var/lib/postgresql` (the PostgreSQL 18 location, never `/var/lib/postgresql/data`); no host port |
+| `migrate` | One-shot: applies the schema, then, once setup is complete, runs the start check (below) and exits. `web` and `worker` start only after it succeeded |
+| `web` | `prks_app.py serve` with password sign-in (`PRKS_AUTH=session`); healthcheck on `/readyz` |
+| `worker` | `prks_app.py worker`: background jobs, beside `web` |
+
+Every service sets `PRKS_MIGRATE_ON_START=0`, so `migrate` is the only schema runner, and reads the database URL from the `prks_database_url` Compose secret (`PRKS_DATABASE_URL_FILE`). Only the services that list a secret can read it.
+
+**1. Secrets and data directory.** Create them once, owner-only, outside version control (`secrets/` and `.env` are ignored by Git and by Docker builds):
 
 ```bash
-install -d -m 700 secrets
+install -d -m 700 secrets data
 umask 077
-# Refuse symlinks (including dangling ones) and non-regular password paths.
-if [ -L secrets/db_password ] || { [ -e secrets/db_password ] && [ ! -f secrets/db_password ]; }; then
-  echo "secrets/db_password must be a regular, non-symlink file" >&2
-  exit 1
-fi
-if [ ! -e secrets/db_password ]; then
-  # noclobber also refuses to overwrite a file inserted after the check.
-  ( set -C; openssl rand -hex 32 > secrets/db_password ) || exit 1
-fi
-chmod 600 secrets/db_password
-test -f secrets/db_password && test -s secrets/db_password || {
-  echo "Missing or empty database password file" >&2
-  exit 1
-}
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres up -d db
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres ps db
+# Refuse an existing file: PostgreSQL reads the password only when it creates the database.
+( set -C; openssl rand -hex 32 > secrets/db_password ) || exit 1
+printf 'postgresql://prks:%s@db:5432/prks\n' "$(cat secrets/db_password)" > secrets/database_url
+cp .env.example .env   # then set UID/GID to `id -u`/`id -g`
 ```
 
-**Do not regenerate or overwrite an existing `secrets/db_password`:** PostgreSQL uses the password file only during first-time database initialization. Changing this file on an initialized volume does not change the `prks` role password; coordinate password rotation using an authenticated `ALTER ROLE` and update the secret together, without deleting the database volume.
+**Do not regenerate `secrets/db_password` on an initialized volume:** changing the file does not change the `prks` role's password. Rotate it with an authenticated `ALTER ROLE` and update both secret files together.
 
-**Always supply both `-f` files for PostgreSQL lifecycle commands**, including `stop`, `down` and `down -v`. Plain `docker compose down` reads only the SQLite default file and will not manage the opt-in PostgreSQL service or its volume.
+**2. Start and set up.**
 
-The database reads that password through `POSTGRES_PASSWORD_FILE` as a Compose secret; `PRKS_DB_PASSWORD_FILE` can specify another secret-file path. Treat the password and future database URL as credentials: never commit them, embed them in an image or print them to logs. The `secrets/` directory is ignored by Git. Docker Compose's named volume `pgdata` is mounted at `/var/lib/postgresql`, the required PostgreSQL 18 location. Use `docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres stop db` to stop only the database while preserving its volume. **`docker compose -f docker-compose.yml -f docker-compose.postgres.yml --profile postgres down` stops every service in this Compose project**, including the existing SQLite `prks` web service; `down` (without `-v`) preserves the database volume, while **`down -v` deletes it**. Take an appropriate backup before any destructive operation.
+```bash
+docker compose -f docker-compose.postgres.yml build
+docker compose -f docker-compose.postgres.yml up -d
+```
 
-**Do not run two PostgreSQL database copies against the same PRKS data root.** Root/database pairing, generation fencing, bootstrap, migration orchestration and readiness are not yet connected to this container. In particular, restoring or duplicating a PostgreSQL volume and pointing it at the same root could permanently delete files after the future cutover (approved risk R20). A database snapshot taken while PRKS is serving is not a safe rollback against its original root. The future cutover must document the offline root+database recovery pair and retire the old database copy after upgrade; reverting an image tag alone is not a rollback.
+On a new, empty data directory `web` binds it as a PRKS data root (`prks-root.json`) and then **waits for setup**: it serves nothing, and `/readyz` stays unreachable (the container is unhealthy) until you create the owner and the Library. `worker` waits too. Run setup in the waiting `web` container ([admin bootstrap](docs/admin-bootstrap.md)):
+
+```bash
+docker compose -f docker-compose.postgres.yml exec web python /app/prks_app.py admin bootstrap issue-token --root /data
+docker compose -f docker-compose.postgres.yml exec web python /app/prks_app.py admin bootstrap complete --root /data --login alice
+```
+
+`web` then starts serving at [http://127.0.0.1:8080](http://127.0.0.1:8080) and turns healthy. Loopback is the default publish address. Expose PRKS on a network only behind an HTTPS reverse proxy, with `PRKS_PUBLISH_HOST`, `PRKS_PUBLIC_ORIGIN` and `PRKS_TRUSTED_PROXIES` set in `.env`.
+
+**Health and stopping.** `GET /healthz` answers 200 while the process runs. `GET /readyz` answers 200 only when the database is reachable, its schema is exactly this image's, setup is complete and the data root is still paired with this database; otherwise 503. Neither shows any detail. On `docker compose stop` (SIGTERM) `web` stops accepting connections and exits, and `worker` claims nothing more and finishes its running job or hands it back, within `stop_grace_period` (30 s).
+
+**Start generation.** The database and the data root's `prks-root.json` both record a *start generation*. Every start of `migrate`, `web` or `worker` checks that the two match and moves both forward by one, database first. A database behind its data root, or one that ran elsewhere, is refused. If a start stops between its two writes, `web` stays not ready until the next start of any service finishes it (`docker compose -f docker-compose.postgres.yml run --rm migrate` does). **The start generation counts starts, not writes**, so it cannot catch every stale copy of the database (below).
+
+**Upgrades.** Build the new image, then `docker compose -f docker-compose.postgres.yml up -d`: `migrate` runs first, while the previous `web` and `worker` may still hold the data root, and the new `web` and `worker` refuse a schema other than their own. Before upgrading PostgreSQL itself or moving its volume, read the next two paragraphs.
+
+**One database per data root.** At most one database ever runs against a data root. **Two databases running against one data root at the same time can permanently delete files, and PRKS cannot detect it**: each database's cleanup removes files that only the other one still references. A copy of the database (a volume snapshot, `pg_dump`, an upgraded or moved cluster) looks like the original to PRKS:
+
+- A database copy taken while PRKS is serving is never started against this data root. Start it only against its own copy of the data root, taken at the same moment (whole-instance disaster recovery).
+- Once a copy (for example an upgraded cluster) has started against the data root, retire the database it came from: move the old cluster's data directory out of the volume, or delete it. It must never start here again.
+- **Reverting the image tag is not a rollback.** Prepare a rollback before upgrading. Either keep the old database's data directory together with a copy of the data root, both taken offline at the same moment, and restore them together. Or restore a format-2 Library backup into a fresh instance with its own new data root, never into the old database on this root.
+
+**Database volume capacity.** PRKS cannot see the free space on the PostgreSQL volume. Monitor it, and keep free at least twice the database's size plus `max_wal_size` (1 GB by default): a Library restore stages a copy of the Library's rows before the old ones are vacuumed. If the volume fills up, free space, restart `db` if it stopped, and let PRKS clean up the failed restore on its next start. A recreated (empty) database volume does not take over a used data root: setup refuses it, and its files stay untouched.
+
+**Lifecycle.** `docker compose -f docker-compose.postgres.yml down` stops every service and keeps the database volume. **`down -v` deletes the database volume.** Always pass `-f docker-compose.postgres.yml`. The CI acceptance run of this file is `scripts/ci/test_postgres_compose.sh`.
 
 ## Configuration and data layout
 
