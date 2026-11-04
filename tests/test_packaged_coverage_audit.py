@@ -7,6 +7,7 @@ import io
 import os
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ci import plan_packaged_e2e as staged
