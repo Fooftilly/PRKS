@@ -471,12 +471,13 @@
 
     /** The PDF caches of `key` under an epoch older than `epoch`, among `names`. */
     function olderEpochPdfCaches(names, key, epoch) {
-        if (!validScopeKey(key) || !epochOf(epoch)) return [];
+        const current = epochOf(epoch);
+        if (!validScopeKey(key) || !current) return [];
         const prefix = PDF_CACHE_BASE + ':' + key + ':';
         return (names || []).filter(function (name) {
             if (typeof name !== 'string' || name.indexOf(prefix) !== 0) return false;
             const other = epochOf(name.slice(prefix.length));
-            return !!other && compareEpochs(other, epoch) < 0;
+            return !!other && compareEpochs(other, current) < 0;
         });
     }
 

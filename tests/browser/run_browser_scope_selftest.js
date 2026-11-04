@@ -856,6 +856,9 @@ async function testWorkerEpochs() {
     await sw.dropOlderEpochPdfCaches({ keys: async () => names, delete: async (n) => { deleted.push(n); return true; } }, KEY_B, '2');
     record('a newer binding deletes them', JSON.stringify(deleted) === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1']));
     record('an invalid epoch drops nothing', sw.olderEpochPdfCaches(names, KEY_B, 'x').length === 0);
+    record('a numeric epoch drops the same caches',
+        JSON.stringify(sw.olderEpochPdfCaches(names, KEY_B, 10))
+            === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9']));
     record('the session names the cache of its scope and epoch',
         sw.sessionPdfCacheName(SESSION_A) === name
         && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 2 }) }))
