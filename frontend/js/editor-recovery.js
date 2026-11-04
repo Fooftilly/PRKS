@@ -2076,6 +2076,8 @@ var prksEditorRecovery = (function(exports) {
 		let disposed = false;
 		/** Retiring: text typed so far is finished, nothing new is taken. */
 		let frozen = false;
+		/** A retirement waiting for every pending write to commit. */
+		let drained = null;
 		/**
 		* Stored generations known to be superseded by the server, still waiting
 		* for their removal: never adopted, so never restored. A removal storage
@@ -2216,6 +2218,7 @@ var prksEditorRecovery = (function(exports) {
 		function changed() {
 			if (disposed) return;
 			const pending = pendingWriters();
+			if (drained && !pending.length) drained();
 			planHeld(pending);
 			setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0);
 			setEmergencyListeners(pending.length > 0);
@@ -2882,6 +2885,8 @@ var prksEditorRecovery = (function(exports) {
 						writeEmergencyNow();
 					} catch {}
 					await Promise.all([...live].map((w) => w.flush().catch(() => void 0)));
+					if (pendingWriters().length) await new Promise((resolve) => drained = resolve);
+					drained = null;
 					registry.dispose();
 				})();
 				return retiring;
@@ -3147,12 +3152,12 @@ var prksEditorRecovery = (function(exports) {
 				if (retiring) return retiring;
 				retired = true;
 				writerListeners.clear();
-				retiring = boundedSettle(writers.retire(), RETIRE_FLUSH_MS).then(() => {
+				retiring = settledWithin(writers.retire().then(() => {
 					writers.dispose();
 					identity.dispose();
 					closed = true;
 					rawStore.retire();
-				});
+				}), options.retireWaitMs ?? RETIRE_WAIT_MS);
 				return retiring;
 			},
 			isRetired: () => retired,
@@ -3169,17 +3174,14 @@ var prksEditorRecovery = (function(exports) {
 		for (const stored of readEmergencyKeys(storage, names)) if ((stored.payload ? stored.payload.entries : []).some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) return stored.pageInstanceId;
 		return null;
 	}
-	/** Longest a retirement waits for the writers' last writes before closing the database regardless. */
-	var RETIRE_FLUSH_MS = 1e4;
-	function boundedSettle(work, ms) {
+	/** How long a retirement waits for the writers' last writes before reporting them pending. */
+	var RETIRE_WAIT_MS = 1e4;
+	function settledWithin(work, ms) {
 		return new Promise((resolve) => {
-			const timer = setTimeout(resolve, ms);
+			const timer = setTimeout(() => resolve("pending"), ms);
 			work.then(() => {
 				clearTimeout(timer);
-				resolve();
-			}, () => {
-				clearTimeout(timer);
-				resolve();
+				resolve("closed");
 			});
 		});
 	}

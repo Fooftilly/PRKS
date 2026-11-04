@@ -65,7 +65,17 @@ export interface EditorRecoveryRuntimeOptions {
   identity?: Omit<IdentityEnv, 'names'>
   writers?: Omit<WriterRegistryOptions, 'store' | 'identity'>
   emergencyStorage?: EmergencyStorage | null
+  /** How long `retire()` waits before reporting writes still pending. Default 10 s. */
+  retireWaitMs?: number
 }
+
+/**
+ * How a retirement ended: `closed` once every text typed before it is in this
+ * scope's database and the database is closed; `pending` when some write had
+ * not committed in time. A pending retirement keeps those writers, their
+ * retries and the leave guard until the text commits, then closes.
+ */
+export type RetireOutcome = 'closed' | 'pending'
 
 export interface EditorRecoveryRuntime {
   /** The browser scope whose recovery storage this runtime reads and writes. */
@@ -126,9 +136,12 @@ export interface EditorRecoveryRuntime {
    * key and finish every pending write to this scope's database (a body too
    * large for the emergency key included); then they, the listeners, the
    * channel and the locks stop and the database closes for good. Nothing
-   * stored is removed. Idempotent; resolves once the database is closed.
+   * stored is removed, and a write that does not commit is never dropped:
+   * its writer keeps retrying and keeps the leave guard until it does.
+   * Idempotent; resolves `closed`, or `pending` after `retireWaitMs` while a
+   * write is still uncommitted.
    */
-  retire(): Promise<void>
+  retire(): Promise<RetireOutcome>
   isRetired(): boolean
   dispose(): void
 }
@@ -148,7 +161,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   let retired = false
   /** The writers' last writes are done: nothing reads or writes this scope. */
   let closed = false
-  let retiring: Promise<void> | null = null
+  let retiring: Promise<RetireOutcome> | null = null
   const rawEmergencyStorage =
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
   const emergencyStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => retired) : null
@@ -348,12 +361,15 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       if (retiring) return retiring
       retired = true
       writerListeners.clear()
-      retiring = boundedSettle(writers.retire(), RETIRE_FLUSH_MS).then(() => {
+      // Only once every text typed before is committed: until then the
+      // writers keep their retries, the leave guard and this page's identity.
+      const closing = writers.retire().then(() => {
         writers.dispose()
         identity.dispose()
         closed = true
         rawStore.retire()
       })
+      retiring = settledWithin(closing, options.retireWaitMs ?? RETIRE_WAIT_MS)
       return retiring
     },
     isRetired: () => retired,
@@ -377,22 +393,16 @@ function listingPage(storage: EmergencyStorage, names: RecoveryNames, draftId: s
   return null
 }
 
-/** Longest a retirement waits for the writers' last writes before closing the database regardless. */
-const RETIRE_FLUSH_MS = 10000
+/** How long a retirement waits for the writers' last writes before reporting them pending. */
+const RETIRE_WAIT_MS = 10000
 
-function boundedSettle(work: Promise<unknown>, ms: number): Promise<void> {
+function settledWithin(work: Promise<void>, ms: number): Promise<RetireOutcome> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    work.then(
-      () => {
-        clearTimeout(timer)
-        resolve()
-      },
-      () => {
-        clearTimeout(timer)
-        resolve()
-      },
-    )
+    const timer = setTimeout(() => resolve('pending'), ms)
+    void work.then(() => {
+      clearTimeout(timer)
+      resolve('closed')
+    })
   })
 }
 

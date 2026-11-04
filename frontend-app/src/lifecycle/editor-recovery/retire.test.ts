@@ -6,14 +6,16 @@ import { createRecoveryStore, RecoveryStoreError } from './store'
 import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
-function load(idb: ReturnType<typeof createFakeIdb>, local: ReturnType<typeof memoryStorage>, page: string) {
+function load(idb: ReturnType<typeof createFakeIdb>, local: ReturnType<typeof memoryStorage>, page: string,
+  scheduler = createManualScheduler(), retireWaitMs?: number) {
   const browser = createFakeBrowser()
   return createEditorRecoveryRuntime({
     names: TEST_NAMES,
     store: { indexedDB: idb.factory },
     identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(page), claimWaitMs: 5 },
-    writers: { scheduler: createManualScheduler(), window: null, document: null },
+    writers: { scheduler, window: null, document: null },
     emergencyStorage: local,
+    retireWaitMs,
   })
 }
 
@@ -112,6 +114,38 @@ describe('recovery retires with its browser scope (#629)', () => {
     const retiring = rt.retire()
     expect(await refusedCode(reading)).toBe('retired')
     await retiring
+    expect(rt.store.isRetired()).toBe(true)
+    const again = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    const rows = await again.listAll()
+    expect(rows).toHaveLength(1)
+    expect((await again.getBody(rows[0]!.draftId))!.body).toBe(large)
+  })
+
+  it('keeps a large body it could not commit in time guarded and retried until it commits', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const scheduler = createManualScheduler()
+    const rt = load(idb, local, 'a', scheduler, 20)
+    await rt.start()
+    const writer = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const large = 'y'.repeat(LARGE_BODY_CHARS + 1)
+    // Storage refuses every commit while the account signs out.
+    idb.failCommits = 1_000_000
+    writer.edit(1, large)
+    expect(await rt.retire()).toBe('pending')
+    // Signed out for everyone else, but the page still holds the only copy and guards it.
+    expect(await refusedCode(rt.store.listAll())).toBe('retired')
+    expect(rt.writers.leaveGuardActive()).toBe(true)
+    expect(rt.writers.writers()).toHaveLength(1)
+    expect(await rt.retire()).toBe('pending')
+    // Storage recovers: the writer's own retry commits the text, then the scope closes.
+    idb.failCommits = 0
+    for (let i = 0; i < 20 && rt.writers.writers().length; i++) {
+      scheduler.advance(60_000)
+      await settle()
+    }
+    expect(rt.writers.writers()).toEqual([])
+    expect(rt.writers.leaveGuardActive()).toBe(false)
     expect(rt.store.isRetired()).toBe(true)
     const again = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
     const rows = await again.listAll()

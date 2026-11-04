@@ -137,8 +137,9 @@ export interface WriterRegistry {
    * The browser scope was signed out or replaced (#629): later edits, writers
    * and adoptions are ignored; text already typed is written once more to the
    * emergency key and every pending write is finished, so no text typed under
-   * the account is lost, even one too large for the emergency key. Then
-   * disposes. Never rejects.
+   * the account is lost, even one too large for the emergency key. A write
+   * that fails keeps its retries and the leave guard; the registry disposes
+   * only once nothing is pending, so this resolves only then. Never rejects.
    */
   retire(): Promise<void>
   dispose(): void
@@ -211,6 +212,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   let disposed = false
   /** Retiring: text typed so far is finished, nothing new is taken. */
   let frozen = false
+  /** A retirement waiting for every pending write to commit. */
+  let drained: (() => void) | null = null
   /**
    * Stored generations known to be superseded by the server, still waiting
    * for their removal: never adopted, so never restored. A removal storage
@@ -369,6 +372,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   function changed(): void {
     if (disposed) return
     const pending = pendingWriters()
+    if (drained && !pending.length) drained()
     planHeld(pending)
     setGuard(pending.some((w) => w.needsLeaveGuard()) || unrecorded.size > 0)
     setEmergencyListeners(pending.length > 0)
@@ -1119,6 +1123,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
           /* whatever was written already stays */
         }
         await Promise.all([...live].map((w) => w.flush().catch(() => undefined)))
+        // A write that failed is retried by its writer, guarded meanwhile;
+        // the text is only let go once it is in the database.
+        if (pendingWriters().length) await new Promise<void>((resolve) => (drained = resolve))
+        drained = null
         registry.dispose()
       })()
       return retiring
