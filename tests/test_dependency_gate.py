@@ -1445,7 +1445,10 @@ class RepoGateLiveTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "aggregator"):
             assert_test_gate_run_steps_allowlisted(
-                workflow.replace("    needs: postgres-helpers-shards", "    needs: []")
+                workflow.replace(
+                    "    needs: [docs-only-plan, postgres-helpers-shards]",
+                    "    needs: []",
+                )
             )
         with self.assertRaisesRegex(ValueError, "aggregator command"):
             assert_test_gate_run_steps_allowlisted(
