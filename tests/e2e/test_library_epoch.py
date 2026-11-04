@@ -16,8 +16,12 @@ PG-C1).
   anything.
 - A page loaded before the restore keeps naming the epoch it loaded, and
   records no new change.
+- Signing the account out in another tab clears the review list from an open
+  Diagnostics view, also when its read was still in flight, and leaves the
+  stored changes for the account.
 """
 
+import json
 import os
 import unittest
 
@@ -25,6 +29,7 @@ import psycopg
 
 from tests.e2e.fixtures import seed_folders_library
 from tests.e2e.harness import AppServer, PageCollector, require_chromium, wait_for_async
+from tests.e2e.postgres_identity import OWNER_LOGIN, PASSWORD
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -224,6 +229,115 @@ class LibraryEpochQueueTests(unittest.TestCase):
         self.assertEqual(reloaded.evaluate(_TRY_NOTE, {"workId": self.work_id, "text": "After the restore"}), "queued")
         rows = reloaded.evaluate("async () => (await prksSync.store.listOperations()).map((r) => r.library_epoch)")
         self.assertTrue(rows and all(e == epoch for e in rows), rows)
+
+
+
+class LibraryEpochReviewSignOutTests(unittest.TestCase):
+    """The review list of an account that signs out in another tab (#1115 review)."""
+
+    restore_epoch = LibraryEpochQueueTests.restore_epoch
+    queue_note = LibraryEpochQueueTests.queue_note
+    hold_sync = LibraryEpochQueueTests.hold_sync
+    wait_reviewed = LibraryEpochQueueTests.wait_reviewed
+
+    def setUp(self):
+        self.server = AppServer(seed_fn=seed_folders_library, auth="session")
+        self.addCleanup(self.server.stop)
+        self.server.start()
+        self.work_id = self.server.ids["work_a"]
+        self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900}, service_workers="block")
+        self.addCleanup(self.context.close)
+        response = self.context.request.post(
+            self.server.origin + "/api/login",
+            data=json.dumps({"login": OWNER_LOGIN, "password": PASSWORD}),
+            headers={"Content-Type": "application/json", "Origin": self.server.origin},
+        )
+        self.assertEqual(response.status, 200, response.text())
+
+    open_page = LibraryEpochQueueTests.open_page
+
+    def reviewed_page(self):
+        page = self.open_page()
+        op_id = self.queue_note(page)
+        self.restore_epoch()
+        page.unroute("**/api/sync/operations")
+        self.wait_reviewed(page, op_id)
+        page.locator("button.settings-btn").click()
+        page.locator("#prks-settings-tab-diagnostics").click()
+        panel = page.locator("#prks-settings-panel-diagnostics")
+        return page, panel
+
+    def sign_out_elsewhere(self, page):
+        other = self.open_page()
+        other.evaluate("() => prksBrowserScope.signOut()")
+        page.wait_for_function("() => prksBrowserScope.isRetired()")
+        other.close()
+
+    def assert_kept_for_the_account(self):
+        response = self.context.request.post(
+            self.server.origin + "/api/login",
+            data=json.dumps({"login": OWNER_LOGIN, "password": PASSWORD}),
+            headers={"Content-Type": "application/json", "Origin": self.server.origin},
+        )
+        self.assertEqual(response.status, 200, response.text())
+        again = self.open_page()
+        restored = again.evaluate("async () => (await prksSync.store.listRestored()).map((r) => r.payload.text)")
+        self.assertEqual(restored, [TYPED], "nothing stored was removed")
+
+    def test_signing_out_clears_a_rendered_review_list(self):
+        page, panel = self.reviewed_page()
+        panel.locator("#prks-offline-cache-refresh-btn").click()
+        rows = panel.locator('[data-prks-role="restored-change"]')
+        rows.first.wait_for(timeout=20000)
+        copy = rows.first.get_by_role("button", name="Copy text", exact=True)
+        handle = copy.element_handle()
+        self.sign_out_elsewhere(page)
+        page.wait_for_function("() => !document.querySelector('[data-prks-role=restored-change]')")
+        self.assertEqual(panel.locator('[data-prks-role="restored-changes-heading"]').count(), 0)
+        # A copy button kept from before hands out nothing.
+        self.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=self.server.origin)
+        page.evaluate("() => navigator.clipboard.writeText('unchanged')")
+        copied = page.evaluate(
+            """async (button) => {
+                button.click();
+                await new Promise((resolve) => setTimeout(resolve, 50));
+                return { label: button.textContent, clipboard: await navigator.clipboard.readText() };
+            }""",
+            handle,
+        )
+        self.assertEqual(copied, {"label": "Copy text", "clipboard": "unchanged"})
+        page.close()
+        self.assert_kept_for_the_account()
+
+    def test_a_review_read_in_flight_at_sign_out_shows_nothing(self):
+        page, panel = self.reviewed_page()
+        page.evaluate(
+            """() => {
+                const store = prksSync.store;
+                const read = store.listRestored;
+                window.__release = null;
+                const gate = new Promise((resolve) => { window.__release = resolve; });
+                window.__served = false;
+                store.listRestored = async () => {
+                    const rows = await read();
+                    await gate;
+                    window.__served = true;
+                    return rows;
+                };
+            }"""
+        )
+        panel.locator("#prks-offline-cache-refresh-btn").click()
+        self.sign_out_elsewhere(page)
+        page.evaluate("() => window.__release()")
+        wait_for_async(
+            page,
+            "async () => { await new Promise((r) => setTimeout(r, 50)); return window.__served; }",
+            message="the delayed review read never completed",
+        )
+        self.assertEqual(panel.locator('[data-prks-role="restored-change"]').count(), 0)
+        self.assertEqual(panel.locator('[data-prks-role="restored-changes-heading"]').count(), 0)
+        page.close()
+        self.assert_kept_for_the_account()
 
 
 if __name__ == "__main__":

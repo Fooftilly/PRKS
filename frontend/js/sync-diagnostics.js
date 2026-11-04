@@ -529,6 +529,31 @@
         return ' Server currently has "' + bounded(result.current_value) + '".';
     }
 
+    /**
+     * The page's account was signed out or replaced (#629): nothing of the
+     * old account's queue is shown or handed out from then on, also by a
+     * read or a row from before. What is stored stays for that account.
+     */
+    function scopeRetired() {
+        const scope = root.prksBrowserScope;
+        try {
+            return !!(scope && typeof scope.isRetired === 'function' && scope.isRetired());
+        } catch (_) {
+            return true;
+        }
+    }
+
+    let watchingScope = false;
+    function clearOnRetire() {
+        const scope = root.prksBrowserScope;
+        if (watchingScope || !scope || typeof scope.subscribe !== 'function') return;
+        watchingScope = true;
+        scope.subscribe(event => {
+            if (!event || event.type !== 'retired') return;
+            for (const section of document.querySelectorAll('[data-sync-diagnostics]')) section.replaceChildren();
+        });
+    }
+
     /** The text a reviewed change carries, for copying out: its value, or the change as described. */
     function copyableText(op) {
         const value = payloadValue(op);
@@ -549,7 +574,8 @@
     async function renderRestored(section, host) {
         if (typeof root.prksSync.store.listRestored !== 'function') return;
         const restored = await root.prksSync.store.listRestored();
-        if (!restored.length) return;
+        // Read before a sign-out completed after it: shown to no one.
+        if (scopeRetired() || !restored.length) return;
         const heading = document.createElement('p');
         heading.dataset.prksRole = 'restored-changes-heading';
         heading.textContent = 'Unsent changes from before this library was restored (' + restored.length +
@@ -565,6 +591,10 @@
             copy.className = 'prks-btn prks-btn--secondary prks-btn--sm';
             copy.textContent = 'Copy text';
             copy.onclick = async () => {
+                if (scopeRetired()) {
+                    row.remove();
+                    return;
+                }
                 try {
                     await root.prksCopyTextToClipboard(copyableText(op));
                     copy.textContent = 'Copied';
@@ -607,8 +637,11 @@
             host.after(section);
         }
         section.replaceChildren();
+        clearOnRetire();
+        if (scopeRetired()) return;
         const operations = (await root.prksSync.store.listOperations())
             .filter(op => op.status !== 'acknowledged');
+        if (scopeRetired()) return;
         for (const op of operations) {
             const row = document.createElement('p');
             const link = document.createElement('a');
