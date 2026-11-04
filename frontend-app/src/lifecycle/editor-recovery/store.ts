@@ -37,7 +37,8 @@ import {
   type EmergencyPayload,
 } from './schema'
 
-export type RecoveryStoreErrorCode = 'unavailable' | 'blocked' | 'quota' | 'aborted'
+/** `retired`: the browser scope this store belongs to was signed out or replaced (#629). */
+export type RecoveryStoreErrorCode = 'unavailable' | 'blocked' | 'quota' | 'aborted' | 'retired'
 
 export class RecoveryStoreError extends Error {
   readonly code: RecoveryStoreErrorCode
@@ -180,6 +181,13 @@ export interface RecoveryStore {
   /** Durability mode the most recent write transaction actually used. */
   lastDurability(): DurabilityMode | null
   close(): void
+  /**
+   * The browser scope was signed out or replaced (#629): closes the database
+   * and refuses every later operation, including one whose open is still in
+   * flight. Nothing stored is removed; the account reads it after signing in.
+   */
+  retire(): void
+  isRetired(): boolean
 }
 
 function supportsDurabilityHint(): boolean {
@@ -220,8 +228,14 @@ export function createRecoveryStore(options: RecoveryStoreOptions): RecoveryStor
   let dbPromise: Promise<IDBDatabase> | null = null
   let handle: IDBDatabase | null = null
   let lastMode: DurabilityMode | null = null
+  let retired = false
+
+  function retiredError(): RecoveryStoreError {
+    return new RecoveryStoreError('retired', 'This account is signed out of recovery storage.')
+  }
 
   function openDb(): Promise<IDBDatabase> {
+    if (retired) return Promise.reject(retiredError())
     if (dbPromise) return dbPromise
     const opening = new Promise<IDBDatabase>((resolve, reject) => {
       if (!factory) {
@@ -242,6 +256,16 @@ export function createRecoveryStore(options: RecoveryStoreOptions): RecoveryStor
       }
       req.onsuccess = () => {
         const db = req.result
+        // Retired while the open was in flight: never handed out.
+        if (retired) {
+          try {
+            db.close()
+          } catch {
+            /* ignore */
+          }
+          reject(retiredError())
+          return
+        }
         handle = db
         db.onversionchange = () => {
           try {
@@ -289,6 +313,10 @@ export function createRecoveryStore(options: RecoveryStoreOptions): RecoveryStor
     return openDb().then(
       (db) =>
         new Promise<T>((resolve, reject) => {
+          if (retired) {
+            reject(retiredError())
+            return
+          }
           let tx: IDBTransaction
           try {
             tx = begin(db, mode)
@@ -689,17 +717,24 @@ export function createRecoveryStore(options: RecoveryStoreOptions): RecoveryStor
     tombstoneIfAbsent,
     applyEmergencyEntry,
     lastDurability: () => lastMode,
-    close() {
-      const db = handle
-      handle = null
-      dbPromise = null
-      if (db) {
-        try {
-          db.close()
-        } catch {
-          /* ignore */
-        }
-      }
+    close,
+    retire() {
+      retired = true
+      close()
     },
+    isRetired: () => retired,
+  }
+
+  function close(): void {
+    const db = handle
+    handle = null
+    dbPromise = null
+    if (db) {
+      try {
+        db.close()
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }

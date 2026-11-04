@@ -311,7 +311,12 @@ var prksEditorRecovery = (function(exports) {
 		let dbPromise = null;
 		let handle = null;
 		let lastMode = null;
+		let retired = false;
+		function retiredError() {
+			return new RecoveryStoreError("retired", "This account is signed out of recovery storage.");
+		}
 		function openDb() {
+			if (retired) return Promise.reject(retiredError());
 			if (dbPromise) return dbPromise;
 			const opening = new Promise((resolve, reject) => {
 				if (!factory) {
@@ -332,6 +337,13 @@ var prksEditorRecovery = (function(exports) {
 				};
 				req.onsuccess = () => {
 					const db = req.result;
+					if (retired) {
+						try {
+							db.close();
+						} catch {}
+						reject(retiredError());
+						return;
+					}
 					handle = db;
 					db.onversionchange = () => {
 						try {
@@ -368,6 +380,10 @@ var prksEditorRecovery = (function(exports) {
 		*/
 		function run(mode, fn) {
 			return openDb().then((db) => new Promise((resolve, reject) => {
+				if (retired) {
+					reject(retiredError());
+					return;
+				}
 				let tx;
 				try {
 					tx = begin(db, mode);
@@ -749,15 +765,21 @@ var prksEditorRecovery = (function(exports) {
 			tombstoneIfAbsent,
 			applyEmergencyEntry,
 			lastDurability: () => lastMode,
-			close() {
-				const db = handle;
-				handle = null;
-				dbPromise = null;
-				if (db) try {
-					db.close();
-				} catch {}
-			}
+			close,
+			retire() {
+				retired = true;
+				close();
+			},
+			isRetired: () => retired
 		};
+		function close() {
+			const db = handle;
+			handle = null;
+			dbPromise = null;
+			if (db) try {
+				db.close();
+			} catch {}
+		}
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/emergency.ts
@@ -997,6 +1019,7 @@ var prksEditorRecovery = (function(exports) {
 	function storageState(error) {
 		const code = error && typeof error === "object" ? error.code : void 0;
 		if (code === "unavailable" || code === "blocked") return code;
+		if (code === "retired") return "unavailable";
 		return "failed";
 	}
 	function stringOrNull(value) {
@@ -1148,7 +1171,7 @@ var prksEditorRecovery = (function(exports) {
 		}
 	}
 	function createRecoveryDiagnostics(rt, options = {}) {
-		const storage = options.storage === void 0 ? defaultLocalStorage$2() : options.storage;
+		const storage = options.storage === void 0 ? rt.emergencyStorage : options.storage;
 		const names = rt.names;
 		const now = options.now || Date.now;
 		async function classifySafely(record) {
@@ -1514,13 +1537,6 @@ var prksEditorRecovery = (function(exports) {
 			readText,
 			discard
 		};
-	}
-	function defaultLocalStorage$2() {
-		try {
-			return typeof localStorage !== "undefined" ? localStorage : null;
-		} catch {
-			return null;
-		}
 	}
 	//#endregion
 	//#region src/lifecycle/editor-recovery/identity.ts
@@ -2874,7 +2890,9 @@ var prksEditorRecovery = (function(exports) {
 			...options.identity,
 			names
 		});
-		const emergencyStorage = options.emergencyStorage !== void 0 ? options.emergencyStorage : options.writers?.emergencyStorage ?? defaultLocalStorage();
+		let retired = false;
+		const rawEmergencyStorage = options.emergencyStorage !== void 0 ? options.emergencyStorage : options.writers?.emergencyStorage ?? defaultLocalStorage();
+		const emergencyStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => retired) : null;
 		const writerListeners = /* @__PURE__ */ new Set();
 		const ownEvent = options.writers?.onEvent;
 		const writers = createWriterRegistry({
@@ -3061,11 +3079,25 @@ var prksEditorRecovery = (function(exports) {
 			discardReviewed,
 			cleanupDeletedEntity,
 			onWriterEvent(listener) {
+				if (retired) return () => void 0;
 				writerListeners.add(listener);
 				return () => {
 					writerListeners.delete(listener);
 				};
 			},
+			emergencyStorage,
+			retire() {
+				if (retired) return;
+				try {
+					writers.writeEmergencyNow();
+				} catch {}
+				writerListeners.clear();
+				writers.dispose();
+				identity.dispose();
+				retired = true;
+				store.retire();
+			},
+			isRetired: () => retired,
 			dispose() {
 				writerListeners.clear();
 				writers.dispose();
@@ -3078,6 +3110,22 @@ var prksEditorRecovery = (function(exports) {
 	function listingPage(storage, names, draftId) {
 		for (const stored of readEmergencyKeys(storage, names)) if ((stored.payload ? stored.payload.entries : []).some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) return stored.pageInstanceId;
 		return null;
+	}
+	/** `storage`, refusing every access once `isRetired()` holds. */
+	function retirableStorage(storage, isRetired) {
+		function guard() {
+			if (isRetired()) throw new Error("This account is signed out of recovery storage.");
+			return storage;
+		}
+		return {
+			get length() {
+				return guard().length;
+			},
+			key: (index) => guard().key(index),
+			getItem: (key) => guard().getItem(key),
+			setItem: (key, value) => guard().setItem(key, value),
+			removeItem: (key) => guard().removeItem(key)
+		};
 	}
 	function defaultLocalStorage() {
 		try {
@@ -3267,9 +3315,44 @@ var prksEditorRecovery = (function(exports) {
 	*/
 	var pageRuntime = null;
 	var pageDiagnostics = null;
+	/** The page's scope was signed out or replaced: recovery stays off for the life of the page. */
+	var pageRetired = false;
+	var watching = false;
+	function browserScope() {
+		return globalThis.prksBrowserScope || null;
+	}
+	/**
+	* Retires the page's recovery (#629): explicit sign-out of this account, or
+	* another account signing in under this page. The runtime, its store, its
+	* localStorage view and the diagnostics refuse every later operation, also
+	* through handles taken before; nothing stored is removed.
+	*/
+	function retirePage() {
+		pageRetired = true;
+		pageDiagnostics = null;
+		if (pageRuntime) pageRuntime.retire();
+	}
+	function scopeRetired(scope) {
+		if (pageRetired) return true;
+		try {
+			if (scope && typeof scope.isRetired === "function" && scope.isRetired()) {
+				retirePage();
+				return true;
+			}
+		} catch {}
+		return false;
+	}
+	function watchScope(scope) {
+		if (watching || !scope || typeof scope.subscribe !== "function") return;
+		watching = true;
+		scope.subscribe((event) => {
+			if (event && event.type === "retired") retirePage();
+		});
+	}
 	/** The page's confirmed browser scope key (`frontend/js/browser-scope.js`), or null. */
 	function confirmedScopeKey() {
-		const scope = globalThis.prksBrowserScope;
+		const scope = browserScope();
+		if (scopeRetired(scope)) return null;
 		try {
 			const current = scope && typeof scope.current === "function" ? scope.current() : null;
 			return current && isScopeKey(current.key) ? current.key : null;
@@ -3284,6 +3367,7 @@ var prksEditorRecovery = (function(exports) {
 	* the same names, unless it already exists, in which case these are its.
 	*/
 	function scopeNames() {
+		if (scopeRetired(browserScope())) return null;
 		if (pageRuntime) return pageRuntime.names;
 		const scopeKey = confirmedScopeKey();
 		return scopeKey ? recoveryNames(scopeKey) : null;
@@ -3292,18 +3376,23 @@ var prksEditorRecovery = (function(exports) {
 	* The page's runtime, bound to the signed-in browser scope (#629), or null
 	* while the page has none: recovery then keeps nothing (fail closed) and
 	* a later call, once the scope is confirmed, creates it. The runtime keeps
-	* that scope for the life of the page: drafts typed under an account stay
-	* that account's, even after it signs out or another account signs in.
+	* that scope until the scope is retired (explicit sign-out, or another
+	* account signing in under this page); from then on it refuses everything
+	* and this returns null for the life of the page. Drafts typed under an
+	* account stay that account's.
 	*/
 	function runtime() {
+		if (scopeRetired(browserScope())) return null;
 		if (pageRuntime) return pageRuntime;
 		const scopeKey = confirmedScopeKey();
 		if (!scopeKey) return null;
+		watchScope(browserScope());
 		pageRuntime = createEditorRecoveryRuntime({ names: recoveryNames(scopeKey) });
 		return pageRuntime;
 	}
 	/** Settings → Diagnostics (#466 slice 5) over this page's runtime, or null without a scope. Starts nothing until it is asked to read. */
 	function diagnostics() {
+		if (scopeRetired(browserScope())) return null;
 		if (pageDiagnostics) return pageDiagnostics;
 		const rt = runtime();
 		if (!rt) return null;

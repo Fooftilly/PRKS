@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-type Global = { prksBrowserScope?: { current(): { key: string } | null } }
+type Scope = { current(): { key: string } | null; isRetired?(): boolean; subscribe?(fn: (event: { type: string }) => void): () => void }
+type Global = { prksBrowserScope?: Scope }
 
 async function freshEntry() {
   vi.resetModules()
@@ -37,5 +38,45 @@ describe('the page runtime is bound to the signed-in browser scope (#629)', () =
     expect(entry.runtime()).toBe(rt)
     expect(entry.diagnostics()).not.toBeNull()
     rt!.dispose()
+  })
+
+  it('retires the runtime, its handles and diagnostics when the scope is signed out or replaced', async () => {
+    const entry = await freshEntry()
+    const listeners: Array<(event: { type: string }) => void> = []
+    let retired = false
+    ;(globalThis as Global).prksBrowserScope = {
+      current: () => (retired ? null : { key: 'IN-1.LIB-1.U-a' }),
+      isRetired: () => retired,
+      subscribe: (fn) => {
+        listeners.push(fn)
+        return () => undefined
+      },
+    }
+    const rt = entry.runtime()!
+    const diag = entry.diagnostics()!
+    expect(rt).not.toBeNull()
+    expect(diag).not.toBeNull()
+    expect(listeners).toHaveLength(1)
+    retired = true
+    listeners.forEach((fn) => fn({ type: 'retired' }))
+    expect(rt.isRetired()).toBe(true)
+    expect(rt.store.isRetired()).toBe(true)
+    expect(entry.runtime()).toBeNull()
+    expect(entry.diagnostics()).toBeNull()
+    expect(entry.scopeNames()).toBeNull()
+    await expect(rt.store.listAll()).rejects.toMatchObject({ code: 'retired' })
+  })
+
+  it('treats a scope found retired without its event as retired', async () => {
+    const entry = await freshEntry()
+    let retired = false
+    ;(globalThis as Global).prksBrowserScope = {
+      current: () => ({ key: 'IN-1.LIB-1.U-a' }),
+      isRetired: () => retired,
+    }
+    const rt = entry.runtime()!
+    retired = true
+    expect(entry.runtime()).toBeNull()
+    expect(rt.isRetired()).toBe(true)
   })
 })

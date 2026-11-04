@@ -161,6 +161,8 @@ function isLive(lineage: LineageClass): boolean {
 function storageState(error: unknown): StorageState {
   const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
   if (code === 'unavailable' || code === 'blocked') return code
+  // Signed out or replaced (#629): nothing of that account is readable here.
+  if (code === 'retired') return 'unavailable'
   return 'failed'
 }
 
@@ -359,7 +361,9 @@ function enumerable(storage: EmergencyStorage | null): boolean {
 }
 
 export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: RecoveryDiagnosticsOptions = {}): RecoveryDiagnostics {
-  const storage = options.storage === undefined ? defaultLocalStorage() : options.storage
+  // The runtime's localStorage view: it refuses every access once the
+  // account is signed out or replaced (#629), like the store does.
+  const storage = options.storage === undefined ? rt.emergencyStorage : options.storage
   const names = rt.names
   const now = options.now || Date.now
 
@@ -675,12 +679,4 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
   }
 
   return { inventory, readText, discard }
-}
-
-function defaultLocalStorage(): EmergencyStorage | null {
-  try {
-    return typeof localStorage !== 'undefined' ? localStorage : null
-  } catch {
-    return null
-  }
 }

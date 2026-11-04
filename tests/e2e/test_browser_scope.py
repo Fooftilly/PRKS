@@ -111,6 +111,31 @@ _DRAFT_BODIES = """
     }
 """
 
+_KEEP_RECOVERY_HANDLES = """
+    () => {
+        window.__heldRecovery = { rt: prksEditorRecovery.runtime(), diag: prksEditorRecovery.diagnostics() };
+        return !!window.__heldRecovery.rt && !!window.__heldRecovery.diag;
+    }
+"""
+
+_HELD_RECOVERY_ACCESS = """
+    async () => {
+        const held = window.__heldRecovery;
+        const out = {
+            runtime: prksEditorRecovery.runtime(),
+            diagnostics: prksEditorRecovery.diagnostics(),
+            names: prksEditorRecovery.scopeNames(),
+            retired: held.rt.isRetired(),
+        };
+        try { await held.rt.store.listAll(); out.list = 'read'; } catch (err) { out.list = err.code || 'error'; }
+        try { await held.rt.store.getBody('d-p-elsewhere-10'); out.body = 'read'; } catch (err) { out.body = err.code || 'error'; }
+        try { held.rt.emergencyStorage.getItem('x'); out.local = 'read'; } catch (err) { out.local = 'refused'; }
+        const inventory = await held.diag.inventory();
+        out.inventory = JSON.stringify(inventory);
+        return out;
+    }
+"""
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -578,6 +603,51 @@ class BrowserScopeTests(unittest.TestCase):
         bodies = page.evaluate(_DRAFT_BODIES)
         self.assertIn("Owner text", bodies)
         self.assertFalse([b for b in bodies if b and b.startswith("Reader text")], bodies)
+
+    def assert_recovery_retired(self, page):
+        access = page.evaluate(_HELD_RECOVERY_ACCESS)
+        self.assertIsNone(access["runtime"])
+        self.assertIsNone(access["diagnostics"])
+        self.assertIsNone(access["names"])
+        self.assertTrue(access["retired"])
+        self.assertEqual(access["list"], "retired")
+        self.assertEqual(access["body"], "retired")
+        self.assertEqual(access["local"], "refused")
+        self.assertNotIn("Owner text", access["inventory"])
+
+    def assert_owner_draft_kept(self):
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        page.wait_for_function(_RECOVERY_READY)
+        self.assertIn("Owner text", page.evaluate(_DRAFT_BODIES))
+
+    def test_signing_out_retires_recovery_also_through_handles_taken_before(self):
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        page.wait_for_function(_RECOVERY_READY)
+        self.assertEqual(page.evaluate(_SEED_DRAFT, {"workId": self.work_id, "body": "Owner text"})["outcome"], "ok")
+        self.assertTrue(page.evaluate(_KEEP_RECOVERY_HANDLES))
+        page.evaluate("() => prksBrowserScope.signOut()")
+        page.wait_for_function("() => prksBrowserScope.isRetired()")
+        self.assert_recovery_retired(page)
+        page.close()
+        self.assert_owner_draft_kept()
+
+    def test_another_account_signing_in_retires_recovery_of_the_open_page(self):
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        page.wait_for_function(_RECOVERY_READY)
+        self.assertEqual(page.evaluate(_SEED_DRAFT, {"workId": self.work_id, "body": "Owner text"})["outcome"], "ok")
+        self.assertTrue(page.evaluate(_KEEP_RECOVERY_HANDLES))
+        self.sign_in(READER)
+        wait_for_async(
+            page,
+            "async () => (await prksBrowserScope.verify()) === 'changed' && prksBrowserScope.isRetired()",
+            message="the page kept its scope after another account signed in",
+        )
+        self.assert_recovery_retired(page)
+        page.close()
+        self.assert_owner_draft_kept()
 
     def test_without_a_session_recovery_stores_nothing(self):
         page = self.context.new_page()

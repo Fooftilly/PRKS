@@ -111,6 +111,22 @@ export interface EditorRecoveryRuntime {
   cleanupDeletedEntity(entity: { entityType: DraftEntityType; entityId: string }, kinds: readonly DraftKind[]): Promise<EntityCleanupReport>
   /** Writer protection events (`unprotected`, `protected`, `ownership-lost`) for this page. */
   onWriterEvent(listener: (event: WriterEvent) => void): () => void
+  /**
+   * This runtime's view of localStorage: every recovery key it and its
+   * diagnostics read or write goes through it, and it refuses every access
+   * once the runtime is retired.
+   */
+  readonly emergencyStorage: EmergencyStorage | null
+  /**
+   * The browser scope was signed out or replaced (#629). Text typed before
+   * it stays this account's: the pending text is written once more to this
+   * scope's emergency key, then writers, listeners, the channel and the
+   * locks stop, and the store and localStorage view refuse every later
+   * operation, through this object or any handle taken from it. Nothing
+   * stored is removed. Idempotent.
+   */
+  retire(): void
+  isRetired(): boolean
   dispose(): void
 }
 
@@ -123,8 +139,10 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   if (!names) throw new Error('recovery storage needs a signed-in scope')
   const store = createRecoveryStore({ ...options.store, name: names.dbName })
   const identity = createPageIdentity({ ...options.identity, names })
-  const emergencyStorage =
+  let retired = false
+  const rawEmergencyStorage =
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
+  const emergencyStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => retired) : null
   const writerListeners = new Set<(event: WriterEvent) => void>()
   const ownEvent = options.writers?.onEvent
   const writers = createWriterRegistry({
@@ -307,11 +325,28 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     discardReviewed,
     cleanupDeletedEntity,
     onWriterEvent(listener) {
+      if (retired) return () => undefined
       writerListeners.add(listener)
       return () => {
         writerListeners.delete(listener)
       }
     },
+    emergencyStorage,
+    retire() {
+      if (retired) return
+      try {
+        // The last text typed under this account, kept in its own scope.
+        writers.writeEmergencyNow()
+      } catch {
+        /* whatever was written already stays */
+      }
+      writerListeners.clear()
+      writers.dispose()
+      identity.dispose()
+      retired = true
+      store.retire()
+    },
+    isRetired: () => retired,
     dispose() {
       writerListeners.clear()
       writers.dispose()
@@ -330,6 +365,23 @@ function listingPage(storage: EmergencyStorage, names: RecoveryNames, draftId: s
     }
   }
   return null
+}
+
+/** `storage`, refusing every access once `isRetired()` holds. */
+function retirableStorage(storage: EmergencyStorage, isRetired: () => boolean): EmergencyStorage {
+  function guard(): EmergencyStorage {
+    if (isRetired()) throw new Error('This account is signed out of recovery storage.')
+    return storage
+  }
+  return {
+    get length() {
+      return guard().length
+    },
+    key: (index: number) => guard().key(index),
+    getItem: (key: string) => guard().getItem(key),
+    setItem: (key: string, value: string) => guard().setItem(key, value),
+    removeItem: (key: string) => guard().removeItem(key),
+  }
 }
 
 function defaultLocalStorage(): EmergencyStorage | null {

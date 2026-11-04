@@ -22,14 +22,57 @@ export { createEditorRecoveryRuntime }
 
 let pageRuntime: EditorRecoveryRuntime | null = null
 let pageDiagnostics: RecoveryDiagnostics | null = null
+/** The page's scope was signed out or replaced: recovery stays off for the life of the page. */
+let pageRetired = false
+let watching = false
 
 interface BrowserScopeLike {
   current(): { key?: unknown } | null
+  isRetired?(): boolean
+  subscribe?(listener: (event: { type?: unknown }) => void): () => void
+}
+
+function browserScope(): BrowserScopeLike | null {
+  return (globalThis as { prksBrowserScope?: BrowserScopeLike }).prksBrowserScope || null
+}
+
+/**
+ * Retires the page's recovery (#629): explicit sign-out of this account, or
+ * another account signing in under this page. The runtime, its store, its
+ * localStorage view and the diagnostics refuse every later operation, also
+ * through handles taken before; nothing stored is removed.
+ */
+function retirePage(): void {
+  pageRetired = true
+  pageDiagnostics = null
+  if (pageRuntime) pageRuntime.retire()
+}
+
+function scopeRetired(scope: BrowserScopeLike | null): boolean {
+  if (pageRetired) return true
+  try {
+    if (scope && typeof scope.isRetired === 'function' && scope.isRetired()) {
+      retirePage()
+      return true
+    }
+  } catch {
+    /* read below */
+  }
+  return false
+}
+
+function watchScope(scope: BrowserScopeLike | null): void {
+  if (watching || !scope || typeof scope.subscribe !== 'function') return
+  watching = true
+  scope.subscribe((event) => {
+    if (event && event.type === 'retired') retirePage()
+  })
 }
 
 /** The page's confirmed browser scope key (`frontend/js/browser-scope.js`), or null. */
 function confirmedScopeKey(): string | null {
-  const scope = (globalThis as { prksBrowserScope?: BrowserScopeLike }).prksBrowserScope
+  const scope = browserScope()
+  if (scopeRetired(scope)) return null
   try {
     const current = scope && typeof scope.current === 'function' ? scope.current() : null
     return current && isScopeKey(current.key) ? current.key : null
@@ -45,6 +88,7 @@ function confirmedScopeKey(): string | null {
  * the same names, unless it already exists, in which case these are its.
  */
 export function scopeNames(): RecoveryNames | null {
+  if (scopeRetired(browserScope())) return null
   if (pageRuntime) return pageRuntime.names
   const scopeKey = confirmedScopeKey()
   return scopeKey ? recoveryNames(scopeKey) : null
@@ -54,19 +98,24 @@ export function scopeNames(): RecoveryNames | null {
  * The page's runtime, bound to the signed-in browser scope (#629), or null
  * while the page has none: recovery then keeps nothing (fail closed) and
  * a later call, once the scope is confirmed, creates it. The runtime keeps
- * that scope for the life of the page: drafts typed under an account stay
- * that account's, even after it signs out or another account signs in.
+ * that scope until the scope is retired (explicit sign-out, or another
+ * account signing in under this page); from then on it refuses everything
+ * and this returns null for the life of the page. Drafts typed under an
+ * account stay that account's.
  */
 export function runtime(): EditorRecoveryRuntime | null {
+  if (scopeRetired(browserScope())) return null
   if (pageRuntime) return pageRuntime
   const scopeKey = confirmedScopeKey()
   if (!scopeKey) return null
+  watchScope(browserScope())
   pageRuntime = createEditorRecoveryRuntime({ names: recoveryNames(scopeKey) })
   return pageRuntime
 }
 
 /** Settings → Diagnostics (#466 slice 5) over this page's runtime, or null without a scope. Starts nothing until it is asked to read. */
 export function diagnostics(): RecoveryDiagnostics | null {
+  if (scopeRetired(browserScope())) return null
   if (pageDiagnostics) return pageDiagnostics
   const rt = runtime()
   if (!rt) return null
