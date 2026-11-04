@@ -748,22 +748,6 @@ async function testWorker() {
     record('no record and no binding: no cache',
         sw.selectPdfCacheName({ pointerKey: null, pointerEpoch: null, bindings: new Map() }, 'x', new Set(), false) === null);
 
-    // Bindings persist in the scope database and drop clients that are gone.
-    const idb = createFakeIndexedDBFactory();
-    await scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([ok(SESSION_A)]) }).resolve();
-    await sw.writeClientBinding(idb, 'tab-a', KEY_A, '1', false, new Set(['tab-a']));
-    await sw.writeClientBinding(idb, 'tab-gone', KEY_A, '1', false, new Set(['tab-a', 'tab-gone']));
-    await sw.writeClientBinding(idb, 'tab-b', KEY_B, '2', false, new Set(['tab-a', 'tab-b']));
-    const read = await sw.readScopeState(idb);
-    record('the worker keeps each live binding', read.bindings.get('tab-a').key === KEY_A && read.bindings.get('tab-b').key === KEY_B);
-    record('with the epoch each page bound with', read.bindings.get('tab-a').epoch === '1' && read.bindings.get('tab-b').epoch === '2');
-    record('and the last confirmed scope\'s epoch', read.pointerKey === KEY_A && read.pointerEpoch === '1');
-    record('the binding of a client that is gone is dropped', !read.bindings.has('tab-gone'));
-    await sw.writeClientBinding(idb, 'tab-a', null, null, true, null);
-    record('a retired page is recorded as retired', (await sw.readScopeState(idb)).bindings.get('tab-a').retired === true);
-    await sw.writeClientBinding(idb, 'tab-x', 'not a key', '1', false, null);
-    record('an invalid key binds no scope', (await sw.readScopeState(idb)).bindings.get('tab-x').key === null);
-
     const storage2 = cacheStorage();
     const byClient = (clientId, strict) => Promise.resolve(sw.selectPdfCacheName(state, clientId, live, strict));
     const foreign = await sw.handlePdfCacheMessage({
@@ -819,6 +803,25 @@ async function testWorker() {
     }
     record('the worker reads a session body as its scope key',
         sw.sessionScopeKey(SESSION_A) === KEY_A && sw.sessionScopeKey({ user: null }) === null);
+}
+
+/** Bindings persist in the scope database and drop clients that are gone. */
+async function testWorkerBindings() {
+    const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
+    const idb = createFakeIndexedDBFactory();
+    await scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([ok(SESSION_A)]) }).resolve();
+    await sw.writeClientBinding(idb, 'tab-a', KEY_A, '1', false, new Set(['tab-a']));
+    await sw.writeClientBinding(idb, 'tab-gone', KEY_A, '1', false, new Set(['tab-a', 'tab-gone']));
+    await sw.writeClientBinding(idb, 'tab-b', KEY_B, '2', false, new Set(['tab-a', 'tab-b']));
+    const read = await sw.readScopeState(idb);
+    record('the worker keeps each live binding', read.bindings.get('tab-a').key === KEY_A && read.bindings.get('tab-b').key === KEY_B);
+    record('with the epoch each page bound with', read.bindings.get('tab-a').epoch === '1' && read.bindings.get('tab-b').epoch === '2');
+    record('and the last confirmed scope\'s epoch', read.pointerKey === KEY_A && read.pointerEpoch === '1');
+    record('the binding of a client that is gone is dropped', !read.bindings.has('tab-gone'));
+    await sw.writeClientBinding(idb, 'tab-a', null, null, true, null);
+    record('a retired page is recorded as retired', (await sw.readScopeState(idb)).bindings.get('tab-a').retired === true);
+    await sw.writeClientBinding(idb, 'tab-x', 'not a key', '1', false, null);
+    record('an invalid key binds no scope', (await sw.readScopeState(idb)).bindings.get('tab-x').key === null);
 }
 
 /** Library epoch (#629, §10.4): each epoch has its own PDF cache. */
@@ -1042,6 +1045,7 @@ async function main() {
     await testHold();
     await testEpoch();
     await testWorker();
+    await testWorkerBindings();
     await testWorkerEpochs();
     console.log(passed + ' passed, ' + failed + ' failed');
     if (failed) process.exit(1);
