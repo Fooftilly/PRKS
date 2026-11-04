@@ -3,7 +3,7 @@ import { createRecoveryDiagnostics } from './diagnostics'
 import { createEditorRecoveryRuntime } from './runtime'
 import { LARGE_BODY_CHARS, UNKNOWN_BASE, emergencyKeyOf } from './schema'
 import { createRecoveryStore, RecoveryStoreError } from './store'
-import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
+import { createFakeBrowser, memoryStorage, TEST_EPOCH, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
 function load(idb: ReturnType<typeof createFakeIdb>, local: ReturnType<typeof memoryStorage>, page: string,
@@ -11,6 +11,7 @@ function load(idb: ReturnType<typeof createFakeIdb>, local: ReturnType<typeof me
   const browser = createFakeBrowser()
   return createEditorRecoveryRuntime({
     names: TEST_NAMES,
+    epoch: TEST_EPOCH,
     store: { indexedDB: idb.factory },
     identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(page), claimWaitMs: 5 },
     writers: { scheduler, window: null, document: null },

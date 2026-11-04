@@ -21,6 +21,7 @@ import type { EditorRecoveryRuntime, ReviewedRecord } from './runtime'
 import {
   entityKeyOf,
   isDraftKind,
+  isEarlierLibrary,
   isSupportedRecord,
   type BaseSource,
   type DraftEntityType,
@@ -61,6 +62,8 @@ export interface DiagnosticsDraft {
   deletedHere: boolean
   /** Created from an emergency entry of a page that did not finish writing it. */
   fromEmergency: boolean
+  /** Typed before this Library was restored (#629): review-only, copy or discard. */
+  earlierLibrary: boolean
   expect: ReviewedRecord
 }
 
@@ -412,6 +415,7 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
       superseded: supersededGeneration(storage, names, record.draftId) >= record.generation,
       deletedHere: record.entityType === 'work' && readKey(storage, names.deletedWorkPrefix + record.entityId) !== null,
       fromEmergency: typeof record.emergencySource === 'string',
+      earlierLibrary: isEarlierLibrary(record.base, rt.epoch),
       expect: { draftId: record.draftId, pageInstanceId: record.owner.pageInstanceId, generation: record.generation, status: record.status },
     }
   }

@@ -8,7 +8,7 @@ const SERVER = 'Saved note.'
 const K: AcknowledgedNote = { value: SERVER, revision: 5, source: 'server' }
 
 function baseOf(value: string, revision: number, source: DraftBase['source'] = 'server'): DraftBase {
-  return { revision, length: value.length, fingerprint: fingerprintText(value), source }
+  return { revision, length: value.length, fingerprint: fingerprintText(value), source, epoch: '1' }
 }
 
 function identity(value: string, revision: number) {
@@ -40,7 +40,7 @@ function candidate(body: string | null, over: Partial<DraftRecord> = {}, lineage
 }
 
 function plan(candidates: RestoreCandidate[], over: Partial<RestoreInput> = {}) {
-  return planResearchNotesRestore({ paneId: 'tab-1', candidates, base: K, queue: [], otherDirtySession: false, ...over })
+  return planResearchNotesRestore({ paneId: 'tab-1', candidates, base: K, queue: [], otherDirtySession: false, epoch: '1', ...over })
 }
 
 const OWN_A = 'Saved note. A'
@@ -223,8 +223,25 @@ describe('Research Notes same-pane restore plan', () => {
   it('defers when the base cannot be verified with the server', () => {
     expect(plan([candidate('x')], { base: null }).review).toMatchObject([{ reason: 'base-unverified' }])
     expect(plan([candidate('x')], { base: { ...K, source: 'cache' } }).review).toMatchObject([{ reason: 'base-unverified' }])
-    const unknown: DraftBase = { revision: null, length: null, fingerprint: null, source: 'unknown' }
+    const unknown: DraftBase = { revision: null, length: null, fingerprint: null, source: 'unknown', epoch: '1' }
     expect(plan([candidate('x', { base: unknown })]).review).toMatchObject([{ reason: 'base-unverified' }])
+  })
+
+  it('keeps a draft typed before the Library was restored for review only, even at the same revision (#629)', () => {
+    for (const base of [{ ...baseOf(SERVER, 5), epoch: '0' }, { ...baseOf(SERVER, 5), epoch: undefined }]) {
+      // Equal to the note, restorable by revision and fingerprint: none of it is proof across epochs.
+      for (const body of [SERVER, 'Saved note. More']) {
+        const p = plan([candidate(body, { base })])
+        expect(p).toMatchObject({ cleanup: [], represented: [], restore: null })
+        expect(p.review).toMatchObject([{ reason: 'library-restored', action: null }])
+      }
+    }
+    // It does not stand in the way of this Library's own draft.
+    const p = plan([candidate('Before', { draftId: 'd-old', base: { ...baseOf(SERVER, 5), epoch: '0' } }), candidate('Saved note. Now')])
+    expect(p.restore).toMatchObject({ body: 'Saved note. Now' })
+    expect(p.review).toMatchObject([{ draftId: 'd-old', reason: 'library-restored', action: null }])
+    // A page that does not know its epoch proves nothing.
+    expect(plan([candidate('Saved note. More')], { epoch: null }).review).toMatchObject([{ reason: 'library-restored' }])
   })
 
   it('defers when another operation is queued for the Work', () => {

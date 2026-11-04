@@ -36,6 +36,7 @@ import {
   RETRY_MAX_MS,
   UNKNOWN_BASE,
   emergencyKeyOf,
+  isEarlierLibrary,
   reservationKeyOf,
   reservationValue,
   mintId,
@@ -84,6 +85,11 @@ export interface WriterRegistryOptions {
   /** `localStorage` for the emergency entry. */
   emergencyStorage?: EmergencyStorage | null
   onEvent?: (event: WriterEvent) => void
+  /**
+   * The Library epoch this page loaded (#629): stamped on every base a
+   * writer records. A lineage of another epoch is never adopted.
+   */
+  epoch?: string | null
 }
 
 export interface OpenWriterInput {
@@ -177,6 +183,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const supersededPrefix = names.supersededPrefix
   const emergencyKey = emergencyKeyOf(names, identity.pageInstanceId)
   const reservationKey = reservationKeyOf(names, identity.pageInstanceId)
+  const pageEpoch = options.epoch ?? null
+  /** A base as this page records it: under the epoch it loaded. */
+  const stamped = (base: DraftBase): DraftBase => ({ ...base, epoch: pageEpoch })
 
   const live = new Set<WriterImpl>()
   /** Writers whose body the budget plan puts in the emergency entry. */
@@ -596,7 +605,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       this.entityType = input.entityType
       this.entityId = input.entityId
       this.paneId = input.paneId
-      this.base = input.base ? { ...input.base } : { ...UNKNOWN_BASE }
+      this.base = stamped(input.base || UNKNOWN_BASE)
     }
 
     adoptRecord(record: DraftRecord): void {
@@ -644,7 +653,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       return !held.has(this)
     }
     setBase(base: DraftBase): void {
-      this.base = { ...base }
+      this.base = stamped(base)
       this.metaChanged()
     }
     setPipeline(pipeline: DraftPipeline | null): void {
@@ -1059,6 +1068,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       }
     }
     if ((superseded.get(record.draftId) || 0) >= record.generation) return null
+    // Typed against an earlier Library (#629): review-only, never continued.
+    if (isEarlierLibrary(record.base, pageEpoch)) return null
     adopting.add(record.draftId)
     const adoption = adoptReserved(record, input)
     adoptions.add(adoption)

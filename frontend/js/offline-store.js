@@ -14,9 +14,18 @@
  * (browser-scope.js). Without a scope the cache is unavailable.
  *
  * Schema (version 1):
- *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision }
- *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision }
+ *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision, libraryEpoch }
+ *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision, libraryEpoch }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
+ *
+ * Library epoch (#629, docs/postgresql-architecture.md §10.4): every
+ * envelope records the epoch of the page that cached it
+ * (`prksBrowserScope.pageEpoch()`), and a read returns only envelopes of the
+ * page's own epoch: what was cached before a restore describes the Library
+ * that was replaced, and an old page never feeds a new one nor overwrites
+ * what a newer page cached at the same key. The first use
+ * under a newer epoch than metadata `library_epoch` also drops every older
+ * envelope, since nothing can read them again.
  *
  * IndexedDB Promise plumbing (#181): simple single-store get/put/delete/clear
  * /count/getAll paths use the thin `idb` wrapper (`wrap` + `tx.done`) so
@@ -63,6 +72,19 @@
         }
         if (typeof IDBKeyRange !== 'undefined') return IDBKeyRange;
         return root && root.IDBKeyRange ? root.IDBKeyRange : null;
+    }
+
+    const META_LIBRARY_EPOCH = 'library_epoch';
+    const EPOCH_PATTERN = /^[1-9][0-9]*$/;
+
+    function epochOf(value) {
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    /** Orders two canonical epochs (they may exceed a double's integers). */
+    function compareEpochs(a, b) {
+        if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
     }
 
     function approxJsonBytes(value) {
@@ -284,12 +306,16 @@
     /**
      * Cursor multi-request kind sweep on a raw IDB database handle.
      * Resolves true only after the transaction commits with a completed sweep.
+     * Reads the cache's `library_epoch` in the same transaction first: on a
+     * page older than the cache (`epoch` below it) nothing of the page's own
+     * Library is left, so the sweep is skipped (true) and the newer page's
+     * entries stay.
      */
-    function deleteEntitiesByKindOnRawDb(raw, wanted, range) {
+    function deleteEntitiesByKindOnRawDb(raw, wanted, range, epoch) {
         return new Promise(function (resolve) {
             let tx;
             try {
-                tx = raw.transaction([STORE_ENTITIES], 'readwrite');
+                tx = raw.transaction([STORE_ENTITIES, STORE_METADATA], 'readwrite');
             } catch (_e) {
                 resolve(false);
                 return;
@@ -321,10 +347,35 @@
                 finish(false);
                 return;
             }
-            if (range && typeof store.openCursor === 'function') {
-                if (sweepKindViaCursor(store, range, finish, markSwept)) return;
+            function sweep() {
+                if (range && typeof store.openCursor === 'function') {
+                    if (sweepKindViaCursor(store, range, finish, markSwept)) return;
+                }
+                sweepKindViaGetAll(store, wanted, finish, markSwept);
             }
-            sweepKindViaGetAll(store, wanted, finish, markSwept);
+            if (!epoch) {
+                sweep();
+                return;
+            }
+            let metaReq;
+            try {
+                metaReq = tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH);
+            } catch (_e) {
+                finish(false);
+                return;
+            }
+            metaReq.onsuccess = function () {
+                const row = metaReq.result;
+                const seen = row ? epochOf(row.value) : null;
+                if (seen && compareEpochs(seen, epoch) > 0) {
+                    markSwept();
+                    return;
+                }
+                sweep();
+            };
+            metaReq.onerror = function () {
+                finish(false);
+            };
         });
     }
 
@@ -361,6 +412,22 @@
         // (`prks-offline-v2:<scope key>`, browser-scope.js). Without a scope
         // the cache is unavailable, never an unscoped database.
         const scope = options.dbName ? null : (options.scope || root.prksBrowserScope || null);
+        // The Library epoch this page caches under: the scope's page epoch,
+        // or the caller's (tests). A scope that names none has no cache.
+        const ownEpoch = options.dbName ? (epochOf(options.libraryEpoch) || null) : null;
+        function pageEpoch() {
+            if (!scope) return ownEpoch;
+            try {
+                return typeof scope.pageEpoch === 'function' ? epochOf(scope.pageEpoch()) : null;
+            } catch (_e) {
+                return null;
+            }
+        }
+        /** Cached under this page's epoch: anything else is not this Library. */
+        function current(envelope) {
+            return !!envelope && (envelope.libraryEpoch == null ? null : envelope.libraryEpoch) === pageEpoch();
+        }
+        let fenced = null;
         const dbVersion = options.dbVersion || DB_VERSION;
         const keyRangeApi = defaultKeyRangeApi(options);
 
@@ -392,7 +459,9 @@
         function resolveDbName() {
             if (options.dbName) return Promise.resolve(options.dbName);
             if (!scope || typeof scope.dbName !== 'function') return Promise.resolve(null);
-            return scope.dbName('offline').catch(function () { return null; });
+            return scope.dbName('offline').then(function (name) {
+                return name && pageEpoch() ? name : null;
+            }).catch(function () { return null; });
         }
 
         function rawDb(db) {
@@ -473,7 +542,125 @@
         }
 
         function runRequest(storeName, mode, fn) {
-            return runIdbStoreRequest(openDb, storeName, mode, fn);
+            return fence().then(function () {
+                return runIdbStoreRequest(openDb, storeName, mode, fn);
+            });
+        }
+
+        /**
+         * Once per store: under a newer epoch than the cache last saw, every
+         * envelope is from the Library a restore replaced and is dropped.
+         * Reads never depend on it (`current`); a page older than the cache
+         * leaves it to the newer page's.
+         */
+        function fence() {
+            if (fenced) return fenced;
+            // Opening the cache waits for the scope to resolve, so the page
+            // epoch read after it is the bound one, never a not-yet-known null.
+            const run = openDb().then(function (db) {
+                const epoch = pageEpoch();
+                if (!db || !epoch) {
+                    if (fenced === run) fenced = null;
+                    return;
+                }
+                // One transaction over the metadata and both caches: two
+                // stores fencing at once cannot both read the older epoch,
+                // so neither clears what the other cached after its fence.
+                let tx;
+                try {
+                    tx = db.transaction([STORE_METADATA, STORE_ENTITIES, STORE_LISTS], 'readwrite');
+                } catch (_e) {
+                    if (fenced === run) fenced = null;
+                    return;
+                }
+                const done = tx.done.then(function () { return true; }, function () { return false; });
+                return tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH).then(function (row) {
+                    const seen = row ? epochOf(row.value) : null;
+                    if (seen && compareEpochs(seen, epoch) >= 0) return undefined;
+                    return Promise.all([
+                        tx.objectStore(STORE_ENTITIES).clear(),
+                        tx.objectStore(STORE_LISTS).clear(),
+                        tx.objectStore(STORE_METADATA).put({ key: META_LIBRARY_EPOCH, value: epoch }),
+                    ]);
+                }).then(function () {
+                    return done;
+                }, function () {
+                    try {
+                        tx.abort();
+                    } catch (_e) {
+                        /* already finished */
+                    }
+                    return done.then(function () { return false; });
+                }).then(function (ok) {
+                    if (!ok && fenced === run) fenced = null;
+                });
+            }).then(function () {}, function () {
+                if (fenced === run) fenced = null;
+            });
+            fenced = run;
+            return run;
+        }
+
+        /**
+         * Runs `op(store)` on `storeName` in one readwrite transaction with the
+         * cache's `library_epoch`. A page older than the cache (a tab loaded
+         * before a restore) never touches what a newer page cached: its op is
+         * skipped and the call resolves to `whenNewer`. Otherwise it resolves
+         * true only when the transaction committed.
+         */
+        function inCurrentEpoch(storeName, op, whenNewer) {
+            return fence().then(openDb).then(function (db) {
+                if (!db) return false;
+                // A scope without an epoch opens no database (resolveDbName);
+                // only a caller-named one (tests) may cache without an epoch.
+                const epoch = pageEpoch();
+                let tx;
+                try {
+                    tx = db.transaction([storeName, STORE_METADATA], 'readwrite');
+                } catch (_e) {
+                    return false;
+                }
+                const done = tx.done.then(function () { return true; }, function () { return false; });
+                let newer = false;
+                return tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH).then(function (row) {
+                    const seen = row ? epochOf(row.value) : null;
+                    if (epoch && seen && compareEpochs(seen, epoch) > 0) {
+                        newer = true;
+                        return undefined;
+                    }
+                    return op(tx.objectStore(storeName), epoch);
+                }).then(function () {
+                    return done.then(function (ok) { return ok && (newer ? whenNewer : true); });
+                }, function () {
+                    try {
+                        tx.abort();
+                    } catch (_e) {
+                        /* already finished */
+                    }
+                    return done.then(function () { return false; });
+                });
+            }).catch(function () {
+                return false;
+            });
+        }
+
+        /** Writes one envelope stamped with this page's epoch; refused (false) on a page older than the cache. */
+        function putCurrent(storeName, envelope) {
+            return inCurrentEpoch(storeName, function (store, epoch) {
+                envelope.libraryEpoch = epoch;
+                return store.put(envelope);
+            }, false);
+        }
+
+        /**
+         * Deletes one key. On a page older than the cache nothing of its own
+         * Library is left there (the newer page's fence cleared it), so the
+         * delete is skipped and reports true: what the newer page cached stays.
+         */
+        function deleteCurrent(storeName, key) {
+            return inCurrentEpoch(storeName, function (store) {
+                return store.delete(key);
+            }, true);
         }
 
         function putEntity(kind, id, value, sourceRevision) {
@@ -483,28 +670,21 @@
                 value: value,
                 cachedAt: now(),
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
+                libraryEpoch: null,
             };
-            return runRequest(STORE_ENTITIES, 'readwrite', function (store) {
-                return store.put(envelope);
-            }).then(function (r) {
-                return r.ok;
-            });
+            return putCurrent(STORE_ENTITIES, envelope);
         }
 
         function getEntity(kind, id) {
             return runRequest(STORE_ENTITIES, 'readonly', function (store) {
                 return store.get([String(kind), String(id)]);
             }).then(function (r) {
-                return r.ok && r.value ? r.value : null;
+                return r.ok && current(r.value) ? r.value : null;
             });
         }
 
         function deleteEntity(kind, id) {
-            return runRequest(STORE_ENTITIES, 'readwrite', function (store) {
-                return store.delete([String(kind), String(id)]);
-            }).then(function (r) {
-                return r.ok;
-            });
+            return deleteCurrent(STORE_ENTITIES, [String(kind), String(id)]);
         }
 
         function kindKeyRange(kind) {
@@ -521,8 +701,8 @@
                 return range ? store.getAll(range) : store.getAll();
             }).then(function (r) {
                 if (!r.ok || !Array.isArray(r.value)) return null;
-                return range ? r.value : r.value.filter(function (row) {
-                    return row && String(row.kind) === String(kind);
+                return r.value.filter(function (row) {
+                    return current(row) && (range || String(row.kind) === String(kind));
                 });
             }).catch(function () {
                 return null;
@@ -535,12 +715,12 @@
          */
         function deleteEntitiesByKind(kind) {
             const wanted = String(kind);
-            return openDb()
+            return fence().then(openDb)
                 .then(function (db) {
                     // Cursor multi-request sweeps stay on the raw IDB handle.
                     const raw = rawDb(db);
                     if (!raw) return false;
-                    return deleteEntitiesByKindOnRawDb(raw, wanted, kindKeyRange(wanted));
+                    return deleteEntitiesByKindOnRawDb(raw, wanted, kindKeyRange(wanted), pageEpoch());
                 })
                 .catch(function () {
                     return false;
@@ -553,45 +733,60 @@
                 value: value,
                 cachedAt: now(),
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
+                libraryEpoch: null,
             };
-            return runRequest(STORE_LISTS, 'readwrite', function (store) {
-                return store.put(envelope);
-            }).then(function (r) {
-                return r.ok;
-            });
+            return putCurrent(STORE_LISTS, envelope);
         }
 
         function getList(listKey) {
             return runRequest(STORE_LISTS, 'readonly', function (store) {
                 return store.get(String(listKey));
             }).then(function (r) {
-                return r.ok && r.value ? r.value : null;
+                return r.ok && current(r.value) ? r.value : null;
             });
         }
 
         function deleteList(listKey) {
-            return runRequest(STORE_LISTS, 'readwrite', function (store) {
-                return store.delete(String(listKey));
-            }).then(function (r) {
-                return r.ok;
-            });
+            return deleteCurrent(STORE_LISTS, String(listKey));
         }
 
+        /**
+         * Empties the cache in one transaction, keeping the `library_epoch`
+         * row: the epoch the cache was fenced at still holds, so a store that
+         * already fenced need not fence again, and the next one does not take
+         * the missing row for a restore and drop what was cached since.
+         */
         function clearAll() {
-            return Promise.all([
-                runRequest(STORE_ENTITIES, 'readwrite', function (store) {
-                    return store.clear();
-                }),
-                runRequest(STORE_LISTS, 'readwrite', function (store) {
-                    return store.clear();
-                }),
-                runRequest(STORE_METADATA, 'readwrite', function (store) {
-                    return store.clear();
-                }),
-            ]).then(function (results) {
-                return results.every(function (r) {
-                    return r.ok;
+            return fence().then(openDb).then(function (db) {
+                if (!db) return false;
+                let tx;
+                try {
+                    tx = db.transaction([STORE_METADATA, STORE_ENTITIES, STORE_LISTS], 'readwrite');
+                } catch (_e) {
+                    return false;
+                }
+                const done = tx.done.then(function () { return true; }, function () { return false; });
+                const meta = tx.objectStore(STORE_METADATA);
+                return meta.get(META_LIBRARY_EPOCH).then(function (row) {
+                    return Promise.all([
+                        tx.objectStore(STORE_ENTITIES).clear(),
+                        tx.objectStore(STORE_LISTS).clear(),
+                        meta.clear(),
+                    ]).then(function () {
+                        return row ? meta.put(row) : undefined;
+                    });
+                }).then(function () {
+                    return done;
+                }, function () {
+                    try {
+                        tx.abort();
+                    } catch (_e) {
+                        /* already finished */
+                    }
+                    return done.then(function () { return false; });
                 });
+            }).catch(function () {
+                return false;
             });
         }
 

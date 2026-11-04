@@ -3,8 +3,11 @@ import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
 import { DRAFTS_STORE, UNKNOWN_BASE, reservationKeyOf, type DraftKind } from './schema'
 import type { DraftWriter } from './writer'
-import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
+import { createFakeBrowser, memoryStorage, TEST_EPOCH, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
+
+/** No proven base, typed on the page's own Library epoch. */
+const CURRENT_BASE = { ...UNKNOWN_BASE, epoch: TEST_EPOCH }
 
 const COPIED = 'r-' + 'c'.repeat(32)
 
@@ -30,20 +33,20 @@ describe('editor recovery runtime', () => {
       }
       return proxy
     }
-    const original = createEditorRecoveryRuntime({ names: TEST_NAMES,
+    const original = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED }), locks: null, createChannel: busyChannel, claimWaitMs: 20 },
       writers: { scheduler: createManualScheduler(), window: null, document: null },
       emergencyStorage: local,
     })
     await original.start()
-    const w = original.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = original.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     w.edit(1, 'still typing here')
     const key = reservationKeyOf(TEST_NAMES, original.identity.pageInstanceId)
     expect(local.map.has(key)).toBe(true)
     busy = true
     // Duplicate tab: the copied id goes unanswered, so it reads as a reload of this tab.
-    const duplicate = createEditorRecoveryRuntime({ names: TEST_NAMES,
+    const duplicate = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED }), locks: null, createChannel: browser.channelFor('duplicate'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -69,7 +72,7 @@ describe('editor recovery runtime', () => {
     const local = memoryStorage()
     const session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED })
     const load = (name: string) =>
-      createEditorRecoveryRuntime({ names: TEST_NAMES,
+      createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -77,11 +80,11 @@ describe('editor recovery runtime', () => {
       })
     const crashed = load('crashed')
     expect((await crashed.start()).claim).toEqual({ runtimeId: COPIED, verified: 'channel' })
-    crashed.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'typed')
+    crashed.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE }).edit(1, 'typed')
     const leaked = reservationKeyOf(TEST_NAMES, crashed.identity.pageInstanceId)
     expect(local.map.has(leaked)).toBe(true)
     // An unrelated tab cannot tell a crash from a freeze, so it leaves the reservation alone.
-    const other = createEditorRecoveryRuntime({ names: TEST_NAMES,
+    const other = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor('other'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -108,7 +111,7 @@ describe('editor recovery runtime', () => {
     const pages = ['a', 'b'].map((name) => {
       const scheduler = createManualScheduler()
       const locks = browser.locksFor(name)
-      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: {
           sessionStorage: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED }),
@@ -124,7 +127,7 @@ describe('editor recovery runtime', () => {
     const starts = pages.map((p) => p.rt.start())
     // Both type before their runtime claims settle.
     const writers = pages.map((p, i) => {
-      const w = p.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+      const w = p.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
       w.edit(1, 'typed in tab ' + i)
       return w
     })
@@ -141,7 +144,7 @@ describe('editor recovery runtime', () => {
       p.rt.identity.dispose()
     })
     await settle()
-    const next = createEditorRecoveryRuntime({ names: TEST_NAMES,
+    const next = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: browser.locksFor('next'), createChannel: browser.channelFor('next'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -163,7 +166,7 @@ describe('editor recovery runtime', () => {
     const idb = createFakeIdb()
     const session = browser.sessionStorageWith()
     const make = (name: string) =>
-      createEditorRecoveryRuntime({ names: TEST_NAMES,
+      createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: session, locks: browser.locksFor(name), createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { window: null, document: null },
@@ -171,7 +174,7 @@ describe('editor recovery runtime', () => {
       })
     const before = make('before')
     await before.start()
-    const w = before.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-2', base: UNKNOWN_BASE })
+    const w = before.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-2', base: CURRENT_BASE })
     w.edit(1, 'before reload')
     await w.flush()
     before.dispose()
@@ -192,7 +195,7 @@ describe('editor recovery runtime', () => {
     const local = memoryStorage()
     const make = (name: string) => {
       const locks = browser.locksFor(name)
-      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: browser.sessionStorageWith(), locks, createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -204,7 +207,7 @@ describe('editor recovery runtime', () => {
     expect((await b.rt.start()).merged).toEqual([])
     const a = make('a')
     await a.rt.start()
-    a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed later')
+    a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE }).edit(1, 'closed later')
     expect(a.rt.writers.writeEmergencyNow()).toBe('written')
     const key = TEST_NAMES.emergencyPrefix + a.rt.identity.pageInstanceId
 
@@ -230,7 +233,7 @@ describe('editor recovery runtime', () => {
     const idb = createFakeIdb()
     const local = memoryStorage()
     const make = (name: string) =>
-      createEditorRecoveryRuntime({ names: TEST_NAMES,
+      createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -241,7 +244,7 @@ describe('editor recovery runtime', () => {
     const a = make('a')
     // Typed and closed before its runtime claim settled: the payload carries no runtime id.
     void a.start()
-    a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed while claiming')
+    a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE }).edit(1, 'closed while claiming')
     expect(a.writers.writeEmergencyNow()).toBe('written')
     const key = TEST_NAMES.emergencyPrefix + a.identity.pageInstanceId
     expect(JSON.parse(local.map.get(key)!).runtimeId).toBeNull()
@@ -270,7 +273,7 @@ describe('editor recovery runtime', () => {
       }
     }
     const make = (name: string, win: EventTarget) =>
-      createEditorRecoveryRuntime({ names: TEST_NAMES,
+      createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local, window: win },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -279,7 +282,7 @@ describe('editor recovery runtime', () => {
     const aWin = events()
     const a = make('a', aWin.target)
     await a.start()
-    const w = a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     w.edit(1, 'still in the cache')
     await w.flush()
     const [record] = await a.store.listByEntity('work-research-note', 'w1')
@@ -297,7 +300,7 @@ describe('editor recovery runtime', () => {
 
   it('scanEmergency starts the runtime when nothing has yet', async () => {
     const browser = createFakeBrowser()
-    const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
+    const rt = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
       store: { indexedDB: createFakeIdb().factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: browser.locksFor('x'), createChannel: browser.channelFor('x'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -328,7 +331,7 @@ describe('editor recovery runtime', () => {
     }
     const make = (name: string) => {
       const locks = browser.locksFor(name)
-      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: browser.sessionStorageWith(), locks, createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -338,7 +341,7 @@ describe('editor recovery runtime', () => {
     }
     const a = make('a')
     await a.rt.start()
-    const w = a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     // First generation, only in the emergency entry.
     w.edit(1, 'discarded words')
     expect(a.rt.writers.writeEmergencyNow()).toBe('written')
@@ -365,7 +368,7 @@ describe('editor recovery runtime', () => {
 describe('review actions', () => {
   function runtimeOn(idb: ReturnType<typeof createFakeIdb>, local: EmergencyStorage, name: string) {
     const browser = createFakeBrowser()
-    return createEditorRecoveryRuntime({ names: TEST_NAMES,
+    return createEditorRecoveryRuntime({ names: TEST_NAMES, epoch: TEST_EPOCH,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 5, localStorage: local },
       writers: { window: null, document: null },
@@ -379,10 +382,10 @@ describe('review actions', () => {
     const rt = runtimeOn(idb, local, 'reviewer')
     await rt.start()
     const draftId = 'd-' + 'e'.repeat(32)
-    const lineage = { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1' }, base: UNKNOWN_BASE }
+    const lineage = { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1' }, base: CURRENT_BASE }
     expect(await rt.store.writeGeneration({
       draftId, pageInstanceId: 'p-gone', generation: 2, body: 'reviewed text',
-      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { ...lineage.owner, claimedAt: 1 }, base: UNKNOWN_BASE },
+      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { ...lineage.owner, claimedAt: 1 }, base: CURRENT_BASE },
     })).toBe('ok')
     // The gone page's key could not be removed and still lists the lineage at generation 1.
     const payload = { v: 1, pageInstanceId: 'p-gone', runtimeId: null, at: 1, entries: [
@@ -408,7 +411,7 @@ describe('review actions', () => {
     const draftId = 'd-' + 'f'.repeat(32)
     await rt.store.writeGeneration({
       draftId, pageInstanceId: 'p-gone', generation: 3, body: 'text',
-      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE },
+      create: { kind: 'work-research-note', entityType: 'work', entityId: 'w1', owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: CURRENT_BASE },
     })
     const reviewed = { draftId, pageInstanceId: 'p-gone', generation: 3, status: 'active' as const }
     expect((await rt.claimReviewed({ ...reviewed, generation: 2 }, 'tab-1')).outcome).toBe('conflict')
@@ -430,7 +433,7 @@ describe('review actions', () => {
       throw new Error('a broken listener')
     })
     idb.failCommits = 5
-    const w = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     w.edit(1, 'text')
     await w.flush()
     expect(seen).toEqual(['unprotected'])
@@ -451,7 +454,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const browser = createFakeBrowser()
     const idb = createFakeIdb()
     const local = memoryStorage()
-    const page = (name: string, frozen?: { now: boolean }) => {
+    const page = (name: string, frozen?: { now: boolean }, epoch: string = TEST_EPOCH) => {
       const locks = browser.locksFor(name)
       const open = browser.channelFor(name)
       // A frozen page keeps its page lock but hears nothing, so it answers nothing.
@@ -473,7 +476,7 @@ describe('cleanupDeletedEntity (#533)', () => {
           close: () => channel.close(),
         }
       }
-      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch,
         store: { indexedDB: idb.factory },
         identity: {
           sessionStorage: browser.sessionStorageWith(),
@@ -494,7 +497,7 @@ describe('cleanupDeletedEntity (#533)', () => {
   async function crashedDraft(make: (name: string) => { rt: EditorRecoveryRuntime; locks: { releaseAll(): void } }, name: string, text: string, kind: DraftKind = 'work-private-note') {
     const p = make(name)
     await p.rt.start()
-    const w = p.rt.writers.openWriter({ kind, entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = p.rt.writers.openWriter({ kind, entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     w.edit(1, text)
     await w.flush()
     p.rt.identity.dispose()
@@ -507,6 +510,19 @@ describe('cleanupDeletedEntity (#533)', () => {
     const rows = (await rt.store.listAll()).filter((r) => r.status !== 'discarded')
     return Promise.all(rows.map(async (r) => [r.entityKey, (await rt.store.getBody(r.draftId))?.body ?? null] as [string, string | null]))
   }
+
+  it('keeps a draft typed before the Library was restored for review, whoever owned it (#629)', async () => {
+    const { page } = setup()
+    const { writer } = await crashedDraft(page, 'gone', 'typed before the restore')
+    const restored = page('after-restore', undefined, '2').rt
+    expect(await restored.cleanupDeletedEntity(W1, KINDS)).toEqual({
+      removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [], restored: [writer.draftId()],
+    })
+    expect(await bodies(restored)).toEqual([['work-private-note:w1', 'typed before the restore']])
+    // Nor is it adopted by a page of the restored Library.
+    const [record] = await restored.store.listAll()
+    expect(await restored.writers.adopt(record!, { paneId: 'tab-2' })).toBeNull()
+  })
 
   it('rejects a cleanup that read a lineage before another page adopted it, and keeps it for that live editor', async () => {
     const { page } = setup()
@@ -524,7 +540,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     }
     const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
     expect(adopted).not.toBeNull()
-    expect(report).toEqual({ removed: [], live: [], unknown: [], changed: [record!.draftId], unsupported: [], suppressed: [] })
+    expect(report).toEqual({ removed: [], live: [], unknown: [], changed: [record!.draftId], unsupported: [], suppressed: [], restored: [] })
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'orphaned text']])
     // Retried: the adopter is now a live editor, so its lineage stays.
     expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: [], live: [record!.draftId] })
@@ -570,7 +586,7 @@ describe('cleanupDeletedEntity (#533)', () => {
       local.setItem(TEST_NAMES.emergencyPrefix + pageInstanceId, JSON.stringify({ v: 1, pageInstanceId, runtimeId: null, at: 1, entries }))
     const entry = (draftId: string, generation: number, committedGeneration: number, body: string, kind: DraftKind, pageInstanceId: string) => ({
       draftId, kind, entityType: 'work', entityId: 'w1', generation, committedGeneration, body,
-      lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' }, base: UNKNOWN_BASE },
+      lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' }, base: CURRENT_BASE },
     })
     // Generation 2 of the stored lineage, held only in the crashed page's key.
     key(crashedPage, [entry(writer.draftId()!, 2, 1, 'typed after the commit', 'work-private-note', crashedPage)])
@@ -578,7 +594,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     key('p-lost', [entry('d-lost', 1, 0, 'only in localStorage', 'work-research-note', 'p-lost')])
 
     const report = await cleaner.cleanupDeletedEntity(W1, KINDS)
-    expect(report).toEqual({ removed: [writer.draftId()], live: [], unknown: [], changed: [], unsupported: [], suppressed: ['d-lost'] })
+    expect(report).toEqual({ removed: [writer.draftId()], live: [], unknown: [], changed: [], unsupported: [], suppressed: ['d-lost'], restored: [] })
     expect(await bodies(cleaner)).toEqual([])
     // Each stays a tombstone while a key still lists it.
     expect(await cleaner.store.get(writer.draftId()!)).toMatchObject({ status: 'discarded' })
@@ -603,7 +619,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     // Malformed: no bundle can ever merge it, so it names nothing, and it is left in place too.
     const broken = TEST_NAMES.emergencyPrefix + 'p-broken'
     local.setItem(broken, '{"v": 1, "entr')
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [key], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [key], suppressed: [], restored: [] })
     expect(local.getItem(key)).toBe(newer)
     expect(local.getItem(broken)).toBe('{"v": 1, "entr')
   })
@@ -615,7 +631,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const payload = { v: 1, pageInstanceId: 'p-lost', runtimeId: null, at: 1, entries: [] }
     const lost = {
       draftId: 'd-lost', kind: 'work-research-note' as DraftKind, entityType: 'work' as const, entityId: 'w1', generation: 1, committedGeneration: 0, body: 'only in localStorage',
-      lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-lost', paneId: 'tab-1' }, base: UNKNOWN_BASE },
+      lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-lost', paneId: 'tab-1' }, base: CURRENT_BASE },
     }
     local.setItem(TEST_NAMES.emergencyPrefix + 'p-lost', JSON.stringify({ ...payload, entries: [lost] }))
     const tombstone = cleaner.store.tombstoneIfAbsent
@@ -625,7 +641,7 @@ describe('cleanupDeletedEntity (#533)', () => {
       cleaner.store.tombstoneIfAbsent = tombstone
       return tombstone(...args)
     }
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: ['d-lost'], unsupported: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: ['d-lost'], unsupported: [], suppressed: [], restored: [] })
     expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toMatchObject({ removed: ['d-lost'], changed: [] })
   })
 
@@ -634,14 +650,14 @@ describe('cleanupDeletedEntity (#533)', () => {
     const frozen = { now: false }
     const live = page('frozen', frozen)
     await live.rt.start()
-    const w = live.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = live.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     w.edit(1, 'committed before the freeze')
     await w.flush()
     expect(live.rt.writers.leaveGuardActive()).toBe(false)
     frozen.now = true
     const cleaner = page('cleaner').rt
     expect(await cleaner.classify((await cleaner.store.get(w.draftId()!))!)).toBe('unknown')
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [w.draftId()], changed: [], unsupported: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [w.draftId()], changed: [], unsupported: [], suppressed: [], restored: [] })
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'committed before the freeze']])
     // Resumed: the writer still owns its lineage and keeps it recoverable.
     frozen.now = false
@@ -687,11 +703,11 @@ describe('cleanupDeletedEntity (#533)', () => {
     const { page } = setup()
     const live = page('live')
     await live.rt.start()
-    const w = live.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const w = live.rt.writers.openWriter({ kind: 'work-private-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: CURRENT_BASE })
     w.edit(1, 'typing now')
     expect(live.rt.writers.writeEmergencyNow()).toBe('written')
     const cleaner = page('cleaner').rt
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], unknown: [], changed: [], unsupported: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [w.draftId()], unknown: [], changed: [], unsupported: [], suppressed: [], restored: [] })
     expect(await cleaner.store.get(w.draftId()!)).toBeNull()
     await w.flush()
     expect(await bodies(cleaner)).toEqual([['work-private-note:w1', 'typing now']])
@@ -703,7 +719,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const cleaner = page('cleaner').rt
     const draftId = (await cleaner.store.listAll())[0]!.draftId
     cleaner.store.discard = async () => 'unsupported'
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [draftId], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [draftId], suppressed: [], restored: [] })
   })
 
   it('finishes an interrupted cleanup on retry, is idempotent, and never touches another Work or kind', async () => {
@@ -713,7 +729,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const other = page('other')
     await other.rt.start()
     for (const [kind, id] of [['work-private-note', 'w2'], ['folder-private-note', 'w1']] as const) {
-      const w = other.rt.writers.openWriter({ kind, entityType: kind === 'folder-private-note' ? 'folder' : 'work', entityId: id, paneId: 'tab-1', base: UNKNOWN_BASE })
+      const w = other.rt.writers.openWriter({ kind, entityType: kind === 'folder-private-note' ? 'folder' : 'work', entityId: id, paneId: 'tab-1', base: CURRENT_BASE })
       w.edit(1, kind + ' ' + id)
       await w.release()
     }
@@ -732,7 +748,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     expect(await bodies(cleaner)).toHaveLength(3)
     const retried = await cleaner.cleanupDeletedEntity(W1, KINDS)
     expect(retried.removed).toHaveLength(1)
-    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [] })
+    expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [], restored: [] })
     expect((await bodies(cleaner)).sort()).toEqual([
       ['folder-private-note:w1', 'folder-private-note w1'],
       ['work-private-note:w2', 'work-private-note w2'],

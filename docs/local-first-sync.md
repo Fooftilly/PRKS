@@ -143,6 +143,14 @@ coordinator names no family: adding one is a registration.
   page loaded before the restore keeps naming its old epoch (the server
   refuses its mutations) and records no new change (`library_restored`)
   until a reload.
+  Recovery drafts record the page's epoch with their base (`base.epoch`).
+  A draft of any other epoch, or one that does not say, is review-only: it
+  is never restored, adopted, cleaned up as saved or removed with its
+  deleted entity, and Review and Settings → Diagnostics mark it "typed
+  before this library was restored" with Copy and Discard. The offline cache
+  stamps every envelope with the page's epoch (`libraryEpoch`) and reads
+  only its own; the first use under a newer epoch drops the older
+  envelopes. A scope that names no epoch has no cache.
 - `prks-offline-v2:<scope>` remains a disposable cache of acknowledged server data.
 - `prks-local-v2:<scope>` holds semantic operations and a random device UUID. Its
   IndexedDB writes request strict durability and resolve only on transaction

@@ -198,8 +198,18 @@ var prksEditorRecovery = (function(exports) {
 		revision: null,
 		length: null,
 		fingerprint: null,
-		source: "unknown"
+		source: "unknown",
+		epoch: null
 	});
+	/**
+	* The text was typed against an earlier Library than the page's `epoch`, or
+	* the record does not say which: shown for review, never restored, adopted
+	* or removed automatically. A revision alone never proves a base across
+	* epochs, since a restored snapshot can reach the same number again.
+	*/
+	function isEarlierLibrary(base, epoch) {
+		return !base || typeof base.epoch !== "string" || base.epoch !== epoch;
+	}
 	function entityKeyOf(kind, entityId) {
 		return kind + ":" + entityId;
 	}
@@ -1217,6 +1227,7 @@ var prksEditorRecovery = (function(exports) {
 				superseded: supersededGeneration(storage, names, record.draftId) >= record.generation,
 				deletedHere: record.entityType === "work" && readKey(storage, names.deletedWorkPrefix + record.entityId) !== null,
 				fromEmergency: typeof record.emergencySource === "string",
+				earlierLibrary: isEarlierLibrary(record.base, rt.epoch),
 				expect: {
 					draftId: record.draftId,
 					pageInstanceId: record.owner.pageInstanceId,
@@ -2042,6 +2053,12 @@ var prksEditorRecovery = (function(exports) {
 		const supersededPrefix = names.supersededPrefix;
 		const emergencyKey = emergencyKeyOf(names, identity.pageInstanceId);
 		const reservationKey = reservationKeyOf(names, identity.pageInstanceId);
+		const pageEpoch = options.epoch ?? null;
+		/** A base as this page records it: under the epoch it loaded. */
+		const stamped = (base) => ({
+			...base,
+			epoch: pageEpoch
+		});
 		const live = /* @__PURE__ */ new Set();
 		/** Writers whose body the budget plan puts in the emergency entry. */
 		let planned = /* @__PURE__ */ new Set();
@@ -2407,7 +2424,7 @@ var prksEditorRecovery = (function(exports) {
 				this.entityType = input.entityType;
 				this.entityId = input.entityId;
 				this.paneId = input.paneId;
-				this.base = input.base ? { ...input.base } : { ...UNKNOWN_BASE };
+				this.base = stamped(input.base || UNKNOWN_BASE);
 			}
 			adoptRecord(record) {
 				this.lineageId = record.draftId;
@@ -2454,7 +2471,7 @@ var prksEditorRecovery = (function(exports) {
 				return !held.has(this);
 			}
 			setBase(base) {
-				this.base = { ...base };
+				this.base = stamped(base);
 				this.metaChanged();
 			}
 			setPipeline(pipeline) {
@@ -2835,6 +2852,7 @@ var prksEditorRecovery = (function(exports) {
 				}
 			}
 			if ((superseded.get(record.draftId) || 0) >= record.generation) return null;
+			if (isEarlierLibrary(record.base, pageEpoch)) return null;
 			adopting.add(record.draftId);
 			const adoption = adoptReserved(record, input);
 			adoptions.add(adoption);
@@ -2940,6 +2958,7 @@ var prksEditorRecovery = (function(exports) {
 	function createEditorRecoveryRuntime(options) {
 		const names = options.names;
 		if (!names) throw new Error("recovery storage needs a signed-in scope");
+		const epoch = options.epoch ?? null;
 		const rawStore = createRecoveryStore({
 			...options.store,
 			name: names.dbName
@@ -2964,6 +2983,7 @@ var prksEditorRecovery = (function(exports) {
 			store: rawStore,
 			identity,
 			emergencyStorage: writerStorage,
+			epoch,
 			onEvent(event) {
 				if (ownEvent) ownEvent(event);
 				for (const listener of [...writerListeners]) try {
@@ -3047,6 +3067,10 @@ var prksEditorRecovery = (function(exports) {
 				}
 				for (const entry of payload.entries) {
 					if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue;
+					if (isEarlierLibrary(entry.lineage ? entry.lineage.base : null, epoch)) {
+						report.restored.push(entry.draftId);
+						continue;
+					}
 					const owner = {
 						runtimeId: payload.runtimeId,
 						pageInstanceId: stored.pageInstanceId,
@@ -3085,7 +3109,8 @@ var prksEditorRecovery = (function(exports) {
 				unknown: [],
 				changed: [],
 				unsupported: [],
-				suppressed: []
+				suppressed: [],
+				restored: []
 			};
 			await scanEmergency();
 			const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)));
@@ -3100,6 +3125,10 @@ var prksEditorRecovery = (function(exports) {
 				if (!(typeof r.entityType === "string" && typeof r.entityId === "string") || r.entityType === entity.entityType && r.entityId === entity.entityId) report.unsupported.push(typeof r.draftId === "string" ? r.draftId : "");
 			}
 			for (const record of records) {
+				if (isEarlierLibrary(record.base, epoch)) {
+					report.restored.push(record.draftId);
+					continue;
+				}
 				const lineage = await classify(record);
 				if (!isAdoptable(lineage)) {
 					keptFor(lineage, report).push(record.draftId);
@@ -3123,6 +3152,7 @@ var prksEditorRecovery = (function(exports) {
 		}
 		return {
 			names,
+			epoch,
 			store,
 			identity,
 			writers,
@@ -3294,6 +3324,10 @@ var prksEditorRecovery = (function(exports) {
 		const remaining = [];
 		for (const c of input.candidates) {
 			if (c.record.status === "discarded") continue;
+			if (isEarlierLibrary(c.record.base, input.epoch)) {
+				review(c, "library-restored");
+				continue;
+			}
 			if (c.lineage === "self-live" || c.lineage === "other-live") {
 				liveElsewhere = true;
 				review(c, "live-elsewhere");
@@ -3399,6 +3433,7 @@ var prksEditorRecovery = (function(exports) {
 	]);
 	function actionFor(c, input, print) {
 		if (c.record.status !== "active" || c.body === null) return null;
+		if (isEarlierLibrary(c.record.base, input.epoch)) return null;
 		if (c.lineage !== "same-runtime-orphan" && c.lineage !== "dead-runtime") return null;
 		if (!input.queue) return null;
 		const judged = judge(c, {
@@ -3474,6 +3509,15 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
+	/** The Library epoch the page loaded, or null (then every draft is review-only). */
+	function pageEpochOf(scope) {
+		try {
+			const epoch = scope && typeof scope.pageEpoch === "function" ? scope.pageEpoch() : null;
+			return typeof epoch === "string" && epoch ? epoch : null;
+		} catch {
+			return null;
+		}
+	}
 	/**
 	* The names of the page's recovery storage for its confirmed browser scope,
 	* or null without one. For readers that must not build the runtime (a
@@ -3501,7 +3545,10 @@ var prksEditorRecovery = (function(exports) {
 		const scopeKey = confirmedScopeKey();
 		if (!scopeKey) return null;
 		watchScope(browserScope());
-		pageRuntime = createEditorRecoveryRuntime({ names: recoveryNames(scopeKey) });
+		pageRuntime = createEditorRecoveryRuntime({
+			names: recoveryNames(scopeKey),
+			epoch: pageEpochOf(browserScope())
+		});
 		return pageRuntime;
 	}
 	/** Settings → Diagnostics (#466 slice 5) over this page's runtime, or null without a scope. Starts nothing until it is asked to read. */
@@ -3544,6 +3591,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.forkedDraftId = forkedDraftId;
 	exports.isAdoptable = isAdoptable;
 	exports.isDraftKind = isDraftKind;
+	exports.isEarlierLibrary = isEarlierLibrary;
 	exports.isScopeKey = isScopeKey;
 	exports.isSupportedRecord = isSupportedRecord;
 	exports.mayHoldUnreadable = mayHoldUnreadable;

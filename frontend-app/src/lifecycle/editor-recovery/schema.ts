@@ -135,9 +135,26 @@ export interface DraftBase {
   /** 128-bit fingerprint of the acknowledged base text (32 hex). */
   fingerprint: string | null
   source: BaseSource
+  /**
+   * Library epoch (#629, docs §10.4) of the page the text was typed on: the
+   * epoch its base was proved under. Writers always stamp it; a record
+   * without it, or with an older one than the page's, is from before a
+   * restore and is review-only (`isEarlierLibrary`).
+   */
+  epoch?: string | null
 }
 
-export const UNKNOWN_BASE: DraftBase = Object.freeze({ revision: null, length: null, fingerprint: null, source: 'unknown' })
+export const UNKNOWN_BASE: DraftBase = Object.freeze({ revision: null, length: null, fingerprint: null, source: 'unknown', epoch: null })
+
+/**
+ * The text was typed against an earlier Library than the page's `epoch`, or
+ * the record does not say which: shown for review, never restored, adopted
+ * or removed automatically. A revision alone never proves a base across
+ * epochs, since a restored snapshot can reach the same number again.
+ */
+export function isEarlierLibrary(base: Pick<DraftBase, 'epoch'> | null | undefined, epoch: string | null): boolean {
+  return !base || typeof base.epoch !== 'string' || base.epoch !== epoch
+}
 
 /** Relationship to the ordinary save pipeline. Informational, never authoritative. Filled from slice 2. */
 export interface DraftPipeline {

@@ -58,6 +58,7 @@ export function draftStateText(d: Pick<DiagnosticsDraft, 'status' | 'lineage'>):
 /** Flags worth a glance, never reasons anything was removed. */
 export function draftFlags(d: DiagnosticsDraft): string[] {
   const flags: string[] = []
+  if (d.earlierLibrary) flags.push('Typed before this library was restored')
   if (d.superseded) flags.push('A newer version is already on the server')
   if (d.deletedHere) flags.push('Its Work was deleted from this browser')
   if (d.fromEmergency) flags.push('Captured as the tab closed')

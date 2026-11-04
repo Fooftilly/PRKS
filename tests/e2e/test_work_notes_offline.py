@@ -1302,7 +1302,8 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
                     draftId: 'd-closed-before-commit', kind: 'work-private-note', entityType: 'work', entityId: workId,
                     generation: 1, committedGeneration: 0, body: 'Only in the emergency key',
                     lineage: { createdAt: Date.now(), owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' },
-                               base: { revision: 0, length: 0, fingerprint: null, source: 'server' } },
+                               base: { revision: 0, length: 0, fingerprint: null, source: 'server',
+                                       epoch: prksBrowserScope.pageEpoch() } },
                 }],
             }));
         }""", work)

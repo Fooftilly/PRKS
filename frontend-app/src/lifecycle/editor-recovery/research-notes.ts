@@ -19,7 +19,7 @@
 
 import { fingerprintText, sameBaseIdentity } from './fingerprint'
 import type { LineageClass } from './lineage'
-import type { DraftBase, DraftRecord } from './schema'
+import { isEarlierLibrary, type DraftBase, type DraftRecord } from './schema'
 
 /** The acknowledged note the mount read, never an effective overlay. */
 export interface AcknowledgedNote {
@@ -52,6 +52,11 @@ export interface RestoreInput {
   /** Another session in this page holds unsaved text for this Work. */
   otherDirtySession: boolean
   /**
+   * The Library epoch this page loaded (#629). A draft typed under any other
+   * epoch, or that does not say, is review-only (`library-restored`).
+   */
+  epoch: string | null
+  /**
    * The mounting pane's own editor already shows text other than the
    * acknowledged note, or has queued it: a restore would replace it, so it
    * is offered only as a reconciliation. False on mount.
@@ -80,6 +85,7 @@ export type ReviewReason =
   | 'foreign-queue'
   | 'queue-unknown'
   | 'base-advanced'
+  | 'library-restored'
 
 /**
  * What Review may offer for one candidate, judged on its own:
@@ -88,7 +94,8 @@ export type ReviewReason =
  *   before anything is written (the note moved on, a foreign row is queued,
  *   the base cannot be verified, or the editor already shows other text);
  * - null: inspect and copy only (live or uncertain owner, incomplete or
- *   unreadable body, unreadable queue, unsaved text in another pane).
+ *   unreadable body, unreadable queue, unsaved text in another pane, typed
+ *   before the Library was restored).
  */
 export type ReviewAction = 'restore' | 'reconcile' | null
 
@@ -152,6 +159,13 @@ export function planResearchNotesRestore(input: RestoreInput): RestorePlan {
   const remaining: RestoreCandidate[] = []
   for (const c of input.candidates) {
     if (c.record.status === 'discarded') continue
+    // Typed against an earlier Library (#629): its base proves nothing here,
+    // even at the same revision. Kept for review only; it neither restores,
+    // nor is cleaned up, nor stands in the way of a draft of this Library.
+    if (isEarlierLibrary(c.record.base, input.epoch)) {
+      review(c, 'library-restored')
+      continue
+    }
     // Being edited in this or another live editor: reported, never offered
     // for restore here, and its existence alone stops an automatic restore.
     if (c.lineage === 'self-live' || c.lineage === 'other-live') {
@@ -285,6 +299,7 @@ const RECONCILABLE: ReadonlySet<ReviewReason> = new Set(['base-advanced', 'forei
 
 function actionFor(c: RestoreCandidate, input: RestoreInput, print: (text: string) => string): ReviewAction {
   if (c.record.status !== 'active' || c.body === null) return null
+  if (isEarlierLibrary(c.record.base, input.epoch)) return null
   if (c.lineage !== 'same-runtime-orphan' && c.lineage !== 'dead-runtime') return null
   // Pending sync that cannot be read could be overwritten: copy and discard only.
   if (!input.queue) return null

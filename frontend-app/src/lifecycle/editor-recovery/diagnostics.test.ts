@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { createRecoveryDiagnostics, OLD_DRAFT_MS, RECOVERY_WARN_BYTES, type DiagnosticsDraft, type DiscardTarget } from './diagnostics'
 import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
 import { BODIES_STORE, DRAFTS_STORE, UNKNOWN_BASE, type DraftEntityType, type DraftKind } from './schema'
-import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
+import { createFakeBrowser, memoryStorage, TEST_EPOCH, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle, type FakeIdbControls } from './test-support/fake-idb'
 
 function setup(withoutLocks = false) {
   const browser = createFakeBrowser()
   const idb = createFakeIdb()
   const local = memoryStorage()
-  const page = (name: string, frozen?: { now: boolean }) => {
+  const page = (name: string, frozen?: { now: boolean }, epoch: string = TEST_EPOCH) => {
     const locks = browser.locksFor(name)
     const open = browser.channelFor(name)
     // A frozen page keeps its page lock but hears nothing, so it answers nothing.
@@ -31,7 +31,7 @@ function setup(withoutLocks = false) {
         close: () => channel.close(),
       }
     }
-    const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
+    const rt = createEditorRecoveryRuntime({ names: TEST_NAMES, epoch,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: withoutLocks ? null : locks, createChannel, claimWaitMs: 20, localStorage: local },
       writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -428,10 +428,22 @@ describe('editor recovery diagnostics (#466 slice 5)', () => {
     local.setItem(TEST_NAMES.deletedWorkPrefix + 'w1', JSON.stringify({ marked: 1, tried: 0 }))
     const diag = createRecoveryDiagnostics(viewer, { storage: local, now: () => 1 + OLD_DRAFT_MS + 1 })
     const inv = await diag.inventory()
-    expect(inv.drafts[0]).toMatchObject<Partial<DiagnosticsDraft>>({ old: true, superseded: true, deletedHere: true })
+    expect(inv.drafts[0]).toMatchObject<Partial<DiagnosticsDraft>>({ old: true, superseded: true, deletedHere: true, earlierLibrary: false })
     expect(inv.overBudget).toBe(true)
     await diag.inventory()
     expect(await bodies(viewer)).toEqual(expect.arrayContaining(['ancient']))
+  })
+
+  it('flags a draft typed before the Library was restored, and still copies and discards it (#629)', async () => {
+    const { page, local } = setup()
+    const draftId = await crashedDraft(page('gone'), 'typed before the restore')
+    const diag = createRecoveryDiagnostics(page('after-restore', undefined, '2').rt, { storage: local })
+    const [draft] = (await diag.inventory()).drafts
+    expect(draft).toMatchObject<Partial<DiagnosticsDraft>>({ draftId, earlierLibrary: true })
+    expect(await diag.readText({ source: 'record', expect: draft!.expect })).toEqual({ ok: true, text: 'typed before the restore' })
+    const target: DiscardTarget = { ...draft!.expect, kind: draft!.kind, entityType: draft!.entityType, entityId: draft!.entityId, allowUnknownOwner: false }
+    expect(await diag.discard(target)).toBe('deleted')
+    expect((await diag.inventory()).drafts).toEqual([])
   })
 
   it('still lists emergency copies when recovery storage cannot be opened', async () => {
