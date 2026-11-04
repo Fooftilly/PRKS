@@ -6,8 +6,8 @@ or author-text change, a Research Note change, a role link or unlink, and a
 Person's name or aliases (every Work credited to the Person, including a
 credit promoted into an alias). The fan-out races of §8.3 are run with
 paused transactions: a rename against a role link of the same Person, in
-both orders, and a metadata command committed while a refresh holds the
-row.
+both orders, a rename against a role change on the same Work, in both
+orders, and a metadata command committed while a refresh holds the row.
 """
 
 from __future__ import annotations
@@ -140,6 +140,32 @@ class FanOutRaceTests(SearchTestCase):
         thread.join(10)
         self.assertEqual(out, [None])
         self.assert_both_renamed()
+
+    def test_a_rename_never_waits_on_a_role_change_holding_the_same_work(self) -> None:
+        # A role change locks its Work (FOR NO KEY UPDATE) before the Person;
+        # the rename's refresh takes the Work FOR KEY SHARE, which that lock
+        # allows, so the two cannot deadlock on a Work they share.
+        with self.paused(lambda scope: self.assertTrue(roles.lock_work(scope, self.first))):
+            thread, out = self.started(self.rename)
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(out, [None])
+        row = self.row(self.first)
+        assert row is not None
+        self.assertEqual(row["people_norm"], "after rename")
+
+    def test_a_role_change_on_a_renamed_work_waits_for_the_rename(self) -> None:
+        def unlink_first(scope: LibraryScope) -> None:
+            roles.set_role(scope, roles.Role(self.first, self.person, "Author"), False)
+
+        with self.paused(self.rename):
+            thread, out = self.started(unlink_first)
+            self.wait_for_lock_waiter()
+        thread.join(10)
+        self.assertEqual(out, [None])
+        row = self.row(self.first)
+        assert row is not None
+        self.assertEqual(row["people_norm"], "")
 
     def test_a_metadata_command_committed_while_a_refresh_holds_the_row_wins(self) -> None:
         def retitle(scope: LibraryScope) -> None:
