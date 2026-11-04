@@ -192,10 +192,27 @@ class MigrateOnStartTests(RootPairingTestCase):
                 prks_app.migrate_on_start(db, env)
                 self.assertTrue(self.applied(db))
 
-    def test_0_leaves_it_to_the_migrate_role(self) -> None:
+    def test_0_leaves_it_to_the_migrate_role_but_refuses_an_unmigrated_schema(self) -> None:
         db = self.empty()
-        prks_app.migrate_on_start(db, {"PRKS_MIGRATE_ON_START": "0"})
-        self.assertFalse(self.applied(db))
+        with self.assertRaises(SystemExit) as ctx:
+            prks_app.migrate_on_start(db, {"PRKS_MIGRATE_ON_START": "0"})
+        self.assertEqual(ctx.exception.code, 2)
+        with psycopg.connect(db.config.conninfo) as conn:
+            row = conn.execute("SELECT to_regclass('prks.schema_migrations')").fetchone()
+        self.assertEqual(row, (None,))
+
+    def test_0_starts_on_exactly_this_codes_schema_only(self) -> None:
+        name = self.database("mos")
+        db = self.db(name)
+        prks_app.migrate_on_start(db, {"PRKS_MIGRATE_ON_START": "0"})  # current: passes
+        with psycopg.connect(self.harness.conninfo(name), autocommit=True) as conn:
+            conn.execute(
+                "INSERT INTO prks.schema_migrations (version, name, sha256) "
+                "VALUES (999, 'future', repeat('a', 64))"
+            )
+        with self.assertRaises(SystemExit) as ctx:
+            prks_app.migrate_on_start(db, {"PRKS_MIGRATE_ON_START": "0"})
+        self.assertEqual(ctx.exception.code, 2)
 
     def test_anything_else_is_refused(self) -> None:
         for value in ("true", "yes", "2"):

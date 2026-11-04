@@ -183,21 +183,27 @@ def start_identity(args, config, environ=None):
 def migrate_on_start(db, environ):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
+    With ``0`` the schema is still verified: a web process never starts on a
+    schema other than its code's (§12.3).
+
     Compose sets ``0``: its one-shot ``migrate`` service is the only runner.
     The schema work never touches the root; the start check runs after it.
     Any refusal exits with status 2.
     """
-    from backend.db.migrate import MigrationError, migrate
+    from backend.db.migrate import MigrationError, migrate, verify_schema
 
     value = (environ.get("PRKS_MIGRATE_ON_START") or "1").strip()
     if value not in ("0", "1"):
         db.close()
         print("PRKS cannot start: PRKS_MIGRATE_ON_START must be 0 or 1.", file=sys.stderr)
         raise SystemExit(2)
-    if value == "0":
-        return
     try:
-        migrate(db.config.conninfo)
+        if value == "0":
+            # The migrate role ran; this process still refuses a schema that
+            # is not exactly its code's (pending, newer or changed files).
+            verify_schema(db.config.conninfo)
+        else:
+            migrate(db.config.conninfo)
     except MigrationError as exc:
         db.close()
         print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
