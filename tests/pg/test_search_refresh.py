@@ -230,8 +230,11 @@ class RefreshTests(SearchTestCase):
         theirs = self.library.add_work("Theirs")
         self.bind(self.actor.context)
         missing = "W-" + "E" * 32
+        before = self.row(theirs)
         self.assertEqual(self.refresh(mine, theirs, missing), [mine])
-        self.assertIsNone(self.row(theirs))
+        # Their row (written by their own create) is neither read nor touched.
+        self.assertEqual(self.row(theirs), before)
+        self.assertNotEqual((before or {}).get("library_id"), self.actor.library_id)
         self.assertIsNone(self.row(missing))
 
     def test_a_refresh_of_a_gone_work_deletes_its_row(self) -> None:

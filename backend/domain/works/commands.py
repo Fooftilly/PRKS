@@ -183,6 +183,8 @@ def create_work(scope: LibraryScope, new: NewWork, *, if_absent: bool = False,
     for kind, body in (("research", new.research_note), ("private", new.private_note)):
         if body:
             scope.execute(_INSERT_NOTE, {"work_id": new.work_id, "kind": kind, "body": body})
+    search_refresh.insert_created_work(scope, new.work_id, title=new.title, author_text=new.author_text,
+                                       abstract=new.abstract, research_note=new.research_note)
     return new.work_id
 
 

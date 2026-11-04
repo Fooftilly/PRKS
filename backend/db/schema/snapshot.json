@@ -40,6 +40,18 @@
       "parallel": "s",
       "strict": true,
       "volatility": "i"
+    },
+    "prks.work_search_doc(text,text,text,text,text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.work_search_doc(title text, people text, author_text text, abstract text, notes text)\n RETURNS tsvector\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT (((setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(title)), 'A'::\"char\") || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(((people || ' '::text) || author_text))), 'B'::\"char\")) || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(abstract)), 'C'::\"char\")) || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(notes)), 'D'::\"char\"));\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    },
+    "prks.work_search_text(text,text,text,text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.work_search_text(title text, author_text text, abstract text, notes text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT prks.search_norm(concat_ws(' '::text, NULLIF(title, ''::text), NULLIF(author_text, ''::text), NULLIF(abstract, ''::text), NULLIF(notes, ''::text))) AS search_norm;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
     }
   },
   "schema_files": [

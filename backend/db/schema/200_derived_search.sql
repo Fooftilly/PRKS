@@ -54,6 +54,30 @@ BEGIN ATOMIC
   SELECT regexp_replace(prks.search_norm(t), '[[:punct:]]+', '', 'g');
 END;
 
+-- A Work's search document and infix-fallback text, from its inputs (§8.3).
+-- One definition for every writer of derived.work_search: the refresh
+-- (backend/domain/search/refresh.py) and a Work create, which computes its
+-- new row from the values it inserts. IMMUTABLE on the same promise as
+-- prks.search_norm; nothing indexes or defaults to their output.
+CREATE FUNCTION prks.work_search_doc(title text, people text, author_text text, abstract text,
+                                     notes text) RETURNS tsvector
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+BEGIN ATOMIC
+  SELECT setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(title)), 'A')
+      || setweight(to_tsvector('prks.prks_search'::regconfig,
+                               prks.search_fold(people || ' ' || author_text)), 'B')
+      || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(abstract)), 'C')
+      || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(notes)), 'D');
+END;
+
+CREATE FUNCTION prks.work_search_text(title text, author_text text, abstract text, notes text)
+  RETURNS text
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+BEGIN ATOMIC
+  SELECT prks.search_norm(concat_ws(' ', nullif(title, ''), nullif(author_text, ''),
+                                    nullif(abstract, ''), nullif(notes, '')));
+END;
+
 -- One row per Work: its search document and the normalized text the
 -- substring and trigram paths match (§8.3). Written only through
 -- backend/domain/search/refresh.py (refresh_work_search), by the commands

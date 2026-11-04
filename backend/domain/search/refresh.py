@@ -36,7 +36,7 @@ indexed text and query tokens use PostgreSQL's one Unicode implementation.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import LiteralString
+from typing import LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
 
@@ -98,15 +98,10 @@ WITH src AS (
   WHERE w.library_id = %(library_id)s AND w.id = ANY(%(locked)s::text[])
 )
 UPDATE derived.work_search s
-SET doc = setweight(to_tsvector('prks.prks_search', prks.search_fold(src.title)), 'A')
-       || setweight(to_tsvector('prks.prks_search',
-                                prks.search_fold(src.people || ' ' || src.author_text)), 'B')
-       || setweight(to_tsvector('prks.prks_search', prks.search_fold(src.abstract)), 'C')
-       || setweight(to_tsvector('prks.prks_search', prks.search_fold(src.notes)), 'D'),
+SET doc = prks.work_search_doc(src.title, src.people, src.author_text, src.abstract, src.notes),
     title_norm = prks.search_norm(src.title),
     people_norm = prks.search_norm(src.people),
-    text_norm = prks.search_norm(src.title || ' ' || src.author_text || ' ' || src.abstract
-                                 || ' ' || src.notes),
+    text_norm = prks.work_search_text(src.title, src.author_text, src.abstract, src.notes),
     updated_at = now()
 FROM src
 WHERE s.library_id = %(library_id)s AND s.work_id = src.id
@@ -132,6 +127,53 @@ def refresh_work_search(scope: LibraryScope, work_ids: Iterable[str]) -> list[st
     scope.execute(_LOCK_ROWS, params).fetchall()
     scope.execute(_RECOMPUTE, params)
     return locked
+
+
+_PERSON_WORKS: LiteralString = (
+    "SELECT DISTINCT work_id FROM prks.roles WHERE library_id = %(library_id)s AND person_id = %(person_id)s"
+)
+
+# The inputs a Person contributes to the rows of the Works it is credited on.
+PERSON_FIELDS = frozenset({"first_name", "last_name", "aliases"})
+
+
+def refresh_person_works(scope: LibraryScope, person_id: str) -> list[str]:
+    """Refresh every Work linked to the Person, after its name or aliases changed (§8.3, fan-out).
+
+    The caller holds the Person row ``FOR NO KEY UPDATE`` (``persons.lock``)
+    before it collects the Works, and a role link or unlink holds it ``FOR
+    SHARE`` before it refreshes its Work, so the two queue: whichever runs
+    second reads the other's committed links or name, and every linked Work
+    ends with the new name.
+    """
+    rows = scope.execute(_PERSON_WORKS, {"person_id": person_id}).fetchall()
+    return refresh_work_search(scope, [str(row["work_id"]) for row in rows])
+
+
+# A Work created in this transaction: its row from the values it inserted,
+# with no read. Nothing else can name the Work's row before this COMMIT (a
+# refresh skips a Work it cannot see), and a create has no people yet (its
+# initial roles refresh the row), no Version title, and only the notes given.
+_INSERT_CREATED: LiteralString = """
+INSERT INTO derived.work_search (library_id, work_id, doc, title_norm, people_norm, text_norm)
+VALUES (%(library_id)s, %(work_id)s,
+        prks.work_search_doc(%(title)s, '', %(author_text)s, %(abstract)s, %(notes)s),
+        prks.search_norm(%(title)s), '',
+        prks.work_search_text(%(title)s, %(author_text)s, %(abstract)s, %(notes)s))
+"""
+
+
+def insert_created_work(scope: LibraryScope, work_id: str, *, title: str, author_text: Optional[str],
+                        abstract: Optional[str], research_note: Optional[str]) -> None:
+    """Write the row of a Work created in the caller's transaction.
+
+    ``create_work`` runs SERIALIZABLE, and the refresh's reads (the row's
+    unique index, the Version, roles and notes of the Work) would make
+    concurrent creates conflict on shared index pages; a create needs none
+    of them, so it computes the row from what it inserted.
+    """
+    scope.execute(_INSERT_CREATED, {"work_id": work_id, "title": title, "author_text": author_text or "",
+                                    "abstract": abstract or "", "notes": research_note or ""})
 
 
 _DELETE_ROW: LiteralString = (

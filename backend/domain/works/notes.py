@@ -22,6 +22,7 @@ from typing import Any, LiteralString, Optional
 
 from backend import work_note_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions
 
 RESEARCH = "research"
@@ -90,6 +91,9 @@ def _set_locked(scope: LibraryScope, work_id: str, kind: str, text: str) -> tupl
     params = {"work_id": work_id, "kind": kind, "body": text}
     scope.execute(_UPSERT if text else _DELETE, params)
     scope.execute(_TOUCH_WORK, params)
+    if kind == RESEARCH:
+        # The Research Note is searched; the Private Note is not (§8.3).
+        search_refresh.refresh_work_search(scope, [work_id])
     return True, revisions.advance(scope, _SCOPE_TYPES[kind], work_id)
 
 

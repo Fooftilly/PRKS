@@ -34,6 +34,7 @@ from typing import Any, LiteralString, Mapping, Optional
 
 from backend import work_metadata_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions
 
 SCOPE_TYPE = "work-field"
@@ -46,6 +47,9 @@ _MANIFESTATION_COLUMNS: tuple[LiteralString, ...] = (
     "volume", "issue", "pages", "isbn", "doi", "urldate", "url",
 )
 _ASSET_COLUMNS: tuple[LiteralString, ...] = ("thumb_page", "thumb_url", "media_type")
+
+# The Work columns a search row is built from (§8.3).
+SEARCHED_WORK_COLUMNS = frozenset({"title", "abstract", "author_text"})
 
 # Legacy field name -> (owning row, column).
 FIELD_COLUMNS: dict[str, tuple[str, str]] = {
@@ -161,6 +165,8 @@ def write(scope: LibraryScope, row: Mapping[str, Any], field: str, database_valu
               "manifestation_id": row["manifestation_id"], "asset_id": row["asset_id"]}
     if owner == "work":
         scope.execute(_SET_WORK[column], params)
+        if column in SEARCHED_WORK_COLUMNS:
+            search_refresh.refresh_work_search(scope, [row["id"]])
         return
     if owner == "manifestation":
         scope.execute(_SET_MANIFESTATION[column], params)
