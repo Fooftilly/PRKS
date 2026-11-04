@@ -5761,12 +5761,17 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Work tag sync inserts this transient status node after
-                    // the panel renders. Exclude only that notice so the
-                    // snapshot still verifies controls such as Copy BibTeX.
+                    // The tag sync notice can mount after render, while
+                    // people and reminder statuses can settle independently.
+                    // Normalize only these transient notices, preserving all
+                    // panel data and controls (including Copy BibTeX).
                     const stable = panel && panel.cloneNode(true);
-                    if (stable) stable.querySelectorAll('[data-work-tag-sync]')
-                        .forEach(node => node.remove());
+                    if (stable) {
+                        stable.querySelectorAll('[data-work-tag-sync]')
+                            .forEach(node => node.remove());
+                        stable.querySelectorAll('[data-prks-role="work-people-sync"], .prks-private-notes-status')
+                            .forEach(node => node.replaceChildren());
+                    }
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
@@ -5797,12 +5802,17 @@ class TabContextHostRootTests(_BrowserE2E):
                     const ctx = window.prksGetTabContext(id);
                     const work = ctx && ctx.getEntity ? ctx.getEntity('work') : null;
                     const panel = document.getElementById('panel-content');
-                    // Work tag sync inserts this transient status node after
-                    // the panel renders. Exclude only that notice so the
-                    // snapshot still verifies controls such as Copy BibTeX.
+                    // The tag sync notice can mount after render, while
+                    // people and reminder statuses can settle independently.
+                    // Normalize only these transient notices, preserving all
+                    // panel data and controls (including Copy BibTeX).
                     const stable = panel && panel.cloneNode(true);
-                    if (stable) stable.querySelectorAll('[data-work-tag-sync]')
-                        .forEach(node => node.remove());
+                    if (stable) {
+                        stable.querySelectorAll('[data-work-tag-sync]')
+                            .forEach(node => node.remove());
+                        stable.querySelectorAll('[data-prks-role="work-people-sync"], .prks-private-notes-status')
+                            .forEach(node => node.replaceChildren());
+                    }
                     return {
                         title: work && work.title,
                         panel: stable ? stable.innerHTML : '',
