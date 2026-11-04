@@ -84,7 +84,7 @@ _SEED_DRAFT = """
             draftId: 'd-' + pageInstanceId, pageInstanceId, generation: 1, body,
             create: { kind: 'work-research-note', entityType: 'work', entityId: workId,
                       owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1', claimedAt: Date.now() },
-                      base: { revision: null, length: null, fingerprint: null, source: 'unknown' } },
+                      base: { revision: null, length: null, fingerprint: null, source: 'unknown', epoch: rt.epoch } },
         });
         // A copy only an emergency key holds, as a tab that closed before its commit leaves.
         const names = rt.names;
@@ -93,7 +93,7 @@ _SEED_DRAFT = """
             entries: [{ draftId: 'd-emergency', kind: 'work-research-note', entityType: 'work', entityId: workId,
                         generation: 1, committedGeneration: 0, body: body + ' (emergency)',
                         lineage: { createdAt: Date.now(), owner: { runtimeId: null, pageInstanceId: 'p-emergency', paneId: 'tab-1' },
-                                   base: { revision: null, length: null, fingerprint: null, source: 'unknown' } } }],
+                                   base: { revision: null, length: null, fingerprint: null, source: 'unknown', epoch: rt.epoch } } }],
         }));
         return { outcome, names: { ...names } };
     }
