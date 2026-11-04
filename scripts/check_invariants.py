@@ -101,6 +101,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/search/__init__.py",
     "backend/domain/search/refresh.py",
     "backend/domain/search/queries.py",
+    "backend/domain/search/text.py",
     "backend/domain/annotations/__init__.py",
     "backend/domain/annotations/materialize.py",
     "backend/domain/annotations/operations.py",

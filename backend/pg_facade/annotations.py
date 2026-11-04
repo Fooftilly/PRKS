@@ -231,10 +231,8 @@ class AnnotationsMixin(FacadeMixin):
         Persons the bytes mention are then linked as ``Mentioned``, best
         effort, as on SQLite. Raises ``LookupError`` for a missing Work or one
         without a managed PDF; a refused write's keys are claimed for cleanup.
-
-        The adapter still owes SQLite's other after-write effect: the text
-        index (``text_index.sync_work(work_id, result["file_path"])``), which
-        reads the bytes through the returned ``file_path``.
+        The commit queues the new bytes' ``text.extract`` (L-S-1), SQLite's
+        after-write ``text_index.sync_work``.
         """
         from backend.domain.identity.authorization import Capability
         from backend.domain.identity.library_scope import library_query

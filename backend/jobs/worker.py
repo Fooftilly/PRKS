@@ -21,7 +21,8 @@ it reports :attr:`~backend.domain.identity.root_pairing.StartStatus.SETUP_PENDIN
 and the worker checks again on its poll; once setup is ready the check
 reconciles and bumps once, the object maintenance jobs are bound to that
 paired root (:func:`backend.domain.objects.jobs.attach`, on the worker's own
-copy of the registry), and the worker starts claiming. A refusal that is
+copy of the registry), as is ``text.extract``
+(:func:`backend.domain.search.text.attach`), and the worker starts claiming. A refusal that is
 not retryable (a foreign root, a stale copy, a testing mismatch) stops it
 before it claims anything.
 
@@ -67,6 +68,7 @@ from backend.domain.identity import root_pairing
 from backend.domain.identity.errors import RootPairingRefused
 from backend.domain.objects import jobs as object_jobs
 from backend.domain.research import reindex as _research_reindex  # noqa: F401  registers research.reindex_work
+from backend.domain.search import text as search_text
 from backend.jobs import queue
 from backend.jobs.diagnostics import WorkerStats
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
@@ -75,6 +77,7 @@ from backend.jobs.queue import DEFAULT_BACKOFF, DEFAULT_LEASE, Backoff, ClaimedJ
 from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import SharedFileLock
+from backend.storage.objects import LocalFilesystemStorage
 from backend.storage.root_binding import acquire_shared_root_lease
 from backend.storage.root_marker import read_marker
 
@@ -454,7 +457,11 @@ def root_start_check(
 
 
 def _attaching_objects(check: StartCheck, registry: HandlerRegistry, root: JoinedRoot) -> StartCheck:
-    """``check``, then (once, before the first claim) the objects lane bound to the paired root."""
+    """``check``, then (once, before the first claim) the lanes that read the paired root.
+
+    The objects lane (cleanup and sweep) and ``text.extract``, which reads
+    the managed PDFs it indexes.
+    """
     attached = False
 
     def start() -> bool:
@@ -463,6 +470,7 @@ def _attaching_objects(check: StartCheck, registry: HandlerRegistry, root: Joine
             return False
         if not attached:
             object_jobs.attach(registry, root.path)
+            search_text.attach(registry, LocalFilesystemStorage(root.path))
             attached = True
         return True
 
