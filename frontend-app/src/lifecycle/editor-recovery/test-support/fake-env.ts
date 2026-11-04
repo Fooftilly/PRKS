@@ -101,3 +101,5 @@ export function memoryStorage(): EmergencyStorage & { map: Map<string, string> }
     removeItem: (k: string) => void map.delete(k),
   }
 }
+/** The Library epoch test runtimes load (#629). */
+export const TEST_EPOCH = '1'

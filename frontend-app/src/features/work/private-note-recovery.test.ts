@@ -13,7 +13,7 @@ import workLifecycleSource from '../../../../frontend/js/work-lifecycle-state.js
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
 import { type DraftBase, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
-import { createFakeBrowser, TEST_NAMES } from '../../lifecycle/editor-recovery/test-support/fake-env'
+import { createFakeBrowser, TEST_EPOCH, TEST_NAMES } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
 
@@ -278,7 +278,7 @@ describe('Work Reminders edits reach the recovery writer', () => {
       kind: KIND,
       entityKey: 'work-private-note:w1',
       generation: s.editGeneration,
-      base: { revision: 5, length: 'Saved reminder.'.length, source: 'server' },
+      base: { revision: 5, length: 'Saved reminder.'.length, source: 'server', epoch: TEST_EPOCH },
       owner: { paneId: 'tab-1' },
     })
     expect(await bodyOf(record!.draftId)).toBe('Saved reminder. One')
@@ -611,7 +611,7 @@ describe('Work Reminders protection warning', () => {
 
 describe('Work delete and recovery drafts (#533)', () => {
   /** Typed on a note read from the server for that Work. */
-  const SERVER_BASE: DraftBase = { revision: 0, length: 0, fingerprint: '0'.repeat(32), source: 'server' }
+  const SERVER_BASE: DraftBase = { revision: 0, length: 0, fingerprint: '0'.repeat(32), source: 'server', epoch: TEST_EPOCH }
 
   /** A Research Notes draft of w1 that no editor holds any more. */
   async function researchDraft(text: string, base = SERVER_BASE): Promise<string> {
@@ -961,7 +961,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     await researchDraft('Written by a newer PRKS')
     const cleanup = page!.rt.cleanupDeletedEntity
     page!.rt.cleanupDeletedEntity = async () =>
-      ({ removed: [], live: [], unknown: [], changed: [], unsupported: ['d-newer'], suppressed: [] })
+      ({ removed: [], live: [], unknown: [], changed: [], unsupported: ['d-newer'], suppressed: [], restored: [] })
     try {
       mark()
       goneOnServer()

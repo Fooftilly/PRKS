@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type DraftPipeline, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type RecoveryStore, type WriteGenerationInput, type WriteOutcome } from './store'
-import { memoryStorage, TEST_NAMES } from './test-support/fake-env'
+import { memoryStorage, TEST_EPOCH, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 import { createWriterRegistry, type DraftWriter, type WriterEvent, type WriterRegistry } from './writer'
 
@@ -24,7 +24,7 @@ function listenerTarget(visibilityState = 'visible') {
   }
 }
 
-const BASE: DraftBase = { revision: 7, length: 3, fingerprint: 'a'.repeat(32), source: 'server' }
+const BASE: DraftBase = { revision: 7, length: 3, fingerprint: 'a'.repeat(32), source: 'server', epoch: TEST_EPOCH }
 
 function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; page?: string; settled?: () => boolean } = {}) {
   const idb = createFakeIdb()
@@ -51,6 +51,7 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; pag
   const storage = memoryStorage()
   const events: WriterEvent[] = []
   const registry = createWriterRegistry({
+    epoch: TEST_EPOCH,
     store,
     identity: {
       names: TEST_NAMES,
@@ -683,6 +684,7 @@ describe('acknowledgement', () => {
     expect(t.storage.getItem(TEST_NAMES.supersededPrefix + id)).toContain('p-me')
     const scheduler = createManualScheduler()
     const next = createWriterRegistry({
+    epoch: TEST_EPOCH,
       store: t.store,
       identity: { names: TEST_NAMES, pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
@@ -708,6 +710,7 @@ describe('acknowledgement', () => {
     // Tab B is open before tab A marks anything.
     const scheduler = createManualScheduler()
     const already = createWriterRegistry({
+    epoch: TEST_EPOCH,
       store: t.store,
       identity: { names: TEST_NAMES, pageInstanceId: 'p-open', current: () => ({ runtimeId: 'r-open', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
@@ -741,6 +744,7 @@ describe('acknowledgement', () => {
     const t = setup()
     const scheduler = createManualScheduler()
     const other = createWriterRegistry({
+    epoch: TEST_EPOCH,
       store: t.store,
       identity: { names: TEST_NAMES, pageInstanceId: 'p-other', current: () => ({ runtimeId: 'r-other', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
@@ -797,6 +801,7 @@ describe('acknowledgement', () => {
     const stale = (await t.store.get(id))!
     const scheduler = createManualScheduler()
     const next = createWriterRegistry({
+    epoch: TEST_EPOCH,
       store: t.store,
       identity: { names: TEST_NAMES, pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
@@ -1000,6 +1005,33 @@ describe('adoption', () => {
     winner.edit(10, 'orphan continued')
     await winner.flush()
     expect(await t.store.getBody('d-orphan')).toMatchObject({ generation: 10, body: 'orphan continued' })
+  })
+
+  it('records every base under the page\'s Library epoch and never adopts a lineage of another (#629)', async () => {
+    const t = setup()
+    const w = t.open()
+    w.setBase({ ...BASE, epoch: '9' })
+    w.edit(1, 'typed here')
+    await w.flush()
+    expect((await t.store.get(w.draftId() as string))?.base).toEqual(BASE)
+    for (const epoch of [undefined, null, '0', '2']) {
+      const draftId = 'd-epoch-' + String(epoch)
+      await t.store.writeGeneration({
+        draftId,
+        pageInstanceId: 'p-before-restore',
+        generation: 1,
+        body: 'typed before the restore',
+        create: {
+          kind: 'work-research-note',
+          entityType: 'work',
+          entityId: 'w1',
+          owner: { runtimeId: 'r-me', pageInstanceId: 'p-before-restore', paneId: 'tab-2', claimedAt: 0 },
+          base: { revision: 7, length: 3, fingerprint: 'a'.repeat(32), source: 'server', ...(epoch === undefined ? {} : { epoch }) },
+        },
+      })
+      expect(await t.registry.adopt((await t.store.get(draftId))!, { paneId: 'tab-1' })).toBeNull()
+      expect((await t.store.get(draftId))!.owner.pageInstanceId).toBe('p-before-restore')
+    }
   })
 
   it('refuses a second adoption of a draft this page released', async () => {

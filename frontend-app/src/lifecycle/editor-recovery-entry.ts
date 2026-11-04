@@ -28,6 +28,8 @@ let watching = false
 
 interface BrowserScopeLike {
   current(): { key?: unknown } | null
+  /** The Library epoch this page loaded (#629). */
+  pageEpoch?(): string | null
   isRetired?(): boolean
   subscribe?(listener: (event: { type?: unknown }) => void): () => void
 }
@@ -81,6 +83,16 @@ function confirmedScopeKey(): string | null {
   }
 }
 
+/** The Library epoch the page loaded, or null (then every draft is review-only). */
+function pageEpochOf(scope: BrowserScopeLike | null): string | null {
+  try {
+    const epoch = scope && typeof scope.pageEpoch === 'function' ? scope.pageEpoch() : null
+    return typeof epoch === 'string' && epoch ? epoch : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The names of the page's recovery storage for its confirmed browser scope,
  * or null without one. For readers that must not build the runtime (a
@@ -109,7 +121,7 @@ export function runtime(): EditorRecoveryRuntime | null {
   const scopeKey = confirmedScopeKey()
   if (!scopeKey) return null
   watchScope(browserScope())
-  pageRuntime = createEditorRecoveryRuntime({ names: recoveryNames(scopeKey) })
+  pageRuntime = createEditorRecoveryRuntime({ names: recoveryNames(scopeKey), epoch: pageEpochOf(browserScope()) })
   return pageRuntime
 }
 

@@ -367,7 +367,7 @@
              * drafts, and no runtime, database or channel is created. */
             if (!await recoveryMayHold(workId)) {
                 if (!keepMark) unmarkDeletedWork(workId);
-                return { removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [] };
+                return { removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [], restored: [] };
             }
             const rt = recoveryRuntime();
             if (!rt) return null;

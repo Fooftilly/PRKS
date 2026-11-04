@@ -14,6 +14,7 @@ import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeCl
 import { classifyLineage, isAdoptable, type LineageClass } from './lineage'
 import {
   entityKeyOf,
+  isEarlierLibrary,
   isSupportedRecord,
   type DraftEntityType,
   type DraftKind,
@@ -53,6 +54,11 @@ export interface EntityCleanupReport {
   unsupported: string[]
   /** Lineages only an emergency key held, tombstoned so no merge creates them. */
   suppressed: string[]
+  /**
+   * Kept: typed against an earlier Library (#629, `isEarlierLibrary`), so the
+   * deletion this page saw says nothing about it; review-only.
+   */
+  restored: string[]
 }
 
 export interface EditorRecoveryRuntimeOptions {
@@ -67,6 +73,11 @@ export interface EditorRecoveryRuntimeOptions {
   emergencyStorage?: EmergencyStorage | null
   /** How long `retire()` waits before reporting writes still pending. Default 10 s. */
   retireWaitMs?: number
+  /**
+   * The Library epoch the page loaded (#629, `prksBrowserScope.pageEpoch()`).
+   * Writers stamp it on every base; drafts of any other epoch are review-only.
+   */
+  epoch?: string | null
 }
 
 /**
@@ -80,6 +91,8 @@ export type RetireOutcome = 'closed' | 'pending'
 export interface EditorRecoveryRuntime {
   /** The browser scope whose recovery storage this runtime reads and writes. */
   readonly names: RecoveryNames
+  /** The Library epoch the page loaded; null when it is not known (every draft is then review-only). */
+  readonly epoch: string | null
   readonly store: RecoveryStore
   readonly identity: PageIdentity
   readonly writers: WriterRegistry
@@ -153,6 +166,7 @@ function keptFor(lineage: LineageClass, report: EntityCleanupReport): string[] {
 export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions): EditorRecoveryRuntime {
   const names = options.names
   if (!names) throw new Error('recovery storage needs a signed-in scope')
+  const epoch = options.epoch ?? null
   const rawStore = createRecoveryStore({ ...options.store, name: names.dbName })
   // What everything but the writers uses: refused from the moment of retirement.
   const store = retirableStore(rawStore, () => retired)
@@ -175,6 +189,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     store: rawStore,
     identity,
     emergencyStorage: writerStorage,
+    epoch,
     onEvent(event) {
       if (ownEvent) ownEvent(event)
       for (const listener of [...writerListeners]) {
@@ -263,6 +278,10 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       }
       for (const entry of payload.entries) {
         if (entry.committedGeneration !== 0 || entry.body === null || !ours(entry.kind, entry.entityType, entry.entityId)) continue
+        if (isEarlierLibrary(entry.lineage ? entry.lineage.base : null, epoch)) {
+          report.restored.push(entry.draftId)
+          continue
+        }
         const owner: DraftOwner = { runtimeId: payload.runtimeId, pageInstanceId: stored.pageInstanceId, paneId: '', claimedAt: payload.at }
         const lineage = await classify({ draftId: entry.draftId, owner })
         if (!isAdoptable(lineage)) {
@@ -286,7 +305,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     entity: { entityType: DraftEntityType; entityId: string },
     kinds: readonly DraftKind[],
   ): Promise<EntityCleanupReport> {
-    const report: EntityCleanupReport = { removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [] }
+    const report: EntityCleanupReport = { removed: [], live: [], unknown: [], changed: [], unsupported: [], suppressed: [], restored: [] }
     // A dead page's tail becomes a record first, so it is removed like any other.
     await scanEmergency()
     const keys = new Set(kinds.map((kind) => entityKeyOf(kind, entity.entityId)))
@@ -305,6 +324,10 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       }
     }
     for (const record of records) {
+      if (isEarlierLibrary(record.base, epoch)) {
+        report.restored.push(record.draftId)
+        continue
+      }
       const lineage = await classify(record)
       if (!isAdoptable(lineage)) {
         keptFor(lineage, report).push(record.draftId)
@@ -330,6 +353,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
 
   return {
     names,
+    epoch,
     store,
     identity,
     writers,

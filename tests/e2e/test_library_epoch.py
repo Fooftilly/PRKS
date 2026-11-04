@@ -341,5 +341,108 @@ class LibraryEpochReviewSignOutTests(unittest.TestCase):
         self.assert_kept_for_the_account()
 
 
+_DRAFT = """
+    async (entityId) => {
+        const api = window.prksEditorRecovery;
+        const rt = api.runtime();
+        await rt.start();
+        const w = rt.writers.openWriter({
+            kind: 'work-research-note', entityType: 'work', entityId, paneId: 'tab-1', base: api.UNKNOWN_BASE,
+        });
+        w.edit(1, 'Drafted before the restore');
+        await w.flush();
+        const record = await rt.store.get(w.draftId());
+        await w.release();
+        return { draftId: w.draftId(), epoch: record.base.epoch };
+    }
+"""
+
+_CACHE = """
+    async (workId) => {
+        const store = createPrksOfflineStore();
+        const put = await store.putEntity('work', workId, { id: workId, title: 'Cached before the restore' }, 'r1');
+        const row = await store.getEntity('work', workId);
+        return { put, epoch: row && row.libraryEpoch };
+    }
+"""
+
+_AFTER = """
+    async ({ draftId, workId }) => {
+        const api = window.prksEditorRecovery;
+        const rt = api.runtime();
+        await rt.start();
+        const record = await rt.store.get(draftId);
+        const body = await rt.store.getBody(draftId);
+        const adopted = await rt.writers.adopt(record, { paneId: 'tab-1' });
+        const inventory = await api.diagnostics().inventory();
+        const listed = inventory.drafts.find((d) => d.draftId === draftId);
+        const cache = createPrksOfflineStore();
+        return {
+            epoch: rt.epoch,
+            body: body && body.body,
+            adopted: !!adopted,
+            earlierLibrary: listed ? listed.earlierLibrary : null,
+            cached: await cache.getEntity('work', workId),
+            cachedCount: (await cache.stats()).entityCount,
+        };
+    }
+"""
+
+
+class LibraryEpochRecoveryTests(unittest.TestCase):
+    """Recovery drafts and the offline cache across a restore (#629 PR 3b)."""
+
+    restore_epoch = LibraryEpochQueueTests.restore_epoch
+
+    def setUp(self):
+        self.server = AppServer(seed_fn=seed_folders_library)
+        self.addCleanup(self.server.stop)
+        self.server.start()
+        self.work_id = self.server.ids["work_a"]
+        self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900}, service_workers="block")
+        self.addCleanup(self.context.close)
+
+    def open_page(self):
+        page = self.context.new_page()
+        PageCollector(page, self.server.origin)
+        page.on("dialog", lambda d: d.accept())
+        page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        page.wait_for_selector(".prks-folder-library")
+        page.wait_for_function("() => !!window.prksEditorRecovery && !!window.prksEditorRecovery.scopeNames()")
+        return page
+
+    def test_drafts_and_cache_from_before_the_restore_are_kept_for_review_or_dropped(self):
+        page = self.open_page()
+        draft = page.evaluate(_DRAFT, self.work_id)
+        self.assertEqual(draft["epoch"], "1", "a draft records the epoch its page loaded")
+        self.assertEqual(page.evaluate(_CACHE, self.work_id), {"put": True, "epoch": "1"})
+        page.close()
+        epoch = self.restore_epoch()
+
+        after = self.open_page()
+        state = after.evaluate(_AFTER, {"draftId": draft["draftId"], "workId": self.work_id})
+        self.assertEqual(state["epoch"], epoch)
+        # The text is kept, flagged for review, and never continued by a page of the restored Library.
+        self.assertEqual(state["body"], "Drafted before the restore")
+        self.assertFalse(state["adopted"])
+        self.assertTrue(state["earlierLibrary"])
+        # What was cached describes the Library the restore replaced: never read, and dropped.
+        self.assertIsNone(state["cached"])
+        self.assertEqual(state["cachedCount"], 0)
+
+        # Settings -> Diagnostics marks it, and it can still be copied.
+        after.locator("button.settings-btn").click()
+        after.locator("#prks-settings-tab-diagnostics").click()
+        row = after.locator('[data-prks-role="editor-recovery-diag-row"]').filter(has_text="Typed before this library was restored")
+        row.wait_for(timeout=20000)
+        self.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=self.server.origin)
+        row.locator('[data-prks-role="editor-recovery-diag-copy"]').click()
+        wait_for_async(
+            after,
+            "async () => (await navigator.clipboard.readText()) === 'Drafted before the restore'",
+            message="the earlier Library's draft text was not copied",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

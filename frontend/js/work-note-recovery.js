@@ -655,6 +655,7 @@
                     base: planBase,
                     queue: queue,
                     otherDirtySession: dirtyElsewhere,
+                    epoch: r.rt.epoch,
                     /* Never replace what an open editor shows; Review recomputes exactly. */
                     editorDirty: reviewOnly,
                     stored: K.stored,
@@ -925,6 +926,7 @@
                 const plan = r.api.planResearchNotesRestore({
                     paneId: paneId, candidates: [c], base: base, queue: queue,
                     otherDirtySession: dirtyElsewhere, editorDirty: dirtyHere, stored: K.stored,
+                    epoch: r.rt.epoch,
                 });
                 const judged = plan.review[0];
                 let reason = judged ? judged.reason : 'restorable';
@@ -984,6 +986,7 @@
                     base: planBase,
                     queue: queue,
                     otherDirtySession: otherDirty(id, key),
+                    epoch: r.rt.epoch,
                     editorDirty: dirtyHere,
                     stored: K.stored,
                 });

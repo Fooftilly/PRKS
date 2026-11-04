@@ -69,6 +69,8 @@ export function reasonText(c: Pick<RecoveryCandidateView, 'reason' | 'typedOnRev
       return 'Other changes to this note are waiting to sync.'
     case 'base-unverified':
       return 'The current note could not be checked with the server.'
+    case 'library-restored':
+      return 'It was typed before this library was restored, so it is kept for review only. Copy what is needed before discarding it.'
     case 'queue-unknown':
       return 'Changes waiting to sync could not be read, so nothing can be restored now.'
     case 'ownership-unknown':

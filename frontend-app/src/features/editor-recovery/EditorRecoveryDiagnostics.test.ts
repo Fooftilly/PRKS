@@ -26,6 +26,7 @@ function draft(over: Partial<DiagnosticsDraft> = {}): DiagnosticsDraft {
     superseded: false,
     deletedHere: false,
     fromEmergency: false,
+    earlierLibrary: false,
     expect: { draftId, pageInstanceId: 'p-old', generation: 3, status: 'active' },
     ...over,
   }

@@ -14,9 +14,17 @@
  * (browser-scope.js). Without a scope the cache is unavailable.
  *
  * Schema (version 1):
- *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision }
- *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision }
+ *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision, libraryEpoch }
+ *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision, libraryEpoch }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
+ *
+ * Library epoch (#629, docs/postgresql-architecture.md §10.4): every
+ * envelope records the epoch of the page that cached it
+ * (`prksBrowserScope.pageEpoch()`), and a read returns only envelopes of the
+ * page's own epoch: what was cached before a restore describes the Library
+ * that was replaced, and an old page never feeds a new one. The first use
+ * under a newer epoch than metadata `library_epoch` also drops every older
+ * envelope, since nothing can read them again.
  *
  * IndexedDB Promise plumbing (#181): simple single-store get/put/delete/clear
  * /count/getAll paths use the thin `idb` wrapper (`wrap` + `tx.done`) so
@@ -63,6 +71,19 @@
         }
         if (typeof IDBKeyRange !== 'undefined') return IDBKeyRange;
         return root && root.IDBKeyRange ? root.IDBKeyRange : null;
+    }
+
+    const META_LIBRARY_EPOCH = 'library_epoch';
+    const EPOCH_PATTERN = /^[1-9][0-9]*$/;
+
+    function epochOf(value) {
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    /** Orders two canonical epochs (they may exceed a double's integers). */
+    function compareEpochs(a, b) {
+        if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
     }
 
     function approxJsonBytes(value) {
@@ -361,6 +382,22 @@
         // (`prks-offline-v2:<scope key>`, browser-scope.js). Without a scope
         // the cache is unavailable, never an unscoped database.
         const scope = options.dbName ? null : (options.scope || root.prksBrowserScope || null);
+        // The Library epoch this page caches under: the scope's page epoch,
+        // or the caller's (tests). A scope that names none has no cache.
+        const ownEpoch = options.dbName ? (epochOf(options.libraryEpoch) || null) : null;
+        function pageEpoch() {
+            if (!scope) return ownEpoch;
+            try {
+                return typeof scope.pageEpoch === 'function' ? epochOf(scope.pageEpoch()) : null;
+            } catch (_e) {
+                return null;
+            }
+        }
+        /** Cached under this page's epoch: anything else is not this Library. */
+        function current(envelope) {
+            return !!envelope && (envelope.libraryEpoch == null ? null : envelope.libraryEpoch) === pageEpoch();
+        }
+        let fenced = null;
         const dbVersion = options.dbVersion || DB_VERSION;
         const keyRangeApi = defaultKeyRangeApi(options);
 
@@ -392,7 +429,9 @@
         function resolveDbName() {
             if (options.dbName) return Promise.resolve(options.dbName);
             if (!scope || typeof scope.dbName !== 'function') return Promise.resolve(null);
-            return scope.dbName('offline').catch(function () { return null; });
+            return scope.dbName('offline').then(function (name) {
+                return name && pageEpoch() ? name : null;
+            }).catch(function () { return null; });
         }
 
         function rawDb(db) {
@@ -473,7 +512,39 @@
         }
 
         function runRequest(storeName, mode, fn) {
-            return runIdbStoreRequest(openDb, storeName, mode, fn);
+            return fence().then(function () {
+                return runIdbStoreRequest(openDb, storeName, mode, fn);
+            });
+        }
+
+        /**
+         * Once per store: under a newer epoch than the cache last saw, every
+         * envelope is from the Library a restore replaced and is dropped.
+         * Reads never depend on it (`current`); a page older than the cache
+         * leaves it to the newer page's.
+         */
+        function fence() {
+            if (fenced) return fenced;
+            const epoch = pageEpoch();
+            fenced = !epoch ? Promise.resolve() : runIdbStoreRequest(openDb, STORE_METADATA, 'readonly', function (store) {
+                return store.get(META_LIBRARY_EPOCH);
+            }).then(function (r) {
+                if (!r.ok) return;
+                const seen = r.value ? epochOf(r.value.value) : null;
+                if (seen && compareEpochs(seen, epoch) >= 0) return;
+                return Promise.all([
+                    runIdbStoreRequest(openDb, STORE_ENTITIES, 'readwrite', function (store) { return store.clear(); }),
+                    runIdbStoreRequest(openDb, STORE_LISTS, 'readwrite', function (store) { return store.clear(); }),
+                ]).then(function (results) {
+                    if (!results.every(function (x) { return x.ok; })) return;
+                    return runIdbStoreRequest(openDb, STORE_METADATA, 'readwrite', function (store) {
+                        return store.put({ key: META_LIBRARY_EPOCH, value: epoch });
+                    });
+                });
+            }).then(function () {}, function () {
+                fenced = null;
+            });
+            return fenced;
         }
 
         function putEntity(kind, id, value, sourceRevision) {
@@ -483,6 +554,7 @@
                 value: value,
                 cachedAt: now(),
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
+                libraryEpoch: pageEpoch(),
             };
             return runRequest(STORE_ENTITIES, 'readwrite', function (store) {
                 return store.put(envelope);
@@ -495,7 +567,7 @@
             return runRequest(STORE_ENTITIES, 'readonly', function (store) {
                 return store.get([String(kind), String(id)]);
             }).then(function (r) {
-                return r.ok && r.value ? r.value : null;
+                return r.ok && current(r.value) ? r.value : null;
             });
         }
 
@@ -521,8 +593,8 @@
                 return range ? store.getAll(range) : store.getAll();
             }).then(function (r) {
                 if (!r.ok || !Array.isArray(r.value)) return null;
-                return range ? r.value : r.value.filter(function (row) {
-                    return row && String(row.kind) === String(kind);
+                return r.value.filter(function (row) {
+                    return current(row) && (range || String(row.kind) === String(kind));
                 });
             }).catch(function () {
                 return null;
@@ -553,6 +625,7 @@
                 value: value,
                 cachedAt: now(),
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
+                libraryEpoch: pageEpoch(),
             };
             return runRequest(STORE_LISTS, 'readwrite', function (store) {
                 return store.put(envelope);
@@ -565,7 +638,7 @@
             return runRequest(STORE_LISTS, 'readonly', function (store) {
                 return store.get(String(listKey));
             }).then(function (r) {
-                return r.ok && r.value ? r.value : null;
+                return r.ok && current(r.value) ? r.value : null;
             });
         }
 

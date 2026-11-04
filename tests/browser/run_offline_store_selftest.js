@@ -409,6 +409,42 @@ async function run() {
         assertEq('kind sweep without IndexedDB resolves false', await store.deleteEntitiesByKind('concept'), false);
     }
 
+    /* ---- Library epoch (#629): a cache of an earlier Library is never read, and is dropped ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const scopeAt = function (epoch) {
+            return {
+                dbName: function () { return Promise.resolve('prks-offline-v2:IN-a.LIB-a.U-a'); },
+                pageEpoch: function () { return epoch; },
+                subscribe: function () { return function () {}; },
+            };
+        };
+        const before = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: idb, scope: scopeAt('1') });
+        assertEq('a cache write under epoch 1 commits', await before.putEntity('work', 'W-1', { title: 'Before' }, 'r1'), true);
+        await before.putList('works', [{ id: 'W-1' }], 'r1');
+        assertEq('the envelope records the epoch it was cached under', (await before.getEntity('work', 'W-1')).libraryEpoch, '1');
+
+        const after = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: idb, scope: scopeAt('2') });
+        assertEq('a page of the restored Library reads no entity of the earlier one', await after.getEntity('work', 'W-1'), null);
+        assertEq('nor a list', await after.getList('works'), null);
+        assertEq('nor a kind listing', await after.getEntitiesByKind('work'), []);
+        const stats = await after.stats();
+        assertEq('the earlier Library\'s envelopes were dropped', [stats.entityCount, stats.listCount], [0, 0]);
+
+        // A page still on epoch 1 caches after the restore: the newer page never reads it.
+        await before.putEntity('work', 'W-2', { title: 'Late' }, 'r1');
+        assertEq('an old page\'s late write is invisible to the new one', await after.getEntity('work', 'W-2'), null);
+        await after.putEntity('work', 'W-3', { title: 'After' }, 'r2');
+        assertEq('the new page reads its own', (await after.getEntity('work', 'W-3')).value, { title: 'After' });
+        assertEq('and the old page never reads the newer Library', await before.getEntity('work', 'W-3'), null);
+        const stale = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: idb, scope: scopeAt('1') });
+        await stale.getEntity('work', 'W-3');
+        assertEq('an older page drops nothing of the newer Library', (await after.getEntity('work', 'W-3')).value, { title: 'After' });
+
+        const noEpoch = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: createFakeIndexedDBFactory(), scope: scopeAt(null) });
+        assertEq('a scope naming no epoch has no cache', await noEpoch.isAvailable(), false);
+    }
+
     /* ---- module boundaries: no DOM, no routing, no fetch/network ---- */
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/js/offline-store.js'), 'utf8');
     assert('offline-store.js has no document/DOM access', src.indexOf('document.') === -1);

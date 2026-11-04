@@ -7,7 +7,7 @@
 import * as recoveryApi from '../../../lifecycle/editor-recovery-entry'
 import type { EmergencyStorage } from '../../../lifecycle/editor-recovery/emergency'
 import type { EditorRecoveryRuntime } from '../../../lifecycle/editor-recovery/runtime'
-import { TEST_NAMES, type createFakeBrowser } from '../../../lifecycle/editor-recovery/test-support/fake-env'
+import { TEST_EPOCH, TEST_NAMES, type createFakeBrowser } from '../../../lifecycle/editor-recovery/test-support/fake-env'
 import type { createFakeIdb } from '../../../lifecycle/editor-recovery/test-support/fake-idb'
 
 export type NoteRow = {
@@ -161,6 +161,7 @@ export function startRecoveryPage(options: {
   const pageWindow = new EventTarget()
   const rt = recoveryApi.createEditorRecoveryRuntime({
     names: TEST_NAMES,
+    epoch: TEST_EPOCH,
     store: { indexedDB: options.idb.factory },
     identity: {
       sessionStorage: options.session,
