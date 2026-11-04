@@ -19,6 +19,9 @@ PG-C1).
 - Signing the account out in another tab clears the review list from an open
   Diagnostics view, also when its read was still in flight, and leaves the
   stored changes for the account.
+- The service worker's PDF cache is kept per Library epoch: a page of the
+  restored Library drops the earlier epoch's cache, and a page loaded before
+  the restore never stores the restored Library's bytes (PR 3c).
 """
 
 import json
@@ -27,7 +30,8 @@ import unittest
 
 import psycopg
 
-from tests.e2e.fixtures import seed_folders_library
+from backend.storage.config import StorageConfig
+from tests.e2e.fixtures import seed_folders_library, seed_library
 from tests.e2e.harness import AppServer, PageCollector, require_chromium, wait_for_async
 from tests.e2e.postgres_identity import OWNER_LOGIN, PASSWORD
 
@@ -463,6 +467,107 @@ class LibraryEpochRecoveryTests(unittest.TestCase):
             "async () => (await navigator.clipboard.readText()) === 'Drafted before the restore'",
             message="the earlier Library's draft text was not copied",
         )
+
+
+class LibraryEpochPdfCacheTests(unittest.TestCase):
+    """The service worker's PDF cache across a restore (#629 PR 3c)."""
+
+    restore_epoch = LibraryEpochQueueTests.restore_epoch
+
+    def setUp(self):
+        self.server = AppServer(seed_fn=seed_library, auth="session")
+        self.addCleanup(self.server.stop)
+        self.server.start()
+        self.pdf_path = "/api/pdfs/%s" % self.server.ids["pdf_name"]
+        self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900})
+        self.addCleanup(self.context.close)
+        response = self.context.request.post(
+            self.server.origin + "/api/login",
+            data=json.dumps({"login": OWNER_LOGIN, "password": PASSWORD}),
+            headers={"Content-Type": "application/json", "Origin": self.server.origin},
+        )
+        self.assertEqual(response.status, 200, response.text())
+
+    def open_controlled_page(self):
+        page = self.context.new_page()
+        PageCollector(page, self.server.origin)
+        page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.prksBrowserScope")
+        page.evaluate("() => navigator.serviceWorker.ready.then(() => true)")
+        page.wait_for_function("() => !!(navigator.serviceWorker && navigator.serviceWorker.controller)")
+        page.evaluate("() => prksBrowserScope.resolve()")
+        return page
+
+    def fetch_pdf(self, page):
+        return page.evaluate(
+            """async (path) => {
+                try {
+                    const res = await fetch(path, { cache: 'no-store' });
+                    if (!res.ok) return { status: res.status };
+                    return { status: res.status, head: (await res.text()).slice(0, 8) };
+                } catch (err) { return { status: 0 }; }
+            }""",
+            self.pdf_path,
+        )
+
+    def cached_head(self, page, name):
+        return page.evaluate(
+            """async ([name, path]) => {
+                if (!(await caches.has(name))) return null;
+                const hit = await (await caches.open(name)).match(path);
+                return hit ? (await hit.text()).slice(0, 8) : null;
+            }""",
+            [name, self.pdf_path],
+        )
+
+    def wait_cached(self, page, name):
+        wait_for_async(
+            page,
+            "async ([name, path]) => (await caches.has(name)) && !!(await (await caches.open(name)).match(path))",
+            arg=[name, self.pdf_path],
+            message="the PDF never reached the cache " + name,
+        )
+
+    def test_each_library_epoch_has_its_own_pdf_cache(self):
+        before = self.open_controlled_page()
+        old_name = before.evaluate("() => prksBrowserScope.dbName('pdf')")
+        self.assertTrue(old_name.endswith(":1"), old_name)
+        self.assertEqual(self.fetch_pdf(before)["head"][:4], "%PDF")
+        self.wait_cached(before, old_name)
+        original = self.cached_head(before, old_name)
+
+        epoch = self.restore_epoch()
+        pdf_file = os.path.join(StorageConfig.for_testing(self.server.storage_root).pdfs_dir, self.server.ids["pdf_name"])
+        with open(pdf_file, "wb") as fh:
+            fh.write(b"%PDF-RESTORED\n%%EOF\n")
+
+        # The page loaded before the restore is answered online, but stores
+        # nothing: the server's session names another epoch.
+        self.assertEqual(self.fetch_pdf(before)["head"], "%PDF-RES")
+        # The worker's refused cache write leaves no observable event to wait on.
+        # prks-allow-wait-for-timeout: asserting a cache write that must NOT happen needs a bounded window
+        before.wait_for_timeout(1500)
+        self.assertEqual(self.cached_head(before, old_name), original, "the earlier epoch's cache never takes the restored bytes")
+
+        # A page of the restored Library caches under its own epoch, and its
+        # binding drops the earlier epoch's cache.
+        after = self.open_controlled_page()
+        new_name = after.evaluate("() => prksBrowserScope.dbName('pdf')")
+        self.assertEqual(new_name, old_name[: -len("1")] + epoch)
+        wait_for_async(
+            after,
+            "async (name) => !(await caches.has(name))",
+            arg=old_name,
+            message="the earlier epoch's PDF cache was not dropped",
+        )
+        self.assertEqual(self.fetch_pdf(after)["head"], "%PDF-RES")
+        self.wait_cached(after, new_name)
+
+        # Offline, the page of the earlier Library is never served the
+        # restored Library's bytes, and the restored page reads its own.
+        self.context.set_offline(True)
+        self.assertEqual(self.fetch_pdf(before), {"status": 503})
+        self.assertEqual(self.fetch_pdf(after), {"status": 200, "head": "%PDF-RES"})
 
 
 if __name__ == "__main__":

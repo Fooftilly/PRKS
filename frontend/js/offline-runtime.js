@@ -57,7 +57,7 @@
     const PROBE_TIMEOUT_MS = 15000; // Dedicated health check only, not ordinary API requests.
 
     /**
-     * The signed-in scope's PDF cache (`prks-pdf-v2:<scope key>`), or null
+     * The signed-in scope's PDF cache (`prks-pdf-v3:<scope key>:<epoch>`), or null
      * without a scope: then no page code reads or writes a PDF cache.
      */
     function pdfCacheName(scope) {
