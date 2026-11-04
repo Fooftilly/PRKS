@@ -22,7 +22,10 @@ Browser first-run setup, when it arrives, uses the same tokens.
   `PRKS_DATABASE_URL` or `PRKS_DATABASE_URL_FILE` names the database.
 - The data root is already bound: it has a `prks-root.json`. Both commands
   check `--root` first and refuse a missing or unbound root before asking for
-  any secret.
+  any secret. A web process with `PRKS_AUTH` started on a new root binds it,
+  then waits (serving nothing, `/readyz` unreachable) until setup is complete;
+  run these commands meanwhile, beside it. Once setup is complete it runs its
+  start check and starts serving.
 - Both commands take `--root PATH`, the data root this database will own.
 - On Windows, use the interactive (terminal) install. Token and password files
   are refused there, because their owner-only protection is an ACL these

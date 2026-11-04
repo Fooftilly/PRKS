@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import os
 import sys
 import time
@@ -101,8 +102,13 @@ def build_parser():
     return parser
 
 
-def open_storage(config):
-    """Validate, lease and mark the selected root; exit with a message on refusal."""
+def open_storage(config, *, paired=False):
+    """Validate, lease and mark the selected root; exit with a message on refusal.
+
+    ``paired`` (a web process with ``PRKS_AUTH``, paired with PostgreSQL)
+    holds the root's lease shared, beside ``worker`` and ``migrate``, and
+    leaves the marker's pairing to the start check (L-D-1 #630).
+    """
     config_file = None
     if config.mode != "testing":
         # Only used to check the root does not contain it (V11); testing mode
@@ -117,17 +123,19 @@ def open_storage(config):
     try:
         # Logging is configured only after the root is open (its log file
         # lives there), so the open's warnings wait for log_binding().
-        return open_storage_root(config, config_file_path=config_file, defer_logs=True)
+        return open_storage_root(config, config_file_path=config_file, defer_logs=True, paired=paired)
     except StorageRootError as exc:
         print(f"PRKS cannot open its storage root: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
 
 
-def start_identity(args, config, environ=None):
-    """Authentication for this process (``PRKS_AUTH``), or ``None`` for the SQLite runtime.
+def prepare_identity(args, config, environ=None):
+    """``(database, settings)`` for ``PRKS_AUTH``, or ``None`` for the SQLite runtime.
 
-    With ``PRKS_AUTH`` set, the PostgreSQL start check and bump run here,
-    before the storage root is opened; any refusal exits with status 2.
+    Checks the authentication settings, opens the pool and applies or
+    verifies the schema (``PRKS_MIGRATE_ON_START``), all before the storage
+    root is touched; :func:`start_identity` then runs the start check once
+    the root is open. Any refusal exits with status 2.
     """
     env = os.environ if environ is None else environ
     if not (env.get("PRKS_AUTH") or "").strip():
@@ -146,14 +154,9 @@ def start_identity(args, config, environ=None):
     from backend.db.config import load_database_config
     from backend.db.database import Database
     from backend.db.errors import DatabaseConfigError
-    from backend.domain.identity.errors import RootPairingRefused
     from backend.domain.identity.login_limiter import LimiterConfigError
     from backend.domain.identity.sessions import SessionConfigError
-    from backend.domain.identity.web_start import (
-        WebAuthConfigError,
-        settings_from_env,
-        start_web_identity,
-    )
+    from backend.domain.identity.web_start import WebAuthConfigError, settings_from_env
 
     testing = config.mode == "testing"
     try:
@@ -172,10 +175,75 @@ def start_identity(args, config, environ=None):
         print(f"PRKS cannot start authentication: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
     migrate_on_start(db, env)
+    return db, settings
+
+
+class SetupWait:
+    """Lets a first-run web process wait for setup instead of exiting (§11.1).
+
+    Each call announces the wait once, then sleeps up to ``poll`` seconds and
+    answers whether to check again: false once SIGTERM or SIGINT arrived
+    while :meth:`watching`. The handlers only record the signal (see
+    ``backend.jobs.worker.SignalStop``).
+    """
+
+    def __init__(self, poll=2.0, *, stderr=None, step=0.1):
+        from backend.jobs.worker import SignalStop
+
+        self.poll = poll
+        self._step = step
+        self._stderr = stderr
+        self._signals = SignalStop()
+        self._announced = False
+
+    @property
+    def stopped(self):
+        return bool(self._signals.requested)
+
+    @contextlib.contextmanager
+    def watching(self):
+        self._signals.install()
+        try:
+            yield self
+        finally:
+            self._signals.restore()
+
+    def __call__(self):
+        if not self._announced:
+            self._announced = True
+            print(
+                "PRKS is waiting for setup to complete (python prks_app.py admin bootstrap; "
+                "docs/admin-bootstrap.md).",
+                file=self._stderr or sys.stderr,
+            )
+        deadline = time.monotonic() + self.poll
+        while not self.stopped and time.monotonic() < deadline:
+            time.sleep(self._step)
+        return not self.stopped
+
+
+def start_identity(prepared, bound_root, *, testing, wait=None):
+    """The start check and bump of this web process, under ``bound_root``'s shared lease.
+
+    ``prepared`` comes from :func:`prepare_identity`. While setup is not
+    ``ready`` the process waits (``wait``, a :class:`SetupWait`); a stop
+    requested meanwhile exits with status 0, and every refusal with 2.
+    """
+    from backend.domain.identity.errors import RootPairingRefused
+    from backend.domain.identity.web_start import start_web_identity
+
+    db, settings = prepared
     try:
-        return start_web_identity(db, settings, root=os.path.realpath(config.root), testing=testing)
+        return start_web_identity(
+            db, settings, root=bound_root.root_real, lease=bound_root.lease,
+            testing=testing, wait_for_setup=wait,
+        )
     except RootPairingRefused as exc:
         db.close()
+        bound_root.release()
+        if wait is not None and wait.stopped:
+            print("PRKS stopped while waiting for setup.", file=sys.stderr)
+            raise SystemExit(0) from None
         print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
 
@@ -306,15 +374,22 @@ if __name__ == "__main__":
         except StorageRootError as exc:
             print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
             raise SystemExit(2) from None
-    # Before the root is opened: the PostgreSQL start check takes the root's
-    # shared lease, which the single-process lease below excludes.
-    with startup_phase("startup_identity"):
-        auth = start_identity(args, config)
+    # Authentication settings, the pool and the schema, before the root is
+    # touched (PostgreSQL only).
+    with startup_phase("startup_identity_config"):
+        identity = prepare_identity(args, config)
+    # Held until this process exits: root.lock, exclusive for the SQLite
+    # runtime, shared (with the content lock) for a web paired with PostgreSQL.
+    with startup_phase("startup_storage_open"):
+        bound_root = open_storage(config, paired=identity is not None)
+    auth = None
+    if identity is not None:
+        # The start check and bump under that shared lease; a first run waits
+        # here, serving nothing, until setup is ready.
+        with startup_phase("startup_identity"), SetupWait().watching() as wait:
+            auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
     with startup_phase("startup_jobs"):
         jobs = start_jobs(auth)
-    # Held until this process exits: the single-process lease (root.lock).
-    with startup_phase("startup_storage_open"):
-        bound_root = open_storage(config)
     # Every later open stays beneath the root that was validated and leased,
     # even if a root symlink is retargeted while the process runs.
     config = bound_root.anchor(config)

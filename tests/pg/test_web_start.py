@@ -2,14 +2,17 @@
 
 ``PRKS_AUTH`` is refused unless it is usable (loopback-owner only on a
 testing instance bound to a loopback address), and an authenticated process
-runs the root-pairing start check and bump before it opens its storage root:
-a foreign root, a stale copy, a testing mismatch or an unfinished bootstrap
-stops it, in loopback-owner mode too.
+runs the root-pairing start check and bump under the shared lease of the
+root it opened (L-D-1 #630): a foreign root, a stale copy or a testing
+mismatch stops it, in loopback-owner mode too, and an unfinished bootstrap
+stops it unless it may wait for setup.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
+import signal
 import unittest
 from datetime import timedelta
 from typing import Any
@@ -109,17 +112,41 @@ class StartTests(WebStartTestCase):
 
     def web_start(self, name: str, root: str, mode: AuthMode = AuthMode.SESSION, **kwargs: Any) -> WebAuth:
         kwargs.setdefault("testing", True)
-        return start_web_identity(self.db(name), self.web_settings(mode), root=root, **kwargs)
+        lease = kwargs.pop("lease", None) or self.lease(root)
+        return start_web_identity(self.db(name), self.web_settings(mode), root=root, lease=lease, **kwargs)
 
     def test_a_paired_database_starts_and_bumps_once(self) -> None:
         name, root = self.ready()
         before = self.db_state(name)
-        auth = self.web_start(name, root)
+        lease = self.lease(root)
+        auth = self.web_start(name, root, lease=lease)
         self.assertEqual(auth.instance_id, self.instance(name)["id"])
         self.assert_paired(name, root, before.generation + 1)
-        # The shared lease is released: the SQLite runtime's exclusive lease is free.
-        bound = root_binding.open_storage_root(StorageConfig.for_testing(root), register=False)
-        bound.release()
+        # The caller's shared lease stays held for the process's whole run.
+        self.assertTrue(lease.held)
+
+    def test_a_first_run_waits_for_setup_then_bumps_once(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        lease = self.lease(root)
+        calls: list[int] = []
+
+        def wait() -> bool:
+            calls.append(1)
+            if len(calls) == 2:  # setup completes while the web process waits
+                self.bootstrap(name, root, lease=self.lease(root))
+            return True
+
+        auth = self.web_start(name, root, lease=lease, wait_for_setup=wait)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(auth.instance_id, self.instance(name)["id"])
+        # The claim was generation 1; this process's start is the one bump.
+        self.assert_paired(name, root, 2)
+
+    def test_a_wait_that_gives_up_is_refused(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        self.refused("setup_pending", self.web_start, name, root, wait_for_setup=lambda: False)
 
     def test_loopback_owner_resolves_the_bootstrap_owner(self) -> None:
         name, root = self.ready()
@@ -199,7 +226,7 @@ class StartTests(WebStartTestCase):
 
 
 class AppStartTests(WebStartTestCase):
-    """``prks_app.start_identity`` exits with status 2 instead of serving."""
+    """``prks_app.prepare_identity`` and ``start_identity`` exit with status 2 instead of serving."""
 
     def args(self, host: str = "127.0.0.1", testing: bool = True) -> argparse.Namespace:
         return argparse.Namespace(host=host, testing=testing)
@@ -207,13 +234,31 @@ class AppStartTests(WebStartTestCase):
     def config(self, root: str) -> StorageConfig:
         return StorageConfig.for_testing(root)
 
-    def exits(self, env: dict[str, str], root: str, **kwargs: Any) -> None:
+    def app_start(self, env: dict[str, str], root: str, **kwargs: Any) -> Any:
+        wait = kwargs.pop("wait", None)
+        config = self.config(root)
+        prepared = prks_app.prepare_identity(self.args(**kwargs), config, env)
+        bound = root_binding.open_storage_root(config, register=False, paired=True)
+        self.addCleanup(bound.release)
+        return prks_app.start_identity(prepared, bound, testing=True, wait=wait)
+
+    def exits(self, env: dict[str, str], root: str, code: int = 2, **kwargs: Any) -> None:
         with self.assertRaises(SystemExit) as ctx:
-            prks_app.start_identity(self.args(**kwargs), self.config(root), env)
-        self.assertEqual(ctx.exception.code, 2)
+            self.app_start(env, root, **kwargs)
+        self.assertEqual(ctx.exception.code, code)
 
     def test_without_prks_auth_nothing_happens(self) -> None:
-        self.assertIsNone(prks_app.start_identity(self.args(host=ALL_INTERFACES), self.config(self.tmp), {}))
+        self.assertIsNone(prks_app.prepare_identity(self.args(host=ALL_INTERFACES), self.config(self.tmp), {}))
+
+    def test_a_stop_while_waiting_for_setup_exits_0_and_lets_go_of_the_root(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        env = {"PRKS_AUTH": "session", "PRKS_DATABASE_URL": self.harness.conninfo(name)}
+        wait = prks_app.SetupWait(poll=0.05, stderr=io.StringIO(), step=0.01)
+        wait._signals.requested.append(signal.SIGTERM)  # as the handler records it
+        self.exits(env, root, code=0, wait=wait)
+        # Both locks are gone: the SQLite runtime's exclusive lease is free.
+        root_binding.open_storage_root(self.config(root), register=False).release()
 
     def test_refusals_exit(self) -> None:
         name = self.database()
@@ -232,7 +277,7 @@ class AppStartTests(WebStartTestCase):
         root = self.new_root()
         self.bootstrap_and_release(name, root)
         env = {"PRKS_AUTH": "loopback-owner", "PRKS_DATABASE_URL": self.harness.conninfo(name)}
-        auth = prks_app.start_identity(self.args(), self.config(root), env)
+        auth = self.app_start(env, root)
         self.addCleanup(auth.db.close)
         self.assertEqual(auth.mode, AuthMode.LOOPBACK_OWNER)
         self.assertIsNotNone(auth.loopback_session())
