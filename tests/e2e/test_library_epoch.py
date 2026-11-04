@@ -331,7 +331,8 @@ class LibraryEpochReviewSignOutTests(unittest.TestCase):
         page.evaluate("() => window.__release()")
         wait_for_async(
             page,
-            "async () => { await new Promise((r) => setTimeout(r, 50)); return window.__served; }",
+            # Served, then one more task: the render that read it has finished.
+            "async () => window.__served && (await new Promise((r) => setTimeout(() => r(true), 50)))",
             message="the delayed review read never completed",
         )
         self.assertEqual(panel.locator('[data-prks-role="restored-change"]').count(), 0)
