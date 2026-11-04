@@ -17,6 +17,15 @@ function load(idb: ReturnType<typeof createFakeIdb>, local: ReturnType<typeof me
   })
 }
 
+/** A draft another page left behind, written straight to this account's database. */
+async function seedDraft(idb: ReturnType<typeof createFakeIdb>, draftId: string, pageInstanceId: string, body: string) {
+  const lineage = { kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1',
+    owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE }
+  const seed = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+  expect(await seed.writeGeneration({ draftId, pageInstanceId, generation: 1, body, create: lineage })).toBe('ok')
+  return seed
+}
+
 async function refusedCode(promise: Promise<unknown>): Promise<string> {
   try {
     await promise
@@ -29,10 +38,7 @@ async function refusedCode(promise: Promise<unknown>): Promise<string> {
 describe('recovery retires with its browser scope (#629)', () => {
   it('refuses every store operation once retired, also an open still in flight, and removes nothing', async () => {
     const idb = createFakeIdb()
-    const store = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
-    const lineage = { kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1',
-      owner: { runtimeId: null, pageInstanceId: 'p-a', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE }
-    expect(await store.writeGeneration({ draftId: 'd-a', pageInstanceId: 'p-a', generation: 1, body: 'Text of A', create: lineage })).toBe('ok')
+    const store = await seedDraft(idb, 'd-a', 'p-a', 'Text of A')
     store.close()
     // The open below starts before the retirement and completes after it.
     const inFlight = store.listAll()
@@ -130,11 +136,8 @@ describe('recovery retires with its browser scope (#629)', () => {
   it('shows nothing of a listing that was still classifying when the account signed out', async () => {
     const idb = createFakeIdb()
     const local = memoryStorage()
-    const lineage = { kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1',
-      owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE }
-    const seed = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
-    expect(await seed.writeGeneration({ draftId: 'd-listed', pageInstanceId: 'p-gone', generation: 1, body: 'Listed text', create: lineage })).toBe('ok')
-    seed.close()
+    const seeded = await seedDraft(idb, 'd-listed', 'p-gone', 'Listed text')
+    seeded.close()
     const rt = load(idb, local, 'a')
     await rt.start()
     // The account signs out while the listing waits on an owner's answer.
@@ -152,11 +155,8 @@ describe('recovery retires with its browser scope (#629)', () => {
   it('settles an adoption begun before the retirement, returns nothing from it, and disposes its writer', async () => {
     const idb = createFakeIdb()
     const local = memoryStorage()
-    const lineage = { kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1',
-      owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE }
-    const seed = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
-    expect(await seed.writeGeneration({ draftId: 'd-orphan', pageInstanceId: 'p-gone', generation: 1, body: 'Orphan text', create: lineage })).toBe('ok')
-    seed.close()
+    const seeded = await seedDraft(idb, 'd-orphan', 'p-gone', 'Orphan text')
+    seeded.close()
     const rt = load(idb, local, 'a')
     await rt.start()
     const record = (await rt.store.get('d-orphan'))!
