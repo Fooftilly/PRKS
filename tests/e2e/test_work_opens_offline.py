@@ -122,7 +122,7 @@ class OfflineWorkOpenTests(unittest.TestCase):
         self.assertEqual([row['id'] for row in cached['value']], [work_b, work_a])
 
     def test_offline_open_survives_reload(self):
-        """The overlay is rebuilt from prks-local-v1, not from tab memory."""
+        """The overlay is rebuilt from the durable local store, not from tab memory."""
         server, page, context = self.start()
         work_a, work_b = server.ids['work_a'], server.ids['work_b']
         self.offline(page, context)

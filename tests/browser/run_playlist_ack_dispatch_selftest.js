@@ -111,7 +111,7 @@ async function waitForRetirement(store) {
 }
 async function scenario(name, write, expectedOperations = 1) {
     await seed();
-    const local = createPrksLocalStore({indexedDB: createFakeIndexedDBFactory(), uuid});
+    const local = createPrksLocalStore({dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid});
     const envelopes = [], events = [];
     let reconciled = 0;
     // Only the network READ adapter is stubbed; it returns the same validated

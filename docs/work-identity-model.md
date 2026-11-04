@@ -126,14 +126,14 @@ keeps Work IDs unchanged.
 | Research Note text | canonical text | `[[W-…]]` or `[[Title]]` wiki links (`resolve_wiki_links`) |
 | URLs / workspace tabs | browser | `#/works/W-…`, persisted workspace layout |
 | `prks.pdf.lastPage.<workId>` | browser `localStorage` | Last-read PDF page, per device |
-| `prks-local-v1` (IndexedDB) | browser, durable | Pending operations carrying `work_id` and base revisions |
+| `prks-local-v2:<scope>` (IndexedDB) | browser, durable | Pending operations carrying `work_id` and base revisions |
 | Offline cache entities | browser, disposable | `work:*`, `work-annotations`, `works-browse:index`, `recent:index`, `recently-added:index`, summaries |
 | Backups | archive | The main DB carries all of the above |
 
 These do **not** hold a Work ID: the managed PDF file name
 (`<unix>_<8hex>_<name>.pdf`, from `mint_managed_pdf_filename`),
 `pending_pdf_cleanup` (keyed by basename), and the service-worker PDF cache
-`prks-pdf-v1` (keyed by `/api/pdfs/<basename>`).
+`prks-pdf-v2:<scope>` (keyed by `/api/pdfs/<basename>`).
 
 ### 1.3 How the model is used, by subsystem
 
@@ -261,7 +261,7 @@ exported.
 identity is canonicalized, so two spellings of one YouTube ID are recognized
 as the same **within one Work**, but not across Works.
 
-**Offline and durable operation.** Durable intent in `prks-local-v1` is kept
+**Offline and durable operation.** Durable intent in `prks-local-v2:<scope>` is kept
 apart from the disposable acknowledged cache. Server revisions are
 per-scope. PDF binary ingestion and replacement require a connection.
 Annotation metadata can be edited offline when the PDF bytes are cached

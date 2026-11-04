@@ -123,10 +123,11 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._wait_content_contains(page, o.PERSON_GROUP_NAME)
         o._wait_content_contains(page, 'Child Branch')
         # The connectivity probe (`/api/settings`) runs on its own backoff
-        # while offline and is not something this page issued; everything else
-        # under /api/ would be.
+        # while offline, and the browser-scope check (`/api/session`) runs at
+        # boot and on focus; neither is something this page issued. Everything
+        # else under /api/ would be.
         self.assertEqual(
-            [p for p in seen if p.startswith('/api/') and p != '/api/settings'], [])
+            [p for p in seen if p.startswith('/api/') and p not in ('/api/settings', '/api/session')], [])
         # New Group stays live offline: it writes a durable intent under an id
         # this device mints, so it is the same feature with or without PRKS.
         self.assertFalse(page.locator('[data-prks-role="group-mutation-control"]').first.is_disabled())

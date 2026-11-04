@@ -72,8 +72,62 @@ coordinator names no family: adding one is a registration.
 
 ## Storage and ownership
 
-- `prks-offline-v1` remains a disposable cache of acknowledged server data.
-- `prks-local-v1` holds semantic operations and a random device UUID. Its
+- **Every store is per account** (#629, `docs/postgresql-architecture.md`
+  §10.3). `frontend/js/browser-scope.js` reads `GET /api/session` once per
+  page; the scope `(instance_id, library_id, user_id)` names each store
+  `<base>:<instance>.<library>.<user>` (written `<scope>` below), so a page
+  never opens another account's queue, cache or PDF cache, and another
+  account's pending rows wait in their own database until that account signs
+  in here again. It fails closed: only a 200 session gives a scope. A server
+  that cannot be reached (network error, 502/503/504) reuses the last
+  confirmed scope, recorded in `prks-browser-scope-v1` (ids only), so an
+  offline reload still opens that account's data; any other answer (401, 403,
+  404, a malformed body) gives no scope and forgets the record. The read
+  goes through the request coordinator, never deduplicated, and is bounded
+  (10 s): past the deadline it counts as unreachable and its late answer is
+  dropped without touching the record. Without a scope the queue refuses
+  every write and the cache is unavailable; no unscoped name exists.
+- **Managed PDFs per tab.** Each page tells the service worker which scope
+  it is bound to (`prks-scope-bind`); the worker keeps one binding per
+  client in `prks-browser-scope-v1` and serves or stores a page's PDFs only
+  in that page's own `prks-pdf-v2:<scope>`. A retired page gets no cache.
+  A live page that has not bound yet waits briefly for its binding and
+  never borrows another scope; a dedicated worker gets the last confirmed
+  scope only when every live page is bound to it; otherwise the network
+  only. Bytes enter a cache only while the session is still that cache's
+  scope: a network GET checks `/api/session` before and after the fetch,
+  and a post-save install (which must name the sender's own bound cache)
+  checks it before the put. Without that confirmation (another account
+  signed in, expiry, offline) the bytes are served or kept by the page but
+  never cached. Offline reads of bytes already cached are unchanged.
+- **Auth hold.** The page re-reads the session
+  (`prksBrowserScope.verify()`) before each send and on its own lifecycle
+  (visible again, focus, online, page show, once a minute while visible), so
+  an idle page with an empty queue notices too. The session expired (401,
+  no explicit sign-out): delivery holds, rows stay pending, and it retries
+  every 30 s; the same account signing in again resumes the page. Signed
+  out on purpose (`prksBrowserScope.signOut()`, in this tab or another):
+  the sign-out is broadcast and recorded with the time it took effect, and
+  every open page of that account retires. A session answer from a read
+  that began before that time (in any tab) never restores the account or
+  clears the record; only a session confirmed by a later read does. Every
+  change to the last confirmed scope is ordered the same way: a refusal
+  or a sign-out keeps its time as a record with no scope, and a refusal or
+  a confirmation from a read that began earlier (in any tab) never undoes a
+  newer confirmation or refusal, and the page that read it never acts
+  on it: it binds no scope from it and retires nothing over it, but reads
+  the session again (after three outranked answers in a row it binds
+  nothing, or the check counts as unreachable).
+  Another account signed in: the page retires. A retired
+  page's stores close and refuse reads and writes, the runtime holds for the
+  life of the page, nothing is deleted, and a reload binds whoever is signed
+  in. Admission refusals of a sent operation (401, 403, 400
+  `LIBRARY_EPOCH_REQUIRED`, 409 `LIBRARY_EPOCH_CHANGED`) were never
+  executed, so they hold the row as pending with the attempt count from
+  before the send (a never-sent row stays editable) and are never settled,
+  conflicted or retired. `prksSyncDiagnostics()` reports the hold as `held`.
+- `prks-offline-v2:<scope>` remains a disposable cache of acknowledged server data.
+- `prks-local-v2:<scope>` holds semantic operations and a random device UUID. Its
   IndexedDB writes request strict durability and resolve only on transaction
   completion. Failures reject; the UI cannot report success on a failed write.
 - Clear offline cache never touches durable operations. Without a cached Work
@@ -373,7 +427,7 @@ Pending open events are an overlay computed at render time
 (`prksEffectiveRecent`), never written into `recent:index`: an unsynchronized
 event must stay distinguishable from acknowledged server state, and Clear
 offline cache must not erase it. The overlay reproduces the canonical order and
-limit exactly, and is rebuilt from `prks-local-v1`, so it survives a reload
+limit exactly, and is rebuilt from `prks-local-v2:<scope>`, so it survives a reload
 rather than living in a tab's memory.
 
 A Work the cached list does not already carry needs a display row; the event's
@@ -492,7 +546,7 @@ the user whether to discard changes they had already saved.
 
 The effective Work is the acknowledged cached record plus durable
 pending/conflicted field edits. Pending intent is never written into the cached
-Work; the overlay is recomputed from `prks-local-v1`, so it survives a reload,
+Work; the overlay is recomputed from `prks-local-v2:<scope>`, so it survives a reload,
 and it is applied on every Work detail render rather than only while editing.
 One renderer produces the bibliographic rows for both the first paint and the
 overlay repaint, so they cannot drift.
@@ -1903,7 +1957,7 @@ batch commits — never between create and tags. Tags are not stuffed into the
 Acknowledgement fences folders, works-browse and recently-added always; playlists
 when construction carried a playlist; people and person-groups when it carried
 roles. Recent is deliberately untouched. Pending creates overlay Work detail
-from the durable envelope; never written into `prks-offline-v1`.
+from the durable envelope; never written into `prks-offline-v2:<scope>`.
 
 ## Work deletion (DELETE_WORK)
 
@@ -2457,9 +2511,9 @@ PDFs. One annotation is one revisioned aggregate under scope
 **Four ownership layers (do not collapse them):**
 
 1. Canonical metadata — `annotations` table (`pdf_annotations.py`)
-2. Durable unsynchronized intent — `prks-local-v1` semantic ops
+2. Durable unsynchronized intent — `prks-local-v2:<scope>` semantic ops
 3. Disposable acknowledged snapshot — offline cache entity `work-annotations`
-4. PDF bytes — materialized artifact in Cache Storage `prks-pdf-v1` only
+4. PDF bytes — materialized artifact in Cache Storage `prks-pdf-v2:<scope>` only
 
 Offline mutation requires all of: usable cached PDF bytes, an acknowledged
 annotation base on this device, and a writable durable store. Connectivity

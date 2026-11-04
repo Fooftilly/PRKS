@@ -91,7 +91,11 @@ class FrontendServiceWorkerTests(unittest.TestCase):
 
     def test_no_indexeddb_or_persistent_domain_storage_in_sw(self):
         src = _read(_SW)
-        self.assertNotIn("indexedDB", src)
+        # IndexedDB only for the scope database (#629): the page's record of
+        # the last confirmed scope and each page's binding. No domain data.
+        self.assertEqual(src.count("indexedDB"), 2)
+        self.assertIn("readScopeState(scope.indexedDB)", src)
+        self.assertIn("writeClientBinding(scope.indexedDB,", src)
         self.assertNotIn("localStorage", src)
 
     def test_eligibility_helpers_are_pure_and_exported(self):

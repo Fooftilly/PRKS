@@ -151,6 +151,21 @@ def _server_work_title(server, work_id):
     return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root)).get_work(work_id)["title"]
 
 
+def _wait_queue_drained(page):
+    """Waits until every queued operation (such as opening a Work) has landed.
+
+    Each send first re-reads the session, so on a slow runner an open-Work
+    operation can still be sending when a test starts holding sends. Tests that
+    hold or count sends wait for this first, so the held send is their own.
+    """
+    wait_for_async(
+        page,
+        "() => prksSync.store.listOperations().then(r => r.length === 0)",
+        timeout=20000,
+        message="earlier queued operations never landed",
+    )
+
+
 def _open_work_from_home(page, title, *, profile_prefix=None):
     """Use the real Folders → Recently Added → Work UI path.
 
@@ -1311,6 +1326,9 @@ class WorkDetailsPolishTests(_BrowserE2E):
             "() => { const b = document.getElementById('save-work-identity-btn');"
             "        return !!b && !b.disabled; }"
         )
+        # Opening the Work queued its own operation. Let it land first, so the
+        # held send below can only be the Title save's.
+        _wait_queue_drained(page)
         page.route("**/api/sync/operations", hold_send)
         try:
             page.fill("#meta-title", "Busy Save Title")
@@ -3674,6 +3692,8 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         def hold_sync(route):
             held.append(route)
 
+        # Opening the Work queued its own operation; only the comment save is held.
+        _wait_queue_drained(page)
         page.route("**/api/sync/operations", hold_sync)
         try:
             _wait_pdf_annotation_durable(page)
@@ -5623,6 +5643,8 @@ class TabContextHostRootTests(_BrowserE2E):
             "() => { const b = document.getElementById('save-work-identity-btn');"
             "        return !!b && !b.disabled; }"
         )
+        # Opening the Work queued its own operation; the held send must be A's save.
+        _wait_queue_drained(page)
         page.route("**/api/sync/operations", hold_send)
         try:
             page.fill("#meta-title", "E2E Research Work Saved")
@@ -5737,6 +5759,9 @@ class TabContextHostRootTests(_BrowserE2E):
             "() => { const b = document.getElementById('save-work-identity-btn');"
             "        return !!b && !b.disabled; }"
         )
+        # Opening A and B queued their own operations. Let them land first, so
+        # the held send is A's Title save and nothing of B's settles later.
+        _wait_queue_drained(page)
 
         page.route("**/api/sync/operations", hold_send)
         try:
@@ -7324,6 +7349,8 @@ class WorkspaceTilingTests(_BrowserE2E):
             }""",
             arg=ids["mainTabId"],
         )
+        # Opening both Works queued their own operations; only the notes save is held.
+        _wait_queue_drained(page)
         page.route("**/api/sync/operations", hold_notes_sync)
         try:
             page.evaluate(

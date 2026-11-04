@@ -159,7 +159,7 @@ async function targetsInvalidateArgumentsAndPositionsOnly() {
 async function integratedSourceAck(reply, shouldAcknowledge) {
     await seed();
     const local = createPrksLocalStore({
-        indexedDB: createFakeIndexedDBFactory(), uuid,
+        dbName: 'prks-local-v2:test', indexedDB: createFakeIndexedDBFactory(), uuid,
     });
     const sent = [];
     const acknowledged = [];

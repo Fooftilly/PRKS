@@ -12,6 +12,11 @@
 const path = require('path');
 const rootDir = path.resolve(__dirname, '../..');
 const sw = require(path.join(rootDir, 'frontend/sw.js'));
+// The signed-in scope's PDF cache, as the worker reads it from the scope record.
+const PDF_CACHE = sw.PRKS_SW_PDF_CACHE_BASE + ':I1.L1.U1';
+const scopedPdfCacheName = function () { return Promise.resolve(PDF_CACHE); };
+// The current session is still the cache's own scope.
+const sessionConfirmed = function () { return Promise.resolve(true); };
 
 let passed = 0;
 let failed = 0;
@@ -193,7 +198,8 @@ async function run() {
     assert('old static cache retired', sw.shouldRetireCache('prks-static-v0'));
     assert('current shell cache kept', !sw.shouldRetireCache(sw.PRKS_SW_SHELL_CACHE));
     assert('current static cache kept', !sw.shouldRetireCache(sw.PRKS_SW_STATIC_CACHE));
-    assert('current pdf cache kept', !sw.shouldRetireCache(sw.PRKS_SW_PDF_CACHE));
+    assert('scoped pdf cache kept', !sw.shouldRetireCache(PDF_CACHE));
+    assert('unscoped pdf cache of earlier builds retired', sw.shouldRetireCache(sw.PRKS_SW_RETIRED_PDF_CACHE));
     assert('unrelated cache name kept', !sw.shouldRetireCache('some-other-cache'));
 
     /* ==================================================================
@@ -206,6 +212,7 @@ async function run() {
         const cacheStorage = makeFakeCacheStorage();
         let networkCalls = 0;
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 networkCalls += 1;
@@ -226,6 +233,7 @@ async function run() {
         const req = fakeRequest({ url: 'https://prks.example/js/app.js' });
         await staticCache.put(req, new Response('cached-body', { status: 200 }));
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.reject(new Error('offline'));
@@ -237,6 +245,7 @@ async function run() {
     await assertRejectsOrThrows('handleStatic offline without cache throws', async function () {
         const cacheStorage = makeFakeCacheStorage();
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.reject(new Error('offline'));
@@ -248,6 +257,7 @@ async function run() {
         // A non-cacheable network response (e.g. 404) must not be written to the static cache.
         const cacheStorage = makeFakeCacheStorage();
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.resolve(new Response('not found', { status: 404 }));
@@ -263,6 +273,7 @@ async function run() {
     {
         const cacheStorage = makeFakeCacheStorage();
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.resolve(new Response('<html>live</html>', { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
@@ -278,6 +289,7 @@ async function run() {
         const shellCache = await cacheStorage.open(sw.PRKS_SW_SHELL_CACHE);
         await shellCache.put('/', new Response('<html>cached-shell</html>', { status: 200 }));
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.reject(new Error('offline'));
@@ -289,6 +301,7 @@ async function run() {
     {
         const cacheStorage = makeFakeCacheStorage();
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.reject(new Error('offline'));
@@ -328,6 +341,7 @@ async function run() {
         const pdfBody = Buffer.from('PDF-WHOLE-FILE-CONTENT-0123456789');
         let networkCalls = 0;
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 networkCalls += 1;
@@ -342,7 +356,7 @@ async function run() {
         const buf1 = Buffer.from(await res1.arrayBuffer());
         assert('handlePdfRequest online whole-file returns full body', buf1.equals(pdfBody));
 
-        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const pdfCache = await cacheStorage.open(PDF_CACHE);
         assert('handlePdfRequest online whole-file populated pdf cache', !!(await pdfCache.match(pathname)));
 
         // Now simulate a Range request while online: the live network wins, and a Range
@@ -359,6 +373,7 @@ async function run() {
 
         // Offline whole-file request: served straight from the whole-file cache.
         const offlineHandlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.reject(new Error('offline'));
@@ -386,6 +401,7 @@ async function run() {
         // Offline with nothing cached at all: explicit unavailable response, never a fake success.
         const cacheStorage = makeFakeCacheStorage();
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.reject(new Error('offline'));
@@ -400,6 +416,7 @@ async function run() {
         // even the very first time the PDF is requested online.
         const cacheStorage = makeFakeCacheStorage();
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.resolve(
@@ -415,7 +432,7 @@ async function run() {
             fakeRequest({ url: 'https://prks.example' + pathname, headers: { range: 'bytes=0-6' } }),
             pathname
         );
-        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const pdfCache = await cacheStorage.open(PDF_CACHE);
         assert('range-only first response never seeds the whole-file pdf cache', !(await pdfCache.match(pathname)));
     }
     {
@@ -425,9 +442,13 @@ async function run() {
         const pathname = '/api/pdfs/race-inflight.pdf';
         let releaseFetch;
         const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
+        let fetchStarted;
+        const inFlight = new Promise(function (resolve) { fetchStarted = resolve; });
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
+                fetchStarted();
                 return fetchGate.then(function () {
                     return new Response(Buffer.from('OLD-BYTES'), {
                         status: 200,
@@ -440,16 +461,18 @@ async function run() {
             fakeRequest({ url: 'https://prks.example' + pathname }),
             pathname
         );
-        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        await inFlight;
+        const pdfCache = await cacheStorage.open(PDF_CACHE);
         const installed = await sw.installAuthoritativeWholeFilePdf(
             pdfCache,
             pathname,
-            Buffer.from('NEW-BYTES')
+            Buffer.from('NEW-BYTES'),
+            PDF_CACHE
         );
         assert('authoritative install during in-flight GET commits', installed === true);
         releaseFetch();
         await pending;
-        await sw.settleWholeFilePdfWrites(pathname);
+        await sw.settleWholeFilePdfWrites(pathname, PDF_CACHE);
         const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
         assert(
             'stale in-flight whole-file GET does not overwrite post-save bytes',
@@ -457,9 +480,57 @@ async function run() {
         );
         assertEq(
             'post-save install advanced the per-path generation',
-            sw.wholeFilePdfGeneration(pathname) > 0,
+            sw.wholeFilePdfGeneration(pathname, PDF_CACHE) > 0,
             true
         );
+    }
+    {
+        // Each account has its own PDF cache. An install into account B's
+        // cache at the same path must not cancel account A's in-flight
+        // whole-file write, or A cannot reopen that PDF offline.
+        const cacheStorage = makeFakeCacheStorage();
+        const pathname = '/api/pdfs/race-other-account.pdf';
+        const otherCache = sw.PRKS_SW_PDF_CACHE_BASE + ':I1.L1.U2';
+        let releaseFetch;
+        const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
+        let fetchStarted;
+        const inFlight = new Promise(function (resolve) { fetchStarted = resolve; });
+        const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
+            caches: cacheStorage,
+            fetchImpl: function () {
+                fetchStarted();
+                return fetchGate.then(function () {
+                    return new Response(Buffer.from('A-BYTES'), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/pdf' },
+                    });
+                });
+            },
+        });
+        const pending = handlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + pathname }),
+            pathname
+        );
+        await inFlight;
+        const bCache = await cacheStorage.open(otherCache);
+        const installed = await sw.installAuthoritativeWholeFilePdf(
+            bCache, pathname, Buffer.from('B-BYTES'), otherCache
+        );
+        assert('install into another account cache commits', installed === true);
+        releaseFetch();
+        await pending;
+        await sw.settleWholeFilePdfWrites(pathname, PDF_CACHE);
+        const aCache = await cacheStorage.open(PDF_CACHE);
+        const aCached = await aCache.match(pathname);
+        assert('another account install does not cancel this account whole-file write', !!aCached);
+        assert('this account cache holds its own bytes',
+            !!aCached && Buffer.from(await aCached.arrayBuffer()).equals(Buffer.from('A-BYTES')));
+        const bCached = Buffer.from(await (await bCache.match(pathname)).arrayBuffer());
+        assert('the other account cache keeps its installed bytes', bCached.equals(Buffer.from('B-BYTES')));
+        assertEq('generations are counted per cache',
+            [sw.wholeFilePdfGeneration(pathname, PDF_CACHE), sw.wholeFilePdfGeneration(pathname, otherCache)],
+            [0, 1]);
     }
     {
         // A network put already queued on the path still loses to a later
@@ -485,6 +556,7 @@ async function run() {
             return cache;
         };
         const handlers = sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName,
             caches: cacheStorage,
             fetchImpl: function () {
                 return Promise.resolve(new Response(Buffer.from('OLD-QUEUED'), {
@@ -498,15 +570,16 @@ async function run() {
             pathname
         );
         await pending;
-        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const pdfCache = await cacheStorage.open(PDF_CACHE);
         const installPromise = sw.installAuthoritativeWholeFilePdf(
             pdfCache,
             pathname,
-            Buffer.from('NEW-QUEUED')
+            Buffer.from('NEW-QUEUED'),
+            PDF_CACHE
         );
         releasePut();
         assert('queued network put then install still commits', (await installPromise) === true);
-        await sw.settleWholeFilePdfWrites(pathname);
+        await sw.settleWholeFilePdfWrites(pathname, PDF_CACHE);
         const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
         assert(
             'authoritative install replaces a whole-file put that was already queued',
@@ -519,18 +592,20 @@ async function run() {
         const ok = await sw.handlePdfCacheMessage({
             type: sw.PDF_CACHE_INSTALL_MESSAGE,
             pathname: pathname,
+            cacheName: PDF_CACHE,
             buffer: Buffer.from('FROM-MESSAGE'),
-        }, cacheStorage);
+        }, cacheStorage, scopedPdfCacheName, '', sessionConfirmed);
         assert('pdf cache install message stores the posted bytes', ok === true);
-        const pdfCache = await cacheStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const pdfCache = await cacheStorage.open(PDF_CACHE);
         const cached = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
         assert('pdf cache install message body matches', cached.equals(Buffer.from('FROM-MESSAGE')));
-        assert('unrelated worker message is ignored', sw.handlePdfCacheMessage({ type: 'other' }, cacheStorage) === null);
+        assert('unrelated worker message is ignored', sw.handlePdfCacheMessage({ type: 'other' }, cacheStorage, scopedPdfCacheName) === null);
         const rejected = await sw.handlePdfCacheMessage({
             type: sw.PDF_CACHE_INSTALL_MESSAGE,
             pathname: '/api/works/not-a-pdf',
+            cacheName: PDF_CACHE,
             buffer: Buffer.from('NOPE'),
-        }, cacheStorage);
+        }, cacheStorage, scopedPdfCacheName, '', sessionConfirmed);
         assert('pdf cache install message rejects a non-pdf path', rejected === false);
     }
     {
@@ -572,7 +647,7 @@ async function run() {
                     const bridge = new MessageChannel();
                     bridge.port1.onmessage = function (event) {
                         if (!reply) return;
-                        Promise.resolve(sw.handlePdfCacheMessage(event.data, cachesApi)).then(function (ok) {
+                        Promise.resolve(sw.handlePdfCacheMessage(event.data, cachesApi, scopedPdfCacheName, '', sessionConfirmed)).then(function (ok) {
                             pagePort.postMessage({ ok: !!ok });
                         }, function () {
                             pagePort.postMessage({ ok: false });
@@ -581,6 +656,7 @@ async function run() {
                     bridge.port2.postMessage({
                         type: data.type,
                         pathname: data.pathname,
+                        cacheName: data.cacheName,
                         buffer: data.buffer,
                     }, [data.buffer]);
                     seen.detached = data.buffer.byteLength === 0;
@@ -595,7 +671,7 @@ async function run() {
         const body = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
         const slow = controllerDeliveringTo(slowStorage, true);
         const started = Date.now();
-        const outcome = await pageApi.prksPostPdfCacheInstall(slow.controller, pathname, body);
+        const outcome = await pageApi.prksPostPdfCacheInstall(slow.controller, pathname, body, { cacheName: PDF_CACHE });
         const elapsed = Date.now() - started;
         assert('slow install transfers the already-copied buffer', slow.seen.transferIncludesBuffer && slow.seen.detached);
         assert('slow install past the old 2s timeout is acknowledged', outcome === 'ok' && elapsed >= 2000, 'outcome=' + outcome + ' elapsed=' + elapsed);
@@ -607,13 +683,13 @@ async function run() {
             materializationFailure = err && err.message ? err.message : 'threw';
         }
         assert('slow successful install is not a materialization failure', materializationFailure === '');
-        const pdfCache = await slowStorage.open(sw.PRKS_SW_PDF_CACHE);
+        const pdfCache = await slowStorage.open(PDF_CACHE);
         const cachedBytes = Buffer.from(await (await pdfCache.match(pathname)).arrayBuffer());
         assert('slow install stores the transferred bytes', cachedBytes.equals(payload));
 
         const silent = controllerDeliveringTo(makeFakeCacheStorage(), false);
         const lostBody = new ArrayBuffer(8);
-        const lost = await pageApi.prksPostPdfCacheInstall(silent.controller, pathname, lostBody, { timeoutMs: 40 });
+        const lost = await pageApi.prksPostPdfCacheInstall(silent.controller, pathname, lostBody, { timeoutMs: 40, cacheName: PDF_CACHE });
         assert('communication loss is unacknowledged, not a put rejection', lost === 'unacknowledged');
         let lostMessage = '';
         try {
@@ -856,7 +932,13 @@ async function run() {
     /* ---- source has no generic /api/... JSON caching and no mutation queueing ---- */
     const src = require('fs').readFileSync(path.join(rootDir, 'frontend/sw.js'), 'utf8');
     assert('sw.js has no localStorage', src.indexOf('localStorage') === -1);
-    assert('sw.js has no indexedDB usage', src.indexOf('indexedDB') === -1);
+    // IndexedDB only for the scope database: read the page's record, keep each
+    // page's binding. No domain data.
+    assertEq('sw.js reaches IndexedDB twice, read and bind', src.split('scope.indexedDB').length - 1, 2);
+    assertEq('sw.js opens only the scope database', src.split('idbFactory.open(').length - 1, 1);
+    assert('the one open names the scope database at the page version',
+        src.indexOf('idbFactory.open(SCOPE_POINTER_DB, SCOPE_POINTER_DB_VERSION)') !== -1);
+    assert('sw.js never writes the scope record', !/objectStore\(SCOPE_POINTER_STORE\)\.(put|add|delete|clear)/.test(src));
     assert('sw.js fetch handler comments out generic /api passthrough', src.indexOf("notably /api/... JSON -- passes straight through") !== -1);
 
     if (failed) {

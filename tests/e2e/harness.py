@@ -836,6 +836,11 @@ def wait_http(url: str, timeout: float = READY_TIMEOUT_S) -> None:
             with urllib.request.urlopen(req, timeout=2) as res:
                 if 200 <= res.status < 500:
                     return
+        except urllib.error.HTTPError as err:
+            # A session-mode server answers 401 before anyone signs in: it is up.
+            if err.code < 500:
+                return
+            last = err
         except (urllib.error.URLError, TimeoutError, OSError) as err:
             last = err
         time.sleep(0.05)
@@ -1112,7 +1117,7 @@ class PageCollector:
 class AppServer:
     """One PRKS subprocess + temp storage. Seed before start()."""
 
-    def __init__(self, seed_fn=None, extra_env=None):
+    def __init__(self, seed_fn=None, extra_env=None, auth=None, members=()):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
         # The storage root is a fresh, empty child directory so PRKS treats it
         # as a new root (storage-architecture §7.1); server output lives beside
@@ -1135,13 +1140,20 @@ class AppServer:
         self._extra_env = dict(extra_env or {})
         # The disposable PostgreSQL Library behind this server; kept across
         # start retries, dropped by stop() (tests/e2e/postgres_identity.py).
+        # `auth="session"` signs accounts in by password; `members` adds
+        # editors beside the owner.
         self.library = None
+        self._auth = auth
+        self._members = tuple(members)
 
     def start(self):
         if self.library is None:
             try:
+                kwargs = {"members": self._members}
+                if self._auth is not None:
+                    kwargs["auth"] = self._auth
                 with profile_e2e_phase("postgres_provision"):
-                    self.library = provision_library(self.storage_root)
+                    self.library = provision_library(self.storage_root, **kwargs)
             except Exception:
                 self._tmpdir.cleanup()
                 raise

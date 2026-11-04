@@ -35,7 +35,7 @@ class E2EPostgresProfileTests(unittest.TestCase):
                 server.stop()
                 phases = harness.finish_test_profile(test_id)
 
-        provision.assert_called_once_with(server.storage_root)
+        provision.assert_called_once_with(server.storage_root, members=())
         library.drop.assert_called_once_with()
         self.assertIn("postgres_provision", phases)
         self.assertIn("postgres_drop", phases)

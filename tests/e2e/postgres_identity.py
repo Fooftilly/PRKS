@@ -19,17 +19,19 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Optional
 
 
 AUTH_MODE = "loopback-owner"
+SESSION_MODE = "session"
 OWNER_LOGIN = "owner"
 OWNER_DISPLAY_NAME = "E2E Owner"
 LIBRARY_NAME = "E2E Library"
-# Never used to sign in (loopback-owner has no login form); bootstrap only
-# needs a valid Argon2id hash.
-_OWNER_PASSWORD = "e2e owner passphrase, never used to sign in"
+# Every E2E account's password. Loopback-owner never signs in; session-mode
+# tests sign in through POST /api/login with it.
+PASSWORD = "e2e account passphrase"
 
 _hash_lock = threading.Lock()
 _owner_hash: Optional[str] = None
@@ -48,6 +50,9 @@ class E2ELibrary:
     instance_id: str
     user_id: str
     library_id: str
+    auth: str = AUTH_MODE
+    # Login name -> user id: the owner and every member added with it.
+    accounts: Mapping[str, str] = field(default_factory=dict)
 
     def server_env(self) -> dict[str, str]:
         """Environment for ``prks_app.py --testing`` on this database.
@@ -57,7 +62,7 @@ class E2ELibrary:
         still referenced only by SQLite (PG-C1 #640).
         """
         return {
-            "PRKS_AUTH": AUTH_MODE,
+            "PRKS_AUTH": self.auth,
             "PRKS_DATABASE_URL": self.conninfo,
             "PRKS_EMBEDDED_WORKER": "0",
         }
@@ -87,15 +92,24 @@ def _password_hash() -> str:
         if _owner_hash is None:
             from backend.domain.identity import passwords
 
-            _owner_hash = passwords.hash_password(_OWNER_PASSWORD)
+            _owner_hash = passwords.hash_password(PASSWORD)
         return _owner_hash
 
 
-def provision_library(storage_root: str) -> E2ELibrary:
+def provision_library(
+    storage_root: str, *, auth: str = AUTH_MODE, members: Sequence[str] = ()
+) -> E2ELibrary:
     """A new database, bootstrapped with one owner and paired with ``storage_root``.
 
-    ``storage_root`` must be the empty directory the server will use.
+    ``storage_root`` must be the empty directory the server will use. With
+    ``auth="session"`` the server signs accounts in by password
+    (:data:`PASSWORD`); ``members`` adds one editor of the Library per login
+    name, so a test can sign two accounts into one browser.
     """
+    if auth not in (AUTH_MODE, SESSION_MODE):
+        raise ValueError(f"unknown E2E auth mode {auth!r}")
+    if members and auth != SESSION_MODE:
+        raise ValueError("members need auth='session': loopback-owner acts only as the owner")
     require_server()
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
@@ -131,6 +145,9 @@ def provision_library(storage_root: str) -> E2ELibrary:
                 )
             finally:
                 lease.release()
+            accounts = {OWNER_LOGIN: result.user_id}
+            for login in members:
+                accounts[login] = _add_member(db, result.library_id, login)
         finally:
             db.close()
     except BaseException:
@@ -142,4 +159,26 @@ def provision_library(storage_root: str) -> E2ELibrary:
         instance_id=result.instance_id,
         user_id=result.user_id,
         library_id=result.library_id,
+        auth=auth,
+        accounts=accounts,
     )
+
+
+def _add_member(db, library_id: str, login: str) -> str:
+    """One more editor of the Library, signing in with :data:`PASSWORD`."""
+    from backend import entity_ids
+
+    user_id = entity_ids.generate("U")
+
+    def add(tx) -> None:
+        tx.execute(
+            "INSERT INTO prks.users (id, login_name, display_name, password_hash) VALUES (%s, %s, %s, %s)",
+            (user_id, login, login, _password_hash()),
+        )
+        tx.execute(
+            "INSERT INTO prks.library_memberships (library_id, user_id, role) VALUES (%s, %s, 'editor')",
+            (library_id, user_id),
+        )
+
+    db.command(add)
+    return user_id

@@ -43,6 +43,9 @@ export function prksPostPdfCacheInstall(controller, pathname, body, options) {
             controller.postMessage({
                 type: 'prks-pdf-cache-install',
                 pathname: pathname,
+                // The page's scoped cache; the worker stores only into the
+                // signed-in scope's cache, and only when this names it.
+                cacheName: typeof opts.cacheName === 'string' ? opts.cacheName : '',
                 buffer: body,
             }, [channel.port2, body]);
         } catch (_ePost) {

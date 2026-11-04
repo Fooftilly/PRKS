@@ -8,6 +8,7 @@ import unittest
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
+from backend.domain.identity import passwords
 from backend.domain.identity.errors import RootPairingRefused
 from tests.e2e import postgres_identity
 from tests.pg.harness import get_harness
@@ -55,6 +56,30 @@ class E2ELibraryTests(unittest.TestCase):
                 "PRKS_EMBEDDED_WORKER": "0",
             },
         )
+
+    def test_session_mode_adds_editors_who_sign_in_with_the_e2e_password(self) -> None:
+        library = postgres_identity.provision_library(self.root, auth="session", members=("reader",))
+        self.addCleanup(self._drop_quietly, library)
+
+        self.assertEqual(library.server_env()["PRKS_AUTH"], "session")
+        self.assertEqual(set(library.accounts), {"owner", "reader"})
+        self.assertEqual(library.accounts["owner"], library.user_id)
+        memberships = self.rows(
+            library.conninfo,
+            "SELECT u.login_name, m.role FROM prks.library_memberships m "
+            "JOIN prks.users u ON u.id = m.user_id ORDER BY u.login_name",
+        )
+        self.assertEqual(
+            memberships, [{"login_name": "owner", "role": "owner"}, {"login_name": "reader", "role": "editor"}]
+        )
+        hashes = self.rows(library.conninfo, "SELECT login_name, password_hash FROM prks.users ORDER BY login_name")
+        for row in hashes:
+            with self.subTest(login=row["login_name"]):
+                self.assertTrue(passwords.verify_password(row["password_hash"], postgres_identity.PASSWORD))
+
+    def test_members_need_session_mode(self) -> None:
+        with self.assertRaises(ValueError):
+            postgres_identity.provision_library(self.root, members=("reader",))
 
     def test_drop_removes_the_database(self) -> None:
         library = postgres_identity.provision_library(self.root)

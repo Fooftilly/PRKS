@@ -77,10 +77,11 @@ async function run() {
 
     /* ---- physical separation from the disposable cache ---- */
     {
-        assertEq('durable state uses its own database name', mod.PRKS_LOCAL_DB_NAME, 'prks-local-v1');
+        const scope = require(path.join(rootDir, 'frontend/js/browser-scope.js'));
+        assertEq('durable state uses its own scoped database base', scope.PRKS_SCOPE_STORE_BASES.local, 'prks-local-v2');
+        assert('local DB base differs from the offline cache DB base',
+            scope.PRKS_SCOPE_STORE_BASES.local !== scope.PRKS_SCOPE_STORE_BASES.offline);
         const offline = require(path.join(rootDir, 'frontend/js/offline-store.js'));
-        assert('local DB name differs from the offline cache DB name',
-            mod.PRKS_LOCAL_DB_NAME !== 'prks-offline-v1');
         assert('offline cache still owns its own database',
             typeof offline.createPrksOfflineStore === 'function');
     }
@@ -88,21 +89,21 @@ async function run() {
     /* ---- device identity ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const first = await store.getOrCreateDeviceId();
         assert('device id is created on first use', typeof first === 'string' && first.length > 0);
         const second = await store.getOrCreateDeviceId();
         assertEq('device id is stable within one store instance', second, first);
 
         // A brand-new store instance models a page reload / browser restart.
-        const reopened = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const reopened = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         assertEq('device id survives a new store instance', await reopened.getOrCreateDeviceId(), first);
     }
 
     /* ---- enqueue / read / durable ordering ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const deviceId = await store.getOrCreateDeviceId();
 
         const a = await store.enqueueOperation(tagOp('W-1', 'T-1'));
@@ -127,7 +128,7 @@ async function run() {
         assertEq('getOperation returns null for an unknown id', await store.getOperation('nope'), null);
 
         // A fresh instance over the same database: the reload case.
-        const reopened = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const reopened = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const afterReload = await reopened.listOperations();
         assertEq('operations survive a new store instance',
             afterReload.map((r) => r.op_id), [a.op_id, b.op_id, c.op_id]);
@@ -138,7 +139,7 @@ async function run() {
     /* ---- envelope validation ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
 
         await assertRejects('unregistered operation type is refused',
             store.enqueueOperation({ operation: 'DROP_DATABASE', entity_type: 'work', entity_id: 'W-1' }),
@@ -172,7 +173,7 @@ async function run() {
     /* ---- duplicate op_id ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const fixed = '11111111-2222-4333-8444-555555555555';
         await store.enqueueOperation(tagOp('W-1', 'T-1', { op_id: fixed }));
         await assertRejects('re-enqueueing the same op_id is refused',
@@ -186,7 +187,7 @@ async function run() {
     /* ---- sync-state transitions ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const op = await store.enqueueOperation(tagOp('W-1', 'T-1'));
 
         const syncing = await store.updateOperationSyncState(op.op_id, {
@@ -222,7 +223,7 @@ async function run() {
     /* ---- the semantic envelope is immutable ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const op = await store.enqueueOperation(tagOp('W-1', 'T-1', { base_revision: 7 }));
         await store.updateOperationSyncState(op.op_id, {
             status: 'syncing',
@@ -245,7 +246,7 @@ async function run() {
     /* ---- deletion is restricted to acknowledged operations ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const pending = await store.enqueueOperation(tagOp('W-1', 'T-1'));
         await assertRejects('a pending operation cannot be discarded',
             store.deleteAcknowledgedOperation(pending.op_id), 'not_acknowledged');
@@ -265,10 +266,10 @@ async function run() {
      * user's unsynchronized change may not. */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         await store.enqueueOperation(tagOp('W-1', 'T-1'));
 
-        const db = idb.__databases.get('prks-local-v1');
+        const db = idb.__databases.get('prks-local-v2:test');
         db._stores.get('operations').failCommit = true;
         await assertRejects('enqueue rejects when the transaction aborts after the request succeeded',
             store.enqueueOperation(tagOp('W-2', 'T-2')), 'write_failed');
@@ -284,9 +285,9 @@ async function run() {
     /* ---- request-level failure ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         await store.enqueueOperation(tagOp('W-1', 'T-1'));
-        const db = idb.__databases.get('prks-local-v1');
+        const db = idb.__databases.get('prks-local-v2:test');
         db._stores.get('operations').forceError = true;
         await assertRejects('enqueue rejects when the request itself fails',
             store.enqueueOperation(tagOp('W-2', 'T-2')), 'write_failed');
@@ -296,7 +297,7 @@ async function run() {
 
     /* ---- storage entirely unavailable ---- */
     {
-        const store = mod.createPrksLocalStore({ indexedDB: null, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: null, uuid: seqUuid });
         assertEq('isAvailable reports false without IndexedDB', await store.isAvailable(), false);
         await assertRejects('enqueue rejects rather than silently dropping the change',
             store.enqueueOperation(tagOp('W-1', 'T-1')), 'unavailable');
@@ -307,7 +308,7 @@ async function run() {
     /* ---- stats ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const a = await store.enqueueOperation(tagOp('W-1', 'T-1'));
         await store.enqueueOperation(tagOp('W-1', 'T-2'));
         await store.updateOperationSyncState(a.op_id, { status: 'conflict' });
@@ -326,8 +327,8 @@ async function run() {
     {
         const idb = createFakeIndexedDBFactory();
         const offlineMod = require(path.join(rootDir, 'frontend/js/offline-store.js'));
-        const cache = offlineMod.createPrksOfflineStore({ indexedDB: idb, idb: idbApi });
-        const local = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const cache = offlineMod.createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: idb, idb: idbApi });
+        const local = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
 
         const deviceId = await local.getOrCreateDeviceId();
         const op = await local.enqueueOperation(tagOp('W-1', 'T-1'));
@@ -342,9 +343,9 @@ async function run() {
 
         // Even destroying the whole cache database leaves durable state alone.
         await cache.deleteDatabase();
-        assert('the offline database is gone', !idb.__databases.has('prks-offline-v1'));
-        assert('the local database is untouched', idb.__databases.has('prks-local-v1'));
-        const reopened = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        assert('the offline database is gone', !idb.__databases.has('prks-offline-v2:test'));
+        assert('the local database is untouched', idb.__databases.has('prks-local-v2:test'));
+        const reopened = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         assertEq('operations survive deletion of the cache database',
             (await reopened.listOperations()).map((r) => r.op_id), [op.op_id]);
         assertEq('device id survives deletion of the cache database',
@@ -359,9 +360,9 @@ async function run() {
      * `blocked` the caller has to handle. */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         await store.enqueueOperation(tagOp('W-1', 'T-1'));
-        const db = idb.__databases.get('prks-local-v1');
+        const db = idb.__databases.get('prks-local-v2:test');
         assert('the store holds an open connection', db._openConnections > 0);
 
         // Recorded rather than awaited bare: a store that failed to close its
@@ -377,8 +378,8 @@ async function run() {
             outcome.code ? 'rejected with code=' + outcome.code : '');
 
         if (outcome.ok === true) {
-            assert('the database is really gone', !idb.__databases.has('prks-local-v1'));
-            const fresh = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            assert('the database is really gone', !idb.__databases.has('prks-local-v2:test'));
+            const fresh = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
             assertEq('operations are gone after an explicit reset',
                 (await fresh.listOperations()).length, 0);
             assertEq('the store reopens cleanly after a reset',
@@ -389,7 +390,7 @@ async function run() {
     /* ---- the store OWNS device identity: null is unrepresentable ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
 
         // Enqueue FIRST, with no prior getOrCreateDeviceId() call: the store
         // must mint and attach one itself, in the same transaction.
@@ -422,7 +423,7 @@ async function run() {
      * likely to reach it. */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const limit = mod.PRKS_LOCAL_MAX_PAYLOAD_BYTES;
 
         // Three UTF-8 bytes per character: a string whose .length is well
@@ -450,7 +451,7 @@ async function run() {
     /* ---- tightened envelope invariants ---- */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
 
         await assertRejects('a negative base_revision is refused',
             store.enqueueOperation(tagOp('W-1', 'T-1', { base_revision: -1 })), 'invalid_envelope');
@@ -503,7 +504,7 @@ async function run() {
     /* Real transactional coalescing, including a new store after reload. */
     {
         const factory = createFakeIndexedDBFactory();
-        const opts = { indexedDB: factory, uuid: seqUuid };
+        const opts = { dbName: 'prks-local-v2:test', indexedDB: factory, uuid: seqUuid };
         let store = mod.createPrksLocalStore(opts);
         const tag = { id: 'T-C', name: 'Coalesce', color: '#112233', aliases: [] };
         for (const base of [false, true]) {
@@ -539,7 +540,7 @@ async function run() {
      */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const abstractOp = (value) => ({
             operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
             payload: { field: 'abstract', value }, base_revision: 0,
@@ -607,7 +608,7 @@ async function run() {
      */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const authorOp = (value) => ({
             operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-A',
             payload: { field: 'author_text', value }, base_revision: 0,
@@ -668,7 +669,7 @@ async function run() {
      */
     {
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const enqueue = () => store.enqueueOperation({
             operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-R',
             payload: { field: 'author_text', value: 'mine' }, base_revision: 0,
@@ -746,7 +747,7 @@ async function run() {
 
         {
             const idb = createFakeIndexedDBFactory();
-            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
             const batch = await store.createWork(videoFields(), {
                 tags: [{ id: 'T-EXISTING', name: 'Existing' }],
             });
@@ -765,7 +766,7 @@ async function run() {
 
         {
             const idb = createFakeIndexedDBFactory();
-            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
             const tagCreate = await store.createTag({ name: 'Pending' });
             const batch = await store.createWork(videoFields(), {
                 tags: [{ id: tagCreate.entity_id, name: 'Pending' }],
@@ -778,7 +779,7 @@ async function run() {
 
         {
             const idb = createFakeIndexedDBFactory();
-            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
             const batch = await store.createWork(videoFields(), {
                 tags: [{ id: 'T-A', name: 'A' }, { id: 'T-B', name: 'B' }],
             });
@@ -805,7 +806,7 @@ async function run() {
 
         {
             const idb = createFakeIndexedDBFactory();
-            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
             await assertRejects(
                 'invalid selected Tag rolls back the whole create batch',
                 store.createWork(videoFields(), { tags: [{ id: '', name: 'Bad' }] }),
@@ -818,7 +819,7 @@ async function run() {
             /* createWorkDurably must not wake sync until the batch Promise
              * resolves with CREATE_WORK + tags already listed. */
             const idb = createFakeIndexedDBFactory();
-            const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+            const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
             let wakeCount = 0;
             let wokeBeforeCommit = false;
             let opsListedBeforeWake = null;
@@ -858,7 +859,7 @@ async function run() {
             return typeof u === 'string' && u.indexOf('youtube.com/watch') !== -1;
         };
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const fields = {
             title: 'Lifecycle',
             status: 'Not Started',
@@ -894,7 +895,7 @@ async function run() {
         assertEq('DELETE_WORK writes delete lifecycle marker',
             await store.getWorkLifecycle(serverWorkId), 'delete');
         /* Marker survives a new store instance (page reload). */
-        const reopened = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const reopened = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         assertEq('delete marker survives store reopen',
             await reopened.getWorkLifecycle(serverWorkId), 'delete');
         await reopened.updateOperationSyncState(del.op_id, { status: 'acknowledged' });
@@ -925,7 +926,7 @@ async function run() {
             return typeof u === 'string' && u.indexOf('youtube.com/watch') !== -1;
         };
         const idb = createFakeIndexedDBFactory();
-        const store = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         const fields = {
             title: 'CreateThenDelete',
             status: 'Not Started',
@@ -966,7 +967,7 @@ async function run() {
             await store.getWorkLifecycle(workId), 'delete');
 
         /* Simulate reload: a fresh store instance must still read delete. */
-        const afterReload = mod.createPrksLocalStore({ indexedDB: idb, uuid: seqUuid });
+        const afterReload = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: seqUuid });
         assertEq('delete marker survives reload after CREATE retirement',
             await afterReload.getWorkLifecycle(workId), 'delete');
 
@@ -990,7 +991,7 @@ async function run() {
         // what must not exist is a code reference that could reach it.
         const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
         assert('local-store.js never references the disposable cache database in code',
-            code.indexOf('prks-offline-v1') === -1);
+            code.indexOf('prks-offline') === -1 && code.indexOf("dbName('offline')") === -1);
         assert('local-store.js never calls the offline cache store',
             code.indexOf('createPrksOfflineStore') === -1);
     }
