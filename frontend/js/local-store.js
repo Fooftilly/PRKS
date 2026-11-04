@@ -820,8 +820,12 @@
         // deleting. IndexedDB blocks a delete on any open connection --
         // including this store's own.
         let openDbHandle = null;
+        // Bumped when the scope retires: an open still in flight then closes
+        // its connection on arrival instead of handing it to its caller.
+        let openGeneration = 0;
 
         function closeHandle() {
+            openGeneration += 1;
             if (openDbHandle) {
                 try {
                     openDbHandle.close();
@@ -858,8 +862,9 @@
          */
         function openDb() {
             if (dbPromise) return dbPromise;
+            const generation = openGeneration;
             dbPromise = resolveDbName().then(function (dbName) { return new Promise(function (resolve, reject) {
-                if (!dbName) {
+                if (!dbName || generation !== openGeneration) {
                     reject(localStoreError('unavailable', 'Sign in to keep changes on this device.'));
                     return;
                 }
@@ -885,6 +890,16 @@
                     const db = req.result;
                     if (!db) {
                         reject(localStoreError('unavailable', 'Could not open local storage.'));
+                        return;
+                    }
+                    if (generation !== openGeneration) {
+                        // The scope retired while this open was in flight.
+                        try {
+                            db.close();
+                        } catch (_e) {
+                            /* ignore */
+                        }
+                        reject(localStoreError('unavailable', 'Sign in to keep changes on this device.'));
                         return;
                     }
                     openDbHandle = db;

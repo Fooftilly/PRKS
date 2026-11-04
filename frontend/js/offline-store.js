@@ -367,8 +367,12 @@
         let dbPromise = null;
         let openDbHandle = null;
         let unavailable = !idbFactory || !wrap;
+        // Bumped when the scope retires: an open still in flight then closes
+        // its connection on arrival instead of handing it to its caller.
+        let openGeneration = 0;
 
         function closeHandle() {
+            openGeneration += 1;
             if (openDbHandle) {
                 try {
                     openDbHandle.close();
@@ -396,8 +400,9 @@
         function openDb() {
             if (unavailable) return Promise.resolve(null);
             if (dbPromise) return dbPromise;
+            const generation = openGeneration;
             dbPromise = resolveDbName().then(function (dbName) { return new Promise(function (resolve) {
-                if (!dbName) {
+                if (!dbName || generation !== openGeneration) {
                     dbPromise = null;
                     resolve(null);
                     return;
@@ -438,6 +443,16 @@
                             return;
                         }
                         const raw = rawDb(db);
+                        if (generation !== openGeneration) {
+                            // The scope retired while this open was in flight.
+                            try {
+                                if (raw) raw.close();
+                            } catch (_e) {
+                                /* ignore */
+                            }
+                            finish(null);
+                            return;
+                        }
                         openDbHandle = raw;
                         attachVersionChange(raw, function onVersionChange() {
                             try {

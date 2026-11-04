@@ -526,6 +526,37 @@ async function testStores() {
     record('each scope has its own offline cache', idb.__databases.has('prks-offline-v2:A'));
     record('without a scope the cache is unavailable', (await cacheNone.isAvailable()) === false
         && (await cacheNone.putEntity('work', 'W-1', { title: 'T' }, '1')) === false);
+
+    // The scope retires while a database open is still in flight: the open
+    // that completes afterwards must not be used.
+    const retiringOnOpen = (scope) => new Proxy(idb, {
+        get(target, prop) {
+            if (prop !== 'open') {
+                const value = target[prop];
+                return typeof value === 'function' ? value.bind(target) : value;
+            }
+            return function (name, version) {
+                const req = target.open(name, version);
+                scope.retire();
+                return req;
+            };
+        },
+    });
+    const midOpen = stubScope('D');
+    const d = createPrksLocalStore({ indexedDB: retiringOnOpen(midOpen), uuid, scope: midOpen });
+    let midRefused = null;
+    try { await d.recordWorkOpened('W-4', '2026-10-31T09:00:00.000Z'); } catch (err) { midRefused = err; }
+    record('a queue open that completes after retirement is refused',
+        !!midRefused && midRefused.prksLocalStoreCode === 'unavailable', midRefused && midRefused.prksLocalStoreCode);
+    const dAgain = createPrksLocalStore({ indexedDB: idb, uuid, scope: stubScope('D') });
+    record('and writes nothing into the retired queue', (await dAgain.listOperations()).length === 0);
+
+    const midCacheScope = stubScope('E');
+    const cacheE = createPrksOfflineStore({ indexedDB: retiringOnOpen(midCacheScope), scope: midCacheScope });
+    record('a cache open that completes after retirement is refused',
+        (await cacheE.putEntity('work', 'W-1', { title: 'T' }, '1')) === false);
+    const cacheEAgain = createPrksOfflineStore({ indexedDB: idb, scope: stubScope('E') });
+    record('and writes nothing into the retired cache', (await cacheEAgain.getEntity('work', 'W-1')) == null);
 }
 
 function fakeOp(store) {
