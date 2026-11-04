@@ -34,7 +34,6 @@ import {
   MAX_WRITE_WAIT_MS,
   RETRY_FIRST_MS,
   RETRY_MAX_MS,
-  SUPERSEDED_KEY_PREFIX,
   UNKNOWN_BASE,
   emergencyKeyOf,
   reservationKeyOf,
@@ -74,7 +73,7 @@ export type WriterEvent =
 
 export interface WriterRegistryOptions {
   store: RecoveryStore
-  identity: Pick<PageIdentity, 'pageInstanceId' | 'current' | 'setLineageResponder'> & Partial<Pick<PageIdentity, 'setContestListener'>>
+  identity: Pick<PageIdentity, 'pageInstanceId' | 'names' | 'current' | 'setLineageResponder'> & Partial<Pick<PageIdentity, 'setContestListener'>>
   scheduler?: Scheduler
   now?: () => number
   random?: RandomSource
@@ -165,8 +164,10 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const doc = options.document === undefined ? (typeof document !== 'undefined' ? document : null) : options.document
   const storage = options.emergencyStorage === undefined ? defaultLocalStorage() : options.emergencyStorage
   const emit = options.onEvent || (() => {})
-  const emergencyKey = emergencyKeyOf(identity.pageInstanceId)
-  const reservationKey = reservationKeyOf(identity.pageInstanceId)
+  const names = identity.names
+  const supersededPrefix = names.supersededPrefix
+  const emergencyKey = emergencyKeyOf(names, identity.pageInstanceId)
+  const reservationKey = reservationKeyOf(names, identity.pageInstanceId)
 
   const live = new Set<WriterImpl>()
   /** Writers whose body the budget plan puts in the emergency entry. */
@@ -234,7 +235,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
 
   function readSupersededMark(draftId: string): SupersededMark | null {
     try {
-      return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null
+      return storage ? parseSupersededMark(draftId, storage.getItem(supersededPrefix + draftId)) : null
     } catch {
       return null
     }
@@ -247,7 +248,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       const ids: string[] = []
       for (let i = 0; i < storage.length; i++) {
         const key = storage.key(i)
-        if (key && key.startsWith(SUPERSEDED_KEY_PREFIX)) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length))
+        if (key && key.startsWith(supersededPrefix)) ids.push(key.slice(supersededPrefix.length))
       }
       for (const id of ids) {
         const mark = readSupersededMark(id)
@@ -265,7 +266,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (prior && prior.generation >= mark.generation) return
     try {
       if (!storage) throw new Error('no localStorage')
-      storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
+      storage.setItem(supersededPrefix + mark.draftId, JSON.stringify({ pageInstanceId: mark.pageInstanceId, generation: mark.generation }))
     } catch {
       // Only this page can suppress it now: guard leaving until it is deleted.
       unrecorded.add(mark.draftId)
@@ -279,7 +280,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     const mark = readSupersededMark(draftId)
     if (!mark || mark.generation > generation) return
     try {
-      if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId)
+      if (storage) storage.removeItem(supersededPrefix + draftId)
     } catch {
       // Left for a later sweep, which finds the record gone and clears it.
     }

@@ -13,13 +13,13 @@ import { mayHoldUnreadable, mergeEmergencyEntries, readEmergencyKeys, releaseDea
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
 import { classifyLineage, isAdoptable, type LineageClass } from './lineage'
 import {
-  RESERVATION_KEY_PREFIX,
   entityKeyOf,
   isSupportedRecord,
   type DraftEntityType,
   type DraftKind,
   type DraftOwner,
   type DraftRecord,
+  type RecoveryNames,
 } from './schema'
 import { createRecoveryStore, forkedDraftId, type AdoptOutcome, type DeleteOutcome, type RecoveryStore, type RecoveryStoreOptions } from './store'
 import { createWriterRegistry, type WriterEvent, type WriterRegistry, type WriterRegistryOptions } from './writer'
@@ -56,13 +56,20 @@ export interface EntityCleanupReport {
 }
 
 export interface EditorRecoveryRuntimeOptions {
-  store?: RecoveryStoreOptions
-  identity?: IdentityEnv
+  /**
+   * The signed-in browser scope's names (`recoveryNames(scopeKey)`). Required:
+   * a page without a confirmed scope has no recovery runtime at all.
+   */
+  names: RecoveryNames
+  store?: Omit<RecoveryStoreOptions, 'name'>
+  identity?: Omit<IdentityEnv, 'names'>
   writers?: Omit<WriterRegistryOptions, 'store' | 'identity'>
   emergencyStorage?: EmergencyStorage | null
 }
 
 export interface EditorRecoveryRuntime {
+  /** The browser scope whose recovery storage this runtime reads and writes. */
+  readonly names: RecoveryNames
   readonly store: RecoveryStore
   readonly identity: PageIdentity
   readonly writers: WriterRegistry
@@ -111,9 +118,11 @@ function keptFor(lineage: LineageClass, report: EntityCleanupReport): string[] {
   return lineage === 'unknown' ? report.unknown : report.live
 }
 
-export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions = {}): EditorRecoveryRuntime {
-  const store = createRecoveryStore(options.store)
-  const identity = createPageIdentity(options.identity)
+export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions): EditorRecoveryRuntime {
+  const names = options.names
+  if (!names) throw new Error('recovery storage needs a signed-in scope')
+  const store = createRecoveryStore({ ...options.store, name: names.dbName })
+  const identity = createPageIdentity({ ...options.identity, names })
   const emergencyStorage =
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
   const writerListeners = new Set<(event: WriterEvent) => void>()
@@ -148,6 +157,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     if (!emergencyStorage) return []
     const env = {
       storage: emergencyStorage,
+      names,
       store,
       pageInstanceId: identity.pageInstanceId,
       isPageAlive: (id: string) => identity.isPageAlive(id),
@@ -164,7 +174,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       verifiedRuntimeId: !definiteOnly && claim && claim.verified !== 'unverified' ? claim.runtimeId : null,
     })
     // A page taken for gone that is only busy or frozen writes it again.
-    for (const key of removed) identity.announceReservationRemoved(key.slice(RESERVATION_KEY_PREFIX.length))
+    for (const key of removed) identity.announceReservationRemoved(key.slice(names.reservationPrefix.length))
     return reports
   }
 
@@ -185,7 +195,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
 
   function discardReviewed(reviewed: ReviewedRecord & Pick<DraftRecord, 'kind' | 'entityType' | 'entityId'>): Promise<DeleteOutcome> {
     const expected = { pageInstanceId: reviewed.pageInstanceId, generation: reviewed.generation, status: reviewed.status }
-    const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null
+    const listing = emergencyStorage ? listingPage(emergencyStorage, names, reviewed.draftId) : null
     const tombstone = listing
       ? { kind: reviewed.kind, entityType: reviewed.entityType, entityId: reviewed.entityId, generation: reviewed.generation, pageInstanceId: listing }
       : undefined
@@ -201,7 +211,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     report: EntityCleanupReport,
   ): Promise<void> {
     if (!emergencyStorage) return
-    for (const stored of readEmergencyKeys(emergencyStorage)) {
+    for (const stored of readEmergencyKeys(emergencyStorage, names)) {
       const payload = stored.payload
       if (!payload) {
         // A key a later read or a newer bundle may still recover could hold this entity: left alone and reported.
@@ -276,6 +286,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   }
 
   return {
+    names,
     store,
     identity,
     writers,
@@ -311,8 +322,8 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
 }
 
 /** The page whose emergency key still lists `draftId` (or its fork), if any. */
-function listingPage(storage: EmergencyStorage, draftId: string): string | null {
-  for (const stored of readEmergencyKeys(storage)) {
+function listingPage(storage: EmergencyStorage, names: RecoveryNames, draftId: string): string | null {
+  for (const stored of readEmergencyKeys(storage, names)) {
     const entries = stored.payload ? stored.payload.entries : []
     if (entries.some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) {
       return stored.pageInstanceId

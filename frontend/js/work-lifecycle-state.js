@@ -213,7 +213,22 @@
      * Works never overwrite each other's marks. A mark goes only once
      * nothing of its Work is left, or the server holds the Work again;
      * never for its age, its count or how often a retry was inconclusive. */
-    const DELETED_WORK_PREFIX = 'prks.workRecoveryCleanup.v1.';
+    /* The key prefix is the signed-in browser scope's (editor-recovery
+     * `RecoveryNames.deletedWorkPrefix`): another account in this browser
+     * never reads or clears these marks. Without a scope there are none. */
+    function recoveryNames() {
+        const api = root.prksEditorRecovery;
+        if (!api || typeof api.scopeNames !== 'function') return null;
+        try {
+            return api.scopeNames();
+        } catch (_e) {
+            return null;
+        }
+    }
+    function deletedWorkPrefix() {
+        const names = recoveryNames();
+        return names && typeof names.deletedWorkPrefix === 'string' ? names.deletedWorkPrefix : null;
+    }
     /* Works retried per page load, the least recently tried first; the rest
      * wait for a later load. */
     const RETRY_MAX_WORKS = 8;
@@ -230,11 +245,11 @@
         }
     }
 
-    function readDeletedWork(storage, key) {
+    function readDeletedWork(storage, prefix, key) {
         try {
             const value = JSON.parse(storage.getItem(key) || 'null');
             if (!value || typeof value.marked !== 'number' || typeof value.tried !== 'number') return null;
-            return { id: key.slice(DELETED_WORK_PREFIX.length), marked: value.marked, tried: value.tried };
+            return { id: key.slice(prefix.length), marked: value.marked, tried: value.tried };
         } catch (_e) {
             return null;
         }
@@ -242,12 +257,14 @@
     /** Marked Works, the least recently tried first (never tried: the earliest marked first). */
     function readDeletedWorks() {
         const marks = [];
+        const prefix = deletedWorkPrefix();
+        if (!prefix) return marks;
         try {
             const storage = root.localStorage;
             for (let i = 0; i < storage.length; i += 1) {
                 const key = storage.key(i);
-                if (!key || key.indexOf(DELETED_WORK_PREFIX) !== 0 || key.length === DELETED_WORK_PREFIX.length) continue;
-                const mark = readDeletedWork(storage, key);
+                if (!key || key.indexOf(prefix) !== 0 || key.length === prefix.length) continue;
+                const mark = readDeletedWork(storage, prefix, key);
                 if (mark) marks.push(mark);
             }
         } catch (_e) {
@@ -258,8 +275,10 @@
         });
     }
     function writeDeletedWork(workId, value) {
+        const prefix = deletedWorkPrefix();
+        if (!prefix) return;
         try {
-            root.localStorage.setItem(DELETED_WORK_PREFIX + workId, JSON.stringify(value));
+            root.localStorage.setItem(prefix + workId, JSON.stringify(value));
         } catch (_e) {
             /* Storage unavailable: this load's cleanup still runs, only a retry is lost. */
         }
@@ -272,17 +291,21 @@
         const later = readDeletedWorks().reduce(function (latest, other) {
             return Math.max(latest, other.tried + 1);
         }, Date.now());
+        const prefix = deletedWorkPrefix();
+        if (!prefix) return;
         let current = null;
         try {
-            current = readDeletedWork(root.localStorage, DELETED_WORK_PREFIX + mark.id);
+            current = readDeletedWork(root.localStorage, prefix, prefix + mark.id);
         } catch (_e) {
             current = null;
         }
         if (current) writeDeletedWork(mark.id, { marked: current.marked, tried: later });
     }
     function unmarkDeletedWork(workId) {
+        const prefix = deletedWorkPrefix();
+        if (!prefix) return;
         try {
-            root.localStorage.removeItem(DELETED_WORK_PREFIX + workId);
+            root.localStorage.removeItem(prefix + workId);
         } catch (_e) {
             /* Left marked: a later retry finds nothing and clears it. */
         }
@@ -295,10 +318,12 @@
      */
     async function recoveryMayHold(workId) {
         const api = root.prksEditorRecovery;
-        if (!api) return false;
-        if (await recoveryStorageExists() !== false) return true;
+        const names = recoveryNames();
+        /* Without a scope this page has no recovery storage to look in. */
+        if (!api || !names) return false;
+        if (await recoveryStorageExists(names) !== false) return true;
         try {
-            return api.readEmergencyKeys(root.localStorage).some(function (stored) {
+            return api.readEmergencyKeys(root.localStorage, names).some(function (stored) {
                 /* A key a later read or a newer bundle may still recover could name the Work. */
                 if (!stored.payload) return api.mayHoldUnreadable(stored);
                 return stored.payload.entries.some(function (entry) {
@@ -360,13 +385,12 @@
     }
 
     /** Whether the recovery database exists; null where the browser cannot list databases. */
-    async function recoveryStorageExists() {
-        const api = root.prksEditorRecovery;
+    async function recoveryStorageExists(names) {
         const factory = root.indexedDB;
-        if (!api || !factory || typeof factory.databases !== 'function') return null;
+        if (!factory || typeof factory.databases !== 'function') return null;
         try {
             return (await factory.databases()).some(function (db) {
-                return db && db.name === api.RECOVERY_DB_NAME;
+                return db && db.name === names.dbName;
             });
         } catch (_e) {
             return null;
@@ -418,8 +442,16 @@
     }
 
     /* Once per page load, after the server has first been observed reachable,
-     * and only when a confirmed deletion is still marked. */
+     * and only when a confirmed deletion is still marked. The marks are the
+     * signed-in scope's, so they are read once that scope is resolved. */
     function armRecoveryRetry() {
+        const scope = root.prksBrowserScope;
+        if (!scope || typeof scope.resolve !== 'function') return;
+        scope.resolve().then(function (bound) {
+            if (bound) armRecoveryRetryInScope();
+        }, function () { /* no scope: no marks this load */ });
+    }
+    function armRecoveryRetryInScope() {
         if (retryStarted || !readDeletedWorks().length || typeof root.prksOfflineRuntimeSubscribe !== 'function' ||
             typeof root.prksOfflineRuntimeState !== 'function') return;
         let unsubscribe = null;

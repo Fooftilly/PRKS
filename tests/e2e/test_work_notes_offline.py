@@ -552,11 +552,15 @@ class ResearchNotesRecoveryTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(sorted(r['body'][-13:] for r in records), sorted([' From tab one', ' From tab two']))
 
 
+# The runtime exists once browser-scope.js confirmed the signed-in scope (#629).
+_RECOVERY_READY = "() => !!window.prksEditorRecovery && !!window.prksEditorRecovery.runtime()"
+
+
 _WITHOUT_RECOVERY_STORAGE = """
     (() => {
         const open = IDBFactory.prototype.open;
         IDBFactory.prototype.open = function (name) {
-            if (name === 'prks-editor-recovery-v1') throw new DOMException('Recovery storage refused', 'QuotaExceededError');
+            if (String(name).indexOf('prks-editor-recovery-v2:') === 0) throw new DOMException('Recovery storage refused', 'QuotaExceededError');
             return open.apply(this, arguments);
         };
     })();
@@ -1212,11 +1216,11 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             message='recovery drafts outlived the acknowledged delete')
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
         # Only a later load, finding nothing of the Work left, clears its mark.
-        mark = "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)"
+        mark = "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)"
         self.assertIsNotNone(page.evaluate(mark, work))
         page.reload()
         page.wait_for_function(
-            "(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId) === null",
+            "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId) === null",
             arg=work, timeout=20000)
 
     def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
@@ -1277,9 +1281,10 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         # is still marked, and a tab that closed before its first IndexedDB commit left the draft
         # only in its emergency key.
         page.evaluate("""(workId) => {
-            localStorage.setItem('prks.workRecoveryCleanup.v1.' + workId, JSON.stringify({ marked: 1, tried: 0 }));
+            const names = window.prksEditorRecovery.scopeNames();
+            localStorage.setItem(names.deletedWorkPrefix + workId, JSON.stringify({ marked: 1, tried: 0 }));
             const pageInstanceId = 'p-closed-before-commit';
-            localStorage.setItem('prks.editorRecovery.emergency.v1.' + pageInstanceId, JSON.stringify({
+            localStorage.setItem(names.emergencyPrefix + pageInstanceId, JSON.stringify({
                 v: 1, pageInstanceId, runtimeId: null, at: Date.now(),
                 entries: [{
                     draftId: 'd-closed-before-commit', kind: 'work-private-note', entityType: 'work', entityId: workId,
@@ -1297,15 +1302,16 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
         tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
         tab.wait_for_selector('#sidebar')
+        tab.wait_for_function(_RECOVERY_READY)
         wait_for_async(
             tab,
             """(workId) => window.prksEditorRecovery.runtime().store.listAll().then(rows =>
-                Object.keys(localStorage).every(k => k.indexOf('prks.editorRecovery.emergency.v1.p-closed-before-commit') !== 0) &&
+                Object.keys(localStorage).every(k => k.indexOf(window.prksEditorRecovery.scopeNames().emergencyPrefix + 'p-closed-before-commit') !== 0) &&
                 rows.every(r => r.entityId !== workId || r.status === 'discarded'))""",
             arg=work,
             timeout=20000,
             message='a draft only an emergency key held outlived its acknowledged delete')
-        self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem('prks.workRecoveryCleanup.v1.' + workId)", work))
+        self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)", work))
 
     def test_drafts_of_a_work_missing_on_the_server_are_kept_on_the_next_load(self):
         server, page, context = self.start()
@@ -1326,6 +1332,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
         tab.wait_for_selector('#sidebar')
         tab.wait_for_function("() => window.prksOfflineRuntimeState && window.prksOfflineRuntimeState() === 'online'", timeout=20000)
+        tab.wait_for_function(_RECOVERY_READY)
         self.assertEqual(tab.evaluate(_WORK_RECOVERY_RECORDS, work), ['work-private-note:active'])
         self.assertEqual(probes, [])
 
@@ -1334,8 +1341,9 @@ _DIAG_SEED_UNREADABLE = """
     async () => {
         // A record a newer PRKS wrote (kept for that version) and two emergency
         // keys this build cannot parse: one of a newer schema, one damaged.
+        const names = window.prksEditorRecovery.scopeNames();
         const db = await new Promise((resolve, reject) => {
-            const req = indexedDB.open('prks-editor-recovery-v1', 1);
+            const req = indexedDB.open(names.dbName, 1);
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
         });
@@ -1348,9 +1356,9 @@ _DIAG_SEED_UNREADABLE = """
             tx.onerror = () => reject(tx.error);
         });
         db.close();
-        localStorage.setItem('prks.editorRecovery.emergency.v1.p-newer',
+        localStorage.setItem(names.emergencyPrefix + 'p-newer',
             JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] }));
-        localStorage.setItem('prks.editorRecovery.emergency.v1.p-broken', '{"v": 1, "entr');
+        localStorage.setItem(names.emergencyPrefix + 'p-broken', '{"v": 1, "entr');
     }
 """
 
@@ -1536,8 +1544,8 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(self.rows(section, 'unreadable-record').count(), 1)
         self.assertEqual(self.rows(section, 'unreadable-emergency').count(), 2)
         self.assertEqual(tab.evaluate("""() => [
-            localStorage.getItem('prks.editorRecovery.emergency.v1.p-broken'),
-            !!localStorage.getItem('prks.editorRecovery.emergency.v1.p-newer'),
+            localStorage.getItem(window.prksEditorRecovery.scopeNames().emergencyPrefix + 'p-broken'),
+            !!localStorage.getItem(window.prksEditorRecovery.scopeNames().emergencyPrefix + 'p-newer'),
         ]"""), ['{"v": 1, "entr', True])
         self.assertEqual(tab.evaluate("""() => window.prksEditorRecovery.runtime().store.get('d-from-newer-prks')
             .then(r => r && r.v)"""), 99)

@@ -19,8 +19,11 @@ accounts of one Library, signed into one browser by `POST /api/login`.
   two tabs of two accounts asking for the same path get different bytes, and
   a retired tab gets none.
 
-Editor recovery drafts are scoped in a later slice; these tests use the
-durable operation queue (`prksSync.store`).
+- Editor recovery drafts (#466) live in per-account storage: one account's
+  drafts and emergency copies are never listed, merged or released for
+  another account, and without a session recovery stores nothing.
+
+The queue tests use the durable operation queue (`prksSync.store`).
 """
 
 import json
@@ -68,6 +71,44 @@ _OPS = """
 
 _DATABASES = """
     async () => (await indexedDB.databases()).map((d) => d.name).filter(Boolean).sort()
+"""
+
+
+_RECOVERY_READY = "() => !!window.prksEditorRecovery && !!window.prksEditorRecovery.runtime()"
+
+_SEED_DRAFT = """
+    async ({ workId, body }) => {
+        const rt = window.prksEditorRecovery.runtime();
+        const pageInstanceId = 'p-elsewhere-' + body.length;
+        const outcome = await rt.store.writeGeneration({
+            draftId: 'd-' + pageInstanceId, pageInstanceId, generation: 1, body,
+            create: { kind: 'work-research-note', entityType: 'work', entityId: workId,
+                      owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1', claimedAt: Date.now() },
+                      base: { revision: null, length: null, fingerprint: null, source: 'unknown' } },
+        });
+        // A copy only an emergency key holds, as a tab that closed before its commit leaves.
+        const names = rt.names;
+        localStorage.setItem(names.emergencyPrefix + 'p-emergency', JSON.stringify({
+            v: 1, pageInstanceId: 'p-emergency', runtimeId: null, at: Date.now(),
+            entries: [{ draftId: 'd-emergency', kind: 'work-research-note', entityType: 'work', entityId: workId,
+                        generation: 1, committedGeneration: 0, body: body + ' (emergency)',
+                        lineage: { createdAt: Date.now(), owner: { runtimeId: null, pageInstanceId: 'p-emergency', paneId: 'tab-1' },
+                                   base: { revision: null, length: null, fingerprint: null, source: 'unknown' } } }],
+        }));
+        return { outcome, names: { ...names } };
+    }
+"""
+
+_DRAFT_BODIES = """
+    async () => {
+        const store = window.prksEditorRecovery.runtime().store;
+        const out = [];
+        for (const row of await store.listAll()) {
+            const body = await store.getBody(row.draftId);
+            out.push(body ? body.body : null);
+        }
+        return out.sort();
+    }
 """
 
 
@@ -494,6 +535,60 @@ class BrowserScopeTests(unittest.TestCase):
         page = self.open_page()
         self.assertEqual([r["op_id"] for r in page.evaluate(_OPS)], [op_id])
         self.wait_delivered(page)
+
+    def test_two_accounts_in_one_browser_never_see_each_others_recovery_drafts(self):
+        owner_id = self.server.library.accounts[OWNER_LOGIN]
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        page.wait_for_function(_RECOVERY_READY)
+        seeded = page.evaluate(_SEED_DRAFT, {"workId": self.work_id, "body": "Owner text"})
+        self.assertEqual(seeded["outcome"], "ok")
+        owner_names = seeded["names"]
+        self.assertTrue(owner_names["dbName"].startswith("prks-editor-recovery-v2:"), owner_names)
+        self.assertTrue(owner_names["dbName"].endswith("." + owner_id), owner_names)
+        page.close()
+
+        self.sign_in(READER)
+        page = self.open_page()
+        page.wait_for_function(_RECOVERY_READY)
+        reader_names = page.evaluate("() => ({ ...prksEditorRecovery.scopeNames() })")
+        for key in ("dbName", "emergencyPrefix", "reservationPrefix", "closedPagePrefix",
+                    "supersededPrefix", "deletedWorkPrefix", "channel", "runtimeLockPrefix", "pageLockPrefix"):
+            self.assertNotEqual(reader_names[key], owner_names[key], key)
+        page.evaluate("() => prksEditorRecovery.runtime().scanEmergency().then(() => null)")
+        self.assertEqual(page.evaluate(_DRAFT_BODIES), [], "the reader must not see the owner's drafts")
+        # The reader's page never merges or removes the owner's emergency copy.
+        self.assertIsNotNone(
+            page.evaluate("(key) => localStorage.getItem(key)", owner_names["emergencyPrefix"] + "p-emergency"))
+        page.evaluate(_SEED_DRAFT, {"workId": self.work_id, "body": "Reader text, longer"})
+        self.assertIn(owner_names["dbName"], page.evaluate(_DATABASES), "the owner's drafts must still exist")
+        page.close()
+
+        # The owner signs in again: the owner's drafts are there, the emergency
+        # copy merged, and nothing the reader wrote.
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        page.wait_for_function(_RECOVERY_READY)
+        wait_for_async(
+            page,
+            "async () => { await prksEditorRecovery.runtime().scanEmergency();"
+            " const b = await (" + _DRAFT_BODIES + ")(); return b.includes('Owner text (emergency)') && b; }",
+            message="the owner's emergency copy was not merged into the owner's drafts",
+        )
+        bodies = page.evaluate(_DRAFT_BODIES)
+        self.assertIn("Owner text", bodies)
+        self.assertFalse([b for b in bodies if b and b.startswith("Reader text")], bodies)
+
+    def test_without_a_session_recovery_stores_nothing(self):
+        page = self.context.new_page()
+        page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        page.wait_for_function("() => !!window.prksBrowserScope && !!window.prksEditorRecovery")
+        self.assertIsNone(page.evaluate("() => prksBrowserScope.resolve()"))
+        self.assertIsNone(page.evaluate("() => prksEditorRecovery.runtime()"))
+        self.assertIsNone(page.evaluate("() => prksEditorRecovery.scopeNames()"))
+        self.assertFalse([n for n in page.evaluate(_DATABASES) if n.startswith("prks-editor-recovery")])
+        self.assertFalse(page.evaluate(
+            "() => Object.keys(localStorage).some((k) => k.startsWith('prks.editorRecovery.'))"))
 
     def test_without_a_session_no_store_is_opened(self):
         page = self.context.new_page()

@@ -1,13 +1,13 @@
 /**
  * Browser-local editor draft recovery (#466): names, budgets and record shapes.
  *
- * Recovery drafts live in their own IndexedDB database. They are not server
- * state, not the semantic operation queue (`prks-local-v1`) and not a cache;
+ * Recovery drafts live in their own IndexedDB database, one per browser
+ * scope (`RecoveryNames`). They are not server state, not the semantic
+ * operation queue (`prks-local-v2:<scope>`) and not a cache;
  * Clear offline cache never touches them. Nothing here claims that a body was
  * saved: the queue and the server stay the only authorities for that.
  */
 
-export const RECOVERY_DB_NAME = 'prks-editor-recovery-v1'
 export const RECOVERY_DB_VERSION = 1
 export const DRAFTS_STORE = 'drafts'
 export const BODIES_STORE = 'bodies'
@@ -15,45 +15,87 @@ export const BODIES_STORE = 'bodies'
 /** Record schema version written by this build. Readers accept `v <= RECORD_VERSION`. */
 export const RECORD_VERSION = 1
 export const EMERGENCY_VERSION = 1
-
-/** One localStorage key per page load, so duplicated tabs never share an entry. */
-export const EMERGENCY_KEY_PREFIX = 'prks.editorRecovery.emergency.v1.'
-/**
- * One key per page load holding filler that reserves quota for that page's
- * emergency payload. Not under the emergency prefix, so it is never read as a draft.
- * The value starts with the page's runtime id and a newline (see reservationValue).
- */
-export const RESERVATION_KEY_PREFIX = 'prks.editorRecovery.reserve.v1.'
 /** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
 export const EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024
-/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
-export const RUNTIME_SESSION_KEY = 'prks.editorRecovery.runtime.v1'
-/**
- * Pages of this tab that ran `pagehide`, newest last. A duplicated tab copies
- * it before the original closes, so it never lists a page still open there.
- */
-export const CLOSED_PAGES_SESSION_KEY = 'prks.editorRecovery.closed.v1'
 export const CLOSED_PAGES_KEPT = 8
-/**
- * Pages of any tab that ran a final `pagehide` (not into the back/forward
- * cache), newest last: positive evidence that the page is gone where Web
- * Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
- * never records itself, so its drafts stay `unknown`. One key per page,
- * valued with its close time: tabs closing together never overwrite each
- * other's record. The oldest beyond the bound are pruned.
- */
-export const CLOSED_PAGE_KEY_PREFIX = 'prks.editorRecovery.closedPage.v1.'
 export const CLOSED_PAGES_LOCAL_KEPT = 64
+
 /**
- * One key per draft whose stored generation the server already superseded
- * and whose removal recovery storage refused: `{ pageInstanceId, generation }`.
- * Kept outside recovery storage, so every page still never restores it and
- * finishes the removal. One key per draft: no tab rewrites another's mark.
+ * Every name recovery storage uses, for one browser scope (#629): the
+ * signed-in `(instance_id, library_id, user_id)`, as `frontend/js/browser-scope.js`
+ * resolves it. Each name carries the scope key, so another account in the
+ * same browser never opens, reads, lists or signals this scope's drafts,
+ * emergency copies, reservations, page records or locks. There is no
+ * unscoped name: without a scope recovery stores nothing.
  */
-export const SUPERSEDED_KEY_PREFIX = 'prks.editorRecovery.superseded.v1.'
-export const RECOVERY_CHANNEL = 'prks-editor-recovery-v1'
-export const RUNTIME_LOCK_PREFIX = 'prks-editor-recovery-runtime:'
-export const PAGE_LOCK_PREFIX = 'prks-editor-recovery-page:'
+export interface RecoveryNames {
+  readonly scopeKey: string
+  /** IndexedDB database of drafts and bodies. */
+  readonly dbName: string
+  /** One localStorage key per page load, so duplicated tabs never share an entry. */
+  readonly emergencyPrefix: string
+  /**
+   * One key per page load holding filler that reserves quota for that page's
+   * emergency payload. Not under the emergency prefix, so it is never read as a draft.
+   * The value starts with the page's runtime id and a newline (see reservationValue).
+   */
+  readonly reservationPrefix: string
+  /** sessionStorage: candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
+  readonly runtimeSessionKey: string
+  /**
+   * sessionStorage: pages of this tab that ran `pagehide`, newest last. A
+   * duplicated tab copies it before the original closes, so it never lists a
+   * page still open there.
+   */
+  readonly closedPagesSessionKey: string
+  /**
+   * Pages of any tab that ran a final `pagehide` (not into the back/forward
+   * cache), newest last: positive evidence that the page is gone where Web
+   * Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
+   * never records itself, so its drafts stay `unknown`. One key per page,
+   * valued with its close time: tabs closing together never overwrite each
+   * other's record. The oldest beyond the bound are pruned.
+   */
+  readonly closedPagePrefix: string
+  /**
+   * One key per draft whose stored generation the server already superseded
+   * and whose removal recovery storage refused: `{ pageInstanceId, generation }`.
+   * Kept outside recovery storage, so every page still never restores it and
+   * finishes the removal. One key per draft: no tab rewrites another's mark.
+   */
+  readonly supersededPrefix: string
+  /** One key per Work whose deletion this browser confirmed (#533). */
+  readonly deletedWorkPrefix: string
+  readonly channel: string
+  readonly runtimeLockPrefix: string
+  readonly pageLockPrefix: string
+}
+
+const SCOPE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}\.[A-Za-z0-9_-]{1,128}\.[A-Za-z0-9_-]{1,128}$/
+
+/** A scope key as browser-scope.js forms it: `<instanceId>.<libraryId>.<userId>`. */
+export function isScopeKey(value: unknown): value is string {
+  return typeof value === 'string' && SCOPE_KEY_PATTERN.test(value)
+}
+
+/** The names of one scope's recovery storage. Throws on anything that is not a scope key. */
+export function recoveryNames(scopeKey: string): RecoveryNames {
+  if (!isScopeKey(scopeKey)) throw new Error('recovery storage needs a signed-in scope')
+  return Object.freeze({
+    scopeKey,
+    dbName: 'prks-editor-recovery-v2:' + scopeKey,
+    emergencyPrefix: 'prks.editorRecovery.emergency.v2.' + scopeKey + '.',
+    reservationPrefix: 'prks.editorRecovery.reserve.v2.' + scopeKey + '.',
+    runtimeSessionKey: 'prks.editorRecovery.runtime.v2.' + scopeKey,
+    closedPagesSessionKey: 'prks.editorRecovery.closed.v2.' + scopeKey,
+    closedPagePrefix: 'prks.editorRecovery.closedPage.v2.' + scopeKey + '.',
+    supersededPrefix: 'prks.editorRecovery.superseded.v2.' + scopeKey + '.',
+    deletedWorkPrefix: 'prks.workRecoveryCleanup.v2.' + scopeKey + '.',
+    channel: 'prks-editor-recovery-v2:' + scopeKey,
+    runtimeLockPrefix: 'prks-editor-recovery-runtime:' + scopeKey + ':',
+    pageLockPrefix: 'prks-editor-recovery-page:' + scopeKey + ':',
+  })
+}
 
 /** Bodies above this are "large": written immediately and leave-guarded until committed. */
 export const LARGE_BODY_CHARS = 256 * 1024
@@ -181,12 +223,12 @@ export function entityKeyOf(kind: DraftKind, entityId: string): string {
   return kind + ':' + entityId
 }
 
-export function emergencyKeyOf(pageInstanceId: string): string {
-  return EMERGENCY_KEY_PREFIX + pageInstanceId
+export function emergencyKeyOf(names: RecoveryNames, pageInstanceId: string): string {
+  return names.emergencyPrefix + pageInstanceId
 }
 
-export function reservationKeyOf(pageInstanceId: string): string {
-  return RESERVATION_KEY_PREFIX + pageInstanceId
+export function reservationKeyOf(names: RecoveryNames, pageInstanceId: string): string {
+  return names.reservationPrefix + pageInstanceId
 }
 
 /**

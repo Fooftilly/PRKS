@@ -22,7 +22,6 @@ import {
   BODIES_STORE,
   DRAFTS_STORE,
   RECORD_VERSION,
-  RECOVERY_DB_NAME,
   RECOVERY_DB_VERSION,
   UNKNOWN_BASE,
   entityKeyOf,
@@ -57,7 +56,8 @@ export type DurabilityMode = 'relaxed' | 'default'
 
 export interface RecoveryStoreOptions {
   indexedDB?: IDBFactory | null
-  name?: string
+  /** The scope's database (`RecoveryNames.dbName`). Required: there is no unscoped database. */
+  name: string
   /**
    * 'auto' requests relaxed durability when `IDBTransaction.prototype` exposes
    * `durability`. Tests force 'relaxed' (try the option even without the
@@ -210,9 +210,10 @@ export function forkedDraftId(draftId: string, generation: number): string {
   return draftId + '.e' + generation
 }
 
-export function createRecoveryStore(options: RecoveryStoreOptions = {}): RecoveryStore {
+export function createRecoveryStore(options: RecoveryStoreOptions): RecoveryStore {
   const factory = options.indexedDB === undefined ? globalThis.indexedDB : options.indexedDB
-  const name = options.name || RECOVERY_DB_NAME
+  const name = options.name
+  if (!name) throw new Error('recovery storage needs a signed-in scope')
   const now = options.now || Date.now
   const durability = options.durability || 'auto'
   const compare = { fingerprint: options.fingerprint }

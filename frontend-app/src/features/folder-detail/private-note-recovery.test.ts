@@ -14,8 +14,8 @@ import uiSource from '../../../../frontend/js/ui.js?raw'
 import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { RUNTIME_SESSION_KEY, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
-import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
+import { type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { createFakeBrowser, TEST_NAMES } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { memoryStorage, startRecoveryPage, type RecoveryPage } from '../work/test-support/work-note-harness'
 import { createFolderQueue, type FolderRow, type FolderServer } from './test-support/folder-note-queue'
@@ -98,7 +98,7 @@ const sync = createFolderQueue(server)
 
 const browser = createFakeBrowser()
 let idb = createFakeIdb()
-let session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
+let session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: 'r-' + 'a'.repeat(32) })
 let local = memoryStorage()
 let page: RecoveryPage | null = null
 let pageSeq = 0
@@ -269,7 +269,7 @@ beforeEach(async () => {
   withoutLocks = false
   focused = 'tab-1'
   idb = createFakeIdb()
-  session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
+  session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: 'r-' + 'a'.repeat(32) })
   local = memoryStorage()
   sync.reset()
   server[FA] = { private_notes: SAVED, revision: 5 }
@@ -628,7 +628,7 @@ describe('Folder Reminders restore', () => {
     page!.rt.dispose()
     page!.locks.releaseAll()
     const copied = 'r-' + 'b'.repeat(32)
-    const first = startRecoveryPage({ browser, name: 'first-tab', idb, session: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: copied }), local, withoutLocks: false, background: true })
+    const first = startRecoveryPage({ browser, name: 'first-tab', idb, session: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: copied }), local, withoutLocks: false, background: true })
     await first.rt.start()
     const api = win.prksEditorRecovery as { fingerprintText(text: string): string }
     const live = first.rt.writers.openWriter({
@@ -637,7 +637,7 @@ describe('Folder Reminders restore', () => {
     })
     live.edit(1, 'Saved reminder. Still typing in the first tab')
     await live.flush()
-    session = duplicated ? browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: copied }) : browser.sessionStorageWith()
+    session = duplicated ? browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: copied }) : browser.sessionStorageWith()
     startPage()
     const { ctx, ta, result } = await openAndRestore()
     expect(result!.restored).toBe(false)

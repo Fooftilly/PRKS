@@ -157,7 +157,7 @@ _WITHOUT_RECOVERY_STORAGE = """
     (() => {
         const open = IDBFactory.prototype.open;
         IDBFactory.prototype.open = function (name) {
-            if (name === 'prks-editor-recovery-v1') throw new DOMException('Recovery storage refused', 'QuotaExceededError');
+            if (String(name).indexOf('prks-editor-recovery-v2:') === 0) throw new DOMException('Recovery storage refused', 'QuotaExceededError');
             return open.apply(this, arguments);
         };
     })();

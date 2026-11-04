@@ -1590,7 +1590,7 @@ authenticated owner of a `ready` instance (§11.4).
   newer than the acknowledged or durably retained body, and a newer body that
   cannot be submitted because an earlier save is in flight remains
   represented and retries. The #465 regression tests are kept.
-- The #466 recovery layer: `prks-editor-recovery-v1` stays its own database,
+- The #466 recovery layer: `prks-editor-recovery-v2:<scope>` stays its own database,
   separate from the queue and the cache; a draft is cleared only by an exact
   acknowledgement of the same generation and body, proven equality, explicit
   discard, or a confirmed deletion seen by this device; nothing is deleted by
@@ -1621,16 +1621,21 @@ account's queued intents or recovered drafts to another. Recommendation:
   per-scope database names (`prks-local-v2:<scope-hash>`). A different scope
   never opens them. Pending rows of another scope stay where they are and are
   delivered when that account signs in again in this browser.
-- **Recovery** (`prks-editor-recovery-v1`): one database, a required `scope`
-  field on every record, indexed. Records whose scope is not the signed-in
-  one are never shown. On sign-out, nothing is deleted.
-- **Pre-0.8 data in the browser.** An unscoped `prks-local-v1` queue cannot be
-  delivered to a 0.8 server (its IDs and revisions refer to a database that no
-  longer exists), but it may hold user text. It is never silently deleted:
-  the 0.8 client reads it once, offers it as a review-only "unsent changes
-  from an earlier PRKS version" list with copy-out, and removes it only on an
-  explicit discard. Unscoped recovery drafts are treated as unknown-owner,
-  review-only drafts, exactly as #489 already treats unknown owners.
+- **Recovery** (`prks-editor-recovery-v2:<scope>`): per-scope names, like the
+  queue and the cache, not one database with a scope field. The database and
+  every other name recovery uses carry the scope key: the localStorage
+  emergency copies, quota reservations, closed-page records, superseded and
+  deleted-Work marks, the sessionStorage runtime and closed-page keys, the
+  BroadcastChannel and the Web Locks (`frontend-app/src/lifecycle/editor-recovery/schema.ts`,
+  `recoveryNames`). Another account never opens, lists, merges or releases
+  them. A page binds its scope when its recovery runtime is created and keeps
+  it for its life; without a confirmed scope recovery stores nothing (fail
+  closed). On sign-out, expiry or an account switch, nothing is deleted.
+- **Pre-0.8 data in the browser.** Pre-1.0 PRKS keeps no compatibility with
+  unscoped browser data (#629, decided 2026-10-30): the 0.8 client never
+  reads `prks-local-v1`, `prks-offline-v1`, `prks-pdf-v1` or
+  `prks-editor-recovery-v1` and their localStorage keys, never replays or
+  migrates them, and never deletes them.
 
 ### 10.4 New client rules under authentication
 
@@ -3050,7 +3055,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R11 | Agents run tests against a real database | Low | Critical | Harness-created databases only, `instance.testing` flag, refusal on mismatch (§13.1) |
 | R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16, decision 4); the folding check rebuilds search data when the rules or the server release change (§8.6) |
 | R13 | Dual-run period lingers and SQLite stays half-alive | Medium | High | Cutover and deletion in the same release (PG22), tracked as a release gate in #614 |
-| R14 | Browser data from pre-0.8 lost at cutover | Low | High | §10.3 review-only legacy queue and drafts, never auto-deleted |
+| R14 | Browser data from pre-0.8 lost at cutover | Low | High | §10.3: pre-1.0, the old stores are never read and never deleted |
 | R15 | #60 Version/merge features designed against the old mirror model | Low | Medium | §6.4 states the mechanics change; #60 slices G–L consume the new schema |
 | R16 | An archive becomes unreadable after a PostgreSQL major or column-type change | Medium | Critical after 1.0 | Text `COPY` with interchange types (§11.4); golden archives restored in CI on every supported major |
 | R17 | A restore races ordinary writers, jobs or cleanup | Medium | High | Committed maintenance flag, maintenance lock drain, objects lock (§11.4); interleaving tests (§13.3) |

@@ -145,56 +145,45 @@ var prksEditorRecovery = (function(exports) {
 	/**
 	* Browser-local editor draft recovery (#466): names, budgets and record shapes.
 	*
-	* Recovery drafts live in their own IndexedDB database. They are not server
-	* state, not the semantic operation queue (`prks-local-v1`) and not a cache;
+	* Recovery drafts live in their own IndexedDB database, one per browser
+	* scope (`RecoveryNames`). They are not server state, not the semantic
+	* operation queue (`prks-local-v2:<scope>`) and not a cache;
 	* Clear offline cache never touches them. Nothing here claims that a body was
 	* saved: the queue and the server stay the only authorities for that.
 	*/
-	var RECOVERY_DB_NAME = "prks-editor-recovery-v1";
 	var RECOVERY_DB_VERSION = 1;
 	var DRAFTS_STORE = "drafts";
 	var BODIES_STORE = "bodies";
 	/** Record schema version written by this build. Readers accept `v <= RECORD_VERSION`. */
 	var RECORD_VERSION = 1;
 	var EMERGENCY_VERSION = 1;
-	/** One localStorage key per page load, so duplicated tabs never share an entry. */
-	var EMERGENCY_KEY_PREFIX = "prks.editorRecovery.emergency.v1.";
-	/**
-	* One key per page load holding filler that reserves quota for that page's
-	* emergency payload. Not under the emergency prefix, so it is never read as a draft.
-	* The value starts with the page's runtime id and a newline (see reservationValue).
-	*/
-	var RESERVATION_KEY_PREFIX = "prks.editorRecovery.reserve.v1.";
 	/** Allowance for one entry's JSON metadata (ids, lineage, base) when sizing the emergency payload. */
 	var EMERGENCY_ENTRY_OVERHEAD_CHARS = 1024;
-	/** Candidate runtime id for this browser tab; copied by window.open and Duplicate tab. */
-	var RUNTIME_SESSION_KEY = "prks.editorRecovery.runtime.v1";
-	/**
-	* Pages of this tab that ran `pagehide`, newest last. A duplicated tab copies
-	* it before the original closes, so it never lists a page still open there.
-	*/
-	var CLOSED_PAGES_SESSION_KEY = "prks.editorRecovery.closed.v1";
 	var CLOSED_PAGES_KEPT = 8;
-	/**
-	* Pages of any tab that ran a final `pagehide` (not into the back/forward
-	* cache), newest last: positive evidence that the page is gone where Web
-	* Locks cannot prove it (LAN/HTTP). A page that crashed or was discarded
-	* never records itself, so its drafts stay `unknown`. One key per page,
-	* valued with its close time: tabs closing together never overwrite each
-	* other's record. The oldest beyond the bound are pruned.
-	*/
-	var CLOSED_PAGE_KEY_PREFIX = "prks.editorRecovery.closedPage.v1.";
 	var CLOSED_PAGES_LOCAL_KEPT = 64;
-	/**
-	* One key per draft whose stored generation the server already superseded
-	* and whose removal recovery storage refused: `{ pageInstanceId, generation }`.
-	* Kept outside recovery storage, so every page still never restores it and
-	* finishes the removal. One key per draft: no tab rewrites another's mark.
-	*/
-	var SUPERSEDED_KEY_PREFIX = "prks.editorRecovery.superseded.v1.";
-	var RECOVERY_CHANNEL = "prks-editor-recovery-v1";
-	var RUNTIME_LOCK_PREFIX = "prks-editor-recovery-runtime:";
-	var PAGE_LOCK_PREFIX = "prks-editor-recovery-page:";
+	var SCOPE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}\.[A-Za-z0-9_-]{1,128}\.[A-Za-z0-9_-]{1,128}$/;
+	/** A scope key as browser-scope.js forms it: `<instanceId>.<libraryId>.<userId>`. */
+	function isScopeKey(value) {
+		return typeof value === "string" && SCOPE_KEY_PATTERN.test(value);
+	}
+	/** The names of one scope's recovery storage. Throws on anything that is not a scope key. */
+	function recoveryNames(scopeKey) {
+		if (!isScopeKey(scopeKey)) throw new Error("recovery storage needs a signed-in scope");
+		return Object.freeze({
+			scopeKey,
+			dbName: "prks-editor-recovery-v2:" + scopeKey,
+			emergencyPrefix: "prks.editorRecovery.emergency.v2." + scopeKey + ".",
+			reservationPrefix: "prks.editorRecovery.reserve.v2." + scopeKey + ".",
+			runtimeSessionKey: "prks.editorRecovery.runtime.v2." + scopeKey,
+			closedPagesSessionKey: "prks.editorRecovery.closed.v2." + scopeKey,
+			closedPagePrefix: "prks.editorRecovery.closedPage.v2." + scopeKey + ".",
+			supersededPrefix: "prks.editorRecovery.superseded.v2." + scopeKey + ".",
+			deletedWorkPrefix: "prks.workRecoveryCleanup.v2." + scopeKey + ".",
+			channel: "prks-editor-recovery-v2:" + scopeKey,
+			runtimeLockPrefix: "prks-editor-recovery-runtime:" + scopeKey + ":",
+			pageLockPrefix: "prks-editor-recovery-page:" + scopeKey + ":"
+		});
+	}
 	/** Bodies above this are "large": written immediately and leave-guarded until committed. */
 	var LARGE_BODY_CHARS = 262144;
 	/** Emergency entry budget: per body, and all held bodies of one page together. */
@@ -214,11 +203,11 @@ var prksEditorRecovery = (function(exports) {
 	function entityKeyOf(kind, entityId) {
 		return kind + ":" + entityId;
 	}
-	function emergencyKeyOf(pageInstanceId) {
-		return EMERGENCY_KEY_PREFIX + pageInstanceId;
+	function emergencyKeyOf(names, pageInstanceId) {
+		return names.emergencyPrefix + pageInstanceId;
 	}
-	function reservationKeyOf(pageInstanceId) {
-		return RESERVATION_KEY_PREFIX + pageInstanceId;
+	function reservationKeyOf(names, pageInstanceId) {
+		return names.reservationPrefix + pageInstanceId;
 	}
 	/**
 	* A reservation value: the reserving page's runtime id, a newline, then
@@ -312,9 +301,10 @@ var prksEditorRecovery = (function(exports) {
 	function forkedDraftId(draftId, generation) {
 		return draftId + ".e" + generation;
 	}
-	function createRecoveryStore(options = {}) {
+	function createRecoveryStore(options) {
 		const factory = options.indexedDB === void 0 ? globalThis.indexedDB : options.indexedDB;
-		const name = options.name || "prks-editor-recovery-v1";
+		const name = options.name;
+		if (!name) throw new Error("recovery storage needs a signed-in scope");
 		const now = options.now || Date.now;
 		const durability = options.durability || "auto";
 		const compare = { fingerprint: options.fingerprint };
@@ -868,18 +858,19 @@ var prksEditorRecovery = (function(exports) {
 		}
 	}
 	/** Blocked storage can throw on enumeration or reads: that leaves the emergency layer empty, never failing startup. */
-	function readEmergencyKeys(storage) {
+	function readEmergencyKeys(storage, names) {
+		const prefix = names.emergencyPrefix;
 		const keys = [];
 		try {
 			for (let i = 0; i < storage.length; i++) {
 				const key = storage.key(i);
-				if (key && key.startsWith("prks.editorRecovery.emergency.v1.")) keys.push(key);
+				if (key && key.startsWith(prefix)) keys.push(key);
 			}
 		} catch {
 			return [];
 		}
 		return keys.map((key) => {
-			const pageInstanceId = key.slice(EMERGENCY_KEY_PREFIX.length);
+			const pageInstanceId = key.slice(prefix.length);
 			let raw = null;
 			let readFailed = false;
 			try {
@@ -951,7 +942,7 @@ var prksEditorRecovery = (function(exports) {
 	}
 	async function mergeEmergencyEntries(env) {
 		const reports = [];
-		for (const stored of readEmergencyKeys(env.storage)) {
+		for (const stored of readEmergencyKeys(env.storage, env.names)) {
 			if (!await mergeable(env, stored)) continue;
 			reports.push(await mergeKey(env, stored, stored.payload));
 		}
@@ -972,14 +963,14 @@ var prksEditorRecovery = (function(exports) {
 		try {
 			for (let i = 0; i < env.storage.length; i++) {
 				const key = env.storage.key(i);
-				if (key && key.startsWith("prks.editorRecovery.reserve.v1.")) keys.push(key);
+				if (key && key.startsWith(env.names.reservationPrefix)) keys.push(key);
 			}
 		} catch {
 			return [];
 		}
 		const removed = [];
 		for (const key of keys) {
-			const pageInstanceId = key.slice(RESERVATION_KEY_PREFIX.length);
+			const pageInstanceId = key.slice(env.names.reservationPrefix.length);
 			if (pageInstanceId === env.pageInstanceId) continue;
 			if (!await env.isPageGone(pageInstanceId) && !claimedRuntimeOf(env, key)) continue;
 			try {
@@ -1018,8 +1009,8 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
-	function supersededGeneration(storage, draftId) {
-		const raw = readKey(storage, SUPERSEDED_KEY_PREFIX + draftId);
+	function supersededGeneration(storage, names, draftId) {
+		const raw = readKey(storage, names.supersededPrefix + draftId);
 		if (!raw) return 0;
 		try {
 			const value = JSON.parse(raw);
@@ -1158,6 +1149,7 @@ var prksEditorRecovery = (function(exports) {
 	}
 	function createRecoveryDiagnostics(rt, options = {}) {
 		const storage = options.storage === void 0 ? defaultLocalStorage$2() : options.storage;
+		const names = rt.names;
 		const now = options.now || Date.now;
 		async function classifySafely(record) {
 			try {
@@ -1184,8 +1176,8 @@ var prksEditorRecovery = (function(exports) {
 				baseSource: record.base ? record.base.source : "unknown",
 				pipelineState: record.pipeline ? record.pipeline.state : null,
 				old: !isLive(lineage) && at - record.updatedAt > 2592e6,
-				superseded: supersededGeneration(storage, record.draftId) >= record.generation,
-				deletedHere: record.entityType === "work" && readKey(storage, "prks.workRecoveryCleanup.v1." + record.entityId) !== null,
+				superseded: supersededGeneration(storage, names, record.draftId) >= record.generation,
+				deletedHere: record.entityType === "work" && readKey(storage, names.deletedWorkPrefix + record.entityId) !== null,
 				fromEmergency: typeof record.emergencySource === "string",
 				expect: {
 					draftId: record.draftId,
@@ -1294,7 +1286,7 @@ var prksEditorRecovery = (function(exports) {
 			for (const row of [...records, ...tombstones]) known.set(row.draftId, Math.max(row.generation, known.get(row.draftId) || 0));
 			const unreadableEmergency = [];
 			const pending = [];
-			for (const stored of storage ? readEmergencyKeys(storage) : []) {
+			for (const stored of storage ? readEmergencyKeys(storage, names) : []) {
 				const payload = stored.payload;
 				if (!payload) {
 					if (stored.raw !== null || stored.readFailed) unreadableEmergency.push(unreadableKeyOf(stored));
@@ -1424,7 +1416,7 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		async function readEmergencyText(key, draftId, generation) {
-			const stored = storage ? readEmergencyKeys(storage).find((s) => s.key === key) : void 0;
+			const stored = storage ? readEmergencyKeys(storage, names).find((s) => s.key === key) : void 0;
 			const payload = stored ? stored.payload : null;
 			if (!stored || !payload) return {
 				ok: false,
@@ -1586,7 +1578,9 @@ var prksEditorRecovery = (function(exports) {
 			return [];
 		}
 	}
-	function createPageIdentity(env = {}) {
+	function createPageIdentity(env) {
+		const names = env.names;
+		if (!names) throw new Error("recovery storage needs a signed-in scope");
 		const random = env.random || globalThis.crypto;
 		const session = env.sessionStorage === void 0 ? defaultSession() : env.sessionStorage;
 		const local = env.localStorage === void 0 ? defaultLocal() : env.localStorage;
@@ -1598,7 +1592,7 @@ var prksEditorRecovery = (function(exports) {
 		const pageEvents = env.window === void 0 ? typeof window !== "undefined" ? window : null : env.window;
 		let channel = null;
 		try {
-			channel = makeChannel ? makeChannel(RECOVERY_CHANNEL) : null;
+			channel = makeChannel ? makeChannel(names.channel) : null;
 		} catch {
 			channel = null;
 		}
@@ -1715,20 +1709,20 @@ var prksEditorRecovery = (function(exports) {
 		}
 		function persist(runtimeId) {
 			try {
-				if (session) session.setItem(RUNTIME_SESSION_KEY, runtimeId);
+				if (session) session.setItem(names.runtimeSessionKey, runtimeId);
 			} catch {}
 		}
 		function initialCandidate() {
 			try {
-				const stored = session ? session.getItem(RUNTIME_SESSION_KEY) : null;
+				const stored = session ? session.getItem(names.runtimeSessionKey) : null;
 				if (stored && /^r-[0-9a-f]{32}$/.test(stored)) return stored;
 			} catch {}
 			return mintId("r", random);
 		}
 		async function claimWithLocks(candidate) {
-			await hold(PAGE_LOCK_PREFIX + pageInstanceId);
+			await hold(names.pageLockPrefix + pageInstanceId);
 			for (let round = 0; round < MAX_CLAIM_ROUNDS; round++) {
-				if (await hold("prks-editor-recovery-runtime:" + candidate)) return {
+				if (await hold(names.runtimeLockPrefix + candidate)) return {
 					runtimeId: candidate,
 					verified: "lock"
 				};
@@ -1765,11 +1759,11 @@ var prksEditorRecovery = (function(exports) {
 			};
 		}
 		function closedPages() {
-			return readIdList(session, CLOSED_PAGES_SESSION_KEY);
+			return readIdList(session, names.closedPagesSessionKey);
 		}
 		function writeClosedPages(list) {
 			try {
-				if (session) session.setItem(CLOSED_PAGES_SESSION_KEY, JSON.stringify(list.slice(-8)));
+				if (session) session.setItem(names.closedPagesSessionKey, JSON.stringify(list.slice(-8)));
 			} catch {}
 		}
 		function onPageHide(event) {
@@ -1777,7 +1771,7 @@ var prksEditorRecovery = (function(exports) {
 			writeClosedPages([...closedPages().filter((id) => id !== pageInstanceId), pageInstanceId]);
 			try {
 				if (!local) return;
-				local.setItem(CLOSED_PAGE_KEY_PREFIX + pageInstanceId, String(Date.now()));
+				local.setItem(names.closedPagePrefix + pageInstanceId, String(Date.now()));
 			} catch {
 				return;
 			}
@@ -1790,7 +1784,7 @@ var prksEditorRecovery = (function(exports) {
 				const records = [];
 				for (let i = 0; i < local.length; i++) {
 					const key = local.key(i);
-					if (!key || !key.startsWith("prks.editorRecovery.closedPage.v1.")) continue;
+					if (!key || !key.startsWith(names.closedPagePrefix)) continue;
 					records.push({
 						key,
 						at: Number(local.getItem(key)) || 0
@@ -1854,12 +1848,13 @@ var prksEditorRecovery = (function(exports) {
 		}
 		return {
 			pageInstanceId,
+			names,
 			claim,
 			current: () => settled,
 			async isPageAlive(id) {
 				if (id === pageInstanceId) return true;
 				const held = await heldLockNames();
-				if (held) return held.has(PAGE_LOCK_PREFIX + id);
+				if (held) return held.has(names.pageLockPrefix + id);
 				return ask({
 					t: "page?",
 					page: id,
@@ -1869,12 +1864,12 @@ var prksEditorRecovery = (function(exports) {
 			async isPageGone(id) {
 				if (id === pageInstanceId) return false;
 				const held = await heldLockNames();
-				return held ? !held.has(PAGE_LOCK_PREFIX + id) : false;
+				return held ? !held.has(names.pageLockPrefix + id) : false;
 			},
 			async isRuntimeAlive(id) {
 				if (settled && settled.runtimeId === id) return true;
 				const held = await heldLockNames();
-				if (held) return held.has(RUNTIME_LOCK_PREFIX + id);
+				if (held) return held.has(names.runtimeLockPrefix + id);
 				return ask({
 					t: "runtime?",
 					rid: id,
@@ -1906,7 +1901,7 @@ var prksEditorRecovery = (function(exports) {
 			wasPageClosed(id) {
 				if (id === pageInstanceId || !local) return false;
 				try {
-					return local.getItem(CLOSED_PAGE_KEY_PREFIX + id) !== null;
+					return local.getItem(names.closedPagePrefix + id) !== null;
 				} catch {
 					return false;
 				}
@@ -2004,8 +1999,10 @@ var prksEditorRecovery = (function(exports) {
 		const doc = options.document === void 0 ? typeof document !== "undefined" ? document : null : options.document;
 		const storage = options.emergencyStorage === void 0 ? defaultLocalStorage$1() : options.emergencyStorage;
 		const emit = options.onEvent || (() => {});
-		const emergencyKey = emergencyKeyOf(identity.pageInstanceId);
-		const reservationKey = reservationKeyOf(identity.pageInstanceId);
+		const names = identity.names;
+		const supersededPrefix = names.supersededPrefix;
+		const emergencyKey = emergencyKeyOf(names, identity.pageInstanceId);
+		const reservationKey = reservationKeyOf(names, identity.pageInstanceId);
 		const live = /* @__PURE__ */ new Set();
 		/** Writers whose body the budget plan puts in the emergency entry. */
 		let planned = /* @__PURE__ */ new Set();
@@ -2068,7 +2065,7 @@ var prksEditorRecovery = (function(exports) {
 		}
 		function readSupersededMark(draftId) {
 			try {
-				return storage ? parseSupersededMark(draftId, storage.getItem(SUPERSEDED_KEY_PREFIX + draftId)) : null;
+				return storage ? parseSupersededMark(draftId, storage.getItem(supersededPrefix + draftId)) : null;
 			} catch {
 				return null;
 			}
@@ -2080,7 +2077,7 @@ var prksEditorRecovery = (function(exports) {
 				const ids = [];
 				for (let i = 0; i < storage.length; i++) {
 					const key = storage.key(i);
-					if (key && key.startsWith("prks.editorRecovery.superseded.v1.")) ids.push(key.slice(SUPERSEDED_KEY_PREFIX.length));
+					if (key && key.startsWith(supersededPrefix)) ids.push(key.slice(supersededPrefix.length));
 				}
 				for (const id of ids) {
 					const mark = readSupersededMark(id);
@@ -2095,7 +2092,7 @@ var prksEditorRecovery = (function(exports) {
 			if (prior && prior.generation >= mark.generation) return;
 			try {
 				if (!storage) throw new Error("no localStorage");
-				storage.setItem(SUPERSEDED_KEY_PREFIX + mark.draftId, JSON.stringify({
+				storage.setItem(supersededPrefix + mark.draftId, JSON.stringify({
 					pageInstanceId: mark.pageInstanceId,
 					generation: mark.generation
 				}));
@@ -2110,7 +2107,7 @@ var prksEditorRecovery = (function(exports) {
 			const mark = readSupersededMark(draftId);
 			if (!mark || mark.generation > generation) return;
 			try {
-				if (storage) storage.removeItem(SUPERSEDED_KEY_PREFIX + draftId);
+				if (storage) storage.removeItem(supersededPrefix + draftId);
 			} catch {}
 		}
 		/**
@@ -2866,9 +2863,17 @@ var prksEditorRecovery = (function(exports) {
 	function keptFor(lineage, report) {
 		return lineage === "unknown" ? report.unknown : report.live;
 	}
-	function createEditorRecoveryRuntime(options = {}) {
-		const store = createRecoveryStore(options.store);
-		const identity = createPageIdentity(options.identity);
+	function createEditorRecoveryRuntime(options) {
+		const names = options.names;
+		if (!names) throw new Error("recovery storage needs a signed-in scope");
+		const store = createRecoveryStore({
+			...options.store,
+			name: names.dbName
+		});
+		const identity = createPageIdentity({
+			...options.identity,
+			names
+		});
 		const emergencyStorage = options.emergencyStorage !== void 0 ? options.emergencyStorage : options.writers?.emergencyStorage ?? defaultLocalStorage();
 		const writerListeners = /* @__PURE__ */ new Set();
 		const ownEvent = options.writers?.onEvent;
@@ -2895,6 +2900,7 @@ var prksEditorRecovery = (function(exports) {
 			if (!emergencyStorage) return [];
 			const env = {
 				storage: emergencyStorage,
+				names,
 				store,
 				pageInstanceId: identity.pageInstanceId,
 				isPageAlive: (id) => identity.isPageAlive(id),
@@ -2908,7 +2914,7 @@ var prksEditorRecovery = (function(exports) {
 				isPageGone: (id) => identity.isPageGone(id),
 				verifiedRuntimeId: !definiteOnly && claim && claim.verified !== "unverified" ? claim.runtimeId : null
 			});
-			for (const key of removed) identity.announceReservationRemoved(key.slice(RESERVATION_KEY_PREFIX.length));
+			for (const key of removed) identity.announceReservationRemoved(key.slice(names.reservationPrefix.length));
 			return reports;
 		}
 		function start() {
@@ -2935,7 +2941,7 @@ var prksEditorRecovery = (function(exports) {
 				generation: reviewed.generation,
 				status: reviewed.status
 			};
-			const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null;
+			const listing = emergencyStorage ? listingPage(emergencyStorage, names, reviewed.draftId) : null;
 			const tombstone = listing ? {
 				kind: reviewed.kind,
 				entityType: reviewed.entityType,
@@ -2951,7 +2957,7 @@ var prksEditorRecovery = (function(exports) {
 		*/
 		async function suppressEmergencyOnly(ours, report) {
 			if (!emergencyStorage) return;
-			for (const stored of readEmergencyKeys(emergencyStorage)) {
+			for (const stored of readEmergencyKeys(emergencyStorage, names)) {
 				const payload = stored.payload;
 				if (!payload) {
 					if (mayHoldUnreadable(stored)) report.unsupported.push(stored.key);
@@ -3034,6 +3040,7 @@ var prksEditorRecovery = (function(exports) {
 			return report;
 		}
 		return {
+			names,
 			store,
 			identity,
 			writers,
@@ -3068,8 +3075,8 @@ var prksEditorRecovery = (function(exports) {
 		};
 	}
 	/** The page whose emergency key still lists `draftId` (or its fork), if any. */
-	function listingPage(storage, draftId) {
-		for (const stored of readEmergencyKeys(storage)) if ((stored.payload ? stored.payload.entries : []).some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) return stored.pageInstanceId;
+	function listingPage(storage, names, draftId) {
+		for (const stored of readEmergencyKeys(storage, names)) if ((stored.payload ? stored.payload.entries : []).some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) return stored.pageInstanceId;
 		return null;
 	}
 	function defaultLocalStorage() {
@@ -3253,19 +3260,54 @@ var prksEditorRecovery = (function(exports) {
 	/**
 	* Classic-script entry. The maintainer build emits `frontend/js/editor-recovery.js`
 	* as the global `prksEditorRecovery`. Loading the script starts nothing;
-	* `runtime()` creates the page's single runtime on first use. Research Notes
+	* `runtime()` creates the page's single runtime on first use, once the page
+	* has a confirmed browser scope. Research Notes
 	* (`works.js`) is the consumer since #466 slice 2; Settings → Diagnostics
 	* reads every kind through `diagnostics()` (slice 5).
 	*/
 	var pageRuntime = null;
 	var pageDiagnostics = null;
+	/** The page's confirmed browser scope key (`frontend/js/browser-scope.js`), or null. */
+	function confirmedScopeKey() {
+		const scope = globalThis.prksBrowserScope;
+		try {
+			const current = scope && typeof scope.current === "function" ? scope.current() : null;
+			return current && isScopeKey(current.key) ? current.key : null;
+		} catch {
+			return null;
+		}
+	}
+	/**
+	* The names of the page's recovery storage for its confirmed browser scope,
+	* or null without one. For readers that must not build the runtime (a
+	* cheap "may anything be stored here?" check): a runtime made later uses
+	* the same names, unless it already exists, in which case these are its.
+	*/
+	function scopeNames() {
+		if (pageRuntime) return pageRuntime.names;
+		const scopeKey = confirmedScopeKey();
+		return scopeKey ? recoveryNames(scopeKey) : null;
+	}
+	/**
+	* The page's runtime, bound to the signed-in browser scope (#629), or null
+	* while the page has none: recovery then keeps nothing (fail closed) and
+	* a later call, once the scope is confirmed, creates it. The runtime keeps
+	* that scope for the life of the page: drafts typed under an account stay
+	* that account's, even after it signs out or another account signs in.
+	*/
 	function runtime() {
-		if (!pageRuntime) pageRuntime = createEditorRecoveryRuntime();
+		if (pageRuntime) return pageRuntime;
+		const scopeKey = confirmedScopeKey();
+		if (!scopeKey) return null;
+		pageRuntime = createEditorRecoveryRuntime({ names: recoveryNames(scopeKey) });
 		return pageRuntime;
 	}
-	/** Settings → Diagnostics (#466 slice 5) over this page's runtime. Starts nothing until it is asked to read. */
+	/** Settings → Diagnostics (#466 slice 5) over this page's runtime, or null without a scope. Starts nothing until it is asked to read. */
 	function diagnostics() {
-		if (!pageDiagnostics) pageDiagnostics = createRecoveryDiagnostics(runtime());
+		if (pageDiagnostics) return pageDiagnostics;
+		const rt = runtime();
+		if (!rt) return null;
+		pageDiagnostics = createRecoveryDiagnostics(rt);
 		return pageDiagnostics;
 	}
 	//#endregion
@@ -3273,29 +3315,19 @@ var prksEditorRecovery = (function(exports) {
 	exports.CLAIM_WAIT_MS = CLAIM_WAIT_MS;
 	exports.CLOSED_PAGES_KEPT = CLOSED_PAGES_KEPT;
 	exports.CLOSED_PAGES_LOCAL_KEPT = CLOSED_PAGES_LOCAL_KEPT;
-	exports.CLOSED_PAGES_SESSION_KEY = CLOSED_PAGES_SESSION_KEY;
-	exports.CLOSED_PAGE_KEY_PREFIX = CLOSED_PAGE_KEY_PREFIX;
 	exports.DRAFTS_STORE = DRAFTS_STORE;
 	exports.EMERGENCY_BODY_CHARS = EMERGENCY_BODY_CHARS;
 	exports.EMERGENCY_ENTRY_OVERHEAD_CHARS = EMERGENCY_ENTRY_OVERHEAD_CHARS;
-	exports.EMERGENCY_KEY_PREFIX = EMERGENCY_KEY_PREFIX;
 	exports.EMERGENCY_PAGE_CHARS = EMERGENCY_PAGE_CHARS;
 	exports.EMERGENCY_VERSION = EMERGENCY_VERSION;
 	exports.IDLE_WRITE_MS = IDLE_WRITE_MS;
 	exports.LARGE_BODY_CHARS = LARGE_BODY_CHARS;
 	exports.MAX_WRITE_WAIT_MS = MAX_WRITE_WAIT_MS;
-	exports.PAGE_LOCK_PREFIX = PAGE_LOCK_PREFIX;
 	exports.RECORD_VERSION = RECORD_VERSION;
-	exports.RECOVERY_CHANNEL = RECOVERY_CHANNEL;
-	exports.RECOVERY_DB_NAME = RECOVERY_DB_NAME;
 	exports.RECOVERY_DB_VERSION = RECOVERY_DB_VERSION;
-	exports.RESERVATION_KEY_PREFIX = RESERVATION_KEY_PREFIX;
 	exports.RETRY_FIRST_MS = RETRY_FIRST_MS;
 	exports.RETRY_MAX_MS = RETRY_MAX_MS;
-	exports.RUNTIME_LOCK_PREFIX = RUNTIME_LOCK_PREFIX;
-	exports.RUNTIME_SESSION_KEY = RUNTIME_SESSION_KEY;
 	exports.RecoveryStoreError = RecoveryStoreError;
-	exports.SUPERSEDED_KEY_PREFIX = SUPERSEDED_KEY_PREFIX;
 	exports.UNKNOWN_BASE = UNKNOWN_BASE;
 	exports.classifyLineage = classifyLineage;
 	exports.createEditorRecoveryRuntime = createEditorRecoveryRuntime;
@@ -3309,6 +3341,7 @@ var prksEditorRecovery = (function(exports) {
 	exports.forkedDraftId = forkedDraftId;
 	exports.isAdoptable = isAdoptable;
 	exports.isDraftKind = isDraftKind;
+	exports.isScopeKey = isScopeKey;
 	exports.isSupportedRecord = isSupportedRecord;
 	exports.mayHoldUnreadable = mayHoldUnreadable;
 	exports.mergeEmergencyEntries = mergeEmergencyEntries;
@@ -3316,12 +3349,14 @@ var prksEditorRecovery = (function(exports) {
 	exports.planEmergency = planEmergency;
 	exports.planResearchNotesRestore = planResearchNotesRestore;
 	exports.readEmergencyKeys = readEmergencyKeys;
+	exports.recoveryNames = recoveryNames;
 	exports.reservationKeyOf = reservationKeyOf;
 	exports.reservationRuntimeOf = reservationRuntimeOf;
 	exports.reservationValue = reservationValue;
 	exports.runtime = runtime;
 	exports.sameBaseIdentity = sameBaseIdentity;
 	exports.sameBody = sameBody;
+	exports.scopeNames = scopeNames;
 	return exports;
 })({});
 if (typeof module === "object" && module != null && module.exports) module.exports = prksEditorRecovery;
