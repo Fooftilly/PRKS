@@ -534,29 +534,36 @@
                     if (fenced === run) fenced = null;
                     return;
                 }
-                return runIdbStoreRequest(openDb, STORE_METADATA, 'readonly', function (store) {
-                    return store.get(META_LIBRARY_EPOCH);
-                }).then(function (r) {
-                    if (!r.ok) {
-                        if (fenced === run) fenced = null;
-                        return;
-                    }
-                    const seen = r.value ? epochOf(r.value.value) : null;
-                    if (seen && compareEpochs(seen, epoch) >= 0) return;
+                // One transaction over the metadata and both caches: two
+                // stores fencing at once cannot both read the older epoch,
+                // so neither clears what the other cached after its fence.
+                let tx;
+                try {
+                    tx = db.transaction([STORE_METADATA, STORE_ENTITIES, STORE_LISTS], 'readwrite');
+                } catch (_e) {
+                    if (fenced === run) fenced = null;
+                    return;
+                }
+                const done = tx.done.then(function () { return true; }, function () { return false; });
+                return tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH).then(function (row) {
+                    const seen = row ? epochOf(row.value) : null;
+                    if (seen && compareEpochs(seen, epoch) >= 0) return undefined;
                     return Promise.all([
-                        runIdbStoreRequest(openDb, STORE_ENTITIES, 'readwrite', function (store) { return store.clear(); }),
-                        runIdbStoreRequest(openDb, STORE_LISTS, 'readwrite', function (store) { return store.clear(); }),
-                    ]).then(function (results) {
-                        if (!results.every(function (x) { return x.ok; })) {
-                            if (fenced === run) fenced = null;
-                            return;
-                        }
-                        return runIdbStoreRequest(openDb, STORE_METADATA, 'readwrite', function (store) {
-                            return store.put({ key: META_LIBRARY_EPOCH, value: epoch });
-                        }).then(function (w) {
-                            if (!w.ok && fenced === run) fenced = null;
-                        });
-                    });
+                        tx.objectStore(STORE_ENTITIES).clear(),
+                        tx.objectStore(STORE_LISTS).clear(),
+                        tx.objectStore(STORE_METADATA).put({ key: META_LIBRARY_EPOCH, value: epoch }),
+                    ]);
+                }).then(function () {
+                    return done;
+                }, function () {
+                    try {
+                        tx.abort();
+                    } catch (_e) {
+                        /* already finished */
+                    }
+                    return done.then(function () { return false; });
+                }).then(function (ok) {
+                    if (!ok && fenced === run) fenced = null;
                 });
             }).then(function () {}, function () {
                 if (fenced === run) fenced = null;

@@ -468,6 +468,22 @@ async function run() {
             assertEq('a later store of the same epoch keeps them too', (await again.getEntity('work', 'W-9')).value, { title: 'Kept' });
         }
 
+        // Two stores of the restored Library fencing at once: neither clears
+        // what the other cached after the fence.
+        {
+            const raceIdb = createFakeIndexedDBFactory();
+            const seed = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: raceIdb, scope: scopeAt('1') });
+            await seed.putEntity('work', 'W-old', { title: 'Old' }, 'r1');
+            const first = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: raceIdb, scope: scopeAt('2') });
+            const second = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: raceIdb, scope: scopeAt('2') });
+            const results = await Promise.all([
+                first.putEntity('work', 'W-new', { title: 'New' }, 'r2'),
+                second.getEntity('work', 'W-old'),
+            ]);
+            assertEq('both fences ran, the earlier Library unread', results, [true, null]);
+            assertEq('what the first cached survives the second fence', ((await second.getEntity('work', 'W-new')) || {}).value, { title: 'New' });
+        }
+
         const noEpoch = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: createFakeIndexedDBFactory(), scope: scopeAt(null) });
         assertEq('a scope naming no epoch has no cache', await noEpoch.isAvailable(), false);
     }
