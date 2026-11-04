@@ -533,7 +533,11 @@
     function copyableText(op) {
         const value = payloadValue(op);
         if (value != null) return String(value);
-        return describe(op) + '\n' + JSON.stringify(op.payload || {}, null, 2);
+        // A field change of any family: its whole value, never the bounded preview.
+        const payload = op.payload || {};
+        if (typeof payload.value === 'string') return payload.value;
+        if (typeof payload.text === 'string') return payload.text;
+        return describe(op) + '\n' + JSON.stringify(payload, null, 2);
     }
 
     /*
@@ -573,6 +577,14 @@
             discard.className = 'prks-btn prks-btn--secondary prks-btn--sm';
             discard.textContent = 'Discard';
             discard.onclick = async () => {
+                // This row may be the only copy of what was typed: never on one click.
+                const confirmed = typeof root.prksConfirmDestructive === 'function' && await root.prksConfirmDestructive({
+                    title: 'Discard this change?',
+                    message: 'It was made before this library was restored and was never sent. Discarding removes ' +
+                        'it from this browser for good. Copy its text first if you want to keep it.',
+                    confirmLabel: 'Discard change',
+                });
+                if (!confirmed) return;
                 discard.disabled = true;
                 try {
                     await root.prksSync.store.discardRestored(op.op_id);

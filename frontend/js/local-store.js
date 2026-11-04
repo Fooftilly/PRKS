@@ -457,7 +457,7 @@
         return typeof v === 'string' && UUID_RE.test(v);
     }
 
-    /** An ISO-8601 string that names a real instant. */
+    /** A Library epoch as its canonical decimal string, or null. */
     function epochOf(value) {
         if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
         return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
@@ -469,6 +469,7 @@
         return a < b ? -1 : a > b ? 1 : 0;
     }
 
+    /** An ISO-8601 string that names a real instant. */
     function isParsableTimestamp(v) {
         if (typeof v !== 'string' || !v.trim()) return false;
         return Number.isFinite(Date.parse(v));

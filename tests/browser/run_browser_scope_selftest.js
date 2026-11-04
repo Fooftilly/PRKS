@@ -843,7 +843,9 @@ async function testEpoch() {
 
     // A later answer names a newer epoch: announced once, and the page's stays.
     const restored = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 2 }) });
-    const page = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(SESSION_A), ok(restored)]) });
+    const at10 = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 10 }) });
+    const pageFetch = sessionFetch([ok(SESSION_A), ok(restored), ok(at10)]);
+    const page = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: pageFetch });
     await page.resolve();
     const events = [];
     page.subscribe((event) => events.push(event));
@@ -851,12 +853,30 @@ async function testEpoch() {
     record('a newer epoch is announced', events.length === 1 && events[0].type === 'epoch' && events[0].epoch === '2',
         JSON.stringify(events));
     record('the page keeps the epoch it bound with', page.pageEpoch() === '1' && page.latestEpoch() === '2');
+    const readsBefore = pageFetch.calls.length;
     page.noteEpoch('1');
     page.noteEpoch('abc');
     page.noteEpoch('2');
-    record('an older, equal or malformed epoch changes nothing', events.length === 1 && page.latestEpoch() === '2');
+    record('an older, equal or malformed header epoch changes nothing and reads nothing',
+        events.length === 1 && page.latestEpoch() === '2' && pageFetch.calls.length === readsBefore);
     page.noteEpoch('10');
-    record('epochs are ordered as numbers', page.latestEpoch() === '10' && events.length === 2);
+    record('a higher header epoch alone raises nothing', page.latestEpoch() === '2');
+    await new Promise((r) => setTimeout(r, 0));
+    await page.verify();
+    record('the same account\'s session read raises it, ordered as numbers',
+        page.latestEpoch() === '10' && events.length === 2 && events[1].epoch === '10', JSON.stringify(events));
+
+    // Another account signed in under the page: its header epoch is not this Library's (#1115 review).
+    const switched = scopeApi.createPrksBrowserScope({
+        indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(SESSION_A), ok(Object.assign({}, SESSION_B, { library: at10.library }))]),
+    });
+    await switched.resolve();
+    const seen = [];
+    switched.subscribe((event) => seen.push(event.type));
+    switched.noteEpoch('10');
+    for (let i = 0; i < 5 && !switched.isRetired(); i++) await new Promise((r) => setTimeout(r, 0));
+    record('another account\'s header epoch retires the page instead of raising its epoch',
+        switched.isRetired() && seen.indexOf('epoch') === -1, JSON.stringify(seen));
 
     // The coordinator sends the page's epoch and reports newer ones to the scope.
     const { createPrksLibraryEpoch } = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));

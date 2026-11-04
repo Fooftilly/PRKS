@@ -41,9 +41,10 @@
  * Library epoch (§10.4, §11.4). A session answer names the Library's epoch,
  * and an answer without a valid one binds no scope. The page acts under the
  * epoch it bound with (`pageEpoch()`, recorded with the scope for an offline
- * reload). `latestEpoch()` is the highest epoch seen since, from a later
- * session read or from `noteEpoch()` (the request coordinator reports every
- * answer's header); a higher one emits `{ type: 'epoch', epoch }`. Once it is
+ * reload). `latestEpoch()` is the highest epoch a later session read of the
+ * same scope named; a higher one emits `{ type: 'epoch', epoch }`. A header
+ * epoch (`noteEpoch()`, the request coordinator reports every answer's) only
+ * prompts that read, since a header does not say whose Library it is. Once it is
  * above the page's epoch, the Library was restored: changes made under the
  * older epoch are never sent, and this page keeps refusing new ones until a
  * reload binds the new epoch.
@@ -466,15 +467,30 @@
         }
 
         /**
-         * Records an epoch the server named for this page's Library. Only a
-         * higher one counts; it is announced to subscribers.
+         * Records an epoch a same-scope session read named for this page's
+         * Library. Only a higher one counts; it is announced to subscribers.
          */
-        function noteEpoch(value) {
+        function raiseEpoch(value) {
             const epoch = epochOf(value);
             if (!epoch || retired) return;
             if (latestEpoch && compareEpochs(epoch, latestEpoch) <= 0) return;
             latestEpoch = epoch;
             if (bound) emit({ type: 'epoch', epoch: epoch });
+        }
+
+        /**
+         * An epoch some answer's header named. A header does not say whose
+         * Library it is (another account may have signed in under this
+         * page), so a higher one only prompts a session read (`verify()`):
+         * the same scope's answer raises the epoch, another account's
+         * retires the page instead.
+         */
+        let hinting = null;
+        function noteEpoch(value) {
+            const epoch = epochOf(value);
+            if (!epoch || retired || !bound || hinting) return;
+            if (latestEpoch && compareEpochs(epoch, latestEpoch) <= 0) return;
+            hinting = verify().catch(function () { return null; }).then(function () { hinting = null; });
         }
 
         /** Re-reads the session against the page's scope. */
@@ -496,7 +512,7 @@
                         });
                     }
                     if (sameScope(answer.scope, scope)) {
-                        noteEpoch(answer.epoch);
+                        raiseEpoch(answer.epoch);
                         return 'same';
                     }
                     retire('changed');

@@ -191,6 +191,13 @@ class LibraryEpochQueueTests(unittest.TestCase):
         row.get_by_role("button", name="Copied", exact=True).wait_for()
         self.assertEqual(page.evaluate("() => navigator.clipboard.readText()"), TYPED)
         row.get_by_role("button", name="Discard", exact=True).click()
+        # Never on one click: the row may be the only copy of what was typed.
+        confirm = page.locator("#prks-modal-confirm:not(.hidden)", has_text="Discard this change?")
+        confirm.wait_for()
+        page.locator("#prks-modal-confirm-cancel").click()
+        self.assertEqual(panel.locator('[data-prks-role="restored-change"]').count(), 1)
+        row.get_by_role("button", name="Discard", exact=True).click()
+        confirm.get_by_role("button", name="Discard change", exact=True).click()
         wait_for_async(page, "async () => (await prksSync.store.listRestored()).length === 0")
         self.assertEqual(panel.locator('[data-prks-role="restored-change"]').count(), 0)
 
