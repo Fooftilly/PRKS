@@ -36,6 +36,9 @@ from backend.storage.root_marker import StartState, binding_refusal, read_marker
 LOGGER = logging.getLogger(__name__)
 
 # A probe must answer well within the Compose healthcheck's timeout.
+# Both bounds together stay within it: the wait for a pooled connection
+# while every connection is busy, then the statements.
+PROBE_BORROW_TIMEOUT_S = 1.0
 PROBE_STATEMENT_TIMEOUT_MS = 2000
 
 _INSTANCE = (
@@ -77,7 +80,7 @@ class PostgresReadiness:
 
     def not_ready_reason(self) -> Optional[str]:
         try:
-            state = self._db.query(self._read_state)
+            state = self._db.query(self._read_state, borrow_timeout=PROBE_BORROW_TIMEOUT_S)
         except DatabaseError:
             return "database_unavailable"
         if state is None:

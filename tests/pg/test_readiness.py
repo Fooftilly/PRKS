@@ -14,7 +14,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+from typing import Any
 
 import psycopg
 
@@ -94,6 +96,28 @@ class ReadinessTests(RootPairingTestCase):
         self.assertEqual(self.readiness(other).not_ready_reason(), "root_pairing_mismatch")
         os.replace(root_marker.marker_path(self.root), os.path.join(self.tmp, "kept-marker"))
         self.assertEqual(self.readiness().not_ready_reason(), "root_unmarked")
+
+    def test_a_busy_pool_answers_not_ready_within_the_probe_bound(self) -> None:
+        busy = Database(
+            DatabaseConfig(conninfo=self.harness.conninfo(self.name), role="test", pool_min=0, pool_max=1)
+        )
+        self.addCleanup(busy.close)
+        readiness = PostgresReadiness(busy, instance_id=self.instance_id, root=self.root)
+        self.assertIsNone(readiness.not_ready_reason())
+        holding, release = threading.Event(), threading.Event()
+
+        def hold(_tx: Any) -> None:
+            holding.set()
+            release.wait(30)
+
+        holder = threading.Thread(target=busy.query, args=(hold,))
+        holder.start()
+        self.addCleanup(holder.join, 30)
+        self.addCleanup(release.set)
+        self.assertTrue(holding.wait(10))
+        started = time.monotonic()
+        self.assertEqual(readiness.not_ready_reason(), "database_unavailable")
+        self.assertLess(time.monotonic() - started, 3.0)
 
     def test_an_unreachable_database_is_not_ready(self) -> None:
         unreachable = Database(
