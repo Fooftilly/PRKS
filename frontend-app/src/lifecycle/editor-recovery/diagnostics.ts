@@ -360,6 +360,22 @@ function enumerable(storage: EmergencyStorage | null): boolean {
   }
 }
 
+/** What a signed-out or replaced account's diagnostics show: nothing of its drafts. */
+function retiredInventory(): RecoveryInventory {
+  return {
+    storage: 'unavailable',
+    emergencyStorage: 'unavailable',
+    drafts: [],
+    unreadable: [],
+    emergency: [],
+    unreadableEmergency: [],
+    totalChars: 0,
+    approxBytes: 0,
+    sizeIncomplete: false,
+    overBudget: false,
+  }
+}
+
 export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: RecoveryDiagnosticsOptions = {}): RecoveryDiagnostics {
   // The runtime's localStorage view: it refuses every access once the
   // account is signed out or replaced (#629), like the store does.
@@ -558,6 +574,9 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     ]
     const totalChars = sizes.reduce<number>((sum, n) => sum + (n ?? 0), 0)
     const approxBytes = totalChars * 2
+    // Signed out or replaced while this was listing (#629): what was read
+    // before belongs to that account and is dropped, never shown.
+    if (rt.isRetired()) return retiredInventory()
     return {
       storage: state,
       emergencyStorage: enumerable(storage) ? 'ok' : 'unavailable',
@@ -637,18 +656,24 @@ export function createRecoveryDiagnostics(rt: EditorRecoveryRuntime, options: Re
     }
   }
 
+  async function readTextOf(target: TextTarget): Promise<TextResult> {
+    switch (target.source) {
+      case 'record':
+        return await readRecordText(target.expect)
+      case 'unreadable-record':
+        return await readUnreadableText(target.draftId, target.snapshot)
+      case 'emergency':
+        return await readEmergencyText(target.key, target.draftId, target.generation)
+      case 'unreadable-emergency':
+        return readRawEmergency(target.key, target.raw)
+    }
+  }
+
   async function readText(target: TextTarget): Promise<TextResult> {
     try {
-      switch (target.source) {
-        case 'record':
-          return await readRecordText(target.expect)
-        case 'unreadable-record':
-          return await readUnreadableText(target.draftId, target.snapshot)
-        case 'emergency':
-          return await readEmergencyText(target.key, target.draftId, target.generation)
-        case 'unreadable-emergency':
-          return readRawEmergency(target.key, target.raw)
-      }
+      const result = await readTextOf(target)
+      // Text read before a sign-out or account switch is never handed out after it (#629).
+      return rt.isRetired() ? { ok: false, code: 'failed' } : result
     } catch {
       return { ok: false, code: 'failed' }
     }

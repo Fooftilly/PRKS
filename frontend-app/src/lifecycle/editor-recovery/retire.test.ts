@@ -127,6 +127,28 @@ describe('recovery retires with its browser scope (#629)', () => {
     expect([...local.map.values()].join('')).not.toContain('Typed by whoever is next')
   })
 
+  it('shows nothing of a listing that was still classifying when the account signed out', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const lineage = { kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1',
+      owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE }
+    const seed = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    expect(await seed.writeGeneration({ draftId: 'd-listed', pageInstanceId: 'p-gone', generation: 1, body: 'Listed text', create: lineage })).toBe('ok')
+    seed.close()
+    const rt = load(idb, local, 'a')
+    await rt.start()
+    // The account signs out while the listing waits on an owner's answer.
+    const signingOut = Object.create(rt) as typeof rt
+    signingOut.classify = async (record) => {
+      await rt.retire()
+      return rt.classify(record)
+    }
+    const inventory = await createRecoveryDiagnostics(signingOut).inventory()
+    expect(inventory.drafts).toEqual([])
+    expect(inventory.storage).toBe('unavailable')
+    expect(JSON.stringify(inventory)).not.toContain('d-listed')
+  })
+
   it('settles an adoption begun before the retirement, returns nothing from it, and disposes its writer', async () => {
     const idb = createFakeIdb()
     const local = memoryStorage()

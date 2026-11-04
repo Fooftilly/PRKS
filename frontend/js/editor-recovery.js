@@ -1170,6 +1170,21 @@ var prksEditorRecovery = (function(exports) {
 			return false;
 		}
 	}
+	/** What a signed-out or replaced account's diagnostics show: nothing of its drafts. */
+	function retiredInventory() {
+		return {
+			storage: "unavailable",
+			emergencyStorage: "unavailable",
+			drafts: [],
+			unreadable: [],
+			emergency: [],
+			unreadableEmergency: [],
+			totalChars: 0,
+			approxBytes: 0,
+			sizeIncomplete: false,
+			overBudget: false
+		};
+	}
 	function createRecoveryDiagnostics(rt, options = {}) {
 		const storage = options.storage === void 0 ? rt.emergencyStorage : options.storage;
 		const names = rt.names;
@@ -1363,6 +1378,7 @@ var prksEditorRecovery = (function(exports) {
 			];
 			const totalChars = sizes.reduce((sum, n) => sum + (n ?? 0), 0);
 			const approxBytes = totalChars * 2;
+			if (rt.isRetired()) return retiredInventory();
 			return {
 				storage: state,
 				emergencyStorage: enumerable(storage) ? "ok" : "unavailable",
@@ -1496,14 +1512,21 @@ var prksEditorRecovery = (function(exports) {
 				};
 			}
 		}
+		async function readTextOf(target) {
+			switch (target.source) {
+				case "record": return await readRecordText(target.expect);
+				case "unreadable-record": return await readUnreadableText(target.draftId, target.snapshot);
+				case "emergency": return await readEmergencyText(target.key, target.draftId, target.generation);
+				case "unreadable-emergency": return readRawEmergency(target.key, target.raw);
+			}
+		}
 		async function readText(target) {
 			try {
-				switch (target.source) {
-					case "record": return await readRecordText(target.expect);
-					case "unreadable-record": return await readUnreadableText(target.draftId, target.snapshot);
-					case "emergency": return await readEmergencyText(target.key, target.draftId, target.generation);
-					case "unreadable-emergency": return readRawEmergency(target.key, target.raw);
-				}
+				const result = await readTextOf(target);
+				return rt.isRetired() ? {
+					ok: false,
+					code: "failed"
+				} : result;
 			} catch {
 				return {
 					ok: false,
