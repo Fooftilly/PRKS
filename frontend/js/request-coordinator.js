@@ -9,11 +9,15 @@
  * resolve those from Cache Storage without the PRKS server answering.
  *
  * Library epoch (docs/postgresql-architecture.md §10.4, §11.4): every Library
- * mutation names the epoch it was made for in `PRKS-Library-Epoch`. The
- * epoch is held in memory only: noted from the header the server puts on
- * every admitted answer, or read once from `GET /api/session` before the
- * first mutation when no answer has carried it yet. An unknown epoch sends
- * no header, and the server refuses the mutation.
+ * mutation names the epoch the page loaded in `PRKS-Library-Epoch`. In a
+ * page that is the browser scope's page epoch (browser-scope.js); without a
+ * browser scope (Node tests) the first epoch an answer carries, or one read
+ * from `GET /api/session` before the first mutation. Once known it never
+ * changes: a page loaded before a restore keeps naming the older epoch, and
+ * the server refuses its mutations until a reload. Every answer's header is
+ * reported to the browser scope, which tells the page the Library was
+ * restored. An unknown epoch sends no header, and the server refuses the
+ * mutation.
  */
 (function (root) {
     'use strict';
@@ -158,6 +162,8 @@
     function createPrksLibraryEpoch(deps) {
         const options = deps && typeof deps === 'object' ? deps : {};
         const fetchImpl = options.fetchImpl || defaultFetch;
+        // The page's browser scope, looked up when needed (it loads after this file).
+        const scopeOf = typeof options.scope === 'function' ? options.scope : function () { return null; };
         // The first mutation waits on this read while it holds the mutation
         // slot, so the read is bounded: past it the mutation goes without.
         const sessionTimeoutMs = options.sessionTimeoutMs > 0 ? options.sessionTimeoutMs : PRKS_SESSION_TIMEOUT_MS;
@@ -168,7 +174,13 @@
             const headers = response && response.headers;
             if (!headers || typeof headers.get !== 'function') return;
             const seen = epochOf(headers.get(PRKS_LIBRARY_EPOCH_HEADER));
-            if (seen) epoch = seen;
+            if (!seen) return;
+            const scope = scopeOf();
+            if (scope && typeof scope.noteEpoch === 'function') {
+                try { scope.noteEpoch(seen); } catch (_e) { /* the scope's own concern */ }
+            } else if (!epoch) {
+                epoch = seen;
+            }
         }
 
         function readSession() {
@@ -221,7 +233,15 @@
 
         function headers() {
             if (epoch) return Promise.resolve({ [PRKS_LIBRARY_EPOCH_HEADER]: epoch });
-            return readSession().then(function () {
+            const scope = scopeOf();
+            const known = scope && typeof scope.pageEpoch === 'function'
+                // The page's epoch is the one its scope bound with.
+                ? Promise.resolve(scope.resolve()).then(function () {
+                    const bound = epochOf(scope.pageEpoch());
+                    if (bound && !epoch) epoch = bound;
+                }, function () { /* no scope: no epoch */ })
+                : readSession();
+            return known.then(function () {
                 return epoch ? { [PRKS_LIBRARY_EPOCH_HEADER]: epoch } : {};
             });
         }
@@ -1003,7 +1023,10 @@
         };
     }
 
-    const libraryEpoch = createPrksLibraryEpoch({ fetchImpl: defaultFetch });
+    const libraryEpoch = createPrksLibraryEpoch({
+        fetchImpl: defaultFetch,
+        scope: function () { return root.prksBrowserScope || null; },
+    });
 
     const production = createPrksRequestCoordinator({
         fetchImpl: libraryEpoch.fetch,

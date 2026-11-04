@@ -38,6 +38,17 @@
  * A retired scope's stores close and refuse to open, sync stops for good, and
  * nothing is deleted. A reload binds whoever is signed in then.
  *
+ * Library epoch (§10.4, §11.4). A session answer names the Library's epoch,
+ * and an answer without a valid one binds no scope. The page acts under the
+ * epoch it bound with (`pageEpoch()`, recorded with the scope for an offline
+ * reload). `latestEpoch()` is the highest epoch a later session read of the
+ * same scope named; a higher one emits `{ type: 'epoch', epoch }`. A header
+ * epoch (`noteEpoch()`, the request coordinator reports every answer's) only
+ * prompts that read, since a header does not say whose Library it is. Once it is
+ * above the page's epoch, the Library was restored: changes made under the
+ * older epoch are never sent, and this page keeps refusing new ones until a
+ * reload binds the new epoch.
+ *
  * The page re-verifies on its own lifecycle (visible again, focus, online,
  * page show, and once a minute while visible), not only before a send, so an
  * idle page with an empty queue also notices another account.
@@ -74,6 +85,8 @@
     // A scope id is the server's identifier; these characters keep it safe in
     // a database and cache name.
     const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+    // The server's grammar for an epoch: 1 to the largest bigint, in decimal.
+    const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
 
     /** Base names of the per-scope stores. The full name is `<base>:<scope key>`. */
     const STORE_BASES = Object.freeze({
@@ -97,6 +110,18 @@
 
     function validId(value) {
         return typeof value === 'string' && ID_PATTERN.test(value);
+    }
+
+    /** An epoch as its canonical decimal string, or null. */
+    function epochOf(value) {
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    /** Orders two canonical epochs (they may exceed a double's integers). */
+    function compareEpochs(a, b) {
+        if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
     }
 
     /** The scope a session body names, or null when it does not name one completely. */
@@ -198,10 +223,15 @@
             });
         }
         return {
+            /** `{ scope, epoch }` of the last confirmed session, or null (a record without an epoch included). */
             read: function () {
                 return withStore('readonly', function (store, done) {
                     const get = store.get(POINTER_KEY);
-                    get.onsuccess = function () { done(scopeFromRecord(get.result)); };
+                    get.onsuccess = function () {
+                        const scope = scopeFromRecord(get.result);
+                        const epoch = get.result ? epochOf(get.result.epoch) : null;
+                        done(scope && epoch ? { scope: scope, epoch: epoch } : null);
+                    };
                 });
             },
             /**
@@ -218,7 +248,7 @@
              * One readwrite transaction, so the checks and the write cannot
              * interleave with another tab's change.
              */
-            write: function (scope, startedAt) {
+            write: function (scope, startedAt, epoch) {
                 const began = Number(startedAt) || 0;
                 return withStore('readwrite', function (store, done) {
                     const marker = store.get(LOGOUT_KEY);
@@ -241,6 +271,7 @@
                             store.put({
                                 key: POINTER_KEY,
                                 scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
+                                epoch: epoch,
                                 confirmedAt: began,
                             });
                             done('written');
@@ -321,6 +352,9 @@
 
         let resolving = null;
         let bound = null;
+        // The epoch this page bound with, and the highest seen since.
+        let pageEpoch = null;
+        let latestEpoch = null;
         let retired = false;
         let retiredReason = null;
         // Each session read is numbered; only a read newer than the last one
@@ -393,7 +427,8 @@
                     if (!response.ok) return { kind: 'none', scope: null };
                     return response.json().then(function (body) {
                         const scope = scopeFromSession(body);
-                        return scope ? { kind: 'session', scope: scope } : { kind: 'none', scope: null };
+                        const epoch = epochOf(body && body.library && body.library.epoch);
+                        return scope && epoch ? { kind: 'session', scope: scope, epoch: epoch } : { kind: 'none', scope: null };
                     }, function () {
                         return { kind: 'none', scope: null };
                     });
@@ -407,7 +442,7 @@
             // The record follows the server's answer; a failed write only costs
             // an offline reload, never a wrong scope.
             const written = function () { return 'written'; };
-            if (answer.kind === 'session') return pointer.write(answer.scope, startedAt).catch(written);
+            if (answer.kind === 'session') return pointer.write(answer.scope, startedAt, answer.epoch).catch(written);
             if (answer.kind === 'none') return pointer.forget(startedAt).catch(written);
             return Promise.resolve('written');
         }
@@ -416,17 +451,46 @@
         function resolve() {
             if (resolving) return resolving;
             resolving = readSession().then(function (answer) {
-                if (answer.kind === 'session') return answer.scope;
+                if (answer.kind === 'session') return answer;
                 if (answer.kind === 'unreachable') {
                     return pointer.read().catch(function () { return null; });
                 }
                 return null;
-            }).then(function (scope) {
-                bound = scope || null;
+            }).then(function (found) {
+                bound = found ? found.scope : null;
+                pageEpoch = bound ? found.epoch : null;
+                if (pageEpoch && (!latestEpoch || compareEpochs(pageEpoch, latestEpoch) > 0)) latestEpoch = pageEpoch;
                 announce();
                 return bound;
             });
             return resolving;
+        }
+
+        /**
+         * Records an epoch a same-scope session read named for this page's
+         * Library. Only a higher one counts; it is announced to subscribers.
+         */
+        function raiseEpoch(value) {
+            const epoch = epochOf(value);
+            if (!epoch || retired) return;
+            if (latestEpoch && compareEpochs(epoch, latestEpoch) <= 0) return;
+            latestEpoch = epoch;
+            if (bound) emit({ type: 'epoch', epoch: epoch });
+        }
+
+        /**
+         * An epoch some answer's header named. A header does not say whose
+         * Library it is (another account may have signed in under this
+         * page), so a higher one only prompts a session read (`verify()`):
+         * the same scope's answer raises the epoch, another account's
+         * retires the page instead.
+         */
+        let hinting = null;
+        function noteEpoch(value) {
+            const epoch = epochOf(value);
+            if (!epoch || retired || !bound || hinting) return;
+            if (latestEpoch && compareEpochs(epoch, latestEpoch) <= 0) return;
+            hinting = verify().catch(function () { return null; }).then(function () { hinting = null; });
         }
 
         /** Re-reads the session against the page's scope. */
@@ -447,7 +511,10 @@
                             return retiredReason;
                         });
                     }
-                    if (sameScope(answer.scope, scope)) return 'same';
+                    if (sameScope(answer.scope, scope)) {
+                        raiseEpoch(answer.epoch);
+                        return 'same';
+                    }
                     retire('changed');
                     return retiredReason;
                 });
@@ -534,6 +601,9 @@
             signOut: signOut,
             dbName: dbName,
             current: function () { return retired ? null : bound; },
+            pageEpoch: function () { return retired ? null : pageEpoch; },
+            latestEpoch: function () { return retired ? null : latestEpoch; },
+            noteEpoch: noteEpoch,
             isRetired: function () { return retired; },
             retiredReason: function () { return retiredReason; },
             subscribe: function (fn) {
@@ -583,6 +653,8 @@
         PRKS_SCOPE_LOGOUT_KEY: LOGOUT_KEY,
         PRKS_SCOPE_POINTER_DB_VERSION: POINTER_DB_VERSION,
         prksScopeFromSession: scopeFromSession,
+        prksEpochOf: epochOf,
+        prksCompareEpochs: compareEpochs,
         prksScopedStoreName: storeName,
         PRKS_SCOPE_STORE_BASES: STORE_BASES,
         PRKS_SCOPE_POINTER_DB_NAME: POINTER_DB_NAME,

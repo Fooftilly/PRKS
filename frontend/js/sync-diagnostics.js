@@ -529,6 +529,106 @@
         return ' Server currently has "' + bounded(result.current_value) + '".';
     }
 
+    /**
+     * The page's account was signed out or replaced (#629): nothing of the
+     * old account's queue is shown or handed out from then on, also by a
+     * read or a row from before. What is stored stays for that account.
+     */
+    function scopeRetired() {
+        const scope = root.prksBrowserScope;
+        try {
+            return !!(scope && typeof scope.isRetired === 'function' && scope.isRetired());
+        } catch (_) {
+            return true;
+        }
+    }
+
+    let watchingScope = false;
+    function clearOnRetire() {
+        const scope = root.prksBrowserScope;
+        if (watchingScope || !scope || typeof scope.subscribe !== 'function') return;
+        watchingScope = true;
+        scope.subscribe(event => {
+            if (!event || event.type !== 'retired') return;
+            for (const section of document.querySelectorAll('[data-sync-diagnostics]')) section.replaceChildren();
+        });
+    }
+
+    /** The text a reviewed change carries, for copying out: its value, or the change as described. */
+    function copyableText(op) {
+        const value = payloadValue(op);
+        if (value != null) return String(value);
+        // A field change of any family: its whole value, never the bounded preview.
+        const payload = op.payload || {};
+        if (typeof payload.value === 'string') return payload.value;
+        if (typeof payload.text === 'string') return payload.text;
+        return describe(op) + '\n' + JSON.stringify(payload, null, 2);
+    }
+
+    /*
+     * Changes made before this Library was restored on the server (§10.4).
+     * They were never sent under the new epoch and never will be: the user
+     * copies out what is worth keeping and discards the rest. Nothing here
+     * is deleted on its own.
+     */
+    async function renderRestored(section, host) {
+        if (typeof root.prksSync.store.listRestored !== 'function') return;
+        const restored = await root.prksSync.store.listRestored();
+        // Read before a sign-out completed after it: shown to no one.
+        if (scopeRetired() || !restored.length) return;
+        const heading = document.createElement('p');
+        heading.dataset.prksRole = 'restored-changes-heading';
+        heading.textContent = 'Unsent changes from before this library was restored (' + restored.length +
+            '). They will not be sent. Copy what you want to keep, then discard them.';
+        section.appendChild(heading);
+        for (const op of restored) {
+            const row = document.createElement('p');
+            row.dataset.prksRole = 'restored-change';
+            row.dataset.opId = op.op_id;
+            row.appendChild(document.createTextNode(describe(op) + ' · ' + op.entity_id + sizeNote(op) + ' '));
+            const copy = document.createElement('button');
+            copy.type = 'button';
+            copy.className = 'prks-btn prks-btn--secondary prks-btn--sm';
+            copy.textContent = 'Copy text';
+            copy.onclick = async () => {
+                if (scopeRetired()) {
+                    row.remove();
+                    return;
+                }
+                try {
+                    await root.prksCopyTextToClipboard(copyableText(op));
+                    copy.textContent = 'Copied';
+                } catch (_) {
+                    copy.textContent = 'Could not copy; retry';
+                }
+            };
+            const discard = document.createElement('button');
+            discard.type = 'button';
+            discard.className = 'prks-btn prks-btn--secondary prks-btn--sm';
+            discard.textContent = 'Discard';
+            discard.onclick = async () => {
+                // This row may be the only copy of what was typed: never on one click.
+                const confirmed = typeof root.prksConfirmDestructive === 'function' && await root.prksConfirmDestructive({
+                    title: 'Discard this change?',
+                    message: 'It was made before this library was restored and was never sent. Discarding removes ' +
+                        'it from this browser for good. Copy its text first if you want to keep it.',
+                    confirmLabel: 'Discard change',
+                });
+                if (!confirmed) return;
+                discard.disabled = true;
+                try {
+                    await root.prksSync.store.discardRestored(op.op_id);
+                    await root.prksRenderSyncDiagnostics(host);
+                } catch (_) {
+                    discard.disabled = false;
+                    discard.textContent = 'Could not discard; retry';
+                }
+            };
+            row.append(copy, document.createTextNode(' '), discard);
+            section.appendChild(row);
+        }
+    }
+
     root.prksRenderSyncDiagnostics = async host => {
         let section = host.parentElement.querySelector('[data-sync-diagnostics]');
         if (!section) {
@@ -537,8 +637,11 @@
             host.after(section);
         }
         section.replaceChildren();
+        clearOnRetire();
+        if (scopeRetired()) return;
         const operations = (await root.prksSync.store.listOperations())
             .filter(op => op.status !== 'acknowledged');
+        if (scopeRetired()) return;
         for (const op of operations) {
             const row = document.createElement('p');
             const link = document.createElement('a');
@@ -583,5 +686,6 @@
             }
             section.appendChild(row);
         }
+        await renderRestored(section, host);
     };
 })(typeof window === 'undefined' ? globalThis : window);

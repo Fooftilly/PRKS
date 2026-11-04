@@ -482,6 +482,9 @@ function stubScope(key) {
         verifyAnswers: [],
         resolve: async () => (key ? scope : null),
         current: () => (retired || !key ? null : scope),
+        epoch: '1',
+        pageEpoch() { return retired || !key ? null : this.epoch; },
+        latestEpoch() { return retired || !key ? null : this.epoch; },
         isRetired: () => retired,
         dbName: async (kind) => (key && !retired ? scopeApi.PRKS_SCOPE_STORE_BASES[kind] + ':' + key : null),
         subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
@@ -815,6 +818,175 @@ async function testWorker() {
         sw.sessionScopeKey(SESSION_A) === KEY_A && sw.sessionScopeKey({ user: null }) === null);
 }
 
+/** A session stub whose epochs the test sets. */
+function epochScope(key, pageEpoch, latest) {
+    const stub = stubScope(key);
+    stub.epoch = pageEpoch;
+    stub.latest = latest || pageEpoch;
+    stub.latestEpoch = function () { return this.latest; };
+    return stub;
+}
+
+async function testEpoch() {
+    // The scope binds the epoch its session names, and records it for an offline reload.
+    const idb = createFakeIndexedDBFactory();
+    const a = scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([ok(SESSION_A)]) });
+    await a.resolve();
+    record('the page binds its session\'s epoch', a.pageEpoch() === '1' && a.latestEpoch() === '1',
+        String(a.pageEpoch()) + '/' + String(a.latestEpoch()));
+    const offlineReload = scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([offline()]) });
+    await offlineReload.resolve();
+    record('an offline reload binds the recorded epoch', offlineReload.pageEpoch() === '1');
+    const noEpoch = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: undefined }) });
+    const odd = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(noEpoch)]) });
+    record('a session without an epoch binds no scope', (await odd.resolve()) === null && odd.pageEpoch() === null);
+
+    // A later answer names a newer epoch: announced once, and the page's stays.
+    const restored = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 2 }) });
+    const at10 = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 10 }) });
+    const pageFetch = sessionFetch([ok(SESSION_A), ok(restored), ok(at10)]);
+    const page = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: pageFetch });
+    await page.resolve();
+    const events = [];
+    page.subscribe((event) => events.push(event));
+    record('a verify of the same account is still the same scope', (await page.verify()) === 'same');
+    record('a newer epoch is announced', events.length === 1 && events[0].type === 'epoch' && events[0].epoch === '2',
+        JSON.stringify(events));
+    record('the page keeps the epoch it bound with', page.pageEpoch() === '1' && page.latestEpoch() === '2');
+    const readsBefore = pageFetch.calls.length;
+    page.noteEpoch('1');
+    page.noteEpoch('abc');
+    page.noteEpoch('2');
+    record('an older, equal or malformed header epoch changes nothing and reads nothing',
+        events.length === 1 && page.latestEpoch() === '2' && pageFetch.calls.length === readsBefore);
+    page.noteEpoch('10');
+    record('a higher header epoch alone raises nothing', page.latestEpoch() === '2');
+    await new Promise((r) => setTimeout(r, 0));
+    await page.verify();
+    record('the same account\'s session read raises it, ordered as numbers',
+        page.latestEpoch() === '10' && events.length === 2 && events[1].epoch === '10', JSON.stringify(events));
+
+    // Another account signed in under the page: its header epoch is not this Library's (#1115 review).
+    const switched = scopeApi.createPrksBrowserScope({
+        indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(SESSION_A), ok(Object.assign({}, SESSION_B, { library: at10.library }))]),
+    });
+    await switched.resolve();
+    const seen = [];
+    switched.subscribe((event) => seen.push(event.type));
+    switched.noteEpoch('10');
+    for (let i = 0; i < 5 && !switched.isRetired(); i++) await new Promise((r) => setTimeout(r, 0));
+    record('another account\'s header epoch retires the page instead of raising its epoch',
+        switched.isRetired() && seen.indexOf('epoch') === -1, JSON.stringify(seen));
+
+    // The coordinator sends the page's epoch and reports newer ones to the scope.
+    const { createPrksLibraryEpoch } = require(path.join(rootDir, 'frontend/js/request-coordinator.js'));
+    const sent = [];
+    const scopeLike = epochScope('A', '3');
+    const noted = [];
+    scopeLike.noteEpoch = (e) => noted.push(e);
+    const coordinator = createPrksLibraryEpoch({
+        scope: () => scopeLike,
+        fetchImpl: async (url, init) => {
+            sent.push(init && init.headers);
+            return new Response('{}', { status: 200, headers: { 'PRKS-Library-Epoch': '4' } });
+        },
+    });
+    await coordinator.fetch('/api/tags', { method: 'POST' });
+    await coordinator.fetch('/api/tags', { method: 'POST' });
+    record('a mutation names the scope\'s page epoch, also after a newer answer',
+        sent.length === 2 && sent.every((h) => h['PRKS-Library-Epoch'] === '3'), JSON.stringify(sent));
+    record('every answer\'s epoch is reported to the scope', noted.length === 2 && noted[0] === '4', JSON.stringify(noted));
+
+    // The queue: every operation records the page's epoch.
+    const uuid = (() => { let n = 0; return () => '00000000-0000-4000-8000-' + String(++n).padStart(12, '0'); })();
+    const qdb = createFakeIndexedDBFactory();
+    const before = epochScope('Q', '1');
+    const store = createPrksLocalStore({ indexedDB: qdb, uuid, scope: before });
+    const opened = await store.recordWorkOpened('W-1', '2026-11-04T09:00:00.000Z');
+    await store.saveWorkNote('W-1', 'SET_WORK_PRIVATE_NOTE', 'Remember this', { value: '', revision: 0 });
+    record('an operation records the page\'s epoch', opened.library_epoch === '1');
+    record('the store records its epoch', (await store.libraryEpoch()) === '1');
+
+    // The server names a newer epoch: the older operations leave the queue for review.
+    const moved = await store.advanceEpoch('2');
+    const kept = await store.listRestored();
+    record('a newer epoch moves every older operation out of the queue',
+        moved === 2 && (await store.listOperations()).length === 0, String(moved));
+    record('their text is kept for review', kept.length === 2 && kept.some((op) => op.payload && op.payload.text === 'Remember this')
+        && kept.every((op) => op.superseded_by_epoch === '2' && op.library_epoch === '1'), JSON.stringify(kept.map((op) => op.operation)));
+    record('an equal or older epoch moves nothing', (await store.advanceEpoch('2')) === 0 && (await store.advanceEpoch('1')) === 0);
+
+    // A page loaded before the restore records nothing more.
+    let refused = null;
+    try { await store.saveWorkNote('W-1', 'SET_WORK_PRIVATE_NOTE', 'Typed on the old page', { value: '', revision: 0 }); } catch (err) { refused = err; }
+    record('a page of an older epoch is refused', !!refused && refused.prksLocalStoreCode === 'library_restored',
+        refused && refused.prksLocalStoreCode);
+    record('and nothing of it is queued', (await store.listOperations()).length === 0);
+
+    // A reloaded page of the new epoch queues again, under it.
+    const reloaded = createPrksLocalStore({ indexedDB: qdb, uuid, scope: epochScope('Q', '2') });
+    const fresh = await reloaded.saveWorkNote('W-1', 'SET_WORK_PRIVATE_NOTE', 'After the restore', { value: '', revision: 0 });
+    record('a page of the new epoch queues under it', fresh.library_epoch === '2' && (await reloaded.listOperations()).length === 1);
+
+    // A page of a newer epoch writing first moves the older operations itself.
+    const pdb = createFakeIndexedDBFactory();
+    const old = createPrksLocalStore({ indexedDB: pdb, uuid, scope: epochScope('P', '5') });
+    await old.recordWorkOpened('W-9', '2026-11-04T09:00:00.000Z');
+    const newer = createPrksLocalStore({ indexedDB: pdb, uuid, scope: epochScope('P', '6') });
+    await newer.recordWorkOpened('W-2', '2026-11-04T10:00:00.000Z');
+    const rows = await newer.listOperations();
+    record('a write under a newer epoch first moves the older operations',
+        rows.length === 1 && rows[0].library_epoch === '6' && (await newer.listRestored()).length === 1, JSON.stringify(rows.map((r) => r.library_epoch)));
+
+    // Discarding is the user's choice, one change at a time.
+    const first = kept[0].op_id;
+    await store.discardRestored(first);
+    record('a discarded change is gone from review', (await store.listRestored()).every((op) => op.op_id !== first));
+    let gone = null;
+    try { await store.discardRestored(first); } catch (err) { gone = err; }
+    record('discarding it again is refused', !!gone && gone.prksLocalStoreCode === 'not_restored');
+
+    // The runtime sends each operation under its own epoch.
+    const handlers = {
+        MARK_WORK_OPENED: {
+            isResult: (data) => !!data && typeof data.code === 'string',
+            reconcile: async () => true,
+            terminal: () => ({ discard: 'refused' }),
+        },
+    };
+    async function runtimeWith(latest, answers) {
+        const db = createFakeIndexedDBFactory();
+        const session = epochScope('R', '1', latest);
+        const queue = createPrksLocalStore({ indexedDB: db, uuid, scope: session });
+        await queue.recordWorkOpened('W-1', '2026-11-04T09:00:00.000Z');
+        const requests = [];
+        const runtime = createPrksSyncRuntime({
+            store: queue, handlers, online: () => true, session,
+            request: async (url, init) => {
+                requests.push(init.headers);
+                const next = answers.shift();
+                return typeof next === 'function' ? next(session) : next;
+            },
+        });
+        await runtime.wake();
+        runtime.stop();
+        return { requests, runtime, queue };
+    }
+    const same = await runtimeWith('1', [json({ code: 'ACKNOWLEDGED', server_revision: 1 })]);
+    record('an operation is sent under its own epoch', same.requests.length === 1 && same.requests[0]['PRKS-Library-Epoch'] === '1',
+        JSON.stringify(same.requests));
+    const known = await runtimeWith('2', []);
+    record('an operation of an older epoch than the server\'s is never sent', known.requests.length === 0);
+    record('it waits for review instead', (await known.queue.listRestored()).length === 1
+        && (await known.queue.listOperations()).length === 0);
+    const refusedAnswer = (session) => { session.latest = '2'; return json({ error: 'LIBRARY_EPOCH_CHANGED', code: 'LIBRARY_EPOCH_CHANGED' }, 409); };
+    const changed = await runtimeWith('1', [refusedAnswer]);
+    record('after a 409 the session names the newer epoch and the operation goes to review',
+        changed.requests.length === 1 && (await changed.queue.listRestored()).length === 1
+        && (await changed.queue.listOperations()).length === 0 && changed.runtime.held() === null,
+        String(changed.runtime.held()));
+}
+
 async function main() {
     await testResolve();
     await testBoundedRead();
@@ -823,6 +995,7 @@ async function main() {
     await testVerify();
     await testStores();
     await testHold();
+    await testEpoch();
     await testWorker();
     console.log(passed + ' passed, ' + failed + ' failed');
     if (failed) process.exit(1);

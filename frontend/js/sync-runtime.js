@@ -39,6 +39,7 @@
         refused: 'Refused for this account; waiting.',
         epoch: 'Waiting for the Library to be confirmed.',
     };
+    const EPOCH_HEADER = 'PRKS-Library-Epoch';
     function admissionHold(response, data) {
         const code = data && (data.code || data.error);
         if (response.status === 401) return 'signed_out';
@@ -46,6 +47,10 @@
         if (response.status === 400 && code === 'LIBRARY_EPOCH_REQUIRED') return 'epoch';
         if (response.status === 409 && code === 'LIBRARY_EPOCH_CHANGED') return 'epoch';
         return null;
+    }
+    function newerEpoch(a, b) {
+        if (a.length !== b.length) return a.length > b.length;
+        return a > b;
     }
     function createRuntime(deps) {
         const store = deps.store;
@@ -76,7 +81,20 @@
         // Another account signed in here, or this one signed out: nothing
         // more is sent from this page.
         if (deps.session && typeof deps.session.subscribe === 'function') {
-            deps.session.subscribe(event => hold(event && event.reason === 'logged_out' ? 'logged_out' : 'changed'));
+            deps.session.subscribe(event => {
+                if (event && event.type === 'epoch') { void wake(); return; }
+                hold(event && event.reason === 'logged_out' ? 'logged_out' : 'changed');
+            });
+        }
+        /* The Library was restored (§10.4, §11.4): the server named a newer
+         * epoch than the queue's. Every operation of an older epoch leaves the
+         * queue for review before anything else is sent. */
+        async function fenceEpoch() {
+            const latest = deps.session && typeof deps.session.latestEpoch === 'function'
+                ? deps.session.latestEpoch() : null;
+            if (!latest || typeof store.advanceEpoch !== 'function') return;
+            const moved = await store.advanceEpoch(latest);
+            if (moved > 0) emit({ restored: moved });
         }
         function retiredReason() {
             const reason = typeof deps.session.retiredReason === 'function' ? deps.session.retiredReason() : null;
@@ -249,6 +267,7 @@
                 if (deps.session.isRetired()) { hold(retiredReason()); return; }
                 if (!bound) { hold('unbound'); return; }
             }
+            await fenceEpoch();
             if (!recovered) await recover();
             await repairTerminalConflictDependents();
             while (deps.online()) {
@@ -307,8 +326,11 @@
                     const timeout = setTimeout(() => controller.abort(), 20000);
                     let response;
                     try {
+                        // Sent under the epoch it was made under, never the page's latest.
+                        const headers = { 'Content-Type': 'application/json' };
+                        if (op.library_epoch) headers[EPOCH_HEADER] = op.library_epoch;
                         response = await deps.request('/api/sync/operations', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            method: 'POST', headers,
                             body: JSON.stringify(Object.fromEntries(fields.map(k => [k, op[k]]))), signal: controller.signal,
                         });
                     } finally { clearTimeout(timeout); }
@@ -322,6 +344,9 @@
                         await store.updateOperationSyncState(op.op_id, {
                             status: 'pending', attempt_count: priorAttempts, last_error: HOLD_LABELS[heldBy],
                         });
+                        // Another epoch: the session names the Library's, and
+                        // a newer one sends this row to review on the next pass.
+                        if (heldBy === 'epoch' && await epochMoved(op)) continue;
                         hold(heldBy);
                         break;
                     }
@@ -354,6 +379,15 @@
                     break;
                 }
             }
+        }
+        /** After an epoch refusal: did a session read find a newer epoch than `op`'s? */
+        async function epochMoved(op) {
+            if (!deps.session || typeof deps.session.latestEpoch !== 'function' || !op.library_epoch) return false;
+            await deps.session.verify();
+            const latest = deps.session.latestEpoch();
+            if (!latest || !newerEpoch(latest, op.library_epoch)) return false;
+            await fenceEpoch();
+            return true;
         }
         async function wake() {
             if (running) return;

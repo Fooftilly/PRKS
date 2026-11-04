@@ -1528,12 +1528,12 @@ async function testLibraryEpoch() {
     await epoch.fetch('/api/later', { method: 'GET' });
     await epoch.fetch('/api/tags', { method: 'POST' });
     const last = calls[calls.length - 1];
-    record('an answer\'s header updates the epoch', last.init.headers['PRKS-Library-Epoch'] === '4' && sessionReads === 1,
+    record('a newer epoch in an answer never replaces the page\'s', last.init.headers['PRKS-Library-Epoch'] === '3' && sessionReads === 1,
         JSON.stringify(last));
     await epoch.fetch('/api/tags', { method: 'POST', headers: { 'PRKS-Library-Epoch': '2' } });
     record('an explicit epoch is never replaced', calls[calls.length - 1].init.headers['PRKS-Library-Epoch'] === '2', '');
     const headers = await epoch.headers();
-    record('headers() names the current epoch', headers['PRKS-Library-Epoch'] === '4', JSON.stringify(headers));
+    record('headers() names the page\'s epoch', headers['PRKS-Library-Epoch'] === '3', JSON.stringify(headers));
 
     // Without a session (signed out, unreachable) nothing is invented: the server refuses.
     for (const answer of [
