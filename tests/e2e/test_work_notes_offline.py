@@ -1275,6 +1275,14 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.assertEqual(page.evaluate(_RECOVERY_IDLE), {'pending': 0, 'guard': False, 'unloadListeners': False})
 
     def test_an_acknowledged_delete_interrupted_before_cleanup_is_retried_on_a_folders_load(self):
+        self._retry_after_interrupted_cleanup(hold_session=False)
+
+    def test_the_retry_runs_when_the_server_is_reachable_before_the_account_is_known(self):
+        # The marks are the signed-in account's: the retry reads them once the
+        # session answers, which can be after the runtime already went online.
+        self._retry_after_interrupted_cleanup(hold_session=True)
+
+    def _retry_after_interrupted_cleanup(self, hold_session):
         server, page, context = self.start()
         work = server.ids['work_a']
         # The delete was acknowledged here, but the browser stopped before the cleanup: the Work
@@ -1300,7 +1308,19 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.close_tab(page)
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
+        held = []
+        if hold_session:
+            tab.route('**/api/session', lambda route: held.append(route))
         tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
+        if hold_session:
+            tab.wait_for_function(
+                "() => window.prksOfflineRuntimeState && window.prksOfflineRuntimeState() === 'online'",
+                timeout=20000)
+            self.assertTrue(held, 'the session read was not held')
+            self.assertIsNone(tab.evaluate('() => window.prksEditorRecovery.scopeNames()'))
+            for route in held:
+                route.continue_()
+            tab.unroute('**/api/session')
         tab.wait_for_selector('#sidebar')
         tab.wait_for_function(_RECOVERY_READY)
         wait_for_async(

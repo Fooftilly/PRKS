@@ -462,6 +462,9 @@
             void retryDeletedWorkRecovery();
         };
         unsubscribe = root.prksOfflineRuntimeSubscribe(check);
+        /* Subscribers hear only transitions: the runtime may have gone online
+         * before the scope resolved. */
+        check();
     }
 
     async function createWorkDurably(fields, options) {
