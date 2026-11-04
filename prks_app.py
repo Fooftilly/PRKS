@@ -234,7 +234,7 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
 
     db, settings = prepared
     try:
-        return start_web_identity(
+        auth = start_web_identity(
             db, settings, root=bound_root.root_real, lease=bound_root.lease,
             testing=testing, wait_for_setup=wait,
         )
@@ -246,6 +246,14 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
             raise SystemExit(0) from None
         print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
+    if wait is not None and wait.stopped:
+        # A stop that arrived during the last check is not lost: the caller
+        # still holds the handlers, so it was recorded, and nothing serves.
+        db.close()
+        bound_root.release()
+        print("PRKS stopped while waiting for setup.", file=sys.stderr)
+        raise SystemExit(0)
+    return auth
 
 
 def migrate_on_start(db, environ):
