@@ -247,8 +247,9 @@ jobs:
         run: scripts/test-postgres
 
   postgres-helpers:
-    # Keep the existing required check name; fail if any shard fails, is
-    # cancelled or is skipped. No silent missing required checks.
+    # Keep the existing required check name. Verified docs-only PRs intentionally
+    # skip both shards and still publish this required gate; all other changes
+    # require the full shard group to succeed. A missing/failed plan fails closed.
     if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}
     needs: [docs-only-plan, postgres-helpers-shards]
     permissions:
