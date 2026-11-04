@@ -1034,6 +1034,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
 
   /** Draft ids with an adoption in progress on this page. */
   const adopting = new Set<string>()
+  /** Adoptions in progress: a retirement settles them before it disposes. */
+  const adoptions = new Set<Promise<unknown>>()
+  let retiring: Promise<void> | null = null
 
   async function adopt(
     record: DraftRecord,
@@ -1053,10 +1056,13 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
     if ((superseded.get(record.draftId) || 0) >= record.generation) return null
     adopting.add(record.draftId)
+    const adoption = adoptReserved(record, input)
+    adoptions.add(adoption)
     try {
-      return await adoptReserved(record, input)
+      return await adoption
     } finally {
       adopting.delete(record.draftId)
+      adoptions.delete(adoption)
     }
   }
 
@@ -1081,6 +1087,9 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     if (result.outcome !== 'ok' || disposed) return null
     writer.adoptRecord(result.record)
     live.add(writer)
+    // Claimed while retiring: kept as this page's lineage until the
+    // retirement disposes it, but nothing is restored after a sign-out.
+    if (frozen) return null
     return writer
   }
 
@@ -1096,16 +1105,23 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     leaveGuardActive: () => guardOn,
     emergencyListenersActive: () => emergencyOn,
     writeEmergencyNow,
-    async retire() {
-      if (frozen || disposed) return
+    retire() {
+      if (retiring) return retiring
+      if (disposed) return (retiring = Promise.resolve())
       frozen = true
-      try {
-        writeEmergencyNow()
-      } catch {
-        /* whatever was written already stays */
-      }
-      await Promise.all([...live].map((w) => w.flush().catch(() => undefined)))
-      registry.dispose()
+      retiring = (async () => {
+        // An adoption already claiming a lineage finishes first, so its
+        // writer is among those finished and disposed below.
+        await Promise.all([...adoptions].map((a) => a.catch(() => undefined)))
+        try {
+          writeEmergencyNow()
+        } catch {
+          /* whatever was written already stays */
+        }
+        await Promise.all([...live].map((w) => w.flush().catch(() => undefined)))
+        registry.dispose()
+      })()
+      return retiring
     },
     dispose() {
       // Stops timers and listeners. An emergency key already written stays:

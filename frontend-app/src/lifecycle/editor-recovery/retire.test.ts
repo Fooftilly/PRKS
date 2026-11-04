@@ -126,4 +126,29 @@ describe('recovery retires with its browser scope (#629)', () => {
     expect(await again.listAll()).toEqual([])
     expect([...local.map.values()].join('')).not.toContain('Typed by whoever is next')
   })
+
+  it('settles an adoption begun before the retirement, returns nothing from it, and disposes its writer', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const lineage = { kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1',
+      owner: { runtimeId: null, pageInstanceId: 'p-gone', paneId: 'tab-1', claimedAt: 1 }, base: UNKNOWN_BASE }
+    const seed = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    expect(await seed.writeGeneration({ draftId: 'd-orphan', pageInstanceId: 'p-gone', generation: 1, body: 'Orphan text', create: lineage })).toBe('ok')
+    seed.close()
+    const rt = load(idb, local, 'a')
+    await rt.start()
+    const record = (await rt.store.get('d-orphan'))!
+    // The claim waits on IndexedDB while the account signs out.
+    const adopting = rt.writers.adopt(record, { paneId: 'tab-1', sessionKey: 's-1' })
+    const first = rt.retire()
+    const second = rt.retire()
+    expect(second).toBe(first)
+    // The registry's own retirement is one promise too, whoever asks.
+    expect(rt.writers.retire()).toBe(rt.writers.retire())
+    expect(await adopting).toBeNull()
+    await first
+    expect(rt.writers.writers()).toEqual([])
+    const again = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    expect((await again.getBody('d-orphan'))!.body).toBe('Orphan text')
+  })
 })

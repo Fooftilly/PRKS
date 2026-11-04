@@ -2796,6 +2796,9 @@ var prksEditorRecovery = (function(exports) {
 		}
 		/** Draft ids with an adoption in progress on this page. */
 		const adopting = /* @__PURE__ */ new Set();
+		/** Adoptions in progress: a retirement settles them before it disposes. */
+		const adoptions = /* @__PURE__ */ new Set();
+		let retiring = null;
 		async function adopt(record, input) {
 			if (disposed || frozen || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
 			if (!superseded.has(record.draftId)) {
@@ -2807,10 +2810,13 @@ var prksEditorRecovery = (function(exports) {
 			}
 			if ((superseded.get(record.draftId) || 0) >= record.generation) return null;
 			adopting.add(record.draftId);
+			const adoption = adoptReserved(record, input);
+			adoptions.add(adoption);
 			try {
-				return await adoptReserved(record, input);
+				return await adoption;
 			} finally {
 				adopting.delete(record.draftId);
+				adoptions.delete(adoption);
 			}
 		}
 		async function adoptReserved(record, input) {
@@ -2831,6 +2837,7 @@ var prksEditorRecovery = (function(exports) {
 			if (result.outcome !== "ok" || disposed) return null;
 			writer.adoptRecord(result.record);
 			live.add(writer);
+			if (frozen) return null;
 			return writer;
 		}
 		sweepSuperseded(readSupersededMarks(), 0);
@@ -2842,14 +2849,19 @@ var prksEditorRecovery = (function(exports) {
 			leaveGuardActive: () => guardOn,
 			emergencyListenersActive: () => emergencyOn,
 			writeEmergencyNow,
-			async retire() {
-				if (frozen || disposed) return;
+			retire() {
+				if (retiring) return retiring;
+				if (disposed) return retiring = Promise.resolve();
 				frozen = true;
-				try {
-					writeEmergencyNow();
-				} catch {}
-				await Promise.all([...live].map((w) => w.flush().catch(() => void 0)));
-				registry.dispose();
+				retiring = (async () => {
+					await Promise.all([...adoptions].map((a) => a.catch(() => void 0)));
+					try {
+						writeEmergencyNow();
+					} catch {}
+					await Promise.all([...live].map((w) => w.flush().catch(() => void 0)));
+					registry.dispose();
+				})();
+				return retiring;
 			},
 			dispose() {
 				for (const w of live) w.dispose();
