@@ -260,6 +260,15 @@ class AppStartTests(WebStartTestCase):
         # Both locks are gone: the SQLite runtime's exclusive lease is free.
         root_binding.open_storage_root(self.config(root), register=False).release()
 
+    def test_a_refusal_while_a_stop_is_pending_still_exits_2(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        self.bootstrap_and_release(name, root)
+        env = {"PRKS_AUTH": "session", "PRKS_DATABASE_URL": self.harness.conninfo(name)}
+        wait = prks_app.SetupWait(poll=0.05, stderr=io.StringIO(), step=0.01)
+        wait._signals.requested.append(signal.SIGTERM)
+        self.exits(env, self.new_root("other"), code=2, wait=wait)  # not this database's root
+
     def test_a_stop_during_the_last_check_exits_0_instead_of_serving(self) -> None:
         name = self.database()
         root = self.new_root()

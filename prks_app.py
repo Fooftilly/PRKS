@@ -241,7 +241,7 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
     except RootPairingRefused as exc:
         db.close()
         bound_root.release()
-        if wait is not None and wait.stopped:
+        if exc.reason == "setup_pending" and wait is not None and wait.stopped:
             print("PRKS stopped while waiting for setup.", file=sys.stderr)
             raise SystemExit(0) from None
         print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
