@@ -111,9 +111,10 @@ coordinator names no family: adding one is a registration.
   every open page of that account retires. A session answer from a read
   that began before that time (in any tab) never restores the account or
   clears the record; only a session confirmed by a later read does. Every
-  change to the last confirmed scope is ordered the same way: a refusal or
+  change to the last confirmed scope is ordered the same way: a refusal
+  or a sign-out keeps its time as a record with no scope, and a refusal or
   a confirmation from a read that began earlier (in any tab) never undoes a
-  newer confirmation of any account, and the page that read it never acts
+  newer confirmation or refusal, and the page that read it never acts
   on it: it binds no scope from it and retires nothing over it, but reads
   the session again (after three outranked answers in a row it binds
   nothing, or the check counts as unreachable).

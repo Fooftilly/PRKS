@@ -340,6 +340,36 @@ async function testSignOut() {
         const none = await always.resolve();
         record('an answer outranked on every read binds nothing', none === null && n === 3, String(n));
     }
+
+    // A confirmation delivered after a newer refusal in another tab never
+    // brings the refused account back.
+    {
+        const idb6 = createFakeIndexedDBFactory();
+        let clock = 1000;
+        const now = () => clock;
+        let releaseA;
+        const gate = new Promise((r) => { releaseA = r; });
+        const signedOut = status(401, { error: 'not_authenticated' });
+        const seed = scopeApi.createPrksBrowserScope({ indexedDB: idb6, now, fetchImpl: fetchFor([ok(SESSION_A)]) });
+        await seed.resolve();
+        clock = 2000;
+        const lateA = scopeApi.createPrksBrowserScope({
+            indexedDB: idb6, now, fetchImpl: fetchFor([() => gate.then(() => json(SESSION_A, 200)), signedOut]),
+        });
+        const resolving = lateA.resolve(); // its read begins at 2000
+        await new Promise((r) => setImmediate(r));
+        clock = 3000;
+        const refused = scopeApi.createPrksBrowserScope({ indexedDB: idb6, now, fetchImpl: fetchFor([signedOut]) });
+        record('the newer refusal binds nothing', (await refused.resolve()) === null);
+        clock = 4000;
+        releaseA();
+        const bound = await resolving;
+        record('an older confirmation after a newer refusal binds nothing', bound === null, bound && bound.key);
+        record('it does not restore the refused account', (await sw.readScopeState(idb6)).pointerKey === null);
+        const reload = scopeApi.createPrksBrowserScope({ indexedDB: idb6, now, fetchImpl: fetchFor([offline()]) });
+        record('an offline reload after it opens no store',
+            (await reload.resolve()) === null && (await reload.dbName('local')) === null);
+    }
 }
 
 async function testAnnounceAndLifecycle() {

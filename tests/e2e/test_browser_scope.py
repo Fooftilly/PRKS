@@ -298,7 +298,7 @@ class BrowserScopeTests(unittest.TestCase):
                         const db = open.result;
                         const get = db.transaction(PRKS_SCOPE_POINTER_STORE).objectStore(PRKS_SCOPE_POINTER_STORE)
                             .get(PRKS_SCOPE_POINTER_KEY);
-                        get.onsuccess = () => { db.close(); resolve(get.result || null); };
+                        get.onsuccess = () => { db.close(); resolve((get.result && get.result.scope) || null); };
                         get.onerror = () => { db.close(); reject(get.error); };
                     };
                 })"""
@@ -406,6 +406,54 @@ class BrowserScopeTests(unittest.TestCase):
         self.assertEqual(bound["user"], reader_id, "a superseded answer must not bind the older account")
         self.assertNotIn(owner_id, bound["db"] or "", "the page must not open the older account's store")
         self.assertEqual(self.scope_user(reader), reader_id)
+
+    def test_an_older_confirmation_never_undoes_a_newer_refusal(self):
+        self.sign_in(OWNER_LOGIN)
+        page = self.open_page()
+        # One reader's session read is answered 200 for the owner, but the
+        # answer is delivered only after the session ended and a newer read
+        # (another reader on the same browser storage) was refused.
+        page.evaluate(
+            """() => {
+                let release;
+                const gate = new Promise((r) => { release = r; });
+                window.__releaseSession = release;
+                window.__sessionAnswered = false;
+                const fetchImpl = (url, init) => fetch(url, init).then((response) => {
+                    if (url !== '/api/session' || window.__sessionAnswered) return response;
+                    window.__sessionAnswered = true;
+                    return gate.then(() => response);
+                });
+                window.__lateScope = createPrksBrowserScope({ fetchImpl });
+                window.__lateBound = window.__lateScope.resolve();
+            }"""
+        )
+        wait_for_async(page, "() => window.__sessionAnswered === true", timeout=10000)
+
+        self.expire_session()
+        self.assertIsNone(
+            page.evaluate("async () => { const s = await createPrksBrowserScope().resolve(); return s && s.key; }"),
+            "the newer read is refused",
+        )
+
+        page.evaluate("() => window.__releaseSession()")
+        bound = page.evaluate(
+            """async () => {
+                const scope = await window.__lateBound;
+                return { key: scope && scope.key, db: await window.__lateScope.dbName('local') };
+            }"""
+        )
+        self.assertEqual(bound, {"key": None, "db": None}, "an older confirmation must not undo a newer refusal")
+        self.assertIsNone(
+            page.evaluate(
+                """async () => {
+                    const offline = createPrksBrowserScope({ fetchImpl: () => Promise.reject(new TypeError('offline')) });
+                    const scope = await offline.resolve();
+                    return scope ? scope.key : (await offline.dbName('local'));
+                }"""
+            ),
+            "an offline reload must not reopen the refused account",
+        )
 
     def test_another_account_signing_in_retires_the_open_page(self):
         reader_id = self.server.library.accounts[READER]

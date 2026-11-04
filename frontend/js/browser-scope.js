@@ -136,6 +136,15 @@
         return base + ':' + scope.key;
     }
 
+    /**
+     * The record after a refusal or a sign-out: no scope, but still the time
+     * it was decided, so an answer from a read that began earlier is
+     * outranked by it.
+     */
+    function noScopeRecord(at) {
+        return { key: POINTER_KEY, scope: null, confirmedAt: at };
+    }
+
     /** When the read that confirmed a record began (0 when unknown). */
     function confirmedAt(record) {
         return record && Number(record.confirmedAt) > 0 ? Number(record.confirmedAt) : 0;
@@ -202,8 +211,8 @@
              *                 began (in any tab): the answer predates the
              *                 sign-out, so nothing is written.
              *   'stale'       a read that began later (in any tab) confirmed
-             *                 another scope: that newer session outranks this
-             *                 answer, which is not written.
+             *                 another scope, or was refused: that newer answer
+             *                 outranks this one, which is not written.
              *   'written'     recorded (or a later read already confirmed the
              *                 same scope).
              * One readwrite transaction, so the checks and the write cannot
@@ -240,9 +249,11 @@
                 });
             },
             /**
-             * A refusal read from `startedAt` forgets the record and resolves
-             * 'written', unless a read that began later (in any tab) confirmed
-             * a session: that newer session outranks this older answer, which
+             * A refusal read from `startedAt` forgets the scope and resolves
+             * 'written'. Forgetting keeps the time (a record with no scope),
+             * so a confirmation from a read that began before this refusal
+             * cannot bring the scope back. A read that began later (in any
+             * tab) and confirmed a session outranks this older answer, which
              * resolves 'stale' and changes nothing.
              */
             forget: function (startedAt) {
@@ -250,11 +261,11 @@
                 return withStore('readwrite', function (store, done) {
                     const current = store.get(POINTER_KEY);
                     current.onsuccess = function () {
-                        if (current.result && confirmedAt(current.result) > began) {
-                            done('stale');
+                        if (confirmedAt(current.result) > began) {
+                            done(scopeFromRecord(current.result) ? 'stale' : 'written');
                             return;
                         }
-                        if (current.result) store.delete(POINTER_KEY);
+                        store.put(noScopeRecord(began));
                         done('written');
                     };
                 });
@@ -262,15 +273,16 @@
             /**
              * Records the sign-out of `scope` at `at` (after the server ended
              * the session). The browser had one session, so the record goes
-             * whichever account it names, unless a read begun after the
-             * sign-out confirmed it (a new session).
+             * whichever account it names (keeping the time, as `forget`
+             * does), unless a read begun after the sign-out confirmed it (a
+             * new session).
              */
             markLoggedOut: function (scope, at) {
                 const when = Number(at) || 0;
                 return withStore('readwrite', function (store) {
                     const current = store.get(POINTER_KEY);
                     current.onsuccess = function () {
-                        if (current.result && !(confirmedAt(current.result) > when)) store.delete(POINTER_KEY);
+                        if (!(confirmedAt(current.result) > when)) store.put(noScopeRecord(when));
                         store.put({ key: LOGOUT_KEY, scopeKey: scope.key, at: when });
                     };
                 });
