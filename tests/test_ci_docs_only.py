@@ -106,7 +106,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / ".github/workflows/test-gate.yml"
         ).read_text(encoding="utf-8")
         unit = workflow.split("  unit-api-contract:\n", 1)[1].split(
-            "  postgres-helpers:\n", 1
+            "  postgres-helpers-shards:\n", 1
         )[0]
         self.assertIn("name: Unit / API / contract tests", unit)
         self.assertIn("Classify documentation-only PR (fail closed)", unit)
@@ -153,6 +153,81 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
         self.assertIn("run: python -m scripts.ci.check_docs_only", docs)
         self.assertIn("run: python run_tests.py", unit)
 
+
+    def test_postgresql_jobs_keep_required_names_and_fail_closed_on_docs_plan(self):
+        # Docs-only changes skip expensive shards but must report a real
+        # required PostgreSQL helper gate. Code changes must run every shard.
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/test-gate.yml"
+        ).read_text(encoding="utf-8")
+        plan = workflow.split("  docs-only-plan:\n", 1)[1].split(
+            "  unit-api-contract:\n", 1
+        )[0]
+        unit = workflow.split("  unit-api-contract:\n", 1)[1].split(
+            "  postgres-helpers-shards:\n", 1
+        )[0]
+        self.assertIn("name: PostgreSQL docs-only scope", plan)
+        self.assertIn("persist-credentials: false", plan)
+        self.assertIn("docs_only: ${{ steps.docs-scope.outputs.docs_only }}", plan)
+
+        def script(block: str, title: str) -> str:
+            start = block.index("      - name: " + title + "\n")
+            end = block.find("\n      - name: ", start + 1)
+            return block[start:end if end >= 0 else len(block)].split(
+                "\n", 1
+            )[1].rstrip()
+
+        self.assertEqual(
+            script(plan, "Classify docs-only scope for PostgreSQL jobs (fail closed)"),
+            script(unit, "Classify documentation-only PR (fail closed)"),
+        )
+        expected_guard = (
+            "!cancelled() && github.event_name != 'schedule' && "
+            "(needs.docs-only-plan.result != 'success' || "
+            "needs.docs-only-plan.outputs.docs_only != 'true')"
+        )
+
+        def job(job_id: str) -> str:
+            match = re.search(
+                r"(?ms)^  " + re.escape(job_id)
+                + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
+                workflow,
+            )
+            self.assertIsNotNone(match)
+            return match.group(1)
+
+        for job_id, required_name in (
+            ("postgres-helpers-shards", "PostgreSQL helpers ("),
+            ("backend-parity", "Backend parity (SQLite + PostgreSQL)"),
+        ):
+            with self.subTest(job_id=job_id):
+                block = job(job_id)
+                self.assertIn("name: " + required_name, block)
+                self.assertIn("needs: docs-only-plan", block)
+                guard = re.search(r"(?m)^    if: >-\n((?:      .*\n)+)", block)
+                self.assertIsNotNone(guard)
+                self.assertEqual(
+                    " ".join(line.strip() for line in guard.group(1).splitlines()),
+                    expected_guard,
+                )
+                self.assertIn("services:\n      postgres:", block)
+
+        required = job("postgres-helpers")
+        self.assertIn("name: PostgreSQL helper tests", required)
+        self.assertIn("needs: [docs-only-plan, postgres-helpers-shards]", required)
+        self.assertIn(
+            "if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}",
+            required,
+        )
+        self.assertIn("PLAN_RESULT: ${{ needs.docs-only-plan.result }}", required)
+        self.assertIn(
+            "DOCS_ONLY: ${{ needs.docs-only-plan.outputs.docs_only }}", required
+        )
+        self.assertIn('if [[ "$SHARD_RESULT" != "skipped" ]]; then', required)
+        self.assertIn('if [[ "$SHARD_RESULT" != "success" ]]; then', required)
+        triggers = workflow.split("on:\n", 1)[1].split("\nconcurrency:", 1)[0]
+        self.assertNotIn("paths:", triggers)
+        self.assertNotIn("paths-ignore:", triggers)
 
 class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_valid_links_headings_references_and_fences(self):

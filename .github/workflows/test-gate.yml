@@ -26,6 +26,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-only-plan:
+    name: PostgreSQL docs-only scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.docs-scope.outputs.docs_only }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Classify docs-only scope for PostgreSQL jobs (fail closed)
+        id: docs-scope
+        shell: bash
+        env:
+          PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [[ "$PRKS_EVENT_NAME" == "pull_request" && "$PRKS_PR_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
+              # The PR checkout is untrusted: use the reviewed classifier from
+              # the immutable base, not the PR's possibly modified selector.
+              if base_classifier="$(mktemp)"; then
+                if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  if [[ "$decision" == "true" ]]; then
+                    docs_only=true
+                  fi
+                else
+                  echo "::warning::Docs classifier absent from base; running full tests."
+                fi
+                rm -f "$base_classifier"
+              else
+                echo "::warning::Failed to allocate classifier file; running full tests."
+              fi
+            else
+              echo "::warning::Could not fetch immutable PR base; running full tests."
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+
   unit-api-contract:
     permissions:
       contents: read
@@ -141,7 +187,12 @@ jobs:
 
   postgres-helpers-shards:
     # Independent disposable PostgreSQL per deterministic test-module slice.
-    if: github.event_name != 'schedule'
+    # Missing/failed classifier always falls back to all database tests.
+    needs: docs-only-plan
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.docs-only-plan.result != 'success' ||
+       needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
       contents: read
     name: PostgreSQL helpers (${{ matrix.shard }}/2)
@@ -196,10 +247,11 @@ jobs:
         run: scripts/test-postgres
 
   postgres-helpers:
-    # Keep the existing required check name; fail if any shard fails, is
-    # cancelled or is skipped. No silent missing required checks.
-    if: ${{ always() && github.event_name != 'schedule' }}
-    needs: postgres-helpers-shards
+    # Keep the existing required check name. Verified docs-only PRs intentionally
+    # skip both shards and still publish this required gate; all other changes
+    # require the full shard group to succeed. A missing/failed plan fails closed.
+    if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}
+    needs: [docs-only-plan, postgres-helpers-shards]
     permissions:
       contents: read
     name: PostgreSQL helper tests
@@ -208,10 +260,20 @@ jobs:
     steps:
       - name: Require both PostgreSQL helper shards
         env:
+          PLAN_RESULT: ${{ needs.docs-only-plan.result }}
+          DOCS_ONLY: ${{ needs.docs-only-plan.outputs.docs_only }}
           SHARD_RESULT: ${{ needs.postgres-helpers-shards.result }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$PLAN_RESULT" == "success" && "$DOCS_ONLY" == "true" ]]; then
+            if [[ "$SHARD_RESULT" != "skipped" ]]; then
+              echo "::error::PostgreSQL helpers must skip on docs-only PR: $SHARD_RESULT"
+              exit 1
+            fi
+            echo "PostgreSQL helper shards intentionally skipped for reviewed docs-only PR."
+            exit 0
+          fi
           if [[ "$SHARD_RESULT" != "success" ]]; then
             echo "::error::PostgreSQL helper shards did not all pass: $SHARD_RESULT"
             exit 1
@@ -219,7 +281,11 @@ jobs:
           echo "All PostgreSQL helper shards passed."
 
   backend-parity:
-    if: github.event_name != 'schedule'
+    needs: docs-only-plan
+    if: >-
+      !cancelled() && github.event_name != 'schedule' &&
+      (needs.docs-only-plan.result != 'success' ||
+       needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
       contents: read
     name: Backend parity (SQLite + PostgreSQL)

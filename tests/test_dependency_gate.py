@@ -77,6 +77,22 @@ _TEST_GATE_PG_AGG_BODY = (
     'fi\n'
     'echo "All PostgreSQL helper shards passed."'
 )
+_TEST_GATE_PG_AGG_DOCS_BODY = (
+    "set -euo pipefail\n"
+    "if [[ \"$PLAN_RESULT\" == \"success\" && \"$DOCS_ONLY\" == \"true\" ]]; then\n"
+    "if [[ \"$SHARD_RESULT\" != \"skipped\" ]]; then\n"
+    "echo \"::error::PostgreSQL helpers must skip on docs-only PR: $SHARD_RESULT\"\n"
+    "exit 1\n"
+    "fi\n"
+    "echo \"PostgreSQL helper shards intentionally skipped for reviewed docs-only PR.\"\n"
+    "exit 0\n"
+    "fi\n"
+    "if [[ \"$SHARD_RESULT\" != \"success\" ]]; then\n"
+    "echo \"::error::PostgreSQL helper shards did not all pass: $SHARD_RESULT\"\n"
+    "exit 1\n"
+    "fi\n"
+    "echo \"All PostgreSQL helper shards passed.\""
+)
 # PostgreSQL is a production runtime dependency from #630 onward.
 # The backend parity job (#625): the same pinned install and exactly
 # ``scripts/test-postgres --parity``. Both steps or neither.
@@ -101,11 +117,13 @@ _TEST_GATE_DOCS_RUNS = {
         "", 'python -m scripts.ci.check_docs_only --base "$PRKS_PR_BASE_SHA"'
     ),
 }
+_TEST_GATE_PG_SCOPE_PLAN_STEP = "Classify docs-only scope for PostgreSQL jobs (fail closed)"
 _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
     {
         _TEST_GATE_APPROVED_INSTALL_STEP,
         _TEST_GATE_RUN_TESTS_STEP,
         _TEST_GATE_PG_AGG_STEP,
+        _TEST_GATE_PG_SCOPE_PLAN_STEP,
         *_TEST_GATE_DOCS_RUNS,
         *(name for pair in _TEST_GATE_PG_PAIRS for name in pair[:2]),
     }
@@ -439,10 +457,19 @@ def assert_test_gate_pg_shards_guarded(workflow: str, pairs: list) -> bool:
             "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
             "        shard: [1, 2]",
             "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
-            "    needs: postgres-helpers-shards",
-            "    if: ${{ always() && github.event_name != 'schedule' }}",
             "    name: PostgreSQL helper tests",
         )
+        if "  docs-only-plan:\n" in workflow:
+            requirements += (
+                "    needs: [docs-only-plan, postgres-helpers-shards]",
+                "    if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}",
+                "    needs: docs-only-plan",
+            )
+        else:
+            requirements += (
+                "    needs: postgres-helpers-shards",
+                "    if: ${{ always() && github.event_name != 'schedule' }}",
+            )
         if not all(text in workflow for text in requirements):
             raise ValueError("PostgreSQL helper shards require the reviewed matrix and aggregator")
         if pairs[0] is None or aggregator != 1:
@@ -452,14 +479,27 @@ def assert_test_gate_pg_shards_guarded(workflow: str, pairs: list) -> bool:
     return sharded
 
 
-def assert_test_gate_single_run_step_allowed(name: str, style: str, body: str) -> None:
+def assert_test_gate_single_run_step_allowed(
+    name: str, style: str, body: str, *, docs_plan: bool = False
+) -> None:
     """Allow only the explicitly reviewed run step name and command."""
     if name not in _TEST_GATE_ALLOWED_RUN_STEP_NAMES:
         label = name if name else "<unnamed step>"
         raise ValueError(f"disallowed run step: {label}")
     if name == _TEST_GATE_PG_AGG_STEP:
-        if style != "|" or _test_gate_run_body_without_shell_comments(body) != _TEST_GATE_PG_AGG_BODY:
+        expected = _TEST_GATE_PG_AGG_DOCS_BODY if docs_plan else _TEST_GATE_PG_AGG_BODY
+        if style != "|" or _test_gate_run_body_without_shell_comments(body) != expected:
             raise ValueError("unreviewed PostgreSQL helper shard aggregator command")
+    if name == _TEST_GATE_PG_SCOPE_PLAN_STEP:
+        expected_style, expected_body = _TEST_GATE_DOCS_RUNS[
+            "Classify documentation-only PR (fail closed)"
+        ]
+        normalized = (
+            _test_gate_run_body_without_shell_comments(body)
+            if style == "|" else body.strip()
+        )
+        if style != expected_style or normalized != expected_body:
+            raise ValueError("unreviewed PostgreSQL docs-only plan command")
     if name in _TEST_GATE_DOCS_RUNS:
         expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
         normalized = (
@@ -491,13 +531,21 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     docs_present = {
         name for name, _style, _body in run_steps if name in _TEST_GATE_DOCS_RUNS
     }
+    pg_plan_present = count_test_gate_steps_named(workflow, _TEST_GATE_PG_SCOPE_PLAN_STEP)
+    if pg_plan_present > 1 or (pg_plan_present and not sharded):
+        raise ValueError("invalid PostgreSQL docs-only plan configuration")
     # Initial fixtures predate the docs-only pilot. For production workflows,
     # require all three guarded docs commands or none; partial setup fails.
     if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
         raise ValueError("incomplete required docs-only CI step set")
     for name, style, body in run_steps:
-        assert_test_gate_single_run_step_allowed(name, style, body)
-    expected = 2 + 2 * sum(pair is not None for pair in pairs) + len(docs_present) + int(sharded)
+        assert_test_gate_single_run_step_allowed(
+            name, style, body, docs_plan=bool(pg_plan_present)
+        )
+    expected = (
+        2 + 2 * sum(pair is not None for pair in pairs)
+        + len(docs_present) + int(sharded) + pg_plan_present
+    )
     if len(run_steps) != expected:
         raise ValueError(
             f"test-gate must have exactly {expected} approved run steps; "
@@ -1397,7 +1445,10 @@ class RepoGateLiveTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "aggregator"):
             assert_test_gate_run_steps_allowlisted(
-                workflow.replace("    needs: postgres-helpers-shards", "    needs: []")
+                workflow.replace(
+                    "    needs: [docs-only-plan, postgres-helpers-shards]",
+                    "    needs: []",
+                )
             )
         with self.assertRaisesRegex(ValueError, "aggregator command"):
             assert_test_gate_run_steps_allowlisted(
