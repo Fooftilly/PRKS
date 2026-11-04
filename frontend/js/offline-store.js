@@ -710,21 +710,43 @@
             });
         }
 
+        /**
+         * Empties the cache in one transaction, keeping the `library_epoch`
+         * row: the epoch the cache was fenced at still holds, so a store that
+         * already fenced need not fence again, and the next one does not take
+         * the missing row for a restore and drop what was cached since.
+         */
         function clearAll() {
-            return Promise.all([
-                runRequest(STORE_ENTITIES, 'readwrite', function (store) {
-                    return store.clear();
-                }),
-                runRequest(STORE_LISTS, 'readwrite', function (store) {
-                    return store.clear();
-                }),
-                runRequest(STORE_METADATA, 'readwrite', function (store) {
-                    return store.clear();
-                }),
-            ]).then(function (results) {
-                return results.every(function (r) {
-                    return r.ok;
+            return fence().then(openDb).then(function (db) {
+                if (!db) return false;
+                let tx;
+                try {
+                    tx = db.transaction([STORE_METADATA, STORE_ENTITIES, STORE_LISTS], 'readwrite');
+                } catch (_e) {
+                    return false;
+                }
+                const done = tx.done.then(function () { return true; }, function () { return false; });
+                const meta = tx.objectStore(STORE_METADATA);
+                return meta.get(META_LIBRARY_EPOCH).then(function (row) {
+                    return Promise.all([
+                        tx.objectStore(STORE_ENTITIES).clear(),
+                        tx.objectStore(STORE_LISTS).clear(),
+                        meta.clear(),
+                    ]).then(function () {
+                        return row ? meta.put(row) : undefined;
+                    });
+                }).then(function () {
+                    return done;
+                }, function () {
+                    try {
+                        tx.abort();
+                    } catch (_e) {
+                        /* already finished */
+                    }
+                    return done.then(function () { return false; });
                 });
+            }).catch(function () {
+                return false;
             });
         }
 

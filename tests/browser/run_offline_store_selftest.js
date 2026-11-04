@@ -484,6 +484,19 @@ async function run() {
             assertEq('what the first cached survives the second fence', ((await second.getEntity('work', 'W-new')) || {}).value, { title: 'New' });
         }
 
+        // Clearing the cache keeps its epoch: a later store of the same
+        // epoch does not take the missing row for a restore.
+        {
+            const clearIdb = createFakeIndexedDBFactory();
+            const store = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: clearIdb, scope: scopeAt('4') });
+            await store.putEntity('work', 'W-a', { title: 'A' }, 'r4');
+            assertEq('clearAll commits', await store.clearAll(), true);
+            assertEq('and empties the cache', await store.getEntity('work', 'W-a'), null);
+            await store.putEntity('work', 'W-b', { title: 'B' }, 'r4');
+            const next = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: clearIdb, scope: scopeAt('4') });
+            assertEq('what was cached after a clear survives the next store', ((await next.getEntity('work', 'W-b')) || {}).value, { title: 'B' });
+        }
+
         const noEpoch = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: createFakeIndexedDBFactory(), scope: scopeAt(null) });
         assertEq('a scope naming no epoch has no cache', await noEpoch.isAvailable(), false);
     }
