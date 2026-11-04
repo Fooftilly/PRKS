@@ -106,7 +106,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / ".github/workflows/test-gate.yml"
         ).read_text(encoding="utf-8")
         unit = workflow.split("  unit-api-contract:\n", 1)[1].split(
-            "  postgres-helpers:\n", 1
+            "  postgres-helpers-shards:\n", 1
         )[0]
         self.assertIn("name: Unit / API / contract tests", unit)
         self.assertIn("Classify documentation-only PR (fail closed)", unit)
