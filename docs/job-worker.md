@@ -6,7 +6,7 @@ PostgreSQL deployments only (L-J-1, #627; design in
 
 Background jobs (`prks.jobs`) are claimed and run by a worker. A worker
 starts claiming only once the database applied exactly this code's schema
-files (`python -m backend.db.migrate`): while a file is pending it waits and
+files (`python prks_app.py migrate`): while a file is pending it waits and
 says why in its log (`worker_waiting reason=pending`); a database newer than
 the code stops it.
 
@@ -39,8 +39,14 @@ thread beside the HTTP server:
 ## `prks worker` (a separate process)
 
 ```
-python -m backend.jobs.worker --root /srv/prks [--testing]
+python prks_app.py worker [--storage-root /srv/prks] [--testing]
 ```
+
+It acts on the storage root `prks_app.py` selects for every role
+(`--storage-root`, `PRKS_STORAGE` or the bootstrap file), so `migrate`,
+`serve` and `worker` of one deployment name it the same way.
+`python -m backend.jobs.worker --root /srv/prks [--testing]` is the same
+worker with the root given directly.
 
 It joins a data root the web process already bound and holds that root's
 **shared** lease while it runs. Until the PostgreSQL cutover the SQLite web

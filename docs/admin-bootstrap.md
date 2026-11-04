@@ -2,8 +2,8 @@
 
 PostgreSQL deployments only (L-ID-1, #626; design in
 `docs/postgresql-architecture.md` §9.2). Nothing in the running SQLite
-application uses this yet. Until the `prks` entry point exists, run the
-command as `python -m backend.domain.identity.admin`.
+application uses this yet. Run the command as `python prks_app.py admin …`
+(the same as `python -m backend.domain.identity.admin …`, used below).
 
 Setup needs a **one-time bootstrap token**. Getting a token and using it are
 two separate commands, so you never handle a token that is already used up:
@@ -16,7 +16,7 @@ Browser first-run setup, when it arrives, uses the same tokens.
 
 ## Before you start
 
-- The database schema is applied (`python -m backend.db.migrate`) and
+- The database schema is applied (`python prks_app.py migrate`) and
   `PRKS_DATABASE_URL` or `PRKS_DATABASE_URL_FILE` names the database.
 - The data root is already bound: it has a `prks-root.json`. Both commands
   check `--root` first and refuse a missing or unbound root before asking for
