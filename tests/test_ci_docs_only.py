@@ -155,9 +155,8 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
 
 
     def test_postgresql_jobs_keep_required_names_and_fail_closed_on_docs_plan(self):
-        # These PostgreSQL services used to start even for the two approved
-        # wiki-only paths. A separate cheap plan lets them skip provisioning
-        # while an unknown/failed plan still executes the full database gate.
+        # Docs-only changes skip expensive shards but must report a real
+        # required PostgreSQL helper gate. Code changes must run every shard.
         workflow = (
             Path(__file__).resolve().parents[1] / ".github/workflows/test-gate.yml"
         ).read_text(encoding="utf-8")
@@ -165,19 +164,12 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
             "  unit-api-contract:\n", 1
         )[0]
         unit = workflow.split("  unit-api-contract:\n", 1)[1].split(
-            "  postgres-helpers:\n", 1
+            "  postgres-helpers-shards:\n", 1
         )[0]
         self.assertIn("name: PostgreSQL docs-only scope", plan)
         self.assertIn("persist-credentials: false", plan)
         self.assertIn("docs_only: ${{ steps.docs-scope.outputs.docs_only }}", plan)
-        self.assertIn(
-            "Classify docs-only scope for PostgreSQL jobs (fail closed)", plan
-        )
-        self.assertIn('git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py"', plan)
-        self.assertIn('if base_classifier="$(mktemp)"; then', plan)
-        self.assertIn('echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"', plan)
-        # The exact script must match the immutable-base unit classifier;
-        # otherwise a second looser skip policy could silently grow.
+
         def script(block: str, title: str) -> str:
             start = block.index("      - name: " + title + "\n")
             end = block.find("\n      - name: ", start + 1)
@@ -189,38 +181,53 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
             script(plan, "Classify docs-only scope for PostgreSQL jobs (fail closed)"),
             script(unit, "Classify documentation-only PR (fail closed)"),
         )
+        expected_guard = (
+            "!cancelled() && github.event_name != 'schedule' && "
+            "(needs.docs-only-plan.result != 'success' || "
+            "needs.docs-only-plan.outputs.docs_only != 'true')"
+        )
+
+        def job(job_id: str) -> str:
+            match = re.search(
+                r"(?ms)^  " + re.escape(job_id)
+                + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
+                workflow,
+            )
+            self.assertIsNotNone(match)
+            return match.group(1)
+
         for job_id, required_name in (
-            ("postgres-helpers", "PostgreSQL helper tests"),
+            ("postgres-helpers-shards", "PostgreSQL helpers ("),
             ("backend-parity", "Backend parity (SQLite + PostgreSQL)"),
         ):
             with self.subTest(job_id=job_id):
-                match = re.search(
-                    r"(?ms)^  " + re.escape(job_id)
-                    + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
-                    workflow,
-                )
-                self.assertIsNotNone(match)
-                job = match.group(1)
-                self.assertIn("name: " + required_name, job)
-                self.assertIn("needs: docs-only-plan", job)
-                guard = re.search(r"(?m)^    if: >-\n((?:      .*\n)+)", job)
+                block = job(job_id)
+                self.assertIn("name: " + required_name, block)
+                self.assertIn("needs: docs-only-plan", block)
+                guard = re.search(r"(?m)^    if: >-\n((?:      .*\n)+)", block)
                 self.assertIsNotNone(guard)
-                normalized = " ".join(
-                    line.strip() for line in guard.group(1).splitlines()
-                )
                 self.assertEqual(
-                    normalized,
-                    "!cancelled() && github.event_name != 'schedule' && "
-                    "(needs.docs-only-plan.result != 'success' || "
-                    "needs.docs-only-plan.outputs.docs_only != 'true')",
+                    " ".join(line.strip() for line in guard.group(1).splitlines()),
+                    expected_guard,
                 )
-                self.assertIn("services:\n      postgres:", job)
-        # The event triggers themselves must NOT filter paths: required
-        # contexts need to keep reporting on docs-only pull requests.
+                self.assertIn("services:\n      postgres:", block)
+
+        required = job("postgres-helpers")
+        self.assertIn("name: PostgreSQL helper tests", required)
+        self.assertIn("needs: [docs-only-plan, postgres-helpers-shards]", required)
+        self.assertIn(
+            "if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}",
+            required,
+        )
+        self.assertIn("PLAN_RESULT: ${{ needs.docs-only-plan.result }}", required)
+        self.assertIn(
+            "DOCS_ONLY: ${{ needs.docs-only-plan.outputs.docs_only }}", required
+        )
+        self.assertIn('if [[ "$SHARD_RESULT" != "skipped" ]]; then', required)
+        self.assertIn('if [[ "$SHARD_RESULT" != "success" ]]; then', required)
         triggers = workflow.split("on:\n", 1)[1].split("\nconcurrency:", 1)[0]
         self.assertNotIn("paths:", triggers)
         self.assertNotIn("paths-ignore:", triggers)
-
 
 class DocsOnlyLinkValidationTests(unittest.TestCase):
     def test_valid_links_headings_references_and_fences(self):
