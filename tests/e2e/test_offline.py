@@ -2494,6 +2494,9 @@ class OfflineFoundationTests(unittest.TestCase):
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
         _wait_pdf_viewer(page)
+        # Work mode arrives after the viewer renders; wait for it so the 500
+        # below is the only thing that could change the mode.
+        page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
         self.assertTrue(page.evaluate("() => navigator.onLine"))
         self.assertEqual(_connectivity_state(page), "online")
 
