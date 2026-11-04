@@ -133,6 +133,14 @@ export interface WriterRegistry {
   emergencyListenersActive(): boolean
   /** The synchronous unload write, also callable directly by tests. */
   writeEmergencyNow(): EmergencyWriteResult | 'nothing-pending' | 'unavailable'
+  /**
+   * The browser scope was signed out or replaced (#629): later edits, writers
+   * and adoptions are ignored; text already typed is written once more to the
+   * emergency key and every pending write is finished, so no text typed under
+   * the account is lost, even one too large for the emergency key. Then
+   * disposes. Never rejects.
+   */
+  retire(): Promise<void>
   dispose(): void
 }
 
@@ -201,6 +209,8 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   const tombstoned = new Set<string>()
   let refreshingEmergency = false
   let disposed = false
+  /** Retiring: text typed so far is finished, nothing new is taken. */
+  let frozen = false
   /**
    * Stored generations known to be superseded by the server, still waiting
    * for their removal: never adopted, so never restored. A removal storage
@@ -714,7 +724,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     }
 
     edit(generation: number, body: string): void {
-      if (this.released || disposed) return
+      if (this.released || disposed || frozen) return
       if (!(generation > this.lastSeen)) return
       this.lastSeen = generation
       if (!this.lineageId) this.startLineage()
@@ -1013,6 +1023,11 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
 
   function openWriter(input: OpenWriterInput): DraftWriter {
     const writer = new WriterImpl(input)
+    // Retiring or disposed: a writer that takes nothing.
+    if (frozen || disposed) {
+      writer.dispose()
+      return writer
+    }
     live.add(writer)
     return writer
   }
@@ -1026,7 +1041,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   ): Promise<DraftWriter | null> {
     // One live writer per lineage on this page: a second adoption of the same
     // draft, concurrent or after the first, is refused.
-    if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
+    if (disposed || frozen || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null
     // Another page may have marked it after this one started: read the marks again.
     if (!superseded.has(record.draftId)) {
       const mark = readSupersededMark(record.draftId)
@@ -1073,7 +1088,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
   // never restored, and their removal resumes here.
   sweepSuperseded(readSupersededMarks(), 0)
 
-  return {
+  const registry: WriterRegistry = {
     openWriter,
     adopt,
     ownerOf,
@@ -1081,6 +1096,17 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
     leaveGuardActive: () => guardOn,
     emergencyListenersActive: () => emergencyOn,
     writeEmergencyNow,
+    async retire() {
+      if (frozen || disposed) return
+      frozen = true
+      try {
+        writeEmergencyNow()
+      } catch {
+        /* whatever was written already stays */
+      }
+      await Promise.all([...live].map((w) => w.flush().catch(() => undefined)))
+      registry.dispose()
+    },
     dispose() {
       // Stops timers and listeners. An emergency key already written stays:
       // it may hold the only copy of unsaved text.
@@ -1103,6 +1129,7 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
       if (identity.setContestListener) identity.setContestListener(null)
     },
   }
+  return registry
 }
 
 function defaultLocalStorage(): EmergencyStorage | null {

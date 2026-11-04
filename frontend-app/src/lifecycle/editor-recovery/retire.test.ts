@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createRecoveryDiagnostics } from './diagnostics'
 import { createEditorRecoveryRuntime } from './runtime'
-import { UNKNOWN_BASE, emergencyKeyOf } from './schema'
+import { LARGE_BODY_CHARS, UNKNOWN_BASE, emergencyKeyOf } from './schema'
 import { createRecoveryStore, RecoveryStoreError } from './store'
 import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
@@ -59,17 +59,24 @@ describe('recovery retires with its browser scope (#629)', () => {
     const diag = createRecoveryDiagnostics(rt)
     const key = emergencyKeyOf(TEST_NAMES, rt.identity.pageInstanceId)
 
-    rt.retire()
+    const retiring = rt.retire()
+    // At once: nothing outside the writers' last writes reads this scope.
     expect(rt.isRetired()).toBe(true)
-    // Written to this account's emergency key on the way out, never deleted.
-    expect(local.map.get(key)).toContain('Typed before sign-out')
+    expect(await refusedCode(store.listAll())).toBe('retired')
+    await retiring
+    // Finished in this account's own database on the way out, never deleted.
+    const own = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    const kept = await own.listAll()
+    expect(kept).toHaveLength(1)
+    expect((await own.getBody(kept[0]!.draftId))!.body).toBe('Typed before sign-out')
+    own.close()
     // Handles taken before the retirement refuse too.
     expect(await refusedCode(store.listAll())).toBe('retired')
     expect(() => storage.getItem(key)).toThrow()
     expect(() => storage.length).toThrow()
     writer.edit(2, 'Typed after sign-out')
     await settle()
-    expect(local.map.get(key)).not.toContain('Typed after sign-out')
+    expect(local.map.get(key) ?? '').not.toContain('Typed after sign-out')
     const inventory = await diag.inventory()
     expect(inventory.drafts).toEqual([])
     expect(inventory.emergency).toEqual([])
@@ -84,5 +91,39 @@ describe('recovery retires with its browser scope (#629)', () => {
     expect(rows).toHaveLength(1)
     expect((await next.store.getBody(rows[0]!.draftId))!.body).toBe('Typed before sign-out')
     next.dispose()
+  })
+
+  it('finishes the write of a body too large for the emergency key before closing', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const rt = load(idb, local, 'a')
+    await rt.start()
+    const writer = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
+    const large = 'x'.repeat(LARGE_BODY_CHARS + 1)
+    writer.edit(1, large)
+    // A read begun before the retirement is refused when it completes.
+    const reading = rt.store.listAll()
+    const retiring = rt.retire()
+    expect(await refusedCode(reading)).toBe('retired')
+    await retiring
+    expect(rt.store.isRetired()).toBe(true)
+    const again = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    const rows = await again.listAll()
+    expect(rows).toHaveLength(1)
+    expect((await again.getBody(rows[0]!.draftId))!.body).toBe(large)
+  })
+
+  it('takes no edit, writer or adoption once retiring', async () => {
+    const idb = createFakeIdb()
+    const local = memoryStorage()
+    const rt = load(idb, local, 'a')
+    await rt.start()
+    const retiring = rt.retire()
+    const late = rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w2', paneId: 'tab-1', base: UNKNOWN_BASE })
+    late.edit(1, 'Typed by whoever is next')
+    await retiring
+    const again = createRecoveryStore({ indexedDB: idb.factory, name: TEST_NAMES.dbName })
+    expect(await again.listAll()).toEqual([])
+    expect([...local.map.values()].join('')).not.toContain('Typed by whoever is next')
   })
 })

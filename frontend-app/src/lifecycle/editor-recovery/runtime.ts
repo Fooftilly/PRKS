@@ -21,7 +21,7 @@ import {
   type DraftRecord,
   type RecoveryNames,
 } from './schema'
-import { createRecoveryStore, forkedDraftId, type AdoptOutcome, type DeleteOutcome, type RecoveryStore, type RecoveryStoreOptions } from './store'
+import { createRecoveryStore, forkedDraftId, RecoveryStoreError, type AdoptOutcome, type DeleteOutcome, type RecoveryStore, type RecoveryStoreOptions } from './store'
 import { createWriterRegistry, type WriterEvent, type WriterRegistry, type WriterRegistryOptions } from './writer'
 
 /** What a reviewer saw of one record; an action on it applies only while it still holds. */
@@ -118,14 +118,17 @@ export interface EditorRecoveryRuntime {
    */
   readonly emergencyStorage: EmergencyStorage | null
   /**
-   * The browser scope was signed out or replaced (#629). Text typed before
-   * it stays this account's: the pending text is written once more to this
-   * scope's emergency key, then writers, listeners, the channel and the
-   * locks stop, and the store and localStorage view refuse every later
-   * operation, through this object or any handle taken from it. Nothing
-   * stored is removed. Idempotent.
+   * The browser scope was signed out or replaced (#629). At once, `store`,
+   * `emergencyStorage` and every method of this runtime refuse, also through
+   * handles taken before, and a read already in flight is refused when it
+   * completes. Text typed before stays this account's: the writers take no
+   * new edit, write the pending text once more to this scope's emergency
+   * key and finish every pending write to this scope's database (a body too
+   * large for the emergency key included); then they, the listeners, the
+   * channel and the locks stop and the database closes for good. Nothing
+   * stored is removed. Idempotent; resolves once the database is closed.
    */
-  retire(): void
+  retire(): Promise<void>
   isRetired(): boolean
   dispose(): void
 }
@@ -137,19 +140,28 @@ function keptFor(lineage: LineageClass, report: EntityCleanupReport): string[] {
 export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions): EditorRecoveryRuntime {
   const names = options.names
   if (!names) throw new Error('recovery storage needs a signed-in scope')
-  const store = createRecoveryStore({ ...options.store, name: names.dbName })
+  const rawStore = createRecoveryStore({ ...options.store, name: names.dbName })
+  // What everything but the writers uses: refused from the moment of retirement.
+  const store = retirableStore(rawStore, () => retired)
   const identity = createPageIdentity({ ...options.identity, names })
+  /** Retired: nothing outside the writers' last writes reads or writes this scope. */
   let retired = false
+  /** The writers' last writes are done: nothing reads or writes this scope. */
+  let closed = false
+  let retiring: Promise<void> | null = null
   const rawEmergencyStorage =
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
   const emergencyStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => retired) : null
+  const writerStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => closed) : null
   const writerListeners = new Set<(event: WriterEvent) => void>()
   const ownEvent = options.writers?.onEvent
   const writers = createWriterRegistry({
     ...options.writers,
-    store,
+    // The writers finish the text typed before a retirement, so they keep the
+    // store until then; they take no new edit once it begins.
+    store: rawStore,
     identity,
-    emergencyStorage,
+    emergencyStorage: writerStorage,
     onEvent(event) {
       if (ownEvent) ownEvent(event)
       for (const listener of [...writerListeners]) {
@@ -333,25 +345,23 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     },
     emergencyStorage,
     retire() {
-      if (retired) return
-      try {
-        // The last text typed under this account, kept in its own scope.
-        writers.writeEmergencyNow()
-      } catch {
-        /* whatever was written already stays */
-      }
-      writerListeners.clear()
-      writers.dispose()
-      identity.dispose()
+      if (retiring) return retiring
       retired = true
-      store.retire()
+      writerListeners.clear()
+      retiring = boundedSettle(writers.retire(), RETIRE_FLUSH_MS).then(() => {
+        writers.dispose()
+        identity.dispose()
+        closed = true
+        rawStore.retire()
+      })
+      return retiring
     },
     isRetired: () => retired,
     dispose() {
       writerListeners.clear()
       writers.dispose()
       identity.dispose()
-      store.close()
+      rawStore.close()
     },
   }
 }
@@ -365,6 +375,65 @@ function listingPage(storage: EmergencyStorage, names: RecoveryNames, draftId: s
     }
   }
   return null
+}
+
+/** Longest a retirement waits for the writers' last writes before closing the database regardless. */
+const RETIRE_FLUSH_MS = 10000
+
+function boundedSettle(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    work.then(
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+    )
+  })
+}
+
+function retiredError(): RecoveryStoreError {
+  return new RecoveryStoreError('retired', 'This account is signed out of recovery storage.')
+}
+
+/**
+ * `store`, refusing every operation once `isRetired()` holds, and refusing
+ * the result of one that was in flight then: nothing read before a
+ * retirement is handed out after it.
+ */
+function retirableStore(store: RecoveryStore, isRetired: () => boolean): RecoveryStore {
+  function guard<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+    return (...args: A) => {
+      if (isRetired()) return Promise.reject(retiredError())
+      return fn(...args).then((value) => {
+        if (isRetired()) throw retiredError()
+        return value
+      })
+    }
+  }
+  return {
+    writeGeneration: guard(store.writeGeneration),
+    updateLineage: guard(store.updateLineage),
+    adopt: guard(store.adopt),
+    get: guard(store.get),
+    getBody: guard(store.getBody),
+    listByEntity: guard(store.listByEntity),
+    listAll: guard(store.listAll),
+    deleteIfAcknowledged: guard(store.deleteIfAcknowledged),
+    deleteIfEqual: guard(store.deleteIfEqual),
+    discard: guard(store.discard),
+    clearTombstone: guard(store.clearTombstone),
+    tombstoneIfAbsent: guard(store.tombstoneIfAbsent),
+    applyEmergencyEntry: guard(store.applyEmergencyEntry),
+    lastDurability: () => store.lastDurability(),
+    close: () => store.close(),
+    retire: () => store.retire(),
+    isRetired: () => isRetired() || store.isRetired(),
+  }
 }
 
 /** `storage`, refusing every access once `isRetired()` holds. */

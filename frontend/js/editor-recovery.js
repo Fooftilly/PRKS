@@ -2051,6 +2051,8 @@ var prksEditorRecovery = (function(exports) {
 		const tombstoned = /* @__PURE__ */ new Set();
 		let refreshingEmergency = false;
 		let disposed = false;
+		/** Retiring: text typed so far is finished, nothing new is taken. */
+		let frozen = false;
 		/**
 		* Stored generations known to be superseded by the server, still waiting
 		* for their removal: never adopted, so never restored. A removal storage
@@ -2499,7 +2501,7 @@ var prksEditorRecovery = (function(exports) {
 				this.retryTimer = null;
 			}
 			edit(generation, body) {
-				if (this.released || disposed) return;
+				if (this.released || disposed || frozen) return;
 				if (!(generation > this.lastSeen)) return;
 				this.lastSeen = generation;
 				if (!this.lineageId) this.startLineage();
@@ -2785,13 +2787,17 @@ var prksEditorRecovery = (function(exports) {
 		}
 		function openWriter(input) {
 			const writer = new WriterImpl(input);
+			if (frozen || disposed) {
+				writer.dispose();
+				return writer;
+			}
 			live.add(writer);
 			return writer;
 		}
 		/** Draft ids with an adoption in progress on this page. */
 		const adopting = /* @__PURE__ */ new Set();
 		async function adopt(record, input) {
-			if (disposed || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
+			if (disposed || frozen || adopting.has(record.draftId) || ownerOf(record.draftId) !== null) return null;
 			if (!superseded.has(record.draftId)) {
 				const mark = readSupersededMark(record.draftId);
 				if (mark) {
@@ -2828,7 +2834,7 @@ var prksEditorRecovery = (function(exports) {
 			return writer;
 		}
 		sweepSuperseded(readSupersededMarks(), 0);
-		return {
+		const registry = {
 			openWriter,
 			adopt,
 			ownerOf,
@@ -2836,6 +2842,15 @@ var prksEditorRecovery = (function(exports) {
 			leaveGuardActive: () => guardOn,
 			emergencyListenersActive: () => emergencyOn,
 			writeEmergencyNow,
+			async retire() {
+				if (frozen || disposed) return;
+				frozen = true;
+				try {
+					writeEmergencyNow();
+				} catch {}
+				await Promise.all([...live].map((w) => w.flush().catch(() => void 0)));
+				registry.dispose();
+			},
 			dispose() {
 				for (const w of live) w.dispose();
 				live.clear();
@@ -2856,6 +2871,7 @@ var prksEditorRecovery = (function(exports) {
 				if (identity.setContestListener) identity.setContestListener(null);
 			}
 		};
+		return registry;
 	}
 	function defaultLocalStorage$1() {
 		try {
@@ -2882,24 +2898,30 @@ var prksEditorRecovery = (function(exports) {
 	function createEditorRecoveryRuntime(options) {
 		const names = options.names;
 		if (!names) throw new Error("recovery storage needs a signed-in scope");
-		const store = createRecoveryStore({
+		const rawStore = createRecoveryStore({
 			...options.store,
 			name: names.dbName
 		});
+		const store = retirableStore(rawStore, () => retired);
 		const identity = createPageIdentity({
 			...options.identity,
 			names
 		});
+		/** Retired: nothing outside the writers' last writes reads or writes this scope. */
 		let retired = false;
+		/** The writers' last writes are done: nothing reads or writes this scope. */
+		let closed = false;
+		let retiring = null;
 		const rawEmergencyStorage = options.emergencyStorage !== void 0 ? options.emergencyStorage : options.writers?.emergencyStorage ?? defaultLocalStorage();
 		const emergencyStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => retired) : null;
+		const writerStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => closed) : null;
 		const writerListeners = /* @__PURE__ */ new Set();
 		const ownEvent = options.writers?.onEvent;
 		const writers = createWriterRegistry({
 			...options.writers,
-			store,
+			store: rawStore,
 			identity,
-			emergencyStorage,
+			emergencyStorage: writerStorage,
 			onEvent(event) {
 				if (ownEvent) ownEvent(event);
 				for (const listener of [...writerListeners]) try {
@@ -3087,22 +3109,23 @@ var prksEditorRecovery = (function(exports) {
 			},
 			emergencyStorage,
 			retire() {
-				if (retired) return;
-				try {
-					writers.writeEmergencyNow();
-				} catch {}
-				writerListeners.clear();
-				writers.dispose();
-				identity.dispose();
+				if (retiring) return retiring;
 				retired = true;
-				store.retire();
+				writerListeners.clear();
+				retiring = boundedSettle(writers.retire(), RETIRE_FLUSH_MS).then(() => {
+					writers.dispose();
+					identity.dispose();
+					closed = true;
+					rawStore.retire();
+				});
+				return retiring;
 			},
 			isRetired: () => retired,
 			dispose() {
 				writerListeners.clear();
 				writers.dispose();
 				identity.dispose();
-				store.close();
+				rawStore.close();
 			}
 		};
 	}
@@ -3110,6 +3133,58 @@ var prksEditorRecovery = (function(exports) {
 	function listingPage(storage, names, draftId) {
 		for (const stored of readEmergencyKeys(storage, names)) if ((stored.payload ? stored.payload.entries : []).some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) return stored.pageInstanceId;
 		return null;
+	}
+	/** Longest a retirement waits for the writers' last writes before closing the database regardless. */
+	var RETIRE_FLUSH_MS = 1e4;
+	function boundedSettle(work, ms) {
+		return new Promise((resolve) => {
+			const timer = setTimeout(resolve, ms);
+			work.then(() => {
+				clearTimeout(timer);
+				resolve();
+			}, () => {
+				clearTimeout(timer);
+				resolve();
+			});
+		});
+	}
+	function retiredError() {
+		return new RecoveryStoreError("retired", "This account is signed out of recovery storage.");
+	}
+	/**
+	* `store`, refusing every operation once `isRetired()` holds, and refusing
+	* the result of one that was in flight then: nothing read before a
+	* retirement is handed out after it.
+	*/
+	function retirableStore(store, isRetired) {
+		function guard(fn) {
+			return (...args) => {
+				if (isRetired()) return Promise.reject(retiredError());
+				return fn(...args).then((value) => {
+					if (isRetired()) throw retiredError();
+					return value;
+				});
+			};
+		}
+		return {
+			writeGeneration: guard(store.writeGeneration),
+			updateLineage: guard(store.updateLineage),
+			adopt: guard(store.adopt),
+			get: guard(store.get),
+			getBody: guard(store.getBody),
+			listByEntity: guard(store.listByEntity),
+			listAll: guard(store.listAll),
+			deleteIfAcknowledged: guard(store.deleteIfAcknowledged),
+			deleteIfEqual: guard(store.deleteIfEqual),
+			discard: guard(store.discard),
+			clearTombstone: guard(store.clearTombstone),
+			tombstoneIfAbsent: guard(store.tombstoneIfAbsent),
+			applyEmergencyEntry: guard(store.applyEmergencyEntry),
+			lastDurability: () => store.lastDurability(),
+			close: () => store.close(),
+			retire: () => store.retire(),
+			isRetired: () => isRetired() || store.isRetired()
+		};
 	}
 	/** `storage`, refusing every access once `isRetired()` holds. */
 	function retirableStorage(storage, isRetired) {

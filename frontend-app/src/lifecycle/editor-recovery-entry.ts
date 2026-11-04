@@ -45,7 +45,7 @@ function browserScope(): BrowserScopeLike | null {
 function retirePage(): void {
   pageRetired = true
   pageDiagnostics = null
-  if (pageRuntime) pageRuntime.retire()
+  if (pageRuntime) void pageRuntime.retire()
 }
 
 function scopeRetired(scope: BrowserScopeLike | null): boolean {
