@@ -1,7 +1,7 @@
 name: E2E Flake Acceptance Stress
 
 # Opt-in 20x acceptance for #456, #457, #458 and current flaky
-# candidates #1007, #1008, #1009. One automatic validation when this
+# candidates #1007, #1008, #1009, #1091. One automatic validation when this
 # workflow or its negative-control helper changes; no extra matrix on ordinary PRs/master.
 on:
   workflow_dispatch:
@@ -65,6 +65,19 @@ jobs:
             test_id: tests.e2e.test_offline.OfflineFoundationTests.test_reconnect_probe_race_settles_pdf_to_online_work_capable_state
           - case: person-membership-1009
             test_id: tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence
+          - case: work-source-coalesce-1091
+            test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_changing_the_video_twice_before_it_sends_is_one_operation
+          - case: work-source-return-to-base-1091
+            test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_returning_to_the_acknowledged_video_leaves_no_intent
+          # #1091 originally failed on the production bundle. Repeat the same
+          # UI oracle against the exact deterministic distribution, not just
+          # the source frontend. All other historical stress cases stay source.
+          - case: packaged-work-source-coalesce-1091
+            packaged: true
+            test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_changing_the_video_twice_before_it_sends_is_one_operation
+          - case: packaged-work-source-return-to-base-1091
+            packaged: true
+            test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_returning_to_the_acknowledged_video_leaves_no_intent
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -98,9 +111,28 @@ jobs:
       - name: Ensure Chromium in repo cache
         run: python tests/e2e/install_browser.py
 
+      - name: Stage the exact production distribution for packaged stress
+        if: matrix.packaged == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep this identical to the packaged-production E2E gate's staging
+          # sequence; never claim packaged acceptance from source-only tests.
+          python -m unittest tests.test_classic_distribution
+          mkdir -p .tests
+          python -m scripts.build_classic_distribution --root . --output .tests/classic-distribution
+          mv frontend .tests/classic-original
+          mv .tests/classic-distribution frontend
+          node --check frontend/js/prks-classic-head.bundle.js
+          node --check frontend/js/prks-classic-body.bundle.js
+          node --check frontend/sw.js
+          python -m unittest tests.test_frontend_service_worker
+
       - name: Run consecutive isolated targeted tests (no retries)
         shell: bash
         env:
+          PRKS_E2E_DISTRIBUTION: ${{ matrix.packaged == true && 'packaged' || 'source' }}
+          PRKS_E2E_ROUTE_FASTPATH: "0"
           PRKS_E2E_TEST_ID: ${{ matrix.test_id }}
           # format() converts numeric zero to the nonempty string '0' so the
           # shell rejects it instead of the || fallback silently choosing 20.
@@ -116,7 +148,9 @@ jobs:
             echo "::error::iterations must be an integer from 1 to 100"
             exit 1
           fi
-          echo "Case: $PRKS_E2E_TEST_ID (iterations: $PRKS_E2E_STRESS_ITERATIONS)"
+          echo "Case: $PRKS_E2E_TEST_ID (distribution: $PRKS_E2E_DISTRIBUTION; iterations: $PRKS_E2E_STRESS_ITERATIONS)"
+          printf 'Distribution: %s; test: %s; iterations: %s\n' \
+            "$PRKS_E2E_DISTRIBUTION" "$PRKS_E2E_TEST_ID" "$PRKS_E2E_STRESS_ITERATIONS" >> "$GITHUB_STEP_SUMMARY"
           echo "Tested code: base $PRKS_E2E_BASE_SHA, head $PRKS_E2E_HEAD_SHA, checkout $GITHUB_SHA"
           printf 'Tested code: base %s, head %s, checkout %s\n' \
             "$PRKS_E2E_BASE_SHA" "$PRKS_E2E_HEAD_SHA" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
