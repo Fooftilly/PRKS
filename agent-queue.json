@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "count": 13,
-  "generated_at": "2026-11-04T15:24:37Z",
+  "count": 16,
+  "generated_at": "2026-11-04T21:28:10Z",
   "issues": [
     {
       "agent": "Claude Code",
@@ -80,6 +80,24 @@
       "execution": "Agent",
       "number": 1037,
       "status": "Ready"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 1111,
+      "status": "Inbox"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 1112,
+      "status": "Inbox"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 1113,
+      "status": "Inbox"
     }
   ],
   "project": {
@@ -90,6 +108,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 41857408218,
-  "stale_after": "2026-11-05T03:24:37Z"
+  "source_run_id": 41916342588,
+  "stale_after": "2026-11-05T09:28:10Z"
 }
