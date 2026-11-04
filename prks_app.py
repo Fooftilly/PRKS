@@ -250,6 +250,11 @@ def select_config(args):
 
 def run_role(role, argv):
     """``migrate``, ``worker`` or ``admin``: the PostgreSQL roles beside ``serve`` (§12.2)."""
+    # Every role fails before any import of the PostgreSQL packages when the
+    # Python environment is wrong, as serve does.
+    from backend.dependency_gate import ensure_runtime_or_exit
+
+    ensure_runtime_or_exit()
     if role == "admin":
         # The admin commands take their own --root (docs/admin-bootstrap.md).
         from backend.domain.identity import admin
@@ -258,9 +263,6 @@ def run_role(role, argv):
     args = build_role_parser(role).parse_args(argv)
     if args.testing:
         os.environ["PRKS_TESTING"] = "1"
-    from backend.dependency_gate import ensure_runtime_or_exit
-
-    ensure_runtime_or_exit()
     config = select_config(args)
     root = os.path.realpath(config.root)
     testing = config.mode == "testing"

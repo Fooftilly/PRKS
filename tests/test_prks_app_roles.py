@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 import prks_app
 
@@ -35,6 +36,16 @@ class SplitRoleTests(unittest.TestCase):
     def test_serve_keeps_its_flags(self) -> None:
         args = prks_app.build_parser().parse_args(["--testing", "--port", "8070"])
         self.assertEqual(args.port, 8070)
+
+    def test_every_role_passes_the_dependency_gate_first(self) -> None:
+        class Gate(Exception):
+            pass
+
+        for role in ("migrate", "worker", "admin"):
+            with self.subTest(role=role):
+                with patch("backend.dependency_gate.ensure_runtime_or_exit", side_effect=Gate):
+                    with self.assertRaises(Gate):
+                        prks_app.run_role(role, ["--help"] if role != "admin" else ["bootstrap", "--help"])
 
     def test_migrate_without_a_database_url_exits_2(self) -> None:
         env = {k: v for k, v in os.environ.items() if not k.startswith("PRKS_")}
