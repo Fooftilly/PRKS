@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { EmergencyStorage } from './emergency'
-import { RECOVERY_DB_NAME, BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type DraftPipeline, type EmergencyPayload } from './schema'
+import { BODIES_STORE, LARGE_BODY_CHARS, emergencyKeyOf, reservationKeyOf, type DraftBase, type DraftPipeline, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type RecoveryStore, type WriteGenerationInput, type WriteOutcome } from './store'
-import { memoryStorage } from './test-support/fake-env'
+import { memoryStorage, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 import { createWriterRegistry, type DraftWriter, type WriterEvent, type WriterRegistry } from './writer'
 
@@ -28,7 +28,7 @@ const BASE: DraftBase = { revision: 7, length: 3, fingerprint: 'a'.repeat(32), s
 
 function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; page?: string; settled?: () => boolean } = {}) {
   const idb = createFakeIdb()
-  const realStore = createRecoveryStore({ indexedDB: idb.factory })
+  const realStore = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: idb.factory })
   const calls: WriteGenerationInput[] = []
   const gates: Array<() => void> = []
   const hooks: { discard: RecoveryStore['discard'] | null } = { discard: null }
@@ -53,6 +53,7 @@ function setup(options: { gate?: boolean; storage?: EmergencyStorage | null; pag
   const registry = createWriterRegistry({
     store,
     identity: {
+      names: TEST_NAMES,
       pageInstanceId: options.page ?? 'p-me',
       current: () => (!options.settled || options.settled() ? { runtimeId: 'r-me', verified: 'lock' } : null),
       setLineageResponder() {},
@@ -177,7 +178,7 @@ describe('emergency entry', () => {
     const w = t.open()
     w.edit(1, 'first words')
     t.doc.fire('visibilitychange')
-    const raw = t.storage.map.get(emergencyKeyOf('p-me'))
+    const raw = t.storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me'))
     const payload = JSON.parse(raw as string) as EmergencyPayload
     expect(payload).toMatchObject({ v: 1, pageInstanceId: 'p-me', runtimeId: 'r-me' })
     expect(payload.entries[0]).toMatchObject({
@@ -192,7 +193,7 @@ describe('emergency entry', () => {
     expect(t.storage.map.size).toBe(0)
     w.edit(2, 'first words and more')
     t.win.fire('pagehide')
-    const next = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const next = JSON.parse(t.storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(next.entries[0]).toMatchObject({ generation: 2, committedGeneration: 1 })
     // A committed lineage still carries its base, for a fork after adoption.
     expect(next.entries[0]!.lineage).toMatchObject({ base: BASE })
@@ -210,7 +211,7 @@ describe('emergency entry', () => {
     expect(t.registry.leaveGuardActive()).toBe(true)
     expectProtectedOrDisclosed(t.registry)
     t.registry.writeEmergencyNow()
-    const payload = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const payload = JSON.parse(t.storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(payload.entries.filter((e) => e.body === null)).toHaveLength(1)
   })
 })
@@ -291,7 +292,7 @@ describe('emergency storage that cannot keep a body', () => {
     w.edit(1, 'first words')
     t.doc.fire('visibilitychange')
     await w.discard()
-    const left = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const left = JSON.parse(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(left.entries).toEqual([])
   })
 
@@ -362,7 +363,7 @@ describe('quota reservation', () => {
     // held page's payload still fits.
     b.registry.writeEmergencyNow()
     expect(a.registry.writeEmergencyNow()).toBe('written')
-    const left = JSON.parse(storage.map.get(emergencyKeyOf('p-a')) as string) as EmergencyPayload
+    const left = JSON.parse(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-a')) as string) as EmergencyPayload
     expect(left.entries[0]!.body).toBe('a'.repeat(1000))
   })
 
@@ -378,7 +379,7 @@ describe('quota reservation', () => {
     expect(free(storage, quota)).toBe(0)
     expect(() => storage.setItem('other', 'y')).toThrow()
     expect(t.registry.writeEmergencyNow()).toBe('written')
-    const left = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const left = JSON.parse(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(left.entries[0]!.body).toBe('x'.repeat(1000))
   })
 
@@ -386,7 +387,7 @@ describe('quota reservation', () => {
     const t = setup()
     const w = t.open()
     w.edit(1, 'x'.repeat(1000))
-    const reservation = t.storage.map.get(reservationKeyOf('p-me')) as string
+    const reservation = t.storage.map.get(reservationKeyOf(TEST_NAMES, 'p-me')) as string
     expect(reservation.length).toBeGreaterThan(2000)
     expect(/^r-me\n\u0101+$/.test(reservation)).toBe(true)
     // Grows geometrically, not on every keystroke.
@@ -394,21 +395,21 @@ describe('quota reservation', () => {
     w.edit(2, 'x'.repeat(1001))
     expect(spy).not.toHaveBeenCalled()
     await w.flush()
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(false)
   })
 
   it('does not reserve again after the pagehide write, and re-plans when the page is shown again', () => {
     const t = setup()
     const w = t.open()
     w.edit(1, 'closing with this')
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(true)
     t.win.fire('pagehide')
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
-    const left = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(false)
+    const left = JSON.parse(t.storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(left.entries[0]!.body).toBe('closing with this')
     // Restored from the back/forward cache: it reserves again.
     t.win.fire('pageshow')
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(true)
     expect(w.heldByEmergency()).toBe(true)
   })
 
@@ -418,13 +419,13 @@ describe('quota reservation', () => {
     w.edit(1, 'typed before the tab was frozen')
     t.doc.fire('visibilitychange')
     // While frozen, a page that claimed this runtime took it for closed.
-    t.storage.map.delete(reservationKeyOf('p-me'))
+    t.storage.map.delete(reservationKeyOf(TEST_NAMES, 'p-me'))
     t.doc.fire('resume')
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
-    t.storage.map.delete(reservationKeyOf('p-me'))
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(true)
+    t.storage.map.delete(reservationKeyOf(TEST_NAMES, 'p-me'))
     ;(t.doc as { visibilityState: string }).visibilityState = 'visible'
     t.doc.fire('visibilitychange')
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(true)
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(true)
     expect(w.heldByEmergency()).toBe(true)
   })
 
@@ -432,7 +433,7 @@ describe('quota reservation', () => {
     const t = setup()
     const w = t.open()
     w.edit(1, 'x'.repeat(200_000))
-    const reserved = (t.storage.map.get(reservationKeyOf('p-me')) as string).length
+    const reserved = (t.storage.map.get(reservationKeyOf(TEST_NAMES, 'p-me')) as string).length
     expect(reserved).toBeGreaterThan(200_000)
     expect(reserved).toBeLessThanOrEqual('r-me\n'.length + 200_000 + 2 + 1024 + 64 * 1024)
   })
@@ -444,7 +445,7 @@ describe('quota reservation', () => {
     w.edit(1, 'before the claim')
     expect(w.heldByEmergency()).toBe(false)
     expect(t.registry.leaveGuardActive()).toBe(true)
-    expect(t.storage.map.has(reservationKeyOf('p-me'))).toBe(false)
+    expect(t.storage.map.has(reservationKeyOf(TEST_NAMES, 'p-me'))).toBe(false)
     settled = true
     w.edit(2, 'after the claim')
     expect(w.heldByEmergency()).toBe(true)
@@ -479,7 +480,7 @@ describe('discard when the emergency key cannot be cleared', () => {
     const draftId = w.draftId() as string
     state.blocked = true
     await w.discard()
-    expect(storage.map.has(emergencyKeyOf('p-me'))).toBe(true)
+    expect(storage.map.has(emergencyKeyOf(TEST_NAMES, 'p-me'))).toBe(true)
     expect(await t.store.listByEntity('work-research-note', 'w1')).toEqual([])
     expect(await t.store.getBody(draftId)).toBeNull()
     expect(await t.store.get(draftId)).toMatchObject({ status: 'discarded', bodyLength: 0 })
@@ -489,7 +490,7 @@ describe('discard when the emergency key cannot be cleared', () => {
     const other = t.open('s-2', 'w2')
     other.edit(1, 'another note')
     await settle()
-    expect(JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string).entries.map((e: { draftId: string }) => e.draftId)).toEqual([other.draftId()])
+    expect(JSON.parse(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string).entries.map((e: { draftId: string }) => e.draftId)).toEqual([other.draftId()])
     expect(await t.store.get(draftId)).toBeNull()
   })
 
@@ -503,9 +504,9 @@ describe('discard when the emergency key cannot be cleared', () => {
     state.blocked = true
     await w.flush()
     expect(await w.acknowledged(1, 'saved words')).toBe('deleted')
-    expect(JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string).entries[0].committedGeneration).toBe(0)
+    expect(JSON.parse(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string).entries[0].committedGeneration).toBe(0)
     expect(await t.store.get(draftId)).toMatchObject({ status: 'discarded' })
-    const payload = JSON.parse(storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const payload = JSON.parse(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(await t.store.applyEmergencyEntry(payload, payload.entries[0]!)).toBe('suppressed')
     expect(await t.store.listByEntity('work-research-note', 'w1')).toEqual([])
   })
@@ -562,7 +563,7 @@ describe('ownership and failure', () => {
     await settle()
     expect(w.state()).toBe('protected')
     expect(t.registry.leaveGuardActive()).toBe(false)
-    expect(t.idb.rows(RECOVERY_DB_NAME, BODIES_STORE)).toHaveLength(1)
+    expect(t.idb.rows(TEST_NAMES.dbName, BODIES_STORE)).toHaveLength(1)
   })
 
   it('release finishes the last write instead of cancelling it and leaves the lineage', async () => {
@@ -679,11 +680,11 @@ describe('acknowledgement', () => {
     expect(await w.acknowledged(2, 'reverted to A')).toBe('deleted')
     // The page reloads before any retry lands.
     t.registry.dispose()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toContain('p-me')
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + id)).toContain('p-me')
     const scheduler = createManualScheduler()
     const next = createWriterRegistry({
       store: t.store,
-      identity: { pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
+      identity: { names: TEST_NAMES, pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
       now: scheduler.now,
       window: listenerTarget(),
@@ -698,7 +699,7 @@ describe('acknowledgement', () => {
     scheduler.advance(60_000)
     await settle()
     expect(await t.store.get(id)).toBeNull()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + id)).toBeNull()
     next.dispose()
   })
 
@@ -708,7 +709,7 @@ describe('acknowledgement', () => {
     const scheduler = createManualScheduler()
     const already = createWriterRegistry({
       store: t.store,
-      identity: { pageInstanceId: 'p-open', current: () => ({ runtimeId: 'r-open', verified: 'lock' }), setLineageResponder() {} },
+      identity: { names: TEST_NAMES, pageInstanceId: 'p-open', current: () => ({ runtimeId: 'r-open', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
       now: scheduler.now,
       window: listenerTarget(),
@@ -732,7 +733,7 @@ describe('acknowledgement', () => {
     scheduler.advance(60_000)
     await settle()
     expect(await t.store.get(id)).toBeNull()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + id)).toBeNull()
     already.dispose()
   })
 
@@ -741,7 +742,7 @@ describe('acknowledgement', () => {
     const scheduler = createManualScheduler()
     const other = createWriterRegistry({
       store: t.store,
-      identity: { pageInstanceId: 'p-other', current: () => ({ runtimeId: 'r-other', verified: 'lock' }), setLineageResponder() {} },
+      identity: { names: TEST_NAMES, pageInstanceId: 'p-other', current: () => ({ runtimeId: 'r-other', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
       now: scheduler.now,
       window: listenerTarget(),
@@ -761,14 +762,14 @@ describe('acknowledgement', () => {
     await Promise.all([mine.flush(), theirs.flush()])
     expect(await mine.acknowledged(2, 'reverted to A')).toBe('deleted')
     expect(await theirs.acknowledged(2, 'reverted to C')).toBe('deleted')
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toContain('p-me')
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + mineId)).toContain('p-me')
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + theirsId)).toContain('p-other')
     t.idb.failCommits = 0
     t.scheduler.advance(60_000)
     await settle()
     // Mine is gone; theirs still waits for its own page's retry.
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + mineId)).toBeNull()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + theirsId)).toContain('p-other')
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + mineId)).toBeNull()
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + theirsId)).toContain('p-other')
     other.dispose()
   })
 
@@ -784,7 +785,7 @@ describe('acknowledgement', () => {
     // The delete is still pending when the page goes away.
     let markedWhileDeleting: string | null = null
     t.hooks.discard = () => {
-      markedWhileDeleting = t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)
+      markedWhileDeleting = t.storage.getItem(TEST_NAMES.supersededPrefix + id)
       return new Promise(() => {})
     }
     void w.acknowledged(2, 'reverted to A')
@@ -797,7 +798,7 @@ describe('acknowledgement', () => {
     const scheduler = createManualScheduler()
     const next = createWriterRegistry({
       store: t.store,
-      identity: { pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
+      identity: { names: TEST_NAMES, pageInstanceId: 'p-next', current: () => ({ runtimeId: 'r-next', verified: 'lock' }), setLineageResponder() {} },
       scheduler,
       now: scheduler.now,
       window: listenerTarget(),
@@ -807,7 +808,7 @@ describe('acknowledgement', () => {
     expect(await next.adopt(stale, { paneId: 'tab-1', sessionKey: 's-next' })).toBeNull()
     await settle()
     expect(await t.store.get(id)).toBeNull()
-    expect(t.storage.getItem('prks.editorRecovery.superseded.v1.' + id)).toBeNull()
+    expect(t.storage.getItem(TEST_NAMES.supersededPrefix + id)).toBeNull()
     next.dispose()
   })
 
@@ -815,7 +816,7 @@ describe('acknowledgement', () => {
     const storage = memoryStorage()
     const setItem = storage.setItem
     storage.setItem = (k: string, v: string) => {
-      if (k.startsWith('prks.editorRecovery.superseded.v1.')) throw new Error('QuotaExceededError')
+      if (k.startsWith(TEST_NAMES.supersededPrefix)) throw new Error('QuotaExceededError')
       setItem(k, v)
     }
     const t = setup({ storage })
@@ -1048,12 +1049,12 @@ describe('emergency key refresh', () => {
     a.edit(1, 'a text')
     b.edit(1, 'b text')
     t.doc.fire('visibilitychange')
-    const before = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const before = JSON.parse(t.storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(before.entries).toHaveLength(2)
     const aId = a.draftId() as string
     await a.flush()
     await a.discard()
-    const after = JSON.parse(t.storage.map.get(emergencyKeyOf('p-me')) as string) as EmergencyPayload
+    const after = JSON.parse(t.storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-me')) as string) as EmergencyPayload
     expect(after.entries.map((e) => e.draftId)).toEqual([b.draftId()])
     expect(after.entries.some((e) => e.draftId === aId)).toBe(false)
   })

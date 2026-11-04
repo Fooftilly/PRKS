@@ -2,7 +2,7 @@
 
 Vitest covers the store, identity, coalescing and emergency rules against
 fakes. What only a real browser proves is kept here: IndexedDB writes and
-Web Locks across page teardown, the separate `prks-editor-recovery-v1`
+Web Locks across page teardown, the separate per-scope `prks-editor-recovery-v2:<scope>`
 database surviving Clear offline cache, simultaneous duplicated tabs, and the
 synchronous emergency entry plus leave guard across a reload.
 
@@ -86,8 +86,17 @@ _LIST = """
 """
 
 _EMERGENCY_KEYS = """
-    () => Object.keys(localStorage).filter((k) => k.startsWith(window.prksEditorRecovery.EMERGENCY_KEY_PREFIX)).sort()
+    () => Object.keys(localStorage).filter((k) => k.startsWith(window.prksEditorRecovery.scopeNames().emergencyPrefix)).sort()
 """
+
+# The script is loaded and the page has its confirmed browser scope, which
+# recovery storage is named for (#629). Reading the scope builds no runtime.
+_RECOVERY_READY = "() => !!window.prksEditorRecovery && !!window.prksEditorRecovery.scopeNames()"
+
+
+def _names(page):
+    """This page's recovery names (editor-recovery schema.ts `RecoveryNames`)."""
+    return page.evaluate("() => ({ ...window.prksEditorRecovery.scopeNames() })")
 
 
 class EditorRecoveryStoreTests(unittest.TestCase):
@@ -101,18 +110,18 @@ class EditorRecoveryStoreTests(unittest.TestCase):
         # A leave guard may be armed; reloads in these tests always proceed.
         context.on('page', lambda p: p.on('dialog', lambda d: d.accept()))
         page.on('dialog', lambda d: d.accept())
-        page.wait_for_function("() => !!window.prksEditorRecovery")
+        page.wait_for_function(_RECOVERY_READY)
         return server, page, context
 
     def open_page(self, context, server):
         page = context.new_page()
         page.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
-        page.wait_for_function("() => !!window.prksEditorRecovery")
+        page.wait_for_function(_RECOVERY_READY)
         return page
 
     def reload(self, page):
         page.reload(wait_until='domcontentloaded')
-        page.wait_for_function("() => !!window.prksEditorRecovery")
+        page.wait_for_function(_RECOVERY_READY)
 
     def test_loading_the_script_starts_nothing(self):
         server, page, context = self.start()
@@ -124,7 +133,7 @@ class EditorRecoveryStoreTests(unittest.TestCase):
             })"""
         )
         self.assertEqual(state['locks'], 0)
-        self.assertNotIn('prks-editor-recovery-v1', state['dbs'])
+        self.assertNotIn(_names(page)['dbName'], state['dbs'])
 
     def test_committed_generation_survives_reload_and_clear_offline_cache(self):
         server, page, context = self.start()
@@ -154,12 +163,13 @@ class EditorRecoveryStoreTests(unittest.TestCase):
             'same-runtime-orphan',
         )
         names = page.evaluate("async () => (await indexedDB.databases()).map((d) => d.name)")
-        self.assertIn('prks-editor-recovery-v1', names)
+        self.assertIn(_names(page)['dbName'], names)
 
     def test_simultaneous_duplicate_runtime_start_keeps_both_drafts(self):
         server, page, context = self.start()
+        names = _names(page)
         context.add_init_script(
-            "try { sessionStorage.setItem('prks.editorRecovery.runtime.v1', '%s'); } catch (e) {}" % COPIED_RUNTIME
+            "try { sessionStorage.setItem('%s', '%s'); } catch (e) {}" % (names['runtimeSessionKey'], COPIED_RUNTIME)
         )
         one = self.open_page(context, server)
         two = self.open_page(context, server)
@@ -171,7 +181,7 @@ class EditorRecoveryStoreTests(unittest.TestCase):
             self.assertEqual(p.evaluate("() => window.prksEditorRecovery.runtime().writers.writeEmergencyNow()"), 'written')
         keys = one.evaluate(_EMERGENCY_KEYS)
         pages = [p.evaluate("() => window.prksEditorRecovery.runtime().identity.pageInstanceId") for p in (one, two)]
-        self.assertEqual(keys, sorted('prks.editorRecovery.emergency.v1.' + pid for pid in pages))
+        self.assertEqual(keys, sorted(names['emergencyPrefix'] + pid for pid in pages))
         claims = [p.evaluate("async () => (await window.__start).claim.runtimeId") for p in (one, two)]
         self.assertNotEqual(claims[0], claims[1])
         self.assertIn(COPIED_RUNTIME, claims)
@@ -184,11 +194,11 @@ class EditorRecoveryStoreTests(unittest.TestCase):
         # still reads as alive is kept for a later start, never merged early.
         wait_for_async(
             page,
-            """(pids) => navigator.locks.query().then((snap) => {
+            """(args) => navigator.locks.query().then((snap) => {
                 const held = snap.held.map((l) => String(l.name));
-                return pids.every((pid) => !held.includes('prks-editor-recovery-page:' + pid));
+                return args.pids.every((pid) => !held.includes(args.prefix + pid));
             })""",
-            arg=pages,
+            arg={'pids': pages, 'prefix': names['pageLockPrefix']},
             timeout=10000,
             message='closed pages still hold their recovery page locks',
         )
@@ -207,7 +217,7 @@ class EditorRecoveryStoreTests(unittest.TestCase):
         draft = other.evaluate(_EDIT, ['W-LATE', 1, 'closed later'])['draftId']
         self.assertEqual(other.evaluate("() => window.prksEditorRecovery.runtime().writers.writeEmergencyNow()"), 'written')
         other_page = other.evaluate("() => window.prksEditorRecovery.runtime().identity.pageInstanceId")
-        key = 'prks.editorRecovery.emergency.v1.' + other_page
+        key = _names(page)['emergencyPrefix'] + other_page
         # The other page is alive: a scan leaves its key alone.
         page.evaluate("async () => { await window.prksEditorRecovery.runtime().scanEmergency(); }")
         self.assertEqual(page.evaluate(_EMERGENCY_KEYS), [key])

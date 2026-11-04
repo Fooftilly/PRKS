@@ -12,8 +12,8 @@ import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?ra
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import * as recoveryApi from '../../lifecycle/editor-recovery-entry'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { RUNTIME_SESSION_KEY, UNKNOWN_BASE, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
-import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
+import { UNKNOWN_BASE, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { createFakeBrowser, TEST_NAMES } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
 
@@ -67,7 +67,7 @@ const workRead = { text: null as string | null, source: 'server' as 'server' | '
 /* ---- one page: runtime, identity and TabContext ---- */
 const browser = createFakeBrowser()
 let idb = createFakeIdb()
-let session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
+let session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: 'r-' + 'a'.repeat(32) })
 let local = memoryStorage()
 let page: RecoveryPage | null = null
 let pageSeq = 0
@@ -220,7 +220,7 @@ beforeAll(() => {
 beforeEach(() => {
   withoutLocks = false
   idb = createFakeIdb()
-  session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
+  session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: 'r-' + 'a'.repeat(32) })
   local = memoryStorage()
   sync.reset()
   server.text = 'Saved note.'

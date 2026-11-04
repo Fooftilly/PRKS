@@ -25,14 +25,9 @@ import {
   CLAIM_WAIT_MS,
   CLOSED_PAGES_KEPT,
   CLOSED_PAGES_LOCAL_KEPT,
-  CLOSED_PAGE_KEY_PREFIX,
-  CLOSED_PAGES_SESSION_KEY,
-  PAGE_LOCK_PREFIX,
-  RECOVERY_CHANNEL,
-  RUNTIME_LOCK_PREFIX,
-  RUNTIME_SESSION_KEY,
   mintId,
   type RandomSource,
+  type RecoveryNames,
 } from './schema'
 
 export interface LockManagerLike {
@@ -55,6 +50,8 @@ export interface PageEventTarget {
 export type ClosedPageStorage = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem' | 'key' | 'length'>>
 
 export interface IdentityEnv {
+  /** The scope's session keys, page records, channel and locks. Required. */
+  names: RecoveryNames
   sessionStorage?: Pick<Storage, 'getItem' | 'setItem'> | null
   /** Where a final `pagehide` is recorded for every tab to read; the global localStorage by default. */
   localStorage?: ClosedPageStorage | null
@@ -76,6 +73,8 @@ export interface RuntimeClaim {
 
 export interface PageIdentity {
   readonly pageInstanceId: string
+  /** The browser scope this page's recovery storage belongs to. */
+  readonly names: RecoveryNames
   /** Claims the runtime id once; later calls return the same promise. */
   claim(): Promise<RuntimeClaim>
   /** The settled claim, or null while it is still being arbitrated. */
@@ -164,7 +163,9 @@ function readIdList(storage: Pick<Storage, 'getItem'> | null, key: string): stri
   }
 }
 
-export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
+export function createPageIdentity(env: IdentityEnv): PageIdentity {
+  const names = env.names
+  if (!names) throw new Error('recovery storage needs a signed-in scope')
   const random = env.random || globalThis.crypto
   const session = env.sessionStorage === undefined ? defaultSession() : env.sessionStorage
   const local = env.localStorage === undefined ? defaultLocal() : env.localStorage
@@ -177,7 +178,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
 
   let channel: ChannelLike | null = null
   try {
-    channel = makeChannel ? makeChannel(RECOVERY_CHANNEL) : null
+    channel = makeChannel ? makeChannel(names.channel) : null
   } catch {
     channel = null
   }
@@ -292,7 +293,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
 
   function persist(runtimeId: string): void {
     try {
-      if (session) session.setItem(RUNTIME_SESSION_KEY, runtimeId)
+      if (session) session.setItem(names.runtimeSessionKey, runtimeId)
     } catch {
       /* sessionStorage may be blocked; the claim still holds for this page */
     }
@@ -300,7 +301,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
 
   function initialCandidate(): string {
     try {
-      const stored = session ? session.getItem(RUNTIME_SESSION_KEY) : null
+      const stored = session ? session.getItem(names.runtimeSessionKey) : null
       if (stored && /^r-[0-9a-f]{32}$/.test(stored)) return stored
     } catch {
       /* fall through */
@@ -310,9 +311,9 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
 
   async function claimWithLocks(candidate: string): Promise<RuntimeClaim> {
     // Held before the runtime claim settles, so a settled page always reads as alive.
-    await hold(PAGE_LOCK_PREFIX + pageInstanceId)
+    await hold(names.pageLockPrefix + pageInstanceId)
     for (let round = 0; round < MAX_CLAIM_ROUNDS; round++) {
-      if (await hold(RUNTIME_LOCK_PREFIX + candidate)) return { runtimeId: candidate, verified: 'lock' }
+      if (await hold(names.runtimeLockPrefix + candidate)) return { runtimeId: candidate, verified: 'lock' }
       candidate = mintId('r', random)
     }
     return { runtimeId: candidate, verified: 'unverified' }
@@ -332,12 +333,12 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
   }
 
   function closedPages(): string[] {
-    return readIdList(session, CLOSED_PAGES_SESSION_KEY)
+    return readIdList(session, names.closedPagesSessionKey)
   }
 
   function writeClosedPages(list: string[]): void {
     try {
-      if (session) session.setItem(CLOSED_PAGES_SESSION_KEY, JSON.stringify(list.slice(-CLOSED_PAGES_KEPT)))
+      if (session) session.setItem(names.closedPagesSessionKey, JSON.stringify(list.slice(-CLOSED_PAGES_KEPT)))
     } catch {
       /* without the record a reload's drafts are offered for review, not adoption */
     }
@@ -351,7 +352,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     try {
       if (!local) return
       // Its own key: a tab closing at the same moment never overwrites it.
-      local.setItem(CLOSED_PAGE_KEY_PREFIX + pageInstanceId, String(Date.now()))
+      local.setItem(names.closedPagePrefix + pageInstanceId, String(Date.now()))
     } catch {
       /* without the record this page's drafts are offered for review, not adoption */
       return
@@ -366,7 +367,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
       const records: Array<{ key: string; at: number }> = []
       for (let i = 0; i < local.length; i++) {
         const key = local.key(i)
-        if (!key || !key.startsWith(CLOSED_PAGE_KEY_PREFIX)) continue
+        if (!key || !key.startsWith(names.closedPagePrefix)) continue
         records.push({ key, at: Number(local.getItem(key)) || 0 })
       }
       if (records.length <= CLOSED_PAGES_LOCAL_KEPT) return
@@ -434,23 +435,24 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
 
   return {
     pageInstanceId,
+    names,
     claim,
     current: () => settled,
     async isPageAlive(id) {
       if (id === pageInstanceId) return true
       const held = await heldLockNames()
-      if (held) return held.has(PAGE_LOCK_PREFIX + id)
+      if (held) return held.has(names.pageLockPrefix + id)
       return ask({ t: 'page?', page: id, q: queryId() })
     },
     async isPageGone(id) {
       if (id === pageInstanceId) return false
       const held = await heldLockNames()
-      return held ? !held.has(PAGE_LOCK_PREFIX + id) : false
+      return held ? !held.has(names.pageLockPrefix + id) : false
     },
     async isRuntimeAlive(id) {
       if (settled && settled.runtimeId === id) return true
       const held = await heldLockNames()
-      if (held) return held.has(RUNTIME_LOCK_PREFIX + id)
+      if (held) return held.has(names.runtimeLockPrefix + id)
       return ask({ t: 'runtime?', rid: id, q: queryId() })
     },
     isLineageLiveElsewhere(draftId) {
@@ -471,7 +473,7 @@ export function createPageIdentity(env: IdentityEnv = {}): PageIdentity {
     wasPageClosed(id) {
       if (id === pageInstanceId || !local) return false
       try {
-        return local.getItem(CLOSED_PAGE_KEY_PREFIX + id) !== null
+        return local.getItem(names.closedPagePrefix + id) !== null
       } catch {
         return false
       }

@@ -12,8 +12,8 @@ import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?ra
 import workLifecycleSource from '../../../../frontend/js/work-lifecycle-state.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
-import { EMERGENCY_KEY_PREFIX, RUNTIME_SESSION_KEY, type DraftBase, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
-import { createFakeBrowser } from '../../lifecycle/editor-recovery/test-support/fake-env'
+import { type DraftBase, type DraftRecord } from '../../lifecycle/editor-recovery/schema'
+import { createFakeBrowser, TEST_NAMES } from '../../lifecycle/editor-recovery/test-support/fake-env'
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { createNoteQueue, memoryStorage, startRecoveryPage, type RecoveryPage } from './test-support/work-note-harness'
 
@@ -91,7 +91,7 @@ const sync = createNoteQueue(server)
 /* ---- one page: runtime, identity, TabContext and the right panel ---- */
 const browser = createFakeBrowser()
 let idb = createFakeIdb()
-let session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
+let session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: 'r-' + 'a'.repeat(32) })
 let local = memoryStorage()
 let page: RecoveryPage | null = null
 let pageSeq = 0
@@ -251,7 +251,7 @@ beforeEach(() => {
   withoutLocks = false
   focused = 'tab-1'
   idb = createFakeIdb()
-  session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: 'r-' + 'a'.repeat(32) })
+  session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: 'r-' + 'a'.repeat(32) })
   local = memoryStorage()
   sync.reset()
   server.text = 'Saved reminder.'
@@ -635,7 +635,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     expect((await records()).map((r) => r.kind).sort()).toEqual(['work-private-note', 'work-research-note'])
   }
 
-  const DELETED_WORK_PREFIX = 'prks.workRecoveryCleanup.v1.'
+  const DELETED_WORK_PREFIX = TEST_NAMES.deletedWorkPrefix
   const deleteOp = () => sync.rows().find((r) => r.operation === 'DELETE_WORK')!.op_id
 
   let responses: Record<string, { status: number; body: unknown }> = {}
@@ -645,7 +645,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     probed.length = 0
     for (const id of markedEntries().map((entry) => entry.id)) window.localStorage.removeItem(DELETED_WORK_PREFIX + id)
     // Cleanup runs only where recovery storage exists; this page's is the fake one.
-    win.indexedDB = { databases: async () => [{ name: 'prks-editor-recovery-v1' }] }
+    win.indexedDB = { databases: async () => [{ name: TEST_NAMES.dbName }] }
     win.prksRequest = async (url: string) => {
       probed.push(url)
       const answer = responses[url] || { status: 200, body: { work_id: 'w1', research_note_revision: 0, private_note_revision: 5 } }
@@ -861,15 +861,15 @@ describe('Work delete and recovery drafts (#533)', () => {
       }],
     })
     // The page reads keys from its own localStorage before it builds a runtime; the runtime here reads `local`.
-    local.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, key)
-    window.localStorage.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, key)
+    local.setItem(TEST_NAMES.emergencyPrefix + pageInstanceId, key)
+    window.localStorage.setItem(TEST_NAMES.emergencyPrefix + pageInstanceId, key)
     mark()
     goneOnServer()
     expect(await win.prksRetryDeletedWorkRecovery()).toEqual(['w1'])
     expect((await records()).filter((r) => r.status !== 'discarded')).toEqual([])
-    expect([...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))).toEqual([])
+    expect([...local.map.keys()].filter((k) => k.startsWith(TEST_NAMES.emergencyPrefix))).toEqual([])
     expect(marked()).toEqual([])
-    window.localStorage.removeItem(EMERGENCY_KEY_PREFIX + pageInstanceId)
+    window.localStorage.removeItem(TEST_NAMES.emergencyPrefix + pageInstanceId)
   })
 
   /** Emergency keys this code cannot parse: the ones a later read or a newer bundle may recover keep the mark. */
@@ -900,7 +900,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     for (const odd of unreadableKeys) {
       it(`${odd.keeps ? 'keeps' : 'does not keep'} the mark for an emergency key ${odd.name}, ${database ? 'with' : 'without'} a recovery database`, async () => {
         if (!database) win.indexedDB = { databases: async () => [] }
-        const key = EMERGENCY_KEY_PREFIX + 'p-odd'
+        const key = TEST_NAMES.emergencyPrefix + 'p-odd'
         local.setItem(key, odd.raw)
         window.localStorage.setItem(key, odd.raw)
         const failing = { now: !!odd.failRead }
@@ -1085,7 +1085,7 @@ describe('Work delete and recovery drafts (#533)', () => {
     win.indexedDB = {
       databases: async () => {
         gated = true
-        return (await page!.rt.store.listAll()).length ? [{ name: 'prks-editor-recovery-v1' }] : []
+        return (await page!.rt.store.listAll()).length ? [{ name: TEST_NAMES.dbName }] : []
       },
     }
     const { ctx, ta } = await openWork()

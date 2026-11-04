@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { jsonEscapeExtra, mergeEmergencyEntries, planEmergency, readEmergencyKeys, releaseDeadReservations, writeEmergency, type EmergencyStorage } from './emergency'
-import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, UNKNOWN_BASE, emergencyKeyOf, reservationKeyOf, reservationValue, type EmergencyPayload } from './schema'
+import { EMERGENCY_BODY_CHARS, EMERGENCY_PAGE_CHARS, UNKNOWN_BASE, emergencyKeyOf, recoveryNames, reservationKeyOf, reservationValue, type EmergencyPayload } from './schema'
 import { createRecoveryStore, type EmergencyOutcome, type RecoveryStore } from './store'
 import { createFakeIdb } from './test-support/fake-idb'
+import { TEST_NAMES } from './test-support/fake-env'
 
 function memoryStorage(limitChars = Infinity): EmergencyStorage & { map: Map<string, string> } {
   const map = new Map<string, string>()
@@ -69,26 +70,26 @@ describe('planEmergency', () => {
 describe('emergency keys', () => {
   it('isolates duplicated tabs that share a runtime id by page instance', () => {
     const storage = memoryStorage()
-    writeEmergency(storage, emergencyKeyOf('p-one'), payload('p-one', 'one'))
-    writeEmergency(storage, emergencyKeyOf('p-two'), payload('p-two', 'two'))
-    const read = readEmergencyKeys(storage)
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-one'), payload('p-one', 'one'))
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-two'), payload('p-two', 'two'))
+    const read = readEmergencyKeys(storage, TEST_NAMES)
     expect(read.map((r) => r.pageInstanceId).sort()).toEqual(['p-one', 'p-two'])
     expect(read.map((r) => r.payload?.entries[0]?.body).sort()).toEqual(['one', 'two'])
   })
 
   it('retries without bodies when the full entry does not fit', () => {
     const storage = memoryStorage(400)
-    expect(writeEmergency(storage, emergencyKeyOf('p'), payload('p', 'x'.repeat(1000)))).toBe('written-without-bodies')
-    expect(readEmergencyKeys(storage)[0]?.payload?.entries[0]?.body).toBeNull()
+    expect(writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p'), payload('p', 'x'.repeat(1000)))).toBe('written-without-bodies')
+    expect(readEmergencyKeys(storage, TEST_NAMES)[0]?.payload?.entries[0]?.body).toBeNull()
   })
 
   it('rejects a payload whose page id does not match its key, or a first generation without lineage', () => {
     const storage = memoryStorage()
-    storage.setItem(emergencyKeyOf('p-a'), JSON.stringify(payload('p-b')))
+    storage.setItem(emergencyKeyOf(TEST_NAMES, 'p-a'), JSON.stringify(payload('p-b')))
     const noLineage = payload('p-c')
     noLineage.entries[0]!.committedGeneration = 0
-    storage.setItem(emergencyKeyOf('p-c'), JSON.stringify(noLineage))
-    expect(readEmergencyKeys(storage).map((r) => r.payload)).toEqual([null, null])
+    storage.setItem(emergencyKeyOf(TEST_NAMES, 'p-c'), JSON.stringify(noLineage))
+    expect(readEmergencyKeys(storage, TEST_NAMES).map((r) => r.payload)).toEqual([null, null])
   })
 })
 
@@ -107,22 +108,22 @@ describe('mergeEmergencyEntries', () => {
 
   it('merges only dead pages, never its own or a live page, and removes merged keys', async () => {
     const storage = memoryStorage()
-    for (const page of ['p-me', 'p-live', 'p-dead']) writeEmergency(storage, emergencyKeyOf(page), payload(page))
+    for (const page of ['p-me', 'p-live', 'p-dead']) writeEmergency(storage, emergencyKeyOf(TEST_NAMES, page), payload(page))
     const { store, applied } = fakeStore()
-    await mergeEmergencyEntries({ storage, store, pageInstanceId: 'p-me', isPageAlive: async (id) => id === 'p-live' })
+    await mergeEmergencyEntries({ storage, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async (id) => id === 'p-live' })
     expect(applied).toEqual(['p-dead'])
-    expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf('p-live'), emergencyKeyOf('p-me')])
+    expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf(TEST_NAMES, 'p-live'), emergencyKeyOf(TEST_NAMES, 'p-me')])
   })
 
   it('on a re-scan, merges only a definite dead page that had settled its claim', async () => {
     const storage = memoryStorage()
-    for (const page of ['p-unknown', 'p-dead', 'p-unsettled']) writeEmergency(storage, emergencyKeyOf(page), payload(page))
+    for (const page of ['p-unknown', 'p-dead', 'p-unsettled']) writeEmergency(storage, emergencyKeyOf(TEST_NAMES, page), payload(page))
     const unsettled = payload('p-unsettled')
     unsettled.runtimeId = null
-    writeEmergency(storage, emergencyKeyOf('p-unsettled'), unsettled)
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-unsettled'), unsettled)
     const liveness: Record<string, boolean | null> = { 'p-unknown': null, 'p-dead': false, 'p-unsettled': false }
     const { store, applied } = fakeStore()
-    const env = { storage, store, pageInstanceId: 'p-me', isPageAlive: async (id: string) => liveness[id] ?? null }
+    const env = { storage, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async (id: string) => liveness[id] ?? null }
     await mergeEmergencyEntries({ ...env, definiteOnly: true })
     expect(applied).toEqual(['p-dead'])
     // A later start still treats an unknown or unsettled page as a previous load.
@@ -136,12 +137,13 @@ describe('mergeEmergencyEntries', () => {
     for (const page of ['p-closed', 'p-closed-answering', 'p-open']) {
       const unsettled = payload(page)
       unsettled.runtimeId = null
-      writeEmergency(storage, emergencyKeyOf(page), unsettled)
+      writeEmergency(storage, emergencyKeyOf(TEST_NAMES, page), unsettled)
     }
     const liveness: Record<string, boolean | null> = { 'p-closed': null, 'p-closed-answering': true, 'p-open': null }
     const { store, applied } = fakeStore()
     await mergeEmergencyEntries({
       storage,
+      names: TEST_NAMES,
       store,
       pageInstanceId: 'p-me',
       isPageAlive: async (id: string) => liveness[id] ?? null,
@@ -150,37 +152,37 @@ describe('mergeEmergencyEntries', () => {
     })
     // A page that still answers keeps its key whatever its record says.
     expect(applied).toEqual(['p-closed'])
-    expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf('p-closed-answering'), emergencyKeyOf('p-open')])
+    expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf(TEST_NAMES, 'p-closed-answering'), emergencyKeyOf(TEST_NAMES, 'p-open')])
   })
 
   it('stops and keeps the key when its page rewrote it after the snapshot', async () => {
     const storage = memoryStorage()
     const two = payload('p-dead')
     two.entries.push({ ...two.entries[0]!, draftId: 'd-second' })
-    writeEmergency(storage, emergencyKeyOf('p-dead'), two)
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), two)
     const newer = JSON.stringify(payload('p-dead', 'newer tail'))
     const applied: string[] = []
     const store: Pick<RecoveryStore, 'applyEmergencyEntry'> = {
       applyEmergencyEntry: async (_p, entry) => {
         applied.push(entry.draftId)
-        storage.setItem(emergencyKeyOf('p-dead'), newer)
+        storage.setItem(emergencyKeyOf(TEST_NAMES, 'p-dead'), newer)
         return 'written'
       },
     }
-    const [report] = await mergeEmergencyEntries({ storage, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+    const [report] = await mergeEmergencyEntries({ storage, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
     expect(applied).toHaveLength(1)
     expect(report!.removed).toBe(false)
-    expect(storage.map.get(emergencyKeyOf('p-dead'))).toBe(newer)
+    expect(storage.map.get(emergencyKeyOf(TEST_NAMES, 'p-dead'))).toBe(newer)
   })
 
   it('keeps a key when an entry could not be applied or is unreadable', async () => {
     const storage = memoryStorage()
-    writeEmergency(storage, emergencyKeyOf('p-dead'), payload('p-dead'))
-    storage.setItem(emergencyKeyOf('p-garbled'), '{not json')
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), payload('p-dead'))
+    storage.setItem(emergencyKeyOf(TEST_NAMES, 'p-garbled'), '{not json')
     const { store } = fakeStore(new Error('quota'))
-    await mergeEmergencyEntries({ storage, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
-    expect(storage.map.has(emergencyKeyOf('p-dead'))).toBe(true)
-    expect(storage.map.has(emergencyKeyOf('p-garbled'))).toBe(true)
+    await mergeEmergencyEntries({ storage, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+    expect(storage.map.has(emergencyKeyOf(TEST_NAMES, 'p-dead'))).toBe(true)
+    expect(storage.map.has(emergencyKeyOf(TEST_NAMES, 'p-garbled'))).toBe(true)
   })
 
   it('treats storage that throws on enumeration or reads as empty instead of failing', async () => {
@@ -194,15 +196,15 @@ describe('mergeEmergencyEntries', () => {
       removeItem: () => undefined,
     }
     const { store, applied } = fakeStore()
-    await expect(mergeEmergencyEntries({ storage: blocked, store, pageInstanceId: 'p-me', isPageAlive: async () => false })).resolves.toEqual([])
+    await expect(mergeEmergencyEntries({ storage: blocked, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async () => false })).resolves.toEqual([])
     const unreadable = memoryStorage()
-    writeEmergency(unreadable, emergencyKeyOf('p-dead'), payload('p-dead'))
+    writeEmergency(unreadable, emergencyKeyOf(TEST_NAMES, 'p-dead'), payload('p-dead'))
     unreadable.getItem = () => {
       throw new DOMException('blocked', 'SecurityError')
     }
-    await mergeEmergencyEntries({ storage: unreadable, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+    await mergeEmergencyEntries({ storage: unreadable, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
     expect(applied).toEqual([])
-    expect(unreadable.map.has(emergencyKeyOf('p-dead'))).toBe(true)
+    expect(unreadable.map.has(emergencyKeyOf(TEST_NAMES, 'p-dead'))).toBe(true)
   })
 })
 
@@ -228,13 +230,13 @@ describe('a merged draft whose emergency key could not be removed', () => {
     }
     return { storage, unstick: () => void (stuck = false) }
   }
-  const env = (storage: EmergencyStorage, store: RecoveryStore) => ({ storage, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
+  const env = (storage: EmergencyStorage, store: RecoveryStore) => ({ storage, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async () => false })
 
   it('is never recreated by the kept key after a discard or an acknowledgement', async () => {
     for (const retire of ['discard', 'acknowledge'] as const) {
-      const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+      const store = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: createFakeIdb().factory })
       const { storage, unstick } = stuckStorage()
-      writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+      writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), uncommitted('p-dead'))
       const [first] = await mergeEmergencyEntries(env(storage, store))
       expect(first!.outcomes).toEqual(['created'])
       expect(first!.removed).toBe(false)
@@ -251,9 +253,9 @@ describe('a merged draft whose emergency key could not be removed', () => {
   })
 
   it('drops the mark once the key is removed, so a later discard leaves nothing behind', async () => {
-    const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+    const store = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: createFakeIdb().factory })
     const { storage, unstick } = stuckStorage()
-    writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), uncommitted('p-dead'))
     await mergeEmergencyEntries(env(storage, store))
     expect((await store.get('d-p-dead'))!.emergencySource).toBe('p-dead')
     unstick()
@@ -265,9 +267,9 @@ describe('a merged draft whose emergency key could not be removed', () => {
   })
 
   it('keeps answering the source key when an acknowledged draft is tombstoned again for the adopter\'s key', async () => {
-    const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+    const store = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: createFakeIdb().factory })
     const { storage, unstick } = stuckStorage()
-    writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), uncommitted('p-dead'))
     await mergeEmergencyEntries(env(storage, store))
     // The writer's order on acknowledgement: retire first, then its own key's tombstone.
     expect(await store.deleteIfAcknowledged('d-p-dead', 1, 'unsaved words')).toBe('deleted')
@@ -281,9 +283,9 @@ describe('a merged draft whose emergency key could not be removed', () => {
   })
 
   it('keeps a tombstone that answers two keys until both are gone', async () => {
-    const store = createRecoveryStore({ indexedDB: createFakeIdb().factory })
+    const store = createRecoveryStore({ name: TEST_NAMES.dbName, indexedDB: createFakeIdb().factory })
     const { storage } = stuckStorage()
-    writeEmergency(storage, emergencyKeyOf('p-dead'), uncommitted('p-dead'))
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), uncommitted('p-dead'))
     await mergeEmergencyEntries(env(storage, store))
     // An adopter discards it while its own key still lists it, too.
     await store.discard('d-p-dead', { kind: 'work-research-note', entityType: 'work', entityId: 'w1', generation: 1, pageInstanceId: 'p-adopter' })
@@ -297,26 +299,49 @@ describe('a merged draft whose emergency key could not be removed', () => {
 describe('releaseDeadReservations', () => {
   it('removes only proven-gone pages\' reservations, never its own or one not proven gone', async () => {
     const storage = memoryStorage()
-    for (const page of ['p-me', 'p-live', 'p-dead', 'p-unknown']) storage.setItem(reservationKeyOf(page), 'ā'.repeat(10))
-    writeEmergency(storage, emergencyKeyOf('p-dead'), payload('p-dead'))
-    const removed = await releaseDeadReservations({ storage, pageInstanceId: 'p-me', isPageGone: async (id) => id === 'p-dead' || id === 'p-me' })
-    expect(removed).toEqual([reservationKeyOf('p-dead')])
+    for (const page of ['p-me', 'p-live', 'p-dead', 'p-unknown']) storage.setItem(reservationKeyOf(TEST_NAMES, page), 'ā'.repeat(10))
+    writeEmergency(storage, emergencyKeyOf(TEST_NAMES, 'p-dead'), payload('p-dead'))
+    const removed = await releaseDeadReservations({ storage, names: TEST_NAMES, pageInstanceId: 'p-me', isPageGone: async (id) => id === 'p-dead' || id === 'p-me' })
+    expect(removed).toEqual([reservationKeyOf(TEST_NAMES, 'p-dead')])
     expect([...storage.map.keys()].sort()).toEqual(
-      [emergencyKeyOf('p-dead'), reservationKeyOf('p-live'), reservationKeyOf('p-me'), reservationKeyOf('p-unknown')].sort(),
+      [emergencyKeyOf(TEST_NAMES, 'p-dead'), reservationKeyOf(TEST_NAMES, 'p-live'), reservationKeyOf(TEST_NAMES, 'p-me'), reservationKeyOf(TEST_NAMES, 'p-unknown')].sort(),
     )
     // A reservation is never read as an emergency entry.
-    expect(readEmergencyKeys(storage).map((r) => r.key)).toEqual([emergencyKeyOf('p-dead')])
+    expect(readEmergencyKeys(storage, TEST_NAMES).map((r) => r.key)).toEqual([emergencyKeyOf(TEST_NAMES, 'p-dead')])
   })
 
   it('removes, without Web Locks, the reservation of an earlier page of the runtime this page verifiably claimed', async () => {
     const storage = memoryStorage()
-    storage.setItem(reservationKeyOf('p-crashed'), reservationValue('r-tab', 'ā'.repeat(10)))
-    storage.setItem(reservationKeyOf('p-other-tab'), reservationValue('r-other', 'ā'.repeat(10)))
-    storage.setItem(reservationKeyOf('p-untagged'), 'ā'.repeat(10))
-    const env = { storage, pageInstanceId: 'p-me', isPageGone: async () => false }
+    storage.setItem(reservationKeyOf(TEST_NAMES, 'p-crashed'), reservationValue('r-tab', 'ā'.repeat(10)))
+    storage.setItem(reservationKeyOf(TEST_NAMES, 'p-other-tab'), reservationValue('r-other', 'ā'.repeat(10)))
+    storage.setItem(reservationKeyOf(TEST_NAMES, 'p-untagged'), 'ā'.repeat(10))
+    const env = { storage, names: TEST_NAMES, pageInstanceId: 'p-me', isPageGone: async () => false }
     // An unverified claim proves nothing.
     expect(await releaseDeadReservations({ ...env, verifiedRuntimeId: null })).toEqual([])
-    expect(await releaseDeadReservations({ ...env, verifiedRuntimeId: 'r-tab' })).toEqual([reservationKeyOf('p-crashed')])
-    expect([...storage.map.keys()].sort()).toEqual([reservationKeyOf('p-other-tab'), reservationKeyOf('p-untagged')].sort())
+    expect(await releaseDeadReservations({ ...env, verifiedRuntimeId: 'r-tab' })).toEqual([reservationKeyOf(TEST_NAMES, 'p-crashed')])
+    expect([...storage.map.keys()].sort()).toEqual([reservationKeyOf(TEST_NAMES, 'p-other-tab'), reservationKeyOf(TEST_NAMES, 'p-untagged')].sort())
+  })
+})
+
+describe('browser scopes (#629)', () => {
+  it("never reads, merges or releases another account's keys in the same browser", async () => {
+    const other = recoveryNames('IN-test.LIB-test.U-other')
+    const storage = memoryStorage()
+    writeEmergency(storage, emergencyKeyOf(other, 'p-dead'), payload('p-dead'))
+    storage.setItem(reservationKeyOf(other, 'p-dead'), 'ā'.repeat(10))
+    expect(readEmergencyKeys(storage, TEST_NAMES)).toEqual([])
+    const applied: string[] = []
+    const store = {
+      applyEmergencyEntry: async (p: { pageInstanceId: string }) => {
+        applied.push(p.pageInstanceId)
+        return { status: 'created' } as never
+      },
+    }
+    expect(await mergeEmergencyEntries({ storage, names: TEST_NAMES, store, pageInstanceId: 'p-me', isPageAlive: async () => false })).toEqual([])
+    expect(applied).toEqual([])
+    expect(await releaseDeadReservations({ storage, names: TEST_NAMES, pageInstanceId: 'p-me', isPageGone: async () => true })).toEqual([])
+    expect([...storage.map.keys()].sort()).toEqual([emergencyKeyOf(other, 'p-dead'), reservationKeyOf(other, 'p-dead')].sort())
+    // Its own account still finds them.
+    expect(readEmergencyKeys(storage, other).map((s) => s.pageInstanceId)).toEqual(['p-dead'])
   })
 })

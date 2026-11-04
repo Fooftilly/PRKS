@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { EmergencyStorage } from './emergency'
 import { createEditorRecoveryRuntime, type EditorRecoveryRuntime } from './runtime'
-import { CLOSED_PAGE_KEY_PREFIX, DRAFTS_STORE, EMERGENCY_KEY_PREFIX, RECOVERY_DB_NAME, RUNTIME_SESSION_KEY, UNKNOWN_BASE, reservationKeyOf, type DraftKind } from './schema'
+import { DRAFTS_STORE, UNKNOWN_BASE, reservationKeyOf, type DraftKind } from './schema'
 import type { DraftWriter } from './writer'
-import { createFakeBrowser, memoryStorage } from './test-support/fake-env'
+import { createFakeBrowser, memoryStorage, TEST_NAMES } from './test-support/fake-env'
 import { createFakeIdb, createManualScheduler, settle } from './test-support/fake-idb'
 
 const COPIED = 'r-' + 'c'.repeat(32)
@@ -30,22 +30,22 @@ describe('editor recovery runtime', () => {
       }
       return proxy
     }
-    const original = createEditorRecoveryRuntime({
+    const original = createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: idb.factory },
-      identity: { sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }), locks: null, createChannel: busyChannel, claimWaitMs: 20 },
+      identity: { sessionStorage: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED }), locks: null, createChannel: busyChannel, claimWaitMs: 20 },
       writers: { scheduler: createManualScheduler(), window: null, document: null },
       emergencyStorage: local,
     })
     await original.start()
     const w = original.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE })
     w.edit(1, 'still typing here')
-    const key = reservationKeyOf(original.identity.pageInstanceId)
+    const key = reservationKeyOf(TEST_NAMES, original.identity.pageInstanceId)
     expect(local.map.has(key)).toBe(true)
     busy = true
     // Duplicate tab: the copied id goes unanswered, so it reads as a reload of this tab.
-    const duplicate = createEditorRecoveryRuntime({
+    const duplicate = createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: idb.factory },
-      identity: { sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }), locks: null, createChannel: browser.channelFor('duplicate'), claimWaitMs: 20 },
+      identity: { sessionStorage: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED }), locks: null, createChannel: browser.channelFor('duplicate'), claimWaitMs: 20 },
       writers: { window: null, document: null },
       emergencyStorage: local,
     })
@@ -67,9 +67,9 @@ describe('editor recovery runtime', () => {
     const browser = createFakeBrowser()
     const idb = createFakeIdb()
     const local = memoryStorage()
-    const session = browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED })
+    const session = browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED })
     const load = (name: string) =>
-      createEditorRecoveryRuntime({
+      createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -78,10 +78,10 @@ describe('editor recovery runtime', () => {
     const crashed = load('crashed')
     expect((await crashed.start()).claim).toEqual({ runtimeId: COPIED, verified: 'channel' })
     crashed.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'typed')
-    const leaked = reservationKeyOf(crashed.identity.pageInstanceId)
+    const leaked = reservationKeyOf(TEST_NAMES, crashed.identity.pageInstanceId)
     expect(local.map.has(leaked)).toBe(true)
     // An unrelated tab cannot tell a crash from a freeze, so it leaves the reservation alone.
-    const other = createEditorRecoveryRuntime({
+    const other = createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor('other'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -108,10 +108,10 @@ describe('editor recovery runtime', () => {
     const pages = ['a', 'b'].map((name) => {
       const scheduler = createManualScheduler()
       const locks = browser.locksFor(name)
-      const rt = createEditorRecoveryRuntime({
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: {
-          sessionStorage: browser.sessionStorageWith({ [RUNTIME_SESSION_KEY]: COPIED }),
+          sessionStorage: browser.sessionStorageWith({ [TEST_NAMES.runtimeSessionKey]: COPIED }),
           locks,
           createChannel: browser.channelFor(name),
           claimWaitMs: 20,
@@ -129,8 +129,8 @@ describe('editor recovery runtime', () => {
       return w
     })
     pages.forEach((p) => p.rt.writers.writeEmergencyNow())
-    const keys = [...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))
-    expect(keys.sort()).toEqual(pages.map((p) => EMERGENCY_KEY_PREFIX + p.rt.identity.pageInstanceId).sort())
+    const keys = [...local.map.keys()].filter((k) => k.startsWith(TEST_NAMES.emergencyPrefix))
+    expect(keys.sort()).toEqual(pages.map((p) => TEST_NAMES.emergencyPrefix + p.rt.identity.pageInstanceId).sort())
     const claims = await Promise.all(starts)
     expect(claims[0]!.claim.runtimeId).not.toBe(claims[1]!.claim.runtimeId)
     expect(writers[0]!.draftId()).not.toBe(writers[1]!.draftId())
@@ -141,7 +141,7 @@ describe('editor recovery runtime', () => {
       p.rt.identity.dispose()
     })
     await settle()
-    const next = createEditorRecoveryRuntime({
+    const next = createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: browser.locksFor('next'), createChannel: browser.channelFor('next'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -163,7 +163,7 @@ describe('editor recovery runtime', () => {
     const idb = createFakeIdb()
     const session = browser.sessionStorageWith()
     const make = (name: string) =>
-      createEditorRecoveryRuntime({
+      createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: session, locks: browser.locksFor(name), createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { window: null, document: null },
@@ -192,7 +192,7 @@ describe('editor recovery runtime', () => {
     const local = memoryStorage()
     const make = (name: string) => {
       const locks = browser.locksFor(name)
-      const rt = createEditorRecoveryRuntime({
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: browser.sessionStorageWith(), locks, createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -206,7 +206,7 @@ describe('editor recovery runtime', () => {
     await a.rt.start()
     a.rt.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed later')
     expect(a.rt.writers.writeEmergencyNow()).toBe('written')
-    const key = EMERGENCY_KEY_PREFIX + a.rt.identity.pageInstanceId
+    const key = TEST_NAMES.emergencyPrefix + a.rt.identity.pageInstanceId
 
     // A is still alive: its key is not consumed.
     const [whileAlive, again] = await Promise.all([b.rt.scanEmergency(), b.rt.scanEmergency()])
@@ -230,7 +230,7 @@ describe('editor recovery runtime', () => {
     const idb = createFakeIdb()
     const local = memoryStorage()
     const make = (name: string) =>
-      createEditorRecoveryRuntime({
+      createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -243,14 +243,14 @@ describe('editor recovery runtime', () => {
     void a.start()
     a.writers.openWriter({ kind: 'work-research-note', entityType: 'work', entityId: 'w1', paneId: 'tab-1', base: UNKNOWN_BASE }).edit(1, 'closed while claiming')
     expect(a.writers.writeEmergencyNow()).toBe('written')
-    const key = EMERGENCY_KEY_PREFIX + a.identity.pageInstanceId
+    const key = TEST_NAMES.emergencyPrefix + a.identity.pageInstanceId
     expect(JSON.parse(local.map.get(key)!).runtimeId).toBeNull()
     a.identity.dispose()
     await settle()
     // Silence alone is not proof: the key stays.
     expect(await b.scanEmergency()).toEqual([])
     expect(local.map.has(key)).toBe(true)
-    local.setItem(CLOSED_PAGE_KEY_PREFIX + a.identity.pageInstanceId, '1')
+    local.setItem(TEST_NAMES.closedPagePrefix + a.identity.pageInstanceId, '1')
     const merged = await b.scanEmergency()
     expect(merged.map((m) => [m.key, m.outcomes, m.removed])).toEqual([[key, ['created'], true]])
     const [row] = await b.store.listByEntity('work-research-note', 'w1')
@@ -270,7 +270,7 @@ describe('editor recovery runtime', () => {
       }
     }
     const make = (name: string, win: EventTarget) =>
-      createEditorRecoveryRuntime({
+      createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: session, locks: null, createChannel: browser.channelFor(name), claimWaitMs: 20, localStorage: local, window: win },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -297,7 +297,7 @@ describe('editor recovery runtime', () => {
 
   it('scanEmergency starts the runtime when nothing has yet', async () => {
     const browser = createFakeBrowser()
-    const rt = createEditorRecoveryRuntime({
+    const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: createFakeIdb().factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: browser.locksFor('x'), createChannel: browser.channelFor('x'), claimWaitMs: 20 },
       writers: { window: null, document: null },
@@ -328,7 +328,7 @@ describe('editor recovery runtime', () => {
     }
     const make = (name: string) => {
       const locks = browser.locksFor(name)
-      const rt = createEditorRecoveryRuntime({
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: { sessionStorage: browser.sessionStorageWith(), locks, createChannel: browser.channelFor(name), claimWaitMs: 20 },
         writers: { scheduler: createManualScheduler(), window: null, document: null },
@@ -344,7 +344,7 @@ describe('editor recovery runtime', () => {
     expect(a.rt.writers.writeEmergencyNow()).toBe('written')
     blocked = true
     await w.discard()
-    const key = EMERGENCY_KEY_PREFIX + a.rt.identity.pageInstanceId
+    const key = TEST_NAMES.emergencyPrefix + a.rt.identity.pageInstanceId
     expect(local.map.has(key)).toBe(true)
     a.locks.releaseAll()
     a.rt.identity.dispose()
@@ -365,7 +365,7 @@ describe('editor recovery runtime', () => {
 describe('review actions', () => {
   function runtimeOn(idb: ReturnType<typeof createFakeIdb>, local: EmergencyStorage, name: string) {
     const browser = createFakeBrowser()
-    return createEditorRecoveryRuntime({
+    return createEditorRecoveryRuntime({ names: TEST_NAMES,
       store: { indexedDB: idb.factory },
       identity: { sessionStorage: browser.sessionStorageWith(), locks: null, createChannel: browser.channelFor(name), claimWaitMs: 5, localStorage: local },
       writers: { window: null, document: null },
@@ -388,7 +388,7 @@ describe('review actions', () => {
     const payload = { v: 1, pageInstanceId: 'p-gone', runtimeId: null, at: 1, entries: [
       { draftId, kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1', generation: 1, committedGeneration: 0, body: 'older text', lineage },
     ] }
-    local.setItem(EMERGENCY_KEY_PREFIX + 'p-gone', JSON.stringify(payload))
+    local.setItem(TEST_NAMES.emergencyPrefix + 'p-gone', JSON.stringify(payload))
     const reviewed = { draftId, pageInstanceId: 'p-gone', generation: 2, status: 'active' as const, kind: 'work-research-note' as const, entityType: 'work' as const, entityId: 'w1' }
     // A stale review (older generation) removes nothing.
     expect(await rt.discardReviewed({ ...reviewed, generation: 1 })).toBe('kept')
@@ -473,7 +473,7 @@ describe('cleanupDeletedEntity (#533)', () => {
           close: () => channel.close(),
         }
       }
-      const rt = createEditorRecoveryRuntime({
+      const rt = createEditorRecoveryRuntime({ names: TEST_NAMES,
         store: { indexedDB: idb.factory },
         identity: {
           sessionStorage: browser.sessionStorageWith(),
@@ -567,7 +567,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const crashedPage = (await cleaner.store.get(writer.draftId()!))!.owner.pageInstanceId
     // Keys whose pages never settled a runtime id: no scan of a running page merges them.
     const key = (pageInstanceId: string, entries: unknown[]) =>
-      local.setItem(EMERGENCY_KEY_PREFIX + pageInstanceId, JSON.stringify({ v: 1, pageInstanceId, runtimeId: null, at: 1, entries }))
+      local.setItem(TEST_NAMES.emergencyPrefix + pageInstanceId, JSON.stringify({ v: 1, pageInstanceId, runtimeId: null, at: 1, entries }))
     const entry = (draftId: string, generation: number, committedGeneration: number, body: string, kind: DraftKind, pageInstanceId: string) => ({
       draftId, kind, entityType: 'work', entityId: 'w1', generation, committedGeneration, body,
       lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId, paneId: 'tab-1' }, base: UNKNOWN_BASE },
@@ -588,7 +588,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const { merged } = await next.start()
     expect(merged.flatMap((m) => m.outcomes)).toEqual(['suppressed', 'suppressed'])
     expect(await bodies(next)).toEqual([])
-    expect([...local.map.keys()].filter((k) => k.startsWith(EMERGENCY_KEY_PREFIX))).toEqual([])
+    expect([...local.map.keys()].filter((k) => k.startsWith(TEST_NAMES.emergencyPrefix))).toEqual([])
     // With the keys gone, so are the tombstones.
     expect(await next.store.listAll()).toEqual([])
   })
@@ -597,11 +597,11 @@ describe('cleanupDeletedEntity (#533)', () => {
     const { page, local } = setup()
     const cleaner = page('cleaner').rt
     await cleaner.start()
-    const key = EMERGENCY_KEY_PREFIX + 'p-newer'
+    const key = TEST_NAMES.emergencyPrefix + 'p-newer'
     const newer = JSON.stringify({ v: 99, pageInstanceId: 'p-newer', entries: [] })
     local.setItem(key, newer)
     // Malformed: no bundle can ever merge it, so it names nothing, and it is left in place too.
-    const broken = EMERGENCY_KEY_PREFIX + 'p-broken'
+    const broken = TEST_NAMES.emergencyPrefix + 'p-broken'
     local.setItem(broken, '{"v": 1, "entr')
     expect(await cleaner.cleanupDeletedEntity(W1, KINDS)).toEqual({ removed: [], live: [], unknown: [], changed: [], unsupported: [key], suppressed: [] })
     expect(local.getItem(key)).toBe(newer)
@@ -617,7 +617,7 @@ describe('cleanupDeletedEntity (#533)', () => {
       draftId: 'd-lost', kind: 'work-research-note' as DraftKind, entityType: 'work' as const, entityId: 'w1', generation: 1, committedGeneration: 0, body: 'only in localStorage',
       lineage: { createdAt: 1, owner: { runtimeId: null, pageInstanceId: 'p-lost', paneId: 'tab-1' }, base: UNKNOWN_BASE },
     }
-    local.setItem(EMERGENCY_KEY_PREFIX + 'p-lost', JSON.stringify({ ...payload, entries: [lost] }))
+    local.setItem(TEST_NAMES.emergencyPrefix + 'p-lost', JSON.stringify({ ...payload, entries: [lost] }))
     const tombstone = cleaner.store.tombstoneIfAbsent
     cleaner.store.tombstoneIfAbsent = async (...args) => {
       // Another tab merges the key between this cleanup's listing and its tombstone.
@@ -667,7 +667,7 @@ describe('cleanupDeletedEntity (#533)', () => {
     const [record] = await cleaner.store.listAll()
     // A newer PRKS rewrote it with a schema this code does not know.
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const req = idb.factory.open(RECOVERY_DB_NAME, 1)
+      const req = idb.factory.open(TEST_NAMES.dbName, 1)
       req.onsuccess = () => resolve(req.result)
     })
     await new Promise<void>((resolve) => {

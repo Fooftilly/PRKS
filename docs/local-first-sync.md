@@ -133,8 +133,9 @@ coordinator names no family: adding one is a registration.
 - Clear offline cache never touches durable operations. Without a cached Work
   base, PRKS shows unavailable rather than inventing a complete Work. Pending
   changes remain in Settings → Diagnostics and synchronize when possible.
-- `prks-editor-recovery-v1` (#466) is browser-local editor draft recovery,
-  a separate database and a distinct layer: not server state, not the
+- `prks-editor-recovery-v2:<scope>` (#466) is browser-local editor draft recovery,
+  a separate database per signed-in scope (#629, every recovery name carries
+  the scope key; without a scope nothing is stored) and a distinct layer: not server state, not the
   operation queue, not a cache. `frontend/js/editor-recovery.js` (built from
   `frontend-app/src/lifecycle/editor-recovery/`) writes metadata and body in
   one transaction with relaxed durability where supported (a plain readwrite
@@ -150,7 +151,7 @@ coordinator names no family: adding one is a registration.
   conflicts); its acknowledgement or a never-sent creation folding away,
   both seen by this device, removes both note kinds for that Work (#533).
   The Work stays marked in localStorage (one key per Work,
-  `prks.workRecoveryCleanup.v1.<workId>`, so tabs never overwrite each
+  `prks.workRecoveryCleanup.v2.<scope>.<workId>`, so tabs never overwrite each
   other's marks) until a later load's retry finds nothing of it left,
   readable or not (a record or emergency key of a newer schema, or a key
   whose read failed or whose only unreadable entries are of a draft kind a
@@ -228,7 +229,7 @@ coordinator names no family: adding one is a registration.
   When the server acknowledges text recovery storage never took, the older
   stored generation is superseded and removed; if storage refuses that
   removal, it is recorded in `localStorage`
-  (one `prks.editorRecovery.superseded.v1.<draftId>` key per draft, so tabs
+  (one `prks.editorRecovery.superseded.v2.<scope>.<draftId>` key per draft, so tabs
   never overwrite each other's marks), never adopted or restored by this
   or any other page (an already open tab reads the record again before it
   adopts), and removed once storage accepts it. If `localStorage` refuses

@@ -13,15 +13,15 @@ import { mayHoldUnreadable, mergeEmergencyEntries, readEmergencyKeys, releaseDea
 import { createPageIdentity, type IdentityEnv, type PageIdentity, type RuntimeClaim } from './identity'
 import { classifyLineage, isAdoptable, type LineageClass } from './lineage'
 import {
-  RESERVATION_KEY_PREFIX,
   entityKeyOf,
   isSupportedRecord,
   type DraftEntityType,
   type DraftKind,
   type DraftOwner,
   type DraftRecord,
+  type RecoveryNames,
 } from './schema'
-import { createRecoveryStore, forkedDraftId, type AdoptOutcome, type DeleteOutcome, type RecoveryStore, type RecoveryStoreOptions } from './store'
+import { createRecoveryStore, forkedDraftId, RecoveryStoreError, type AdoptOutcome, type DeleteOutcome, type RecoveryStore, type RecoveryStoreOptions } from './store'
 import { createWriterRegistry, type WriterEvent, type WriterRegistry, type WriterRegistryOptions } from './writer'
 
 /** What a reviewer saw of one record; an action on it applies only while it still holds. */
@@ -56,13 +56,30 @@ export interface EntityCleanupReport {
 }
 
 export interface EditorRecoveryRuntimeOptions {
-  store?: RecoveryStoreOptions
-  identity?: IdentityEnv
+  /**
+   * The signed-in browser scope's names (`recoveryNames(scopeKey)`). Required:
+   * a page without a confirmed scope has no recovery runtime at all.
+   */
+  names: RecoveryNames
+  store?: Omit<RecoveryStoreOptions, 'name'>
+  identity?: Omit<IdentityEnv, 'names'>
   writers?: Omit<WriterRegistryOptions, 'store' | 'identity'>
   emergencyStorage?: EmergencyStorage | null
+  /** How long `retire()` waits before reporting writes still pending. Default 10 s. */
+  retireWaitMs?: number
 }
 
+/**
+ * How a retirement ended: `closed` once every text typed before it is in this
+ * scope's database and the database is closed; `pending` when some write had
+ * not committed in time. A pending retirement keeps those writers, their
+ * retries and the leave guard until the text commits, then closes.
+ */
+export type RetireOutcome = 'closed' | 'pending'
+
 export interface EditorRecoveryRuntime {
+  /** The browser scope whose recovery storage this runtime reads and writes. */
+  readonly names: RecoveryNames
   readonly store: RecoveryStore
   readonly identity: PageIdentity
   readonly writers: WriterRegistry
@@ -104,6 +121,28 @@ export interface EditorRecoveryRuntime {
   cleanupDeletedEntity(entity: { entityType: DraftEntityType; entityId: string }, kinds: readonly DraftKind[]): Promise<EntityCleanupReport>
   /** Writer protection events (`unprotected`, `protected`, `ownership-lost`) for this page. */
   onWriterEvent(listener: (event: WriterEvent) => void): () => void
+  /**
+   * This runtime's view of localStorage: every recovery key it and its
+   * diagnostics read or write goes through it, and it refuses every access
+   * once the runtime is retired.
+   */
+  readonly emergencyStorage: EmergencyStorage | null
+  /**
+   * The browser scope was signed out or replaced (#629). At once, `store`,
+   * `emergencyStorage` and every method of this runtime refuse, also through
+   * handles taken before, and a read already in flight is refused when it
+   * completes. Text typed before stays this account's: the writers take no
+   * new edit, write the pending text once more to this scope's emergency
+   * key and finish every pending write to this scope's database (a body too
+   * large for the emergency key included); then they, the listeners, the
+   * channel and the locks stop and the database closes for good. Nothing
+   * stored is removed, and a write that does not commit is never dropped:
+   * its writer keeps retrying and keeps the leave guard until it does.
+   * Idempotent; resolves `closed`, or `pending` after `retireWaitMs` while a
+   * write is still uncommitted.
+   */
+  retire(): Promise<RetireOutcome>
+  isRetired(): boolean
   dispose(): void
 }
 
@@ -111,18 +150,31 @@ function keptFor(lineage: LineageClass, report: EntityCleanupReport): string[] {
   return lineage === 'unknown' ? report.unknown : report.live
 }
 
-export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions = {}): EditorRecoveryRuntime {
-  const store = createRecoveryStore(options.store)
-  const identity = createPageIdentity(options.identity)
-  const emergencyStorage =
+export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOptions): EditorRecoveryRuntime {
+  const names = options.names
+  if (!names) throw new Error('recovery storage needs a signed-in scope')
+  const rawStore = createRecoveryStore({ ...options.store, name: names.dbName })
+  // What everything but the writers uses: refused from the moment of retirement.
+  const store = retirableStore(rawStore, () => retired)
+  const identity = createPageIdentity({ ...options.identity, names })
+  /** Retired: nothing outside the writers' last writes reads or writes this scope. */
+  let retired = false
+  /** The writers' last writes are done: nothing reads or writes this scope. */
+  let closed = false
+  let retiring: Promise<RetireOutcome> | null = null
+  const rawEmergencyStorage =
     options.emergencyStorage !== undefined ? options.emergencyStorage : (options.writers?.emergencyStorage ?? defaultLocalStorage())
+  const emergencyStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => retired) : null
+  const writerStorage = rawEmergencyStorage ? retirableStorage(rawEmergencyStorage, () => closed) : null
   const writerListeners = new Set<(event: WriterEvent) => void>()
   const ownEvent = options.writers?.onEvent
   const writers = createWriterRegistry({
     ...options.writers,
-    store,
+    // The writers finish the text typed before a retirement, so they keep the
+    // store until then; they take no new edit once it begins.
+    store: rawStore,
     identity,
-    emergencyStorage,
+    emergencyStorage: writerStorage,
     onEvent(event) {
       if (ownEvent) ownEvent(event)
       for (const listener of [...writerListeners]) {
@@ -148,6 +200,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     if (!emergencyStorage) return []
     const env = {
       storage: emergencyStorage,
+      names,
       store,
       pageInstanceId: identity.pageInstanceId,
       isPageAlive: (id: string) => identity.isPageAlive(id),
@@ -164,7 +217,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
       verifiedRuntimeId: !definiteOnly && claim && claim.verified !== 'unverified' ? claim.runtimeId : null,
     })
     // A page taken for gone that is only busy or frozen writes it again.
-    for (const key of removed) identity.announceReservationRemoved(key.slice(RESERVATION_KEY_PREFIX.length))
+    for (const key of removed) identity.announceReservationRemoved(key.slice(names.reservationPrefix.length))
     return reports
   }
 
@@ -185,7 +238,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
 
   function discardReviewed(reviewed: ReviewedRecord & Pick<DraftRecord, 'kind' | 'entityType' | 'entityId'>): Promise<DeleteOutcome> {
     const expected = { pageInstanceId: reviewed.pageInstanceId, generation: reviewed.generation, status: reviewed.status }
-    const listing = emergencyStorage ? listingPage(emergencyStorage, reviewed.draftId) : null
+    const listing = emergencyStorage ? listingPage(emergencyStorage, names, reviewed.draftId) : null
     const tombstone = listing
       ? { kind: reviewed.kind, entityType: reviewed.entityType, entityId: reviewed.entityId, generation: reviewed.generation, pageInstanceId: listing }
       : undefined
@@ -201,7 +254,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     report: EntityCleanupReport,
   ): Promise<void> {
     if (!emergencyStorage) return
-    for (const stored of readEmergencyKeys(emergencyStorage)) {
+    for (const stored of readEmergencyKeys(emergencyStorage, names)) {
       const payload = stored.payload
       if (!payload) {
         // A key a later read or a newer bundle may still recover could hold this entity: left alone and reported.
@@ -276,6 +329,7 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
   }
 
   return {
+    names,
     store,
     identity,
     writers,
@@ -296,29 +350,117 @@ export function createEditorRecoveryRuntime(options: EditorRecoveryRuntimeOption
     discardReviewed,
     cleanupDeletedEntity,
     onWriterEvent(listener) {
+      if (retired) return () => undefined
       writerListeners.add(listener)
       return () => {
         writerListeners.delete(listener)
       }
     },
+    emergencyStorage,
+    retire() {
+      if (retiring) return retiring
+      retired = true
+      writerListeners.clear()
+      // Only once every text typed before is committed: until then the
+      // writers keep their retries, the leave guard and this page's identity.
+      const closing = writers.retire().then(() => {
+        writers.dispose()
+        identity.dispose()
+        closed = true
+        rawStore.retire()
+      })
+      retiring = settledWithin(closing, options.retireWaitMs ?? RETIRE_WAIT_MS)
+      return retiring
+    },
+    isRetired: () => retired,
     dispose() {
       writerListeners.clear()
       writers.dispose()
       identity.dispose()
-      store.close()
+      rawStore.close()
     },
   }
 }
 
 /** The page whose emergency key still lists `draftId` (or its fork), if any. */
-function listingPage(storage: EmergencyStorage, draftId: string): string | null {
-  for (const stored of readEmergencyKeys(storage)) {
+function listingPage(storage: EmergencyStorage, names: RecoveryNames, draftId: string): string | null {
+  for (const stored of readEmergencyKeys(storage, names)) {
     const entries = stored.payload ? stored.payload.entries : []
     if (entries.some((entry) => entry.draftId === draftId || forkedDraftId(entry.draftId, entry.generation) === draftId)) {
       return stored.pageInstanceId
     }
   }
   return null
+}
+
+/** How long a retirement waits for the writers' last writes before reporting them pending. */
+const RETIRE_WAIT_MS = 10000
+
+function settledWithin(work: Promise<void>, ms: number): Promise<RetireOutcome> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('pending'), ms)
+    void work.then(() => {
+      clearTimeout(timer)
+      resolve('closed')
+    })
+  })
+}
+
+function retiredError(): RecoveryStoreError {
+  return new RecoveryStoreError('retired', 'This account is signed out of recovery storage.')
+}
+
+/**
+ * `store`, refusing every operation once `isRetired()` holds, and refusing
+ * the result of one that was in flight then: nothing read before a
+ * retirement is handed out after it.
+ */
+function retirableStore(store: RecoveryStore, isRetired: () => boolean): RecoveryStore {
+  function guard<A extends unknown[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+    return (...args: A) => {
+      if (isRetired()) return Promise.reject(retiredError())
+      return fn(...args).then((value) => {
+        if (isRetired()) throw retiredError()
+        return value
+      })
+    }
+  }
+  return {
+    writeGeneration: guard(store.writeGeneration),
+    updateLineage: guard(store.updateLineage),
+    adopt: guard(store.adopt),
+    get: guard(store.get),
+    getBody: guard(store.getBody),
+    listByEntity: guard(store.listByEntity),
+    listAll: guard(store.listAll),
+    deleteIfAcknowledged: guard(store.deleteIfAcknowledged),
+    deleteIfEqual: guard(store.deleteIfEqual),
+    discard: guard(store.discard),
+    clearTombstone: guard(store.clearTombstone),
+    tombstoneIfAbsent: guard(store.tombstoneIfAbsent),
+    applyEmergencyEntry: guard(store.applyEmergencyEntry),
+    lastDurability: () => store.lastDurability(),
+    close: () => store.close(),
+    retire: () => store.retire(),
+    isRetired: () => isRetired() || store.isRetired(),
+  }
+}
+
+/** `storage`, refusing every access once `isRetired()` holds. */
+function retirableStorage(storage: EmergencyStorage, isRetired: () => boolean): EmergencyStorage {
+  function guard(): EmergencyStorage {
+    if (isRetired()) throw new Error('This account is signed out of recovery storage.')
+    return storage
+  }
+  return {
+    get length() {
+      return guard().length
+    },
+    key: (index: number) => guard().key(index),
+    getItem: (key: string) => guard().getItem(key),
+    setItem: (key: string, value: string) => guard().setItem(key, value),
+    removeItem: (key: string) => guard().removeItem(key),
+  }
 }
 
 function defaultLocalStorage(): EmergencyStorage | null {
