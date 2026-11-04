@@ -20,7 +20,9 @@
  *
  * The session read goes through the request coordinator and is bounded:
  * past `sessionTimeoutMs` it counts as unreachable, and its late answer is
- * dropped unread, so it can never record over a newer one.
+ * dropped unread, so it can never record over a newer one. Answers are
+ * ordered by when their read began, across tabs: an answer that a later read
+ * outranks is neither recorded nor acted on, and the page reads again.
  *
  * The page's scope is fixed once resolved. `verify()` re-reads the session:
  *   - 'same'         the session is still this scope.
@@ -66,6 +68,9 @@
     const CHANNEL_NAME = 'prks-browser-scope';
     const BIND_MESSAGE = 'prks-scope-bind';
     const UNREACHABLE_STATUSES = [502, 503, 504];
+    // Reads in a row that a newer read (in any tab) outranked before the page
+    // gives up for now: it binds nothing, or a verify reports 'unreachable'.
+    const MAX_SESSION_READS = 3;
     // A scope id is the server's identifier; these characters keep it safe in
     // a database and cache name.
     const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -192,11 +197,16 @@
             },
             /**
              * Records a confirmed session of `scope` read from `startedAt`.
-             * Resolves false, writing nothing, when that scope was signed out
-             * at or after the read began (in any tab): the answer predates the
-             * sign-out and must not bring the scope back. A record confirmed
-             * by a read that began later (in any tab) is kept as it is. One
-             * readwrite transaction, so the checks and the write cannot
+             * Resolves with the outcome:
+             *   'logged_out'  that scope was signed out at or after the read
+             *                 began (in any tab): the answer predates the
+             *                 sign-out, so nothing is written.
+             *   'stale'       a read that began later (in any tab) confirmed
+             *                 another scope: that newer session outranks this
+             *                 answer, which is not written.
+             *   'written'     recorded (or a later read already confirmed the
+             *                 same scope).
+             * One readwrite transaction, so the checks and the write cannot
              * interleave with another tab's change.
              */
             write: function (scope, startedAt) {
@@ -206,7 +216,7 @@
                     marker.onsuccess = function () {
                         const out = marker.result;
                         if (out && out.scopeKey === scope.key && !(began > (Number(out.at) || 0))) {
-                            done(false);
+                            done('logged_out');
                             return;
                         }
                         const current = store.get(POINTER_KEY);
@@ -216,7 +226,7 @@
                                 store.delete(LOGOUT_KEY);
                             }
                             if (confirmedAt(current.result) > began) {
-                                done(true);
+                                done(sameScope(scopeFromRecord(current.result), scope) ? 'written' : 'stale');
                                 return;
                             }
                             store.put({
@@ -224,22 +234,28 @@
                                 scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
                                 confirmedAt: began,
                             });
-                            done(true);
+                            done('written');
                         };
                     };
                 });
             },
             /**
-             * A refusal read from `startedAt` forgets the record, unless a read
-             * that began later (in any tab) confirmed it: that newer session
-             * outranks this older answer.
+             * A refusal read from `startedAt` forgets the record and resolves
+             * 'written', unless a read that began later (in any tab) confirmed
+             * a session: that newer session outranks this older answer, which
+             * resolves 'stale' and changes nothing.
              */
             forget: function (startedAt) {
                 const began = Number(startedAt) || 0;
-                return withStore('readwrite', function (store) {
+                return withStore('readwrite', function (store, done) {
                     const current = store.get(POINTER_KEY);
                     current.onsuccess = function () {
-                        if (current.result && !(confirmedAt(current.result) > began)) store.delete(POINTER_KEY);
+                        if (current.result && confirmedAt(current.result) > began) {
+                            done('stale');
+                            return;
+                        }
+                        if (current.result) store.delete(POINTER_KEY);
+                        done('written');
                     };
                 });
             },
@@ -307,10 +323,14 @@
         }
 
         /**
-         * One bounded session read, recorded: { kind: 'session'|'none'|'unreachable', scope }.
+         * One bounded session read, recorded: { kind: 'session'|'none'|'unreachable'|'superseded', scope }.
          * Past the deadline it is unreachable; its late answer is dropped.
+         * An answer that a read begun later (in this tab or another) outranks
+         * is never acted on: the page reads again, and after
+         * MAX_SESSION_READS such answers it is 'superseded' (no scope).
          */
-        function readSession() {
+        function readSession(attempt) {
+            const tries = (Number(attempt) || 0) + 1;
             const seq = ++readSeq;
             const controller = typeof AbortController === 'function' ? new AbortController() : null;
             let expired = false;
@@ -326,11 +346,18 @@
             const read = fetchAnswer(controller).then(function (answer) {
                 if (expired) return null;
                 clearTimeout(timer);
-                if (seq < recordedSeq) return answer;
+                // A newer read (in this tab or another) outranks this answer:
+                // read again rather than act on a superseded session.
+                const superseded = function () {
+                    return tries < MAX_SESSION_READS ? readSession(tries) : { kind: 'superseded', scope: null };
+                };
+                if (seq < recordedSeq) return superseded();
                 recordedSeq = seq;
-                return record(answer, startedAt).then(function (kept) {
+                return record(answer, startedAt).then(function (outcome) {
                     // Answered before a sign-out of that scope: the session is over.
-                    return kept === false ? { kind: 'none', scope: null } : answer;
+                    if (outcome === 'logged_out') return { kind: 'none', scope: null };
+                    if (outcome === 'stale') return superseded();
+                    return answer;
                 });
             });
             return Promise.race([read, deadline]).then(function (answer) {
@@ -363,17 +390,14 @@
                 });
         }
 
-        /** Resolves false only when the answer predates a sign-out of its scope. */
+        /** Resolves 'written', 'stale' or 'logged_out' (see `pointer.write`). */
         function record(answer, startedAt) {
             // The record follows the server's answer; a failed write only costs
             // an offline reload, never a wrong scope.
-            if (answer.kind === 'session') {
-                return pointer.write(answer.scope, startedAt).then(function (kept) {
-                    return kept !== false;
-                }, function () { return true; });
-            }
-            if (answer.kind === 'none') return pointer.forget(startedAt).then(function () { return true; }, function () { return true; });
-            return Promise.resolve(true);
+            const written = function () { return 'written'; };
+            if (answer.kind === 'session') return pointer.write(answer.scope, startedAt).catch(written);
+            if (answer.kind === 'none') return pointer.forget(startedAt).catch(written);
+            return Promise.resolve('written');
         }
 
         /** The page's scope, or null. Resolved once per page. */
@@ -400,7 +424,8 @@
                 if (!scope) return 'unbound';
                 return readSession().then(function (answer) {
                     if (retired) return retiredReason;
-                    if (answer.kind === 'unreachable') return 'unreachable';
+                    // No answer that outranks every other read: try again later.
+                    if (answer.kind === 'unreachable' || answer.kind === 'superseded') return 'unreachable';
                     if (answer.kind === 'none') {
                         // Expired, or signed out on purpose? Only an explicit
                         // sign-out of this scope retires the page.

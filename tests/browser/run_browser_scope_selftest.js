@@ -247,8 +247,11 @@ async function testSignOut() {
             return { release, answer: (body, code) => () => gate.then(() => json(body, code)) };
         };
         const late401 = deferred();
+        // The browser's one session cookie: after B signs in, a new read in
+        // this tab answers B too.
         const expired = scopeApi.createPrksBrowserScope({
-            indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_A), late401.answer({ error: 'not_authenticated' }, 401)]),
+            indexedDB: idb4, now,
+            fetchImpl: fetchFor([ok(SESSION_A), late401.answer({ error: 'not_authenticated' }, 401), ok(SESSION_B)]),
         });
         await expired.resolve();
         clock = 2000;
@@ -259,7 +262,9 @@ async function testSignOut() {
         await tabB.resolve(); // B signs in and is confirmed by a later read
         clock = 4000;
         late401.release();
-        record('the older refusal still holds its own page', (await pendingA) === 'signed_out');
+        const verdictA = await pendingA;
+        record('the older refusal is not acted on: the page reads again and sees the new account',
+            verdictA === 'changed' && expired.isRetired(), verdictA);
         record("an older refusal does not forget another account's newer record",
             (await sw.readScopeState(idb4)).pointerKey === KEY_B);
         const reloadB = scopeApi.createPrksBrowserScope({ indexedDB: idb4, now, fetchImpl: fetchFor([offline()]) });
@@ -268,7 +273,7 @@ async function testSignOut() {
 
         const late200 = deferred();
         const old = scopeApi.createPrksBrowserScope({
-            indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_B), late200.answer(SESSION_A, 200)]),
+            indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_B), late200.answer(SESSION_A, 200), ok(SESSION_B)]),
         });
         clock = 5000;
         await old.resolve();
@@ -279,9 +284,61 @@ async function testSignOut() {
         const tabB2 = scopeApi.createPrksBrowserScope({ indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_B)]) });
         await tabB2.resolve();
         late200.release();
-        await pendingOld;
+        const verdictOld = await pendingOld;
         record("an older confirmation does not replace a newer account's record",
             (await sw.readScopeState(idb4)).pointerKey === KEY_B);
+        record('an older confirmation is not acted on: the page reads again',
+            verdictOld === 'same' && !old.isRetired(), verdictOld);
+    }
+
+    // A page's first read, answered for A but delivered after another tab
+    // confirmed B, never binds A.
+    {
+        const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
+        const idb5 = createFakeIndexedDBFactory();
+        let clock = 1000;
+        const now = () => clock;
+        let releaseA;
+        const gate = new Promise((r) => { releaseA = r; });
+        const bindings = [];
+        const firstA = scopeApi.createPrksBrowserScope({
+            indexedDB: idb5, now,
+            fetchImpl: fetchFor([() => gate.then(() => json(SESSION_A, 200)), ok(SESSION_B)]),
+            serviceWorker: { controller: { postMessage: (m) => bindings.push(m && m.key) }, addEventListener() {} },
+        });
+        const resolving = firstA.resolve(); // its read begins at 1000
+        await new Promise((r) => setImmediate(r));
+        clock = 2000;
+        const tabB = scopeApi.createPrksBrowserScope({ indexedDB: idb5, now, fetchImpl: fetchFor([ok(SESSION_B)]) });
+        await tabB.resolve();
+        clock = 3000;
+        releaseA();
+        const bound = await resolving;
+        record("a superseded first answer does not bind the older account",
+            !!bound && bound.key === KEY_B, bound && bound.key);
+        record("the page opens the newer account's stores, never the older one's",
+            (await firstA.dbName('local')) === 'prks-local-v2:' + KEY_B && bindings.indexOf(KEY_A) === -1,
+            JSON.stringify(bindings));
+        record("the newer account's record survives", (await sw.readScopeState(idb5)).pointerKey === KEY_B);
+
+        // Every answer outranked by a newer read: the page binds nothing.
+        let n = 0;
+        const always = scopeApi.createPrksBrowserScope({
+            indexedDB: idb5, now,
+            fetchImpl: () => {
+                const began = clock;
+                return (async () => {
+                    clock = began + 10;
+                    const other = scopeApi.createPrksBrowserScope({ indexedDB: idb5, now, fetchImpl: fetchFor([ok(SESSION_B)]) });
+                    await other.resolve();
+                    n += 1;
+                    return json(SESSION_A, 200);
+                })();
+            },
+        });
+        clock = 4000;
+        const none = await always.resolve();
+        record('an answer outranked on every read binds nothing', none === null && n === 3, String(n));
     }
 }
 

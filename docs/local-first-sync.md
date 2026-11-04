@@ -113,7 +113,10 @@ coordinator names no family: adding one is a registration.
   clears the record; only a session confirmed by a later read does. Every
   change to the last confirmed scope is ordered the same way: a refusal or
   a confirmation from a read that began earlier (in any tab) never undoes a
-  newer confirmation of any account.
+  newer confirmation of any account, and the page that read it never acts
+  on it: it binds no scope from it and retires nothing over it, but reads
+  the session again (after three outranked answers in a row it binds
+  nothing, or the check counts as unreachable).
   Another account signed in: the page retires. A retired
   page's stores close and refuse reads and writes, the runtime holds for the
   life of the page, nothing is deleted, and a reload binds whoever is signed

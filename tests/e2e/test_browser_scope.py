@@ -98,9 +98,11 @@ class BrowserScopeTests(unittest.TestCase):
         """The session ends without this browser signing out (as on expiry)."""
         self.context.clear_cookies()
 
-    def open_page(self):
+    def open_page(self, before_load=None):
         page = self.context.new_page()
         PageCollector(page, self.server.origin)
+        if before_load:
+            before_load(page)
         page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
         page.wait_for_selector(".prks-folder-library")
         return page
@@ -175,12 +177,20 @@ class BrowserScopeTests(unittest.TestCase):
         self.assertNotIn("prks-offline-v1", names)
         page.close()
 
-        # The owner signs in again: only the owner's row is there, and it is delivered.
+        # The owner signs in again: only the owner's row is there, and it is
+        # delivered. Sends are held from the first load; a held send marks the
+        # row in flight until its 503 returns it to pending, so wait for that.
         self.sign_in(OWNER_LOGIN)
-        page = self.open_page()
-        ops = page.evaluate(_OPS)
-        self.assertEqual([r["op_id"] for r in ops], [owner_op])
-        self.assertEqual(ops[0]["status"], "pending")
+        page = self.open_page(before_load=self.hold_sync)
+        self.assertEqual([r["op_id"] for r in page.evaluate(_OPS)], [owner_op])
+        wait_for_async(
+            page,
+            "async (id) => { const rows = await prksSync.store.listOperations();"
+            " return rows.length === 1 && rows[0].op_id === id && rows[0].status === 'pending'; }",
+            arg=owner_op,
+            message="the owner's row did not wait as pending",
+        )
+        self.release_sync(page)
         self.wait_delivered(page)
         page.close()
 
@@ -313,8 +323,19 @@ class BrowserScopeTests(unittest.TestCase):
         self.expire_session()
         # The stale tab's session read is refused, but the refusal reaches the
         # page only after another account has signed in and been confirmed.
+        # Only that first read is held; the page's next read goes through.
+        # A read the page began before the session ended still carries the
+        # old cookie (a 200); only the refused read is held.
         held = []
-        stale.route("**/api/session", lambda route: held.append((route, route.fetch())))
+
+        def hold_first(route):
+            response = route.fetch()
+            if held or response.status != 401:
+                route.fulfill(response=response)
+                return
+            held.append((route, response))
+
+        stale.route("**/api/session", hold_first)
         stale.evaluate("() => { window.__verdict = prksBrowserScope.verify(); }")
         deadline = time.time() + 10
         while time.time() < deadline and not held:
@@ -327,10 +348,12 @@ class BrowserScopeTests(unittest.TestCase):
         reader = self.open_page()
         self.assertEqual(self.scope_user(reader), reader_id)
 
-        route, response = held.pop()
+        route, response = held[0]
         route.fulfill(response=response)
+        # The older refusal is not acted on: the page reads again and finds
+        # the reader's session.
+        self.assertEqual(stale.evaluate("() => window.__verdict"), "changed")
         stale.unroute("**/api/session")
-        self.assertEqual(stale.evaluate("() => window.__verdict"), "signed_out")
 
         # The reader's record survives, so an offline reload still binds it.
         self.assertEqual(
@@ -344,6 +367,45 @@ class BrowserScopeTests(unittest.TestCase):
             reader_id,
             "an older refusal must not forget a newer account's last confirmed scope",
         )
+
+    def test_a_superseded_first_answer_never_binds_the_older_account(self):
+        owner_id = self.server.library.accounts[OWNER_LOGIN]
+        reader_id = self.server.library.accounts[READER]
+        self.sign_in(OWNER_LOGIN)
+        late = self.open_page()
+        # A page's first session read is answered for the owner, but the
+        # answer reaches it only after another tab confirmed the reader.
+        late.evaluate(
+            """() => {
+                let release;
+                const gate = new Promise((r) => { release = r; });
+                window.__releaseSession = release;
+                window.__sessionAnswered = false;
+                const fetchImpl = (url, init) => fetch(url, init).then((response) => {
+                    if (url !== '/api/session' || window.__sessionAnswered) return response;
+                    window.__sessionAnswered = true;
+                    return gate.then(() => response);
+                });
+                window.__lateScope = createPrksBrowserScope({ fetchImpl });
+                window.__lateBound = window.__lateScope.resolve();
+            }"""
+        )
+        wait_for_async(late, "() => window.__sessionAnswered === true", timeout=10000)
+
+        self.sign_in(READER)
+        reader = self.open_page()
+        self.assertEqual(self.scope_user(reader), reader_id)
+
+        late.evaluate("() => window.__releaseSession()")
+        bound = late.evaluate(
+            """async () => {
+                const scope = await window.__lateBound;
+                return { user: scope && scope.userId, db: await window.__lateScope.dbName('local') };
+            }"""
+        )
+        self.assertEqual(bound["user"], reader_id, "a superseded answer must not bind the older account")
+        self.assertNotIn(owner_id, bound["db"] or "", "the page must not open the older account's store")
+        self.assertEqual(self.scope_user(reader), reader_id)
 
     def test_another_account_signing_in_retires_the_open_page(self):
         reader_id = self.server.library.accounts[READER]
