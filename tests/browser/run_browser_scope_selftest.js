@@ -748,45 +748,6 @@ async function testWorker() {
     record('no record and no binding: no cache',
         sw.selectPdfCacheName({ pointerKey: null, pointerEpoch: null, bindings: new Map() }, 'x', new Set(), false) === null);
 
-    // Library epoch (#629, §10.4): each epoch has its own cache.
-    {
-        const epochs = new Map([
-            ['tab-old-lib', { key: KEY_B, epoch: '1', retired: false }],
-            ['tab-new-lib', { key: KEY_B, epoch: '2', retired: false }],
-            ['tab-no-epoch', { key: KEY_B, epoch: null, retired: false }],
-        ]);
-        const restored = { pointerKey: KEY_B, pointerEpoch: '2', bindings: epochs };
-        const all = new Set(['tab-old-lib', 'tab-new-lib', 'tab-no-epoch']);
-        record('a page of the restored Library gets its epoch\'s cache',
-            sw.selectPdfCacheName(restored, 'tab-new-lib', all, false) === 'prks-pdf-v3:' + KEY_B + ':2');
-        record('a page of the earlier Library keeps its own, never the newer one',
-            sw.selectPdfCacheName(restored, 'tab-old-lib', all, false) === nameB);
-        record('a page bound without an epoch gets no cache', sw.selectPdfCacheName(restored, 'tab-no-epoch', all, false) === null);
-        record('a worker gets no cache while live pages are on different epochs',
-            sw.selectPdfCacheName(restored, 'worker-1', new Set(['tab-old-lib', 'tab-new-lib']), false) === null);
-        record('a worker borrows the confirmed epoch when every page is on it',
-            sw.selectPdfCacheName(restored, 'worker-1', new Set(['tab-new-lib']), false) === 'prks-pdf-v3:' + KEY_B + ':2');
-        record('a record without an epoch lends no cache',
-            sw.selectPdfCacheName({ pointerKey: KEY_B, pointerEpoch: null, bindings: new Map() }, 'worker-1', new Set(['tab-new-lib']), false) === null);
-        const names = ['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9', 'prks-pdf-v3:' + KEY_B + ':10',
-            'prks-pdf-v3:' + KEY_B + ':11', 'prks-pdf-v3:' + KEY_A + ':1', 'prks-static-x', 'prks-pdf-v3:' + KEY_B + ':x'];
-        record('the caches of earlier epochs of that scope are the ones dropped',
-            JSON.stringify(sw.olderEpochPdfCaches(names, KEY_B, '10'))
-                === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9']));
-        const deleted = [];
-        await sw.dropOlderEpochPdfCaches({ keys: async () => names, delete: async (n) => { deleted.push(n); return true; } }, KEY_B, '2');
-        record('a newer binding deletes them', JSON.stringify(deleted) === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1']));
-        record('an invalid epoch drops nothing', sw.olderEpochPdfCaches(names, KEY_B, 'x').length === 0);
-        record('the session names the cache of its scope and epoch',
-            sw.sessionPdfCacheName(SESSION_A) === name
-            && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 2 }) }))
-                === 'prks-pdf-v3:' + KEY_A + ':2'
-            && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: undefined }) })) === null);
-        record('the per-scope caches of builds without an epoch are retired',
-            sw.shouldRetireCache('prks-pdf-v2:' + KEY_A) && sw.shouldRetireCache('prks-pdf-v1')
-            && !sw.shouldRetireCache('prks-pdf-v3:' + KEY_A + ':1'));
-    }
-
     // Bindings persist in the scope database and drop clients that are gone.
     const idb = createFakeIndexedDBFactory();
     await scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([ok(SESSION_A)]) }).resolve();
@@ -858,6 +819,48 @@ async function testWorker() {
     }
     record('the worker reads a session body as its scope key',
         sw.sessionScopeKey(SESSION_A) === KEY_A && sw.sessionScopeKey({ user: null }) === null);
+}
+
+/** Library epoch (#629, §10.4): each epoch has its own PDF cache. */
+async function testWorkerEpochs() {
+    const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
+    const name = 'prks-pdf-v3:' + KEY_A + ':1';
+    const nameB = 'prks-pdf-v3:' + KEY_B + ':1';
+    const epochs = new Map([
+        ['tab-old-lib', { key: KEY_B, epoch: '1', retired: false }],
+        ['tab-new-lib', { key: KEY_B, epoch: '2', retired: false }],
+        ['tab-no-epoch', { key: KEY_B, epoch: null, retired: false }],
+    ]);
+    const restored = { pointerKey: KEY_B, pointerEpoch: '2', bindings: epochs };
+    const all = new Set(['tab-old-lib', 'tab-new-lib', 'tab-no-epoch']);
+    record('a page of the restored Library gets its epoch\'s cache',
+        sw.selectPdfCacheName(restored, 'tab-new-lib', all, false) === 'prks-pdf-v3:' + KEY_B + ':2');
+    record('a page of the earlier Library keeps its own, never the newer one',
+        sw.selectPdfCacheName(restored, 'tab-old-lib', all, false) === nameB);
+    record('a page bound without an epoch gets no cache', sw.selectPdfCacheName(restored, 'tab-no-epoch', all, false) === null);
+    record('a worker gets no cache while live pages are on different epochs',
+        sw.selectPdfCacheName(restored, 'worker-1', new Set(['tab-old-lib', 'tab-new-lib']), false) === null);
+    record('a worker borrows the confirmed epoch when every page is on it',
+        sw.selectPdfCacheName(restored, 'worker-1', new Set(['tab-new-lib']), false) === 'prks-pdf-v3:' + KEY_B + ':2');
+    record('a record without an epoch lends no cache',
+        sw.selectPdfCacheName({ pointerKey: KEY_B, pointerEpoch: null, bindings: new Map() }, 'worker-1', new Set(['tab-new-lib']), false) === null);
+    const names = ['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9', 'prks-pdf-v3:' + KEY_B + ':10',
+        'prks-pdf-v3:' + KEY_B + ':11', 'prks-pdf-v3:' + KEY_A + ':1', 'prks-static-x', 'prks-pdf-v3:' + KEY_B + ':x'];
+    record('the caches of earlier epochs of that scope are the ones dropped',
+        JSON.stringify(sw.olderEpochPdfCaches(names, KEY_B, '10'))
+            === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9']));
+    const deleted = [];
+    await sw.dropOlderEpochPdfCaches({ keys: async () => names, delete: async (n) => { deleted.push(n); return true; } }, KEY_B, '2');
+    record('a newer binding deletes them', JSON.stringify(deleted) === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1']));
+    record('an invalid epoch drops nothing', sw.olderEpochPdfCaches(names, KEY_B, 'x').length === 0);
+    record('the session names the cache of its scope and epoch',
+        sw.sessionPdfCacheName(SESSION_A) === name
+        && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 2 }) }))
+            === 'prks-pdf-v3:' + KEY_A + ':2'
+        && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: undefined }) })) === null);
+    record('the per-scope caches of builds without an epoch are retired',
+        sw.shouldRetireCache('prks-pdf-v2:' + KEY_A) && sw.shouldRetireCache('prks-pdf-v1')
+        && !sw.shouldRetireCache('prks-pdf-v3:' + KEY_A + ':1'));
 }
 
 /** A session stub whose epochs the test sets. */
@@ -1039,6 +1042,7 @@ async function main() {
     await testHold();
     await testEpoch();
     await testWorker();
+    await testWorkerEpochs();
     console.log(passed + ' passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }
