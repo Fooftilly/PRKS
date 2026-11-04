@@ -10,6 +10,7 @@ thin reconnect conflict park, and browser-local recovery of Research Notes
 (#466 slices 2-3) and Work Reminders (#474) text across a reload or a closed tab.
 """
 import os
+import time
 import unittest
 
 from backend import work_lifecycle_sync, work_note_sync
@@ -1282,7 +1283,10 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         # session answers, which can be after the runtime already went online.
         self._retry_after_interrupted_cleanup(hold_session=True)
 
-    def _retry_after_interrupted_cleanup(self, hold_session):
+    def test_a_retry_the_server_left_unanswered_runs_again_on_reconnect(self):
+        self._retry_after_interrupted_cleanup(hold_session=False, drop_first_answer=True)
+
+    def _retry_after_interrupted_cleanup(self, hold_session, drop_first_answer=False):
         server, page, context = self.start()
         work = server.ids['work_a']
         # The delete was acknowledged here, but the browser stopped before the cleanup: the Work
@@ -1309,8 +1313,12 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
         held = []
+        dropped = []
         if hold_session:
             tab.route('**/api/session', lambda route: held.append(route))
+        if drop_first_answer:
+            # The connection drops before the server answers for the marked Work.
+            tab.route('**/notes-state', lambda route: (dropped.append(route.request.url), route.abort()))
         tab.goto(server.origin + '/#/folders', wait_until='domcontentloaded')
         if hold_session:
             tab.wait_for_function(
@@ -1323,6 +1331,18 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             tab.unroute('**/api/session')
         tab.wait_for_selector('#sidebar')
         tab.wait_for_function(_RECOVERY_READY)
+        if drop_first_answer:
+            # Every attempt of the request coordinator (one try and two retries) fails.
+            deadline = time.monotonic() + 20
+            while len(dropped) < 3 and time.monotonic() < deadline:
+                tab.wait_for_timeout(100)
+            self.assertEqual(len(dropped), 3, 'the first retry never gave up asking the server')
+            tab.wait_for_timeout(500)
+            self.assertIsNotNone(tab.evaluate(
+                "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)", work))
+            tab.unroute('**/notes-state')
+            self.offline(tab, context)
+            self.reconnect(tab, context)
         wait_for_async(
             tab,
             """(workId) => window.prksEditorRecovery.runtime().store.listAll().then(rows =>

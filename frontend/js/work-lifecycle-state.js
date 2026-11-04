@@ -429,21 +429,29 @@
      * the server answers. Returns the Work ids it ran a cleanup for.
      */
     async function retryDeletedWorkRecovery() {
+        return (await retryDeletedWorksOnce()).cleaned;
+    }
+    /* `unanswered`: the server gave no answer for some marked Work. */
+    async function retryDeletedWorksOnce() {
         const cleaned = [];
+        let unanswered = false;
         for (const mark of readDeletedWorks().slice(0, RETRY_MAX_WORKS)) {
             /* Moved behind the rest before the attempt, whatever it finds. */
             markTried(mark);
             const answer = await workOnServer(mark.id);
+            if (answer === 'unknown') unanswered = true;
             if (answer === 'present') unmarkDeletedWork(mark.id);
             if (answer !== 'gone') continue;
             if (await cleanupDeletedWorkRecovery(mark.id, { retry: true })) cleaned.push(mark.id);
         }
-        return cleaned;
+        return { cleaned: cleaned, unanswered: unanswered };
     }
 
-    /* Once per page load, after the server has first been observed reachable,
-     * and only when a confirmed deletion is still marked. The marks are the
-     * signed-in scope's, so they are read once that scope is resolved. */
+    /* Once per page load while the server is reachable, and only when a
+     * confirmed deletion is still marked; a pass the server left unanswered
+     * (offline, or online only by assumption) waits for the next time it is
+     * reachable. The marks are the signed-in scope's, so they are read once
+     * that scope is resolved. */
     function armRecoveryRetry() {
         const scope = root.prksBrowserScope;
         if (!scope || typeof scope.resolve !== 'function') return;
@@ -455,11 +463,27 @@
         if (retryStarted || !readDeletedWorks().length || typeof root.prksOfflineRuntimeSubscribe !== 'function' ||
             typeof root.prksOfflineRuntimeState !== 'function') return;
         let unsubscribe = null;
+        let running = false;
+        /* A transition heard during a pass: its answer may predate it. */
+        let heardDuringPass = false;
         const check = function () {
-            if (retryStarted || root.prksOfflineRuntimeState() !== 'online') return;
-            retryStarted = true;
-            if (typeof unsubscribe === 'function') unsubscribe();
-            void retryDeletedWorkRecovery();
+            if (retryStarted) return;
+            if (running) {
+                heardDuringPass = true;
+                return;
+            }
+            if (root.prksOfflineRuntimeState() !== 'online') return;
+            running = true;
+            heardDuringPass = false;
+            void retryDeletedWorksOnce().then(function (result) {
+                running = false;
+                if (result.unanswered && readDeletedWorks().length) {
+                    if (heardDuringPass) check();
+                    return;
+                }
+                retryStarted = true;
+                if (typeof unsubscribe === 'function') unsubscribe();
+            });
         };
         unsubscribe = root.prksOfflineRuntimeSubscribe(check);
         /* Subscribers hear only transitions: the runtime may have gone online
