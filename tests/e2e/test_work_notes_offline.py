@@ -1335,13 +1335,15 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             # Every attempt of the request coordinator (one try and two retries) fails.
             deadline = time.monotonic() + 20
             while len(dropped) < 3 and time.monotonic() < deadline:
+                # prks-allow-wait-for-timeout: polling for a route handler to record the aborted attempts
                 tab.wait_for_timeout(100)
             self.assertEqual(len(dropped), 3, 'the first retry never gave up asking the server')
-            tab.wait_for_timeout(500)
             self.assertIsNotNone(tab.evaluate(
                 "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)", work))
-            tab.unroute('**/notes-state')
+            # Offline before the route is lifted: whether the unanswered pass has ended
+            # yet or not, only the reconnect may run it again.
             self.offline(tab, context)
+            tab.unroute('**/notes-state')
             self.reconnect(tab, context)
         wait_for_async(
             tab,
