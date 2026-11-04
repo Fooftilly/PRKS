@@ -203,9 +203,17 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
                 job = match.group(1)
                 self.assertIn("name: " + required_name, job)
                 self.assertIn("needs: docs-only-plan", job)
-                self.assertIn("!cancelled() && github.event_name != 'schedule'", job)
-                self.assertIn("needs.docs-only-plan.result != 'success'", job)
-                self.assertIn("needs.docs-only-plan.outputs.docs_only != 'true'", job)
+                guard = re.search(r"(?m)^    if: >-\n((?:      .*\n)+)", job)
+                self.assertIsNotNone(guard)
+                normalized = " ".join(
+                    line.strip() for line in guard.group(1).splitlines()
+                )
+                self.assertEqual(
+                    normalized,
+                    "!cancelled() && github.event_name != 'schedule' && "
+                    "(needs.docs-only-plan.result != 'success' || "
+                    "needs.docs-only-plan.outputs.docs_only != 'true')",
+                )
                 self.assertIn("services:\n      postgres:", job)
         # The event triggers themselves must NOT filter paths: required
         # contexts need to keep reporting on docs-only pull requests.
