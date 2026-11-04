@@ -306,6 +306,45 @@ class BrowserScopeTests(unittest.TestCase):
             )
         )
 
+    def test_an_older_refusal_never_forgets_a_newer_accounts_scope(self):
+        reader_id = self.server.library.accounts[READER]
+        self.sign_in(OWNER_LOGIN)
+        stale = self.open_page()
+        self.expire_session()
+        # The stale tab's session read is refused, but the refusal reaches the
+        # page only after another account has signed in and been confirmed.
+        held = []
+        stale.route("**/api/session", lambda route: held.append((route, route.fetch())))
+        stale.evaluate("() => { window.__verdict = prksBrowserScope.verify(); }")
+        deadline = time.time() + 10
+        while time.time() < deadline and not held:
+            # prks-allow-wait-for-timeout: polling for a route handler to capture the held request
+            stale.wait_for_timeout(50)
+        self.assertTrue(held, "the stale tab never read its session")
+        self.assertEqual(held[0][1].status, 401)
+
+        self.sign_in(READER)
+        reader = self.open_page()
+        self.assertEqual(self.scope_user(reader), reader_id)
+
+        route, response = held.pop()
+        route.fulfill(response=response)
+        stale.unroute("**/api/session")
+        self.assertEqual(stale.evaluate("() => window.__verdict"), "signed_out")
+
+        # The reader's record survives, so an offline reload still binds it.
+        self.assertEqual(
+            reader.evaluate(
+                """async () => {
+                    const offline = createPrksBrowserScope({ fetchImpl: () => Promise.reject(new TypeError('offline')) });
+                    const scope = await offline.resolve();
+                    return scope && scope.userId;
+                }"""
+            ),
+            reader_id,
+            "an older refusal must not forget a newer account's last confirmed scope",
+        )
+
     def test_another_account_signing_in_retires_the_open_page(self):
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)

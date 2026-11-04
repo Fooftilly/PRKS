@@ -131,7 +131,16 @@
         return base + ':' + scope.key;
     }
 
-    /** The last confirmed scope record. Every call opens and closes its own connection. */
+    /** When the read that confirmed a record began (0 when unknown). */
+    function confirmedAt(record) {
+        return record && Number(record.confirmedAt) > 0 ? Number(record.confirmedAt) : 0;
+    }
+
+    /**
+     * The last confirmed scope record. Every call opens and closes its own
+     * connection. Each change is ordered by when its session read began, so
+     * an older answer from any tab never undoes a newer one.
+     */
     function createPointer(idbFactory) {
         function withStore(mode, fn) {
             return new Promise(function (resolve, reject) {
@@ -185,41 +194,69 @@
              * Records a confirmed session of `scope` read from `startedAt`.
              * Resolves false, writing nothing, when that scope was signed out
              * at or after the read began (in any tab): the answer predates the
-             * sign-out and must not bring the scope back. One readwrite
-             * transaction, so the check and the write cannot interleave with
-             * another tab's sign-out.
+             * sign-out and must not bring the scope back. A record confirmed
+             * by a read that began later (in any tab) is kept as it is. One
+             * readwrite transaction, so the checks and the write cannot
+             * interleave with another tab's change.
              */
             write: function (scope, startedAt) {
+                const began = Number(startedAt) || 0;
                 return withStore('readwrite', function (store, done) {
                     const marker = store.get(LOGOUT_KEY);
                     marker.onsuccess = function () {
                         const out = marker.result;
-                        if (out && out.scopeKey === scope.key) {
-                            const at = Number(out.at) || 0;
-                            if (!(Number(startedAt) > at)) {
-                                done(false);
+                        if (out && out.scopeKey === scope.key && !(began > (Number(out.at) || 0))) {
+                            done(false);
+                            return;
+                        }
+                        const current = store.get(POINTER_KEY);
+                        current.onsuccess = function () {
+                            if (out && out.scopeKey === scope.key) {
+                                // A session confirmed after the sign-out ends it.
+                                store.delete(LOGOUT_KEY);
+                            }
+                            if (confirmedAt(current.result) > began) {
+                                done(true);
                                 return;
                             }
-                            // A session confirmed after the sign-out ends it.
-                            store.delete(LOGOUT_KEY);
-                        }
-                        store.put({
-                            key: POINTER_KEY,
-                            scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
-                        });
-                        done(true);
+                            store.put({
+                                key: POINTER_KEY,
+                                scope: { instanceId: scope.instanceId, libraryId: scope.libraryId, userId: scope.userId },
+                                confirmedAt: began,
+                            });
+                            done(true);
+                        };
                     };
                 });
             },
-            forget: function () {
+            /**
+             * A refusal read from `startedAt` forgets the record, unless a read
+             * that began later (in any tab) confirmed it: that newer session
+             * outranks this older answer.
+             */
+            forget: function (startedAt) {
+                const began = Number(startedAt) || 0;
                 return withStore('readwrite', function (store) {
-                    store.delete(POINTER_KEY);
+                    const current = store.get(POINTER_KEY);
+                    current.onsuccess = function () {
+                        if (current.result && !(confirmedAt(current.result) > began)) store.delete(POINTER_KEY);
+                    };
                 });
             },
+            /**
+             * Records the sign-out of `scope` at `at` (after the server ended
+             * the session). The browser had one session, so the record goes
+             * whichever account it names, unless a read begun after the
+             * sign-out confirmed it (a new session).
+             */
             markLoggedOut: function (scope, at) {
+                const when = Number(at) || 0;
                 return withStore('readwrite', function (store) {
-                    store.delete(POINTER_KEY);
-                    store.put({ key: LOGOUT_KEY, scopeKey: scope.key, at: at });
+                    const current = store.get(POINTER_KEY);
+                    current.onsuccess = function () {
+                        if (current.result && !(confirmedAt(current.result) > when)) store.delete(POINTER_KEY);
+                        store.put({ key: LOGOUT_KEY, scopeKey: scope.key, at: when });
+                    };
                 });
             },
             loggedOut: function (scope) {
@@ -335,7 +372,7 @@
                     return kept !== false;
                 }, function () { return true; });
             }
-            if (answer.kind === 'none') return pointer.forget().then(function () { return true; }, function () { return true; });
+            if (answer.kind === 'none') return pointer.forget(startedAt).then(function () { return true; }, function () { return true; });
             return Promise.resolve(true);
         }
 

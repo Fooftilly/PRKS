@@ -110,7 +110,10 @@ coordinator names no family: adding one is a registration.
   the sign-out is broadcast and recorded with the time it took effect, and
   every open page of that account retires. A session answer from a read
   that began before that time (in any tab) never restores the account or
-  clears the record; only a session confirmed by a later read does.
+  clears the record; only a session confirmed by a later read does. Every
+  change to the last confirmed scope is ordered the same way: a refusal or
+  a confirmation from a read that began earlier (in any tab) never undoes a
+  newer confirmation of any account.
   Another account signed in: the page retires. A retired
   page's stores close and refuse reads and writes, the runtime holds for the
   life of the page, nothing is deleted, and a reload binds whoever is signed

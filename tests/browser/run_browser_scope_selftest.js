@@ -234,6 +234,55 @@ async function testSignOut() {
         record('a session confirmed after the sign-out ends it', (await sw.readScopeState(idb3)).pointerKey === KEY_A);
         record('and a later expiry only holds', (await missed.verify()) === 'signed_out' && !missed.isRetired());
     }
+
+    // An older answer from one tab never undoes a newer confirmation by another.
+    {
+        const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
+        const idb4 = createFakeIndexedDBFactory();
+        let clock = 1000;
+        const now = () => clock;
+        const deferred = () => {
+            let release;
+            const gate = new Promise((r) => { release = r; });
+            return { release, answer: (body, code) => () => gate.then(() => json(body, code)) };
+        };
+        const late401 = deferred();
+        const expired = scopeApi.createPrksBrowserScope({
+            indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_A), late401.answer({ error: 'not_authenticated' }, 401)]),
+        });
+        await expired.resolve();
+        clock = 2000;
+        const pendingA = expired.verify(); // A's read begins; its 401 is held
+        await new Promise((r) => setImmediate(r));
+        clock = 3000;
+        const tabB = scopeApi.createPrksBrowserScope({ indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_B)]) });
+        await tabB.resolve(); // B signs in and is confirmed by a later read
+        clock = 4000;
+        late401.release();
+        record('the older refusal still holds its own page', (await pendingA) === 'signed_out');
+        record("an older refusal does not forget another account's newer record",
+            (await sw.readScopeState(idb4)).pointerKey === KEY_B);
+        const reloadB = scopeApi.createPrksBrowserScope({ indexedDB: idb4, now, fetchImpl: fetchFor([offline()]) });
+        const boundB = await reloadB.resolve();
+        record('an offline reload still binds the newer account', !!boundB && boundB.key === KEY_B);
+
+        const late200 = deferred();
+        const old = scopeApi.createPrksBrowserScope({
+            indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_B), late200.answer(SESSION_A, 200)]),
+        });
+        clock = 5000;
+        await old.resolve();
+        clock = 6000;
+        const pendingOld = old.verify(); // reads A's session from 6000; answer held
+        await new Promise((r) => setImmediate(r));
+        clock = 7000;
+        const tabB2 = scopeApi.createPrksBrowserScope({ indexedDB: idb4, now, fetchImpl: fetchFor([ok(SESSION_B)]) });
+        await tabB2.resolve();
+        late200.release();
+        await pendingOld;
+        record("an older confirmation does not replace a newer account's record",
+            (await sw.readScopeState(idb4)).pointerKey === KEY_B);
+    }
 }
 
 async function testAnnounceAndLifecycle() {
