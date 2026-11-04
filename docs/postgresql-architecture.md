@@ -1654,8 +1654,11 @@ account's queued intents or recovered drafts to another. Recommendation:
   resume, in a response header, or from a 409 `LIBRARY_EPOCH_CHANGED`), the
   sync runtime stops delivering older-epoch rows and moves them, with their
   text, to the review-only "unsent changes from before this library was
-  restored" list, the same mechanism as the pre-0.8 list in §10.3: copy-out
-  and explicit discard, never automatic deletion or re-submission. Drafts
+  restored" list in Settings → Diagnostics: copy-out and explicit discard,
+  never automatic deletion or re-submission. Each row is sent under the
+  epoch it records, never under a later one. A page keeps the epoch it
+  loaded: after a restore its mutations are refused and it queues nothing
+  new until a reload. Drafts
   whose base belongs to an older epoch become unproven-base drafts: shown for
   review, never auto-restored or auto-adopted, exactly as #489 treats unknown
   owners. Cached bodies of an older epoch are invalidated, since an ETag of

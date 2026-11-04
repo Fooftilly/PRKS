@@ -126,6 +126,23 @@ coordinator names no family: adding one is a registration.
   executed, so they hold the row as pending with the attempt count from
   before the send (a never-sent row stays editable) and are never settled,
   conflicted or retired. `prksSyncDiagnostics()` reports the hold as `held`.
+- **Library epoch** (#629, §10.4 and §11.4 of `postgresql-architecture.md`).
+  The page acts under the epoch its session named when it loaded
+  (`prksBrowserScope.pageEpoch()`, recorded with the scope for an offline
+  reload); the request coordinator names it on every mutation and reports
+  every answer's `PRKS-Library-Epoch` to the scope, which tracks the highest
+  seen (`latestEpoch()`). Every queued operation records the page's epoch
+  (`library_epoch`) and is sent under it, never under a later one. The
+  queue has one epoch (metadata `library_epoch`): once the server names a
+  newer one (a session read, an answer's header, or a session read after a
+  409 `LIBRARY_EPOCH_CHANGED`), every operation of the older epoch leaves
+  the queue, in one transaction, for the review-only `restored` store,
+  before anything else is sent. Settings → Diagnostics lists them under
+  "Unsent changes from before this library was restored", with Copy text
+  and Discard; nothing there is sent, reapplied or deleted on its own. A
+  page loaded before the restore keeps naming its old epoch (the server
+  refuses its mutations) and records no new change (`library_restored`)
+  until a reload.
 - `prks-offline-v2:<scope>` remains a disposable cache of acknowledged server data.
 - `prks-local-v2:<scope>` holds semantic operations and a random device UUID. Its
   IndexedDB writes request strict durability and resolve only on transaction

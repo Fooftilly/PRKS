@@ -529,6 +529,64 @@
         return ' Server currently has "' + bounded(result.current_value) + '".';
     }
 
+    /** The text a reviewed change carries, for copying out: its value, or the change as described. */
+    function copyableText(op) {
+        const value = payloadValue(op);
+        if (value != null) return String(value);
+        return describe(op) + '\n' + JSON.stringify(op.payload || {}, null, 2);
+    }
+
+    /*
+     * Changes made before this Library was restored on the server (§10.4).
+     * They were never sent under the new epoch and never will be: the user
+     * copies out what is worth keeping and discards the rest. Nothing here
+     * is deleted on its own.
+     */
+    async function renderRestored(section, host) {
+        if (typeof root.prksSync.store.listRestored !== 'function') return;
+        const restored = await root.prksSync.store.listRestored();
+        if (!restored.length) return;
+        const heading = document.createElement('p');
+        heading.dataset.prksRole = 'restored-changes-heading';
+        heading.textContent = 'Unsent changes from before this library was restored (' + restored.length +
+            '). They will not be sent. Copy what you want to keep, then discard them.';
+        section.appendChild(heading);
+        for (const op of restored) {
+            const row = document.createElement('p');
+            row.dataset.prksRole = 'restored-change';
+            row.dataset.opId = op.op_id;
+            row.appendChild(document.createTextNode(describe(op) + ' · ' + op.entity_id + sizeNote(op) + ' '));
+            const copy = document.createElement('button');
+            copy.type = 'button';
+            copy.className = 'prks-btn prks-btn--secondary prks-btn--sm';
+            copy.textContent = 'Copy text';
+            copy.onclick = async () => {
+                try {
+                    await root.prksCopyTextToClipboard(copyableText(op));
+                    copy.textContent = 'Copied';
+                } catch (_) {
+                    copy.textContent = 'Could not copy; retry';
+                }
+            };
+            const discard = document.createElement('button');
+            discard.type = 'button';
+            discard.className = 'prks-btn prks-btn--secondary prks-btn--sm';
+            discard.textContent = 'Discard';
+            discard.onclick = async () => {
+                discard.disabled = true;
+                try {
+                    await root.prksSync.store.discardRestored(op.op_id);
+                    await root.prksRenderSyncDiagnostics(host);
+                } catch (_) {
+                    discard.disabled = false;
+                    discard.textContent = 'Could not discard; retry';
+                }
+            };
+            row.append(copy, document.createTextNode(' '), discard);
+            section.appendChild(row);
+        }
+    }
+
     root.prksRenderSyncDiagnostics = async host => {
         let section = host.parentElement.querySelector('[data-sync-diagnostics]');
         if (!section) {
@@ -583,5 +641,6 @@
             }
             section.appendChild(row);
         }
+        await renderRestored(section, host);
     };
 })(typeof window === 'undefined' ? globalThis : window);

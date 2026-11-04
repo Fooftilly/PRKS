@@ -385,7 +385,9 @@
         }
 
         // Another account signed in: this page's cache closes for good.
-        if (scope && typeof scope.subscribe === 'function') scope.subscribe(closeHandle);
+        if (scope && typeof scope.subscribe === 'function') {
+            scope.subscribe(function (event) { if (event && event.type === 'retired') closeHandle(); });
+        }
 
         function resolveDbName() {
             if (options.dbName) return Promise.resolve(options.dbName);
