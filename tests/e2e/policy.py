@@ -345,6 +345,7 @@ FEATURES = {
             "tests.e2e.test_local_store_durability",
             "tests.e2e.test_browser_scope",
             "tests.e2e.test_editor_recovery_store",
+            "tests.e2e.test_library_epoch",
         ),
     },
     "sync": {
