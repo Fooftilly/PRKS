@@ -90,7 +90,8 @@ coordinator names no family: adding one is a registration.
 - **Managed PDFs per tab.** Each page tells the service worker which scope
   it is bound to (`prks-scope-bind`); the worker keeps one binding per
   client in `prks-browser-scope-v1` and serves or stores a page's PDFs only
-  in that page's own `prks-pdf-v2:<scope>`. A retired page gets no cache.
+  in that page's own `prks-pdf-v3:<scope>:<epoch>` (the epoch it loaded
+  under). A retired page gets no cache.
   A live page that has not bound yet waits briefly for its binding and
   never borrows another scope; a dedicated worker gets the last confirmed
   scope only when every live page is bound to it; otherwise the network
@@ -150,7 +151,16 @@ coordinator names no family: adding one is a registration.
   before this library was restored" with Copy and Discard. The offline cache
   stamps every envelope with the page's epoch (`libraryEpoch`) and reads
   only its own; the first use under a newer epoch drops the older
-  envelopes. A scope that names no epoch has no cache.
+  envelopes. A scope that names no epoch has no cache. Writes, deletes and
+  kind sweeps read the cache's `library_epoch` in their own transaction: a
+  page older than the cache changes nothing there.
+  Managed PDFs are cached per epoch too (`prks-pdf-v3:<scope>:<epoch>`),
+  since file bytes carry no epoch to filter by. A page binds the worker with
+  its epoch and is served only that epoch's cache; a page of a newer epoch
+  drops its scope's caches of earlier ones; and bytes enter a cache only
+  while `/api/session` names that scope and that epoch, so a page loaded
+  before the restore never stores the restored Library's files. The
+  per-scope caches of earlier builds (`prks-pdf-v2:<scope>`) are retired.
 - `prks-offline-v2:<scope>` remains a disposable cache of acknowledged server data.
 - `prks-local-v2:<scope>` holds semantic operations and a random device UUID. Its
   IndexedDB writes request strict durability and resolve only on transaction
@@ -2539,7 +2549,7 @@ PDFs. One annotation is one revisioned aggregate under scope
 1. Canonical metadata — `annotations` table (`pdf_annotations.py`)
 2. Durable unsynchronized intent — `prks-local-v2:<scope>` semantic ops
 3. Disposable acknowledged snapshot — offline cache entity `work-annotations`
-4. PDF bytes — materialized artifact in Cache Storage `prks-pdf-v2:<scope>` only
+4. PDF bytes — materialized artifact in Cache Storage `prks-pdf-v3:<scope>:<epoch>` only
 
 Offline mutation requires all of: usable cached PDF bytes, an acknowledged
 annotation base on this device, and a writable durable store. Connectivity

@@ -88,11 +88,16 @@
     // The server's grammar for an epoch: 1 to the largest bigint, in decimal.
     const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
 
-    /** Base names of the per-scope stores. The full name is `<base>:<scope key>`. */
+    /**
+     * Base names of the per-scope stores. The full name is `<base>:<scope key>`;
+     * the PDF cache's is `<base>:<scope key>:<page epoch>` (§10.4): it holds
+     * file bytes, which carry no epoch of their own to filter by, so each
+     * Library epoch has its own cache (frontend/sw.js).
+     */
     const STORE_BASES = Object.freeze({
         local: 'prks-local-v2',
         offline: 'prks-offline-v2',
-        pdf: 'prks-pdf-v2',
+        pdf: 'prks-pdf-v3',
     });
 
     // Through the request coordinator (frontend/AGENTS.md transport boundary),
@@ -576,6 +581,7 @@
                 controller.postMessage({
                     type: BIND_MESSAGE,
                     key: bound && !retired ? bound.key : null,
+                    epoch: bound && !retired ? pageEpoch : null,
                     retired: retired,
                 });
             } catch (_e) { /* the worker then serves this page no cache */ }
@@ -586,12 +592,15 @@
             });
         }
 
-        /** `<base>:<scope key>` for a live scope, else null (never an unscoped name). */
+        /** `<base>:<scope key>` (the PDF cache: `:<page epoch>` too) for a live scope, else null (never an unscoped name). */
         function dbName(kind) {
             const base = STORE_BASES[kind];
             if (!base) return Promise.resolve(null);
             return resolve().then(function (scope) {
-                return scope && !retired ? storeName(base, scope) : null;
+                if (!scope || retired) return null;
+                if (kind !== 'pdf') return storeName(base, scope);
+                // A page that knows no epoch has no PDF cache.
+                return pageEpoch ? storeName(base, scope) + ':' + pageEpoch : null;
             });
         }
 

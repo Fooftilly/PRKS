@@ -28,17 +28,23 @@
     const DEPENDENCY_REVISION = '4f7633cd9c07';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
-    // Managed PDFs are cached per signed-in scope, `prks-pdf-v2:<scope key>`
-    // (frontend/js/browser-scope.js). Each page tells the worker which scope
-    // it is bound to (PRKS_SCOPE_BIND_MESSAGE); the worker keeps that per
-    // client in the scope database, so a page is only ever served its own
-    // scope's cache, and a retired page none. A request from a client that
+    // Managed PDFs are cached per signed-in scope and Library epoch,
+    // `prks-pdf-v3:<scope key>:<epoch>` (frontend/js/browser-scope.js). Each
+    // page tells the worker which scope and epoch it is bound to
+    // (PRKS_SCOPE_BIND_MESSAGE); the worker keeps that per client in the
+    // scope database, so a page is only ever served its own scope's cache of
+    // its own Library, and a retired page none. A request from a client that
     // never bound (a dedicated worker, a page still loading) gets the last
-    // confirmed scope only when every live page bound to a scope agrees with
-    // it; otherwise, and with no record at all, the worker neither reads nor
-    // writes any PDF cache. The unscoped cache of earlier builds is retired.
-    const PDF_CACHE_BASE = 'prks-pdf-v2';
+    // confirmed scope and epoch only when every live page bound to a scope
+    // agrees with both; otherwise, and with no record at all, the worker
+    // neither reads nor writes any PDF cache. A page bound to a newer epoch
+    // drops its scope's caches of earlier epochs: they hold the files of the
+    // Library a restore replaced (docs/postgresql-architecture.md §10.4).
+    // The caches of earlier builds (unscoped v1, per-scope v2 without an
+    // epoch) are retired, never read.
+    const PDF_CACHE_BASE = 'prks-pdf-v3';
     const RETIRED_PDF_CACHE = 'prks-pdf-v1';
+    const RETIRED_PDF_CACHE_PREFIX = 'prks-pdf-v2';
     const SCOPE_POINTER_DB = 'prks-browser-scope-v1';
     const SCOPE_POINTER_DB_VERSION = 2;
     const SCOPE_POINTER_STORE = 'pointer';
@@ -49,6 +55,8 @@
     // How long a page's PDF request waits for that page's own binding.
     const BIND_WAIT_MS = 3000;
     const SCOPE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+    // The server's grammar for a Library epoch: 1 to the largest bigint.
+    const EPOCH_PATTERN = /^[1-9][0-9]{0,18}$/;
     // Install-time-only staging buckets (AGENTS.md "Make failed SW installs
     // unable to poison the active shell cache"): a currently-active worker
     // may still be serving fetches out of SHELL_CACHE/STATIC_CACHE while a
@@ -432,6 +440,7 @@
 
     function shouldRetireCache(name) {
         if (name === RETIRED_PDF_CACHE) return true;
+        if (name === RETIRED_PDF_CACHE_PREFIX || name.indexOf(RETIRED_PDF_CACHE_PREFIX + ':') === 0) return true;
         if (CURRENT_CACHES.indexOf(name) !== -1) return false;
         return RETIRE_PREFIXES.some(function (prefix) {
             return name.indexOf(prefix) === 0;
@@ -442,6 +451,34 @@
         if (typeof key !== 'string') return false;
         const ids = key.split('.');
         return ids.length === 3 && ids.every(function (id) { return SCOPE_ID_PATTERN.test(id); });
+    }
+
+    function epochOf(value) {
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
+        return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    /** Orders two canonical epochs (they may exceed a double's integers). */
+    function compareEpochs(a, b) {
+        if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+        return a < b ? -1 : a > b ? 1 : 0;
+    }
+
+    /** `prks-pdf-v3:<scope key>:<epoch>`, or null unless both are valid. */
+    function pdfCacheNameOf(key, epoch) {
+        return validScopeKey(key) && epochOf(epoch) ? PDF_CACHE_BASE + ':' + key + ':' + epoch : null;
+    }
+
+    /** The PDF caches of `key` under an epoch older than `epoch`, among `names`. */
+    function olderEpochPdfCaches(names, key, epoch) {
+        const current = epochOf(epoch);
+        if (!validScopeKey(key) || !current) return [];
+        const prefix = PDF_CACHE_BASE + ':' + key + ':';
+        return (names || []).filter(function (name) {
+            if (typeof name !== 'string' || name.indexOf(prefix) !== 0) return false;
+            const other = epochOf(name.slice(prefix.length));
+            return !!other && compareEpochs(other, current) < 0;
+        });
     }
 
     /** Opens the scope database (the page's version), or resolves null. */
@@ -473,12 +510,12 @@
     }
 
     /**
-     * The last confirmed scope and every client binding:
-     * { pointerKey: string|null, bindings: Map<clientId, { key, retired }> }.
+     * The last confirmed scope and epoch, and every client binding:
+     * { pointerKey, pointerEpoch, bindings: Map<clientId, { key, epoch, retired }> }.
      * Resolves, never rejects: any failure reads as nothing recorded.
      */
     function readScopeState(idbFactory) {
-        const empty = { pointerKey: null, bindings: new Map() };
+        const empty = { pointerKey: null, pointerEpoch: null, bindings: new Map() };
         return openScopeDb(idbFactory).then(function (db) {
             if (!db) return empty;
             return new Promise(function (resolve) {
@@ -490,12 +527,13 @@
                     resolve(empty);
                     return;
                 }
-                const state = { pointerKey: null, bindings: new Map() };
+                const state = { pointerKey: null, pointerEpoch: null, bindings: new Map() };
                 const get = tx.objectStore(SCOPE_POINTER_STORE).get(SCOPE_POINTER_KEY);
                 get.onsuccess = function () {
                     const scope = get.result && get.result.scope;
                     const key = scope ? [scope.instanceId, scope.libraryId, scope.userId].join('.') : null;
                     state.pointerKey = validScopeKey(key) ? key : null;
+                    state.pointerEpoch = get.result ? epochOf(get.result.epoch) : null;
                 };
                 const all = tx.objectStore(SCOPE_CLIENTS_STORE).getAll();
                 all.onsuccess = function () {
@@ -503,6 +541,7 @@
                         if (!row || typeof row.clientId !== 'string') return;
                         state.bindings.set(row.clientId, {
                             key: validScopeKey(row.key) ? row.key : null,
+                            epoch: epochOf(row.epoch),
                             retired: row.retired === true,
                         });
                     });
@@ -514,10 +553,11 @@
     }
 
     /**
-     * Records which scope `clientId` is bound to (null key: none) and drops
-     * the bindings of clients that are gone. Resolves true when written.
+     * Records which scope and epoch `clientId` is bound to (null key: none)
+     * and drops the bindings of clients that are gone. Resolves true when
+     * written.
      */
-    function writeClientBinding(idbFactory, clientId, key, retired, liveClientIds) {
+    function writeClientBinding(idbFactory, clientId, key, epoch, retired, liveClientIds) {
         if (typeof clientId !== 'string' || !clientId) return Promise.resolve(false);
         return openScopeDb(idbFactory).then(function (db) {
             if (!db) return false;
@@ -531,7 +571,13 @@
                     return;
                 }
                 const store = tx.objectStore(SCOPE_CLIENTS_STORE);
-                store.put({ clientId: clientId, key: validScopeKey(key) && !retired ? key : null, retired: retired === true });
+                const bound = validScopeKey(key) && !retired;
+                store.put({
+                    clientId: clientId,
+                    key: bound ? key : null,
+                    epoch: bound ? epochOf(epoch) : null,
+                    retired: retired === true,
+                });
                 if (liveClientIds) {
                     const rows = store.getAll();
                     rows.onsuccess = function () {
@@ -549,15 +595,18 @@
 
     /**
      * The PDF cache a request from `clientId` may use, or null.
-     * - A bound client: its own scope's cache; a retired or unscoped one none.
+     * - A bound client: its own scope's cache of its own epoch; a retired,
+     *   unscoped or epoch-less one none.
      * - `strict` (installs): only a bound client's own cache.
-     * - Any other client: the last confirmed scope, only when every live page
-     *   that has bound agrees with it (none retired, none on another scope).
+     * - Any other client: the last confirmed scope and epoch, only when every
+     *   live page that has bound agrees with both (none retired, none on
+     *   another scope or epoch).
      */
     function selectPdfCacheName(state, clientId, liveWindowIds, strict) {
         const own = clientId ? state.bindings.get(clientId) : null;
-        if (own) return own.key && !own.retired ? PDF_CACHE_BASE + ':' + own.key : null;
-        if (strict || !state.pointerKey || !clientId) return null;
+        if (own) return own.key && !own.retired ? pdfCacheNameOf(own.key, own.epoch) : null;
+        const confirmed = pdfCacheNameOf(state.pointerKey, state.pointerEpoch);
+        if (strict || !confirmed || !clientId) return null;
         const live = liveWindowIds || new Set();
         // An unbound page has no identity of its own: never another one's cache.
         if (live.has(clientId)) return null;
@@ -566,9 +615,9 @@
         let agreed = live.size > 0;
         live.forEach(function (id) {
             const binding = state.bindings.get(id);
-            if (!binding || binding.retired || binding.key !== state.pointerKey) agreed = false;
+            if (!binding || binding.retired || pdfCacheNameOf(binding.key, binding.epoch) !== confirmed) agreed = false;
         });
-        return agreed ? PDF_CACHE_BASE + ':' + state.pointerKey : null;
+        return agreed ? confirmed : null;
     }
 
     /** The scope key a GET /api/session body names, or null (the page's own check, browser-scope.js). */
@@ -576,6 +625,11 @@
         if (!body || typeof body !== 'object') return null;
         const key = [body.instance_id, body.library && body.library.id, body.user && body.user.id].join('.');
         return validScopeKey(key) ? key : null;
+    }
+
+    /** The PDF cache a GET /api/session body is the scope and Library epoch of, or null. */
+    function sessionPdfCacheName(body) {
+        return pdfCacheNameOf(sessionScopeKey(body), body && body.library && body.library.epoch);
     }
 
     /**
@@ -845,6 +899,16 @@
             });
     }
 
+    /** Deletes the PDF caches of `key` under epochs older than `epoch`. Never rejects. */
+    function dropOlderEpochPdfCaches(cachesApi, key, epoch) {
+        if (!cachesApi || typeof cachesApi.keys !== 'function') return Promise.resolve();
+        return cachesApi.keys().then(function (names) {
+            return Promise.all(olderEpochPdfCaches(names, key, epoch).map(function (name) {
+                return cachesApi.delete(name);
+            }));
+        }).then(function () {}, function () {});
+    }
+
     function attachServiceWorkerListeners(scope) {
         if (!scope || typeof scope.addEventListener !== 'function') return;
 
@@ -898,8 +962,10 @@
             }).then(function (response) {
                 if (!response || response.status !== 200) return false;
                 return response.json().then(function (body) {
-                    const key = sessionScopeKey(body);
-                    return !!key && PDF_CACHE_BASE + ':' + key === cacheName;
+                    // The same account AND the same Library epoch: after a
+                    // restore, a page of the earlier Library stores nothing.
+                    const name = sessionPdfCacheName(body);
+                    return !!name && name === cacheName;
                 });
             }).catch(function () {
                 return false;
@@ -961,10 +1027,14 @@
             const sourceId = event.source && typeof event.source.id === 'string' ? event.source.id : '';
             const data = event.data;
             if (data && data.type === SCOPE_BIND_MESSAGE) {
+                const retired = data.retired === true;
                 const bind = liveClientIds('all').then(function (live) {
-                    return writeClientBinding(scope.indexedDB, sourceId, data.key, data.retired === true, live);
+                    return writeClientBinding(scope.indexedDB, sourceId, data.key, data.epoch, retired, live);
                 }).then(function (written) {
                     bindingWritten(sourceId);
+                    // A page of a newer Library epoch: its scope's caches of
+                    // earlier epochs hold the replaced Library's files.
+                    if (!retired && scope.caches) return dropOlderEpochPdfCaches(scope.caches, data.key, data.epoch).then(function () { return written; });
                     return written;
                 });
                 if (typeof event.waitUntil === 'function') event.waitUntil(bind);
@@ -1021,6 +1091,10 @@
         writeClientBinding: writeClientBinding,
         selectPdfCacheName: selectPdfCacheName,
         sessionScopeKey: sessionScopeKey,
+        sessionPdfCacheName: sessionPdfCacheName,
+        pdfCacheNameOf: pdfCacheNameOf,
+        olderEpochPdfCaches: olderEpochPdfCaches,
+        dropOlderEpochPdfCaches: dropOlderEpochPdfCaches,
         PRKS_SW_SCOPE_BIND_MESSAGE: SCOPE_BIND_MESSAGE,
         PRKS_SW_SCOPE_CLIENTS_STORE: SCOPE_CLIENTS_STORE,
         PRKS_SW_SCOPE_POINTER_DB_VERSION: SCOPE_POINTER_DB_VERSION,

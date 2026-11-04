@@ -133,7 +133,7 @@ keeps Work IDs unchanged.
 These do **not** hold a Work ID: the managed PDF file name
 (`<unix>_<8hex>_<name>.pdf`, from `mint_managed_pdf_filename`),
 `pending_pdf_cleanup` (keyed by basename), and the service-worker PDF cache
-`prks-pdf-v2:<scope>` (keyed by `/api/pdfs/<basename>`).
+`prks-pdf-v3:<scope>:<epoch>` (keyed by `/api/pdfs/<basename>`).
 
 ### 1.3 How the model is used, by subsystem
 

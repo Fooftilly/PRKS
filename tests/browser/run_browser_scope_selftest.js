@@ -68,7 +68,7 @@ async function testResolve() {
     record('the scoped store name carries the scope key',
         (await a.dbName('local')) === 'prks-local-v2:' + KEY_A
         && (await a.dbName('offline')) === 'prks-offline-v2:' + KEY_A
-        && (await a.dbName('pdf')) === 'prks-pdf-v2:' + KEY_A);
+        && (await a.dbName('pdf')) === 'prks-pdf-v3:' + KEY_A + ':1');
     record('an unknown store kind has no name', (await a.dbName('other')) === null);
 
     // Offline reload: the last confirmed scope, read from the record.
@@ -386,13 +386,14 @@ async function testAnnounceAndLifecycle() {
     await scope.resolve();
     record('a bound page tells the worker its scope',
         messages.length === 1 && messages[0].type === scopeApi.PRKS_SCOPE_BIND_MESSAGE && messages[0].key === KEY_A && !messages[0].retired);
+    record('with the Library epoch it bound with', messages[0].epoch === '1');
     listeners.controllerchange();
     await new Promise((r) => setTimeout(r, 0));
     record('a new controlling worker is told again', messages.length === 2 && messages[1].key === KEY_A);
     await scope.verify();
     await scope.verify();
     const last = messages[messages.length - 1];
-    record('a retired page tells the worker it has no scope', last.key === null && last.retired === true);
+    record('a retired page tells the worker it has no scope', last.key === null && last.epoch === null && last.retired === true);
 
     const unboundMessages = [];
     const unbound = scopeApi.createPrksBrowserScope({
@@ -674,7 +675,7 @@ async function testHold() {
 }
 
 async function testWorker() {
-    const name = 'prks-pdf-v2:' + KEY_A;
+    const name = 'prks-pdf-v3:' + KEY_A + ':1';
     function cacheStorage() {
         const caches = new Map();
         return {
@@ -694,7 +695,7 @@ async function testWorker() {
     }
     const storage = cacheStorage();
     const wrong = await sw.handlePdfCacheMessage({
-        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/pdfs/a.pdf', cacheName: 'prks-pdf-v2:other',
+        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/pdfs/a.pdf', cacheName: 'prks-pdf-v3:other',
         buffer: Buffer.from('X'),
     }, storage, async () => name);
     record('the worker refuses an install naming another scope', wrong === false && storage.caches.size === 0);
@@ -715,13 +716,13 @@ async function testWorker() {
 
     // Per-client selection.
     const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
-    const nameB = 'prks-pdf-v2:' + KEY_B;
+    const nameB = 'prks-pdf-v3:' + KEY_B + ':1';
     const bindings = new Map([
-        ['tab-a', { key: KEY_A, retired: false }],
-        ['tab-b', { key: KEY_B, retired: false }],
-        ['tab-old', { key: null, retired: true }],
+        ['tab-a', { key: KEY_A, epoch: '1', retired: false }],
+        ['tab-b', { key: KEY_B, epoch: '1', retired: false }],
+        ['tab-old', { key: null, epoch: null, retired: true }],
     ]);
-    const state = { pointerKey: KEY_B, bindings };
+    const state = { pointerKey: KEY_B, pointerEpoch: '1', bindings };
     const live = new Set(['tab-a', 'tab-b', 'tab-old']);
     record("a bound page gets its own scope's cache, not the last confirmed one",
         sw.selectPdfCacheName(state, 'tab-a', live, false) === name);
@@ -736,7 +737,7 @@ async function testWorker() {
         && sw.selectPdfCacheName(state, 'tab-b', live, true) === nameB);
     // A live page that has not bound yet (still loading, or its bind is lost)
     // never borrows the last confirmed account's cache.
-    const gap = { pointerKey: KEY_B, bindings: new Map([['tab-b', { key: KEY_B, retired: false }]]) };
+    const gap = { pointerKey: KEY_B, pointerEpoch: '1', bindings: new Map([['tab-b', { key: KEY_B, epoch: '1', retired: false }]]) };
     const gapLive = new Set(['tab-a', 'tab-b']);
     record('an unbound live page gets no cache even when every bound page agrees',
         sw.selectPdfCacheName(gap, 'tab-a', gapLive, false) === null);
@@ -745,21 +746,7 @@ async function testWorker() {
     record('a client with no id gets no cache', sw.selectPdfCacheName(gap, '', new Set(['tab-b']), false) === null);
     record('a worker gets no cache with no live page at all', sw.selectPdfCacheName(gap, 'worker-1', new Set(), false) === null);
     record('no record and no binding: no cache',
-        sw.selectPdfCacheName({ pointerKey: null, bindings: new Map() }, 'x', new Set(), false) === null);
-
-    // Bindings persist in the scope database and drop clients that are gone.
-    const idb = createFakeIndexedDBFactory();
-    await scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([ok(SESSION_A)]) }).resolve();
-    await sw.writeClientBinding(idb, 'tab-a', KEY_A, false, new Set(['tab-a']));
-    await sw.writeClientBinding(idb, 'tab-gone', KEY_A, false, new Set(['tab-a', 'tab-gone']));
-    await sw.writeClientBinding(idb, 'tab-b', KEY_B, false, new Set(['tab-a', 'tab-b']));
-    const read = await sw.readScopeState(idb);
-    record('the worker keeps each live binding', read.bindings.get('tab-a').key === KEY_A && read.bindings.get('tab-b').key === KEY_B);
-    record('the binding of a client that is gone is dropped', !read.bindings.has('tab-gone'));
-    await sw.writeClientBinding(idb, 'tab-a', null, true, null);
-    record('a retired page is recorded as retired', (await sw.readScopeState(idb)).bindings.get('tab-a').retired === true);
-    await sw.writeClientBinding(idb, 'tab-x', 'not a key', false, null);
-    record('an invalid key binds no scope', (await sw.readScopeState(idb)).bindings.get('tab-x').key === null);
+        sw.selectPdfCacheName({ pointerKey: null, pointerEpoch: null, bindings: new Map() }, 'x', new Set(), false) === null);
 
     const storage2 = cacheStorage();
     const byClient = (clientId, strict) => Promise.resolve(sw.selectPdfCacheName(state, clientId, live, strict));
@@ -816,6 +803,70 @@ async function testWorker() {
     }
     record('the worker reads a session body as its scope key',
         sw.sessionScopeKey(SESSION_A) === KEY_A && sw.sessionScopeKey({ user: null }) === null);
+}
+
+/** Bindings persist in the scope database and drop clients that are gone. */
+async function testWorkerBindings() {
+    const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
+    const idb = createFakeIndexedDBFactory();
+    await scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([ok(SESSION_A)]) }).resolve();
+    await sw.writeClientBinding(idb, 'tab-a', KEY_A, '1', false, new Set(['tab-a']));
+    await sw.writeClientBinding(idb, 'tab-gone', KEY_A, '1', false, new Set(['tab-a', 'tab-gone']));
+    await sw.writeClientBinding(idb, 'tab-b', KEY_B, '2', false, new Set(['tab-a', 'tab-b']));
+    const read = await sw.readScopeState(idb);
+    record('the worker keeps each live binding', read.bindings.get('tab-a').key === KEY_A && read.bindings.get('tab-b').key === KEY_B);
+    record('with the epoch each page bound with', read.bindings.get('tab-a').epoch === '1' && read.bindings.get('tab-b').epoch === '2');
+    record('and the last confirmed scope\'s epoch', read.pointerKey === KEY_A && read.pointerEpoch === '1');
+    record('the binding of a client that is gone is dropped', !read.bindings.has('tab-gone'));
+    await sw.writeClientBinding(idb, 'tab-a', null, null, true, null);
+    record('a retired page is recorded as retired', (await sw.readScopeState(idb)).bindings.get('tab-a').retired === true);
+    await sw.writeClientBinding(idb, 'tab-x', 'not a key', '1', false, null);
+    record('an invalid key binds no scope', (await sw.readScopeState(idb)).bindings.get('tab-x').key === null);
+}
+
+/** Library epoch (#629, §10.4): each epoch has its own PDF cache. */
+async function testWorkerEpochs() {
+    const KEY_B = SESSION_B.instance_id + '.' + SESSION_B.library.id + '.' + SESSION_B.user.id;
+    const name = 'prks-pdf-v3:' + KEY_A + ':1';
+    const nameB = 'prks-pdf-v3:' + KEY_B + ':1';
+    const epochs = new Map([
+        ['tab-old-lib', { key: KEY_B, epoch: '1', retired: false }],
+        ['tab-new-lib', { key: KEY_B, epoch: '2', retired: false }],
+        ['tab-no-epoch', { key: KEY_B, epoch: null, retired: false }],
+    ]);
+    const restored = { pointerKey: KEY_B, pointerEpoch: '2', bindings: epochs };
+    const all = new Set(['tab-old-lib', 'tab-new-lib', 'tab-no-epoch']);
+    record('a page of the restored Library gets its epoch\'s cache',
+        sw.selectPdfCacheName(restored, 'tab-new-lib', all, false) === 'prks-pdf-v3:' + KEY_B + ':2');
+    record('a page of the earlier Library keeps its own, never the newer one',
+        sw.selectPdfCacheName(restored, 'tab-old-lib', all, false) === nameB);
+    record('a page bound without an epoch gets no cache', sw.selectPdfCacheName(restored, 'tab-no-epoch', all, false) === null);
+    record('a worker gets no cache while live pages are on different epochs',
+        sw.selectPdfCacheName(restored, 'worker-1', new Set(['tab-old-lib', 'tab-new-lib']), false) === null);
+    record('a worker borrows the confirmed epoch when every page is on it',
+        sw.selectPdfCacheName(restored, 'worker-1', new Set(['tab-new-lib']), false) === 'prks-pdf-v3:' + KEY_B + ':2');
+    record('a record without an epoch lends no cache',
+        sw.selectPdfCacheName({ pointerKey: KEY_B, pointerEpoch: null, bindings: new Map() }, 'worker-1', new Set(['tab-new-lib']), false) === null);
+    const names = ['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9', 'prks-pdf-v3:' + KEY_B + ':10',
+        'prks-pdf-v3:' + KEY_B + ':11', 'prks-pdf-v3:' + KEY_A + ':1', 'prks-static-x', 'prks-pdf-v3:' + KEY_B + ':x'];
+    record('the caches of earlier epochs of that scope are the ones dropped',
+        JSON.stringify(sw.olderEpochPdfCaches(names, KEY_B, '10'))
+            === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9']));
+    const deleted = [];
+    await sw.dropOlderEpochPdfCaches({ keys: async () => names, delete: async (n) => { deleted.push(n); return true; } }, KEY_B, '2');
+    record('a newer binding deletes them', JSON.stringify(deleted) === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1']));
+    record('an invalid epoch drops nothing', sw.olderEpochPdfCaches(names, KEY_B, 'x').length === 0);
+    record('a numeric epoch drops the same caches',
+        JSON.stringify(sw.olderEpochPdfCaches(names, KEY_B, 10))
+            === JSON.stringify(['prks-pdf-v3:' + KEY_B + ':1', 'prks-pdf-v3:' + KEY_B + ':9']));
+    record('the session names the cache of its scope and epoch',
+        sw.sessionPdfCacheName(SESSION_A) === name
+        && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: 2 }) }))
+            === 'prks-pdf-v3:' + KEY_A + ':2'
+        && sw.sessionPdfCacheName(Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: undefined }) })) === null);
+    record('the per-scope caches of builds without an epoch are retired',
+        sw.shouldRetireCache('prks-pdf-v2:' + KEY_A) && sw.shouldRetireCache('prks-pdf-v1')
+        && !sw.shouldRetireCache('prks-pdf-v3:' + KEY_A + ':1'));
 }
 
 /** A session stub whose epochs the test sets. */
@@ -997,6 +1048,8 @@ async function main() {
     await testHold();
     await testEpoch();
     await testWorker();
+    await testWorkerBindings();
+    await testWorkerEpochs();
     console.log(passed + ' passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }

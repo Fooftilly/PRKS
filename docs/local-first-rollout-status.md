@@ -30,7 +30,7 @@ projection, and is proven by focused E2E coverage.
 | Concepts | `CREATE_CONCEPT`, `SET_CONCEPT_FIELD`, `SET_CONCEPT_IDENTITY`, `SET_CONCEPT_PARENTS`, `DELETE_CONCEPT` | name+aliases are one aggregate; the parent set is another |
 | Playlists | `CREATE_PLAYLIST`, `SET_PLAYLIST_FIELD`, `REORDER_PLAYLIST_ITEMS`, `DELETE_PLAYLIST`, `SET_WORK_PLAYLIST` | the order is one aggregate; a Work's playlist is a scalar on the Work; detail page offers Delete playlist |
 | Work notes | `SET_WORK_RESEARCH_NOTE`, `SET_WORK_PRIVATE_NOTE` | independent whole-document aggregates; Research ACK fences Concept/Argument/Graph when the body changed or the revision advanced past the observed base; Private ACK does not |
-| PDF annotations | `CREATE_PDF_ANNOTATION`, `SET_PDF_ANNOTATION`, `DELETE_PDF_ANNOTATION` | per-annotation aggregate on already-available PDFs; PDF bytes never in the durable queue; offline edits require cached `prks-pdf-v2:<scope>` bytes + acknowledged annotation base + durable store; materialization may lag (`ANNOTATION_MATERIALIZATION_STALE`) |
+| PDF annotations | `CREATE_PDF_ANNOTATION`, `SET_PDF_ANNOTATION`, `DELETE_PDF_ANNOTATION` | per-annotation aggregate on already-available PDFs; PDF bytes never in the durable queue; offline edits require cached `prks-pdf-v3:<scope>:<epoch>` bytes + acknowledged annotation base + durable store; materialization may lag (`ANNOTATION_MATERIALIZATION_STALE`) |
 
 ## What one overnight pass added
 

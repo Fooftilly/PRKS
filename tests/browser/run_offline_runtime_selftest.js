@@ -2200,11 +2200,11 @@ async function run() {
             window: null,
             caches: fakeCaches,
             navigator: null,
-            scope: { dbName: async (kind) => (kind === 'pdf' ? 'prks-pdf-v2:S' : null) },
+            scope: { dbName: async (kind) => (kind === 'pdf' ? 'prks-pdf-v3:S:1' : null) },
         });
         const ok = await runtime.clearCache();
         assert('clearCache resolves true', ok === true);
-        assertEq('clearCache removes the signed-in scope\'s pdf cache', deletedCacheName, 'prks-pdf-v2:S');
+        assertEq('clearCache removes the signed-in scope\'s pdf cache', deletedCacheName, 'prks-pdf-v3:S:1');
         deletedCacheName = null;
         const unscoped = mod.createPrksOfflineRuntime({
             prksRequest: null, store: makeFakeStore(), setTimeout: noopSetTimeout,
