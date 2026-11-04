@@ -484,6 +484,32 @@ async function run() {
             assertEq('what the first cached survives the second fence', ((await second.getEntity('work', 'W-new')) || {}).value, { title: 'New' });
         }
 
+        // Nor does an old page's invalidation delete what a newer page cached
+        // (#1116 review): a delete, a list delete and a kind sweep are skipped
+        // and report true, since nothing of the old page's Library is left.
+        {
+            const delIdb = createFakeIndexedDBFactory();
+            const stale = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: delIdb, scope: scopeAt('1') });
+            await stale.putEntity('work', 'W-1', { title: 'Old' }, 'r1');
+            const fresh = mod.createPrksOfflineStore({ idb: idbApi, indexedDB: delIdb, scope: scopeAt('2') });
+            await fresh.putEntity('work', 'W-1', { title: 'New' }, 'r2');
+            await fresh.putEntity('work', 'W-2', { title: 'New 2' }, 'r2');
+            await fresh.putList('works', [{ id: 'W-1' }], 'r2');
+            assertEq('an old page\'s entity delete reports done', await stale.deleteEntity('work', 'W-1'), true);
+            assertEq('an old page\'s list delete reports done', await stale.deleteList('works'), true);
+            assertEq('an old page\'s kind sweep reports done', await stale.deleteEntitiesByKind('work'), true);
+            assertEq('the newer page keeps its entity', ((await fresh.getEntity('work', 'W-1')) || {}).value, { title: 'New' });
+            assertEq('its kind listing', (await fresh.getEntitiesByKind('work')).length, 2);
+            assertEq('and its list', ((await fresh.getList('works')) || {}).value, [{ id: 'W-1' }]);
+            // The newer page's own invalidations still delete.
+            assertEq('the newer page deletes its entity', await fresh.deleteEntity('work', 'W-1'), true);
+            assertEq('gone', await fresh.getEntity('work', 'W-1'), null);
+            assertEq('the newer page sweeps a kind', await fresh.deleteEntitiesByKind('work'), true);
+            assertEq('swept', await fresh.getEntitiesByKind('work'), []);
+            assertEq('the newer page deletes its list', await fresh.deleteList('works'), true);
+            assertEq('list gone', await fresh.getList('works'), null);
+        }
+
         // Clearing the cache keeps its epoch: a later store of the same
         // epoch does not take the missing row for a restore.
         {

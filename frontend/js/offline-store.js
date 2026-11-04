@@ -306,12 +306,16 @@
     /**
      * Cursor multi-request kind sweep on a raw IDB database handle.
      * Resolves true only after the transaction commits with a completed sweep.
+     * Reads the cache's `library_epoch` in the same transaction first: on a
+     * page older than the cache (`epoch` below it) nothing of the page's own
+     * Library is left, so the sweep is skipped (true) and the newer page's
+     * entries stay.
      */
-    function deleteEntitiesByKindOnRawDb(raw, wanted, range) {
+    function deleteEntitiesByKindOnRawDb(raw, wanted, range, epoch) {
         return new Promise(function (resolve) {
             let tx;
             try {
-                tx = raw.transaction([STORE_ENTITIES], 'readwrite');
+                tx = raw.transaction([STORE_ENTITIES, STORE_METADATA], 'readwrite');
             } catch (_e) {
                 resolve(false);
                 return;
@@ -343,10 +347,35 @@
                 finish(false);
                 return;
             }
-            if (range && typeof store.openCursor === 'function') {
-                if (sweepKindViaCursor(store, range, finish, markSwept)) return;
+            function sweep() {
+                if (range && typeof store.openCursor === 'function') {
+                    if (sweepKindViaCursor(store, range, finish, markSwept)) return;
+                }
+                sweepKindViaGetAll(store, wanted, finish, markSwept);
             }
-            sweepKindViaGetAll(store, wanted, finish, markSwept);
+            if (!epoch) {
+                sweep();
+                return;
+            }
+            let metaReq;
+            try {
+                metaReq = tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH);
+            } catch (_e) {
+                finish(false);
+                return;
+            }
+            metaReq.onsuccess = function () {
+                const row = metaReq.result;
+                const seen = row ? epochOf(row.value) : null;
+                if (seen && compareEpochs(seen, epoch) > 0) {
+                    markSwept();
+                    return;
+                }
+                sweep();
+            };
+            metaReq.onerror = function () {
+                finish(false);
+            };
         });
     }
 
@@ -573,18 +602,18 @@
         }
 
         /**
-         * Writes one envelope under this page's epoch, in one transaction with
-         * the cache's `library_epoch`: a page older than the cache (a tab
-         * loaded before a restore) never replaces what a newer page cached at
-         * the same key. Resolves true only when the write committed.
+         * Runs `op(store)` on `storeName` in one readwrite transaction with the
+         * cache's `library_epoch`. A page older than the cache (a tab loaded
+         * before a restore) never touches what a newer page cached: its op is
+         * skipped and the call resolves to `whenNewer`. Otherwise it resolves
+         * true only when the transaction committed.
          */
-        function putCurrent(storeName, envelope) {
+        function inCurrentEpoch(storeName, op, whenNewer) {
             return fence().then(openDb).then(function (db) {
+                if (!db) return false;
                 // A scope without an epoch opens no database (resolveDbName);
                 // only a caller-named one (tests) may cache without an epoch.
                 const epoch = pageEpoch();
-                if (!db) return false;
-                envelope.libraryEpoch = epoch;
                 let tx;
                 try {
                     tx = db.transaction([storeName, STORE_METADATA], 'readwrite');
@@ -592,16 +621,16 @@
                     return false;
                 }
                 const done = tx.done.then(function () { return true; }, function () { return false; });
-                let refused = false;
+                let newer = false;
                 return tx.objectStore(STORE_METADATA).get(META_LIBRARY_EPOCH).then(function (row) {
                     const seen = row ? epochOf(row.value) : null;
                     if (epoch && seen && compareEpochs(seen, epoch) > 0) {
-                        refused = true;
+                        newer = true;
                         return undefined;
                     }
-                    return tx.objectStore(storeName).put(envelope);
+                    return op(tx.objectStore(storeName), epoch);
                 }).then(function () {
-                    return done.then(function (ok) { return ok && !refused; });
+                    return done.then(function (ok) { return ok && (newer ? whenNewer : true); });
                 }, function () {
                     try {
                         tx.abort();
@@ -613,6 +642,25 @@
             }).catch(function () {
                 return false;
             });
+        }
+
+        /** Writes one envelope stamped with this page's epoch; refused (false) on a page older than the cache. */
+        function putCurrent(storeName, envelope) {
+            return inCurrentEpoch(storeName, function (store, epoch) {
+                envelope.libraryEpoch = epoch;
+                return store.put(envelope);
+            }, false);
+        }
+
+        /**
+         * Deletes one key. On a page older than the cache nothing of its own
+         * Library is left there (the newer page's fence cleared it), so the
+         * delete is skipped and reports true: what the newer page cached stays.
+         */
+        function deleteCurrent(storeName, key) {
+            return inCurrentEpoch(storeName, function (store) {
+                return store.delete(key);
+            }, true);
         }
 
         function putEntity(kind, id, value, sourceRevision) {
@@ -636,11 +684,7 @@
         }
 
         function deleteEntity(kind, id) {
-            return runRequest(STORE_ENTITIES, 'readwrite', function (store) {
-                return store.delete([String(kind), String(id)]);
-            }).then(function (r) {
-                return r.ok;
-            });
+            return deleteCurrent(STORE_ENTITIES, [String(kind), String(id)]);
         }
 
         function kindKeyRange(kind) {
@@ -671,12 +715,12 @@
          */
         function deleteEntitiesByKind(kind) {
             const wanted = String(kind);
-            return openDb()
+            return fence().then(openDb)
                 .then(function (db) {
                     // Cursor multi-request sweeps stay on the raw IDB handle.
                     const raw = rawDb(db);
                     if (!raw) return false;
-                    return deleteEntitiesByKindOnRawDb(raw, wanted, kindKeyRange(wanted));
+                    return deleteEntitiesByKindOnRawDb(raw, wanted, kindKeyRange(wanted), pageEpoch());
                 })
                 .catch(function () {
                     return false;
@@ -703,11 +747,7 @@
         }
 
         function deleteList(listKey) {
-            return runRequest(STORE_LISTS, 'readwrite', function (store) {
-                return store.delete(String(listKey));
-            }).then(function (r) {
-                return r.ok;
-            });
+            return deleteCurrent(STORE_LISTS, String(listKey));
         }
 
         /**
