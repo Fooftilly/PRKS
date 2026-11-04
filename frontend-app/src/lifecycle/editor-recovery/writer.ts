@@ -1125,7 +1125,11 @@ export function createWriterRegistry(options: WriterRegistryOptions): WriterRegi
         await Promise.all([...live].map((w) => w.flush().catch(() => undefined)))
         // A write that failed is retried by its writer, guarded meanwhile;
         // the text is only let go once it is in the database.
-        if (pendingWriters().length) await new Promise<void>((resolve) => (drained = resolve))
+        if (pendingWriters().length) {
+          await new Promise<void>((resolve) => {
+            drained = resolve
+          })
+        }
         drained = null
         registry.dispose()
       })()

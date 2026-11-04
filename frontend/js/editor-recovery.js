@@ -2885,7 +2885,9 @@ var prksEditorRecovery = (function(exports) {
 						writeEmergencyNow();
 					} catch {}
 					await Promise.all([...live].map((w) => w.flush().catch(() => void 0)));
-					if (pendingWriters().length) await new Promise((resolve) => drained = resolve);
+					if (pendingWriters().length) await new Promise((resolve) => {
+						drained = resolve;
+					});
 					drained = null;
 					registry.dispose();
 				})();
