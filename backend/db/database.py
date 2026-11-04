@@ -189,9 +189,9 @@ class Database:
             conn.execute("SELECT set_config(%s, %s, false)", (name, value))
 
     @contextmanager
-    def _borrow(self) -> Iterator[psycopg.Connection[Any]]:
+    def _borrow(self, timeout: float | None = None) -> Iterator[psycopg.Connection[Any]]:
         try:
-            with self._pool.connection() as conn:
+            with self._pool.connection(timeout=timeout) as conn:
                 yield conn
         except PoolTimeout as exc:
             raise map_database_error(exc, self._registry) from exc
@@ -203,8 +203,9 @@ class Database:
         isolation: Isolation,
         read_only: bool,
         attempt: int,
+        borrow_timeout: float | None = None,
     ) -> T:
-        with self._borrow() as conn:
+        with self._borrow(borrow_timeout) as conn:
             with conn.transaction():
                 conn.execute(_begin_statement(isolation, read_only))
                 tx = Transaction(conn, isolation=isolation, read_only=read_only, attempt=attempt)
@@ -241,11 +242,20 @@ class Database:
                     continue
                 raise map_database_error(exc, self._registry) from exc
 
-    def query(self, fn: Callable[[Transaction], T]) -> T:
-        """Run ``fn`` in one REPEATABLE READ READ ONLY snapshot."""
+    def query(self, fn: Callable[[Transaction], T], *, borrow_timeout: float | None = None) -> T:
+        """Run ``fn`` in one REPEATABLE READ READ ONLY snapshot.
+
+        ``borrow_timeout`` (seconds) bounds the wait for a pooled connection
+        instead of the pool's own timeout; a probe uses it to answer quickly
+        while the pool is busy.
+        """
         try:
             return self._run_once(
-                fn, isolation=Isolation.REPEATABLE_READ, read_only=True, attempt=1
+                fn,
+                isolation=Isolation.REPEATABLE_READ,
+                read_only=True,
+                attempt=1,
+                borrow_timeout=borrow_timeout,
             )
         except psycopg.Error as exc:
             raise map_database_error(exc, self._registry) from exc

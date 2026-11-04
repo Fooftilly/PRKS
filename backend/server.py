@@ -1091,13 +1091,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         )
 
     def _probe(self, path, *, head=False):
-        """No-I/O liveness; readiness fails closed until the PG cutover.
+        """``/healthz``: no-I/O liveness. ``/readyz``: the PostgreSQL readiness checks.
 
         This never invokes API session admission or returns configuration.
-        /readyz must not signal success until the #630 paired-root, pool,
-        schema and bootstrap checks are wired into the serving process.
+        ``/readyz`` answers 200 only when the server carries a readiness
+        check (``backend.readiness``: pool, schema, setup, paired root and
+        reconciled start generation) and it passes; the SQLite runtime has
+        none, so it stays not ready.
         """
-        ready = path == '/healthz'
+        if path == '/healthz':
+            ready = True
+        else:
+            readiness = getattr(self.server, 'prks_readiness', None)
+            try:
+                ready = readiness is not None and bool(readiness.ready())
+            except Exception as exc:  # a probe fails closed, never with a 500
+                LOGGER.warning("readiness_check_failed error_type=%s", safe_error_type(exc))
+                ready = False
         body = b"ok" if ready else b"not ready"
         self.send_response(200 if ready else 503)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -3889,7 +3899,7 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None):
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     host = normalize_listen_host(host)
@@ -3936,6 +3946,8 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None):
         # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
         # embedded worker and the job diagnostics. None for the SQLite runtime.
         httpd.prks_jobs = jobs
+        # GET /readyz (backend.readiness.PostgresReadiness); None keeps it 503.
+        httpd.prks_readiness = readiness
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(

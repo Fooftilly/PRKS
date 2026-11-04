@@ -29,8 +29,49 @@ def parse_host(value):
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+ROLES = ("serve", "migrate", "worker", "admin")
+
+
+def split_role(argv):
+    """``(role, rest)``: the first argument names a role (§12.2); none means ``serve``."""
+    if argv and argv[0] in ROLES:
+        return argv[0], list(argv[1:])
+    return "serve", list(argv)
+
+
+def _add_root_arguments(parser):
+    parser.add_argument(
+        "--testing",
+        action="store_true",
+        help="A disposable testing instance on the testing storage root.",
+    )
+    parser.add_argument(
+        "--storage-root",
+        metavar="PATH",
+        default=None,
+        help="Storage root for this run (as for serve).",
+    )
+
+
+def build_role_parser(role):
+    """The arguments of ``migrate`` and ``worker``: they act on the selected storage root."""
+    descriptions = {
+        "migrate": "Apply the PostgreSQL schema, then check and bump this start against the storage root.",
+        "worker": "Run the PostgreSQL job worker on the storage root.",
+    }
+    parser = argparse.ArgumentParser(prog=f"prks_app.py {role}", description=descriptions[role])
+    _add_root_arguments(parser)
+    return parser
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(description="PRKS — Personal Research Knowledge System")
+    parser = argparse.ArgumentParser(
+        description="PRKS — Personal Research Knowledge System",
+        epilog=(
+            "Roles: serve (the default), migrate, worker, admin. "
+            "Run 'prks_app.py ROLE --help' for each."
+        ),
+    )
     parser.add_argument(
         "--testing",
         action="store_true",
@@ -130,12 +171,52 @@ def start_identity(args, config, environ=None):
     except DatabaseConfigError as exc:
         print(f"PRKS cannot start authentication: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
+    migrate_on_start(db, env)
     try:
         return start_web_identity(db, settings, root=os.path.realpath(config.root), testing=testing)
     except RootPairingRefused as exc:
         db.close()
         print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
+
+
+def migrate_on_start(db, environ):
+    """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
+
+    With ``0`` the schema is still verified: a web process never starts on a
+    schema other than its code's (§12.3).
+
+    Compose sets ``0``: its one-shot ``migrate`` service is the only runner.
+    The schema work never touches the root; the start check runs after it.
+    Any refusal exits with status 2.
+    """
+    from backend.db.migrate import MigrationError, migrate, verify_schema
+
+    value = (environ.get("PRKS_MIGRATE_ON_START") or "1").strip()
+    if value not in ("0", "1"):
+        db.close()
+        print("PRKS cannot start: PRKS_MIGRATE_ON_START must be 0 or 1.", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        if value == "0":
+            # The migrate role ran; this process still refuses a schema that
+            # is not exactly its code's (pending, newer or changed files).
+            verify_schema(db.config.conninfo)
+        else:
+            migrate(db.config.conninfo)
+    except MigrationError as exc:
+        db.close()
+        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def readiness_for(auth, root):
+    """``GET /readyz`` of a ``PRKS_AUTH`` web process (``backend.readiness``); None for the SQLite runtime."""
+    if auth is None:
+        return None
+    from backend.readiness import PostgresReadiness
+
+    return PostgresReadiness(auth.db, instance_id=auth.instance_id, root=os.path.realpath(root))
 
 
 def start_jobs(auth, environ=None):
@@ -165,11 +246,51 @@ def start_jobs(auth, environ=None):
     raise SystemExit(2)
 
 
+def run_role(role, argv):
+    """``migrate``, ``worker`` or ``admin``: the PostgreSQL roles beside ``serve`` (§12.2)."""
+    # Every role fails before any import of the PostgreSQL packages when the
+    # Python environment is wrong, as serve does.
+    from backend.dependency_gate import ensure_runtime_or_exit
+
+    ensure_runtime_or_exit()
+    if role == "admin":
+        # The admin commands take their own --root (docs/admin-bootstrap.md).
+        from backend.domain.identity import admin
+
+        return admin.main(argv)
+    args = build_role_parser(role).parse_args(argv)
+    if args.testing:
+        os.environ["PRKS_TESTING"] = "1"
+    config = select_config(args)
+    root = os.path.realpath(config.root)
+    testing = config.mode == "testing"
+    from backend import process_roles
+
+    if role == "migrate":
+        return process_roles.run_migrate(root=root, testing=testing)
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    return process_roles.run_worker(root=root, testing=testing)
+
+
+def select_config(args):
+    """The storage root of a ``migrate`` or ``worker`` role; serve selects its own inline below."""
+    try:
+        return StorageConfig.from_env(cli_root=args.storage_root)
+    except StorageRootError as exc:
+        print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 if __name__ == "__main__":
     from backend.startup_profile import phase as startup_phase, record_imports
 
     record_imports(_IMPORT_STARTED)
-    args = build_parser().parse_args()
+    role, role_argv = split_role(sys.argv[1:])
+    if role != "serve":
+        raise SystemExit(run_role(role, role_argv))
+    args = build_parser().parse_args(role_argv)
     if args.testing:
         os.environ["PRKS_TESTING"] = "1"
 
@@ -210,4 +331,4 @@ if __name__ == "__main__":
             jobs.bind_root(config.root)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    run_server(port=port, host=args.host, auth=auth, jobs=jobs)
+    run_server(port=port, host=args.host, auth=auth, jobs=jobs, readiness=readiness_for(auth, config.root))
