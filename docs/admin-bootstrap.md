@@ -16,7 +16,9 @@ Browser first-run setup, when it arrives, uses the same tokens.
 
 ## Before you start
 
-- The database schema is applied (`python prks_app.py migrate`) and
+- The database schema is applied (`python prks_app.py migrate`; a web
+  process with `PRKS_AUTH` also applies it at start unless
+  `PRKS_MIGRATE_ON_START=0`) and
   `PRKS_DATABASE_URL` or `PRKS_DATABASE_URL_FILE` names the database.
 - The data root is already bound: it has a `prks-root.json`. Both commands
   check `--root` first and refuse a missing or unbound root before asking for

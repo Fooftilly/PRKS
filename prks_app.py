@@ -171,12 +171,46 @@ def start_identity(args, config, environ=None):
     except DatabaseConfigError as exc:
         print(f"PRKS cannot start authentication: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
+    migrate_on_start(db, env)
     try:
         return start_web_identity(db, settings, root=os.path.realpath(config.root), testing=testing)
     except RootPairingRefused as exc:
         db.close()
         print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
+
+
+def migrate_on_start(db, environ):
+    """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
+
+    Compose sets ``0``: its one-shot ``migrate`` service is the only runner.
+    The schema work never touches the root; the start check runs after it.
+    Any refusal exits with status 2.
+    """
+    from backend.db.migrate import MigrationError, migrate
+
+    value = (environ.get("PRKS_MIGRATE_ON_START") or "1").strip()
+    if value not in ("0", "1"):
+        db.close()
+        print("PRKS cannot start: PRKS_MIGRATE_ON_START must be 0 or 1.", file=sys.stderr)
+        raise SystemExit(2)
+    if value == "0":
+        return
+    try:
+        migrate(db.config.conninfo)
+    except MigrationError as exc:
+        db.close()
+        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def readiness_for(auth, root):
+    """``GET /readyz`` of a ``PRKS_AUTH`` web process (``backend.readiness``); None for the SQLite runtime."""
+    if auth is None:
+        return None
+    from backend.readiness import PostgresReadiness
+
+    return PostgresReadiness(auth.db, instance_id=auth.instance_id, root=os.path.realpath(root))
 
 
 def start_jobs(auth, environ=None):
@@ -284,4 +318,4 @@ if __name__ == "__main__":
             jobs.bind_root(config.root)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    run_server(port=port, host=args.host, auth=auth, jobs=jobs)
+    run_server(port=port, host=args.host, auth=auth, jobs=jobs, readiness=readiness_for(auth, config.root))

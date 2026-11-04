@@ -1,4 +1,4 @@
-"""HTTP deployment probe contract, before PostgreSQL Compose cutover (#630)."""
+"""HTTP deployment probe contract (#630): /healthz liveness, /readyz from the server's readiness check."""
 from __future__ import annotations
 
 import http.client
@@ -24,6 +24,7 @@ class HealthProbeTests(unittest.TestCase):
         self.httpd.prks_trusted_hosts = frozenset()
         self.httpd.prks_auth = object()  # no session; probe cannot depend on it
         self.httpd.prks_jobs = None
+        self.httpd.prks_readiness = None
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.thread.join, 5)
@@ -56,9 +57,8 @@ class HealthProbeTests(unittest.TestCase):
                     self.assertEqual(headers.get("Content-Type"), "text/plain; charset=utf-8")
                     self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
 
-    def test_readiness_is_explicitly_unavailable_until_pg_cutover(self):
-        # A running HTTP handler cannot claim PostgreSQL readiness while the
-        # canonical API still serves SQLite and no pairing check is connected.
+    def test_readiness_is_unavailable_without_a_readiness_check(self):
+        # The SQLite runtime carries no PostgreSQL readiness check.
         for method, expected_body in (("GET", b"not ready"), ("HEAD", b"")):
             with self.subTest(method=method):
                 status, body, headers = self.request(method, "/readyz")
@@ -66,6 +66,34 @@ class HealthProbeTests(unittest.TestCase):
                 self.assertEqual(body, expected_body)
                 self.assertEqual(headers.get("Content-Length"), "9")
                 self.assertEqual(headers.get("Cache-Control"), "no-store")
+
+    def test_readiness_follows_the_check_without_api_admission_or_detail(self):
+        class Readiness:
+            def __init__(self, answer):
+                self.answer = answer
+                self.calls = 0
+
+            def ready(self):
+                self.calls += 1
+                if isinstance(self.answer, Exception):
+                    raise self.answer
+                return self.answer
+
+        cases = ((True, 200, b"ok"), (False, 503, b"not ready"), (RuntimeError("db at 10.0.0.5"), 503, b"not ready"))
+        with patch.object(PRKSHandler, "_prks_admit", side_effect=AssertionError("API auth invoked")):
+            for answer, expected_status, expected_body in cases:
+                with self.subTest(answer=repr(answer)):
+                    readiness = Readiness(answer)
+                    self.httpd.prks_readiness = readiness
+                    status, body, headers = self.request("GET", "/readyz")
+                    self.assertEqual((status, body), (expected_status, expected_body))
+                    self.assertEqual(headers.get("Cache-Control"), "no-store")
+                    status, body, _headers = self.request("HEAD", "/readyz")
+                    self.assertEqual((status, body), (expected_status, b""))
+                    self.assertEqual(readiness.calls, 2)
+                    # Liveness never consults the readiness check.
+                    self.assertEqual(self.request("GET", "/healthz")[0], 200)
+                    self.assertEqual(readiness.calls, 2)
 
     def test_normalized_probe_urls_never_fall_through_to_spa(self):
         # The SPA fallback returns 200 for unknown routes. Both GET and HEAD

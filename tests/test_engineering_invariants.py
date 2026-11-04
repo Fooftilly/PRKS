@@ -1415,6 +1415,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/jobs/worker.py",
                 "backend/jobs/embedded.py",
                 "backend/process_roles.py",
+                "backend/readiness.py",
                 "backend/sync/__init__.py",
                 "backend/sync/families.py",
                 "backend/sync/protocol.py",
