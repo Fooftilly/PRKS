@@ -31,6 +31,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
 from backend.domain.organization import folders, playlists
 from backend.domain.people import roles
+from backend.domain.search import refresh as search_refresh
 from backend.domain.works import metadata, revisions
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, StorageKey
 
@@ -336,7 +337,8 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     advanced, and every fixed scope (``work_scopes``) even if never edited, so
     a base taken before the delete is stale on a Work recreated under the id.
     A ``research.reindex_work`` enqueued here drops the Work's derived
-    mentions once the delete commits (§8.4).
+    mentions once the delete commits (§8.4), and the Work's
+    ``derived.work_search`` row is deleted after the Work (§8.3).
     Every stored key of the Work's Assets (working and pristine) that no
     other Asset of the Library names gets a cleanup claim in this
     transaction (``objects.lifecycle.release``, §11.2); the bytes are
@@ -369,6 +371,9 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     annotation_store.release_work(scope, work_id)
     for statement in _DELETE_WORK_LEVELS:
         scope.execute(statement, {"work_id": work_id})
+    # Then its search row: a refresh that locked the Work first has committed
+    # by now, and a later one finds the Work gone and writes nothing (§8.3).
+    search_refresh.drop_work(scope, work_id)
     # Its reindex runs after this COMMIT and removes whatever an earlier one
     # wrote (§8.4).
     reindex.enqueue(scope, work_id)
