@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 1033,
+      "number": 1111,
       "set": {
-        "Agent": "Cursor Cloud",
+        "Agent": "ChatGPT/Codex",
         "Execution": "Agent"
       },
       "expected_before": {
@@ -13,14 +13,14 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Owner approved Cursor Cloud ownership of the newly accepted post-migration Vue UI consolidation roadmap #1033. Reviewed #179, completed #230/#303, current scope, and open PRs; status stays Inbox rather than authorizing pickup.",
+      "reason": "Maintainer explicitly requested ChatGPT/Codex ownership; reviewed PG-C1/PG-C2, candidate EF-173 scope and open PR overlap. Preserve Inbox: audit candidate is not approved for implementation.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1034,
+      "number": 1112,
       "set": {
-        "Agent": "Cursor Cloud",
+        "Agent": "ChatGPT/Codex",
         "Execution": "Agent"
       },
       "expected_before": {
@@ -28,14 +28,14 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Owner explicitly assigned the Vue Folder hierarchy consolidation issue to Cursor Cloud. Reviewed #1033 and existing folder correctness issues #282/#197/#525; no native blockers and no active PR implementing this migration.",
+      "reason": "Maintainer explicitly requested ChatGPT/Codex ownership; reviewed PG-C1/PG-C2, candidate EF-174 and open Vue create-form PR #1056, which does not own the offline deletion dependency. Preserve Inbox pending acceptance.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1035,
+      "number": 1113,
       "set": {
-        "Agent": "Cursor Cloud",
+        "Agent": "ChatGPT/Codex",
         "Execution": "Agent"
       },
       "expected_before": {
@@ -43,82 +43,7 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Owner explicitly assigned the shared Vue modal/dialog host consolidation issue to Cursor Cloud. Reviewed roadmap and existing UX #154/#360/#842; no native blockers. Open PR #883 touches frontend ui.js and must be reconciled before implementation.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1036,
-      "set": {
-        "Agent": "Cursor Cloud",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Owner explicitly assigned remaining classic create/edit modal forms migration to Cursor Cloud. Reviewed roadmap and explicit #1035 predecessor in issue body, no native blockers; keep lifecycle Inbox pending dependencies.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1037,
-      "set": {
-        "Agent": "Cursor Cloud",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Owner explicitly assigned the Settings Vue presentation migration to Cursor Cloud. Reviewed roadmap and #1035 dependency, #543 and modal/Settings tests; no native blockers, leave Inbox.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1038,
-      "set": {
-        "Agent": "Cursor Cloud",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Owner explicitly assigned sidebar/ribbon navigation chrome consolidation to Cursor Cloud. Reviewed #1033, existing #416/#445 UX plans, and current open PRs; no native blockers and no redesign authorized.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1039,
-      "set": {
-        "Agent": "Cursor Cloud",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Owner explicitly assigned the command palette Vue presentation migration to Cursor Cloud. Reviewed #1033 and #1035 dependency, existing redesign #439; no native blockers or active same-scope PR.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1040,
-      "set": {
-        "Agent": "Cursor Cloud",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Owner explicitly assigned narrow Work video viewer HTML-to-Vue migration to Cursor Cloud. Reviewed roadmap and existing Work/PDF ownership; no native blockers or active same-scope PR.",
+      "reason": "Maintainer explicitly requested ChatGPT/Codex ownership; reviewed PG-C1/PG-C2, candidate EF-175 and PR overlap; assignment only, retain Inbox pending acceptance.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
