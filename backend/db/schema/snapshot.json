@@ -11,8 +11,32 @@
       "strict": true,
       "volatility": "i"
     },
+    "prks.like_escape(text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.like_escape(s text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT replace(replace(replace(s, '\\'::text, '\\\\'::text), '%'::text, '\\%'::text), '_'::text, '\\_'::text) AS replace;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    },
+    "prks.search_fold(text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.search_fold(s text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT casefold((NORMALIZE(s, NFC) COLLATE pg_unicode_fast)) AS casefold;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    },
     "prks.search_norm(text)": {
       "definition": "CREATE OR REPLACE FUNCTION prks.search_norm(s text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT ext.unaccent('prks.search_unaccent'::regdictionary, casefold((NORMALIZE(s, NFC) COLLATE pg_unicode_fast))) AS unaccent;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    },
+    "prks.search_token(text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.search_token(t text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT regexp_replace(prks.search_norm(t), '[[:punct:]]+'::text, ''::text, 'g'::text) AS regexp_replace;\nEND\n",
+      "parallel": "s",
+      "strict": true,
+      "volatility": "i"
+    },
+    "prks.tsquery_prefix(text)": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.tsquery_prefix(f text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT ((''''::text || replace(replace(f, '\\'::text, '\\\\'::text), ''''::text, ''''''::text)) || ''':*'::text);\nEND\n",
       "parallel": "s",
       "strict": true,
       "volatility": "i"
@@ -30,7 +54,8 @@
     "130_research.sql",
     "140_annotations.sql",
     "150_objects.sql",
-    "160_processing.sql"
+    "160_processing.sql",
+    "200_derived_search.sql"
   ],
   "schemas": [
     "derived",
@@ -78,6 +103,79 @@
       "indexes": {
         "argument_mentions_argument": "CREATE INDEX argument_mentions_argument ON derived.argument_mentions USING btree (library_id, argument_id)",
         "argument_mentions_pkey": "CREATE UNIQUE INDEX argument_mentions_pkey ON derived.argument_mentions USING btree (work_id, start_offset)"
+      }
+    },
+    "derived.asset_text": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "asset_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "content_sha256",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "extractor_version",
+          "not_null": true,
+          "type": "integer"
+        },
+        {
+          "name": "status",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "false",
+          "name": "truncated",
+          "not_null": true,
+          "type": "boolean"
+        },
+        {
+          "default": "''::text",
+          "name": "text",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "doc",
+          "not_null": true,
+          "type": "tsvector"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "asset_text_asset_id_not_null": "NOT NULL asset_id",
+        "asset_text_content_sha256_check": "CHECK (content_sha256 ~ '^[0-9a-f]{64}$'::text)",
+        "asset_text_content_sha256_not_null": "NOT NULL content_sha256",
+        "asset_text_doc_not_null": "NOT NULL doc",
+        "asset_text_extractor_version_check": "CHECK (extractor_version > 0)",
+        "asset_text_extractor_version_not_null": "NOT NULL extractor_version",
+        "asset_text_library_id_not_null": "NOT NULL library_id",
+        "asset_text_pkey": "PRIMARY KEY (asset_id, content_sha256)",
+        "asset_text_status_check": "CHECK (status = ANY (ARRAY['indexed'::text, 'empty'::text, 'failed'::text]))",
+        "asset_text_status_not_null": "NOT NULL status",
+        "asset_text_status_text_check": "CHECK (status = 'indexed'::text OR text = ''::text)",
+        "asset_text_text_not_null": "NOT NULL text",
+        "asset_text_truncated_not_null": "NOT NULL truncated",
+        "asset_text_updated_at_not_null": "NOT NULL updated_at"
+      },
+      "indexes": {
+        "asset_text_doc": "CREATE INDEX asset_text_doc ON derived.asset_text USING gin (doc)",
+        "asset_text_library": "CREATE INDEX asset_text_library ON derived.asset_text USING btree (library_id, asset_id)",
+        "asset_text_pkey": "CREATE UNIQUE INDEX asset_text_pkey ON derived.asset_text USING btree (asset_id, content_sha256)"
       }
     },
     "derived.concept_mentions": {
@@ -150,6 +248,63 @@
       "indexes": {
         "work_note_state_library": "CREATE INDEX work_note_state_library ON derived.work_note_state USING btree (library_id, work_id)",
         "work_note_state_pkey": "CREATE UNIQUE INDEX work_note_state_pkey ON derived.work_note_state USING btree (work_id)"
+      }
+    },
+    "derived.work_search": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "work_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "doc",
+          "not_null": true,
+          "type": "tsvector"
+        },
+        {
+          "name": "title_norm",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "people_norm",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "text_norm",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "updated_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "work_search_doc_not_null": "NOT NULL doc",
+        "work_search_library_id_not_null": "NOT NULL library_id",
+        "work_search_people_norm_not_null": "NOT NULL people_norm",
+        "work_search_pkey": "PRIMARY KEY (work_id)",
+        "work_search_text_norm_not_null": "NOT NULL text_norm",
+        "work_search_title_norm_not_null": "NOT NULL title_norm",
+        "work_search_updated_at_not_null": "NOT NULL updated_at",
+        "work_search_work_id_not_null": "NOT NULL work_id"
+      },
+      "indexes": {
+        "work_search_doc": "CREATE INDEX work_search_doc ON derived.work_search USING gin (doc)",
+        "work_search_library": "CREATE INDEX work_search_library ON derived.work_search USING btree (library_id, work_id)",
+        "work_search_pkey": "CREATE UNIQUE INDEX work_search_pkey ON derived.work_search USING btree (work_id)",
+        "work_search_text_trgm": "CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm ext.gin_trgm_ops)",
+        "work_search_trgm": "CREATE INDEX work_search_trgm ON derived.work_search USING gin (title_norm ext.gin_trgm_ops, people_norm ext.gin_trgm_ops)"
       }
     },
     "prks.annotations": {
@@ -3918,7 +4073,112 @@
     }
   },
   "text_search": {
-    "configurations": {},
+    "configurations": {
+      "prks.prks_search": {
+        "mappings": [
+          [
+            "asciihword",
+            "simple"
+          ],
+          [
+            "asciiword",
+            "simple"
+          ],
+          [
+            "email",
+            "simple"
+          ],
+          [
+            "file",
+            "simple"
+          ],
+          [
+            "float",
+            "simple"
+          ],
+          [
+            "host",
+            "simple"
+          ],
+          [
+            "hword",
+            "prks.search_unaccent"
+          ],
+          [
+            "hword",
+            "simple"
+          ],
+          [
+            "hword_asciipart",
+            "simple"
+          ],
+          [
+            "hword_numpart",
+            "prks.search_unaccent"
+          ],
+          [
+            "hword_numpart",
+            "simple"
+          ],
+          [
+            "hword_part",
+            "prks.search_unaccent"
+          ],
+          [
+            "hword_part",
+            "simple"
+          ],
+          [
+            "int",
+            "simple"
+          ],
+          [
+            "numhword",
+            "prks.search_unaccent"
+          ],
+          [
+            "numhword",
+            "simple"
+          ],
+          [
+            "numword",
+            "prks.search_unaccent"
+          ],
+          [
+            "numword",
+            "simple"
+          ],
+          [
+            "sfloat",
+            "simple"
+          ],
+          [
+            "uint",
+            "simple"
+          ],
+          [
+            "url",
+            "simple"
+          ],
+          [
+            "url_path",
+            "simple"
+          ],
+          [
+            "version",
+            "simple"
+          ],
+          [
+            "word",
+            "prks.search_unaccent"
+          ],
+          [
+            "word",
+            "simple"
+          ]
+        ]
+      }
+    },
     "dictionaries": {
       "prks.search_unaccent": {
         "options": "rules = 'unaccent'",

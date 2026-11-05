@@ -1099,8 +1099,16 @@ CREATE TEXT SEARCH DICTIONARY prks.search_unaccent
   (TEMPLATE = ext.unaccent, RULES = 'unaccent');   -- or 'prks_unaccent_v<N>', below
 CREATE TEXT SEARCH CONFIGURATION prks.prks_search (COPY = pg_catalog.simple);
 ALTER TEXT SEARCH CONFIGURATION prks.prks_search
-  ALTER MAPPING FOR hword, hword_part, word WITH prks.search_unaccent, simple;
+  ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart
+  WITH prks.search_unaccent, simple;
 ```
+
+Every token type that can hold a non-ASCII letter is mapped, those that mix
+letters and digits included, so `cafe2026` finds `café2026`. Each of a Work's
+four weighted inputs (title; people and author text; abstract; Research
+Note) contributes only its first 50000 characters to its `doc`: PostgreSQL refuses a `tsvector` over 1 MB, and a longer note
+would otherwise fail the command that saved it. The full text stays in
+`text_norm`, which the infix fallback searches.
 
 - **Case folding before the configuration.** The `simple` dictionary only
   lowercases, which keeps Greek final `ς` and medial `σ` (and similar pairs)
