@@ -11,7 +11,8 @@ with sleeps.
 
 from __future__ import annotations
 
-import hashlib
+import itertools
+import string
 
 import threading
 import unicodedata
@@ -193,15 +194,22 @@ class RefreshTests(SearchTestCase):
         self.assertEqual(row["doc"], "'alpha':1A 'beta':2B 'delta':4 'gamma':3C")
 
     def test_inputs_too_long_for_a_tsvector_are_capped_in_doc_only(self) -> None:
-        # 40000 distinct words (about 1.3 MB): a tsvector of all of them exceeds 1 MB.
-        words = [f"w{i:05d}{hashlib.md5(str(i).encode()).hexdigest()}" for i in range(40000)]
-        work = self.library.add_work("Long notes", text_content=" ".join(words), author_text=" ".join(words))
+        # A distinct corpus for each weighted input, 30000 words (180000
+        # characters) each: uncapped, their tsvector exceeds 1 MB together.
+        def corpus(prefix: str) -> list[str]:
+            codes = itertools.product(string.ascii_lowercase, repeat=4)
+            return [prefix + "".join(code) for code in itertools.islice(codes, 30000)]
+
+        title, people, abstract, note = (corpus(p) for p in "qxyz")
+        work = self.library.add_work(" ".join(title), abstract=" ".join(abstract),
+                                     text_content=" ".join(note), author_text=" ".join(people))
         self.assertEqual(self.refresh(work), [work])
-        self.assertTrue(self.matches(work, words[0]))
-        self.assertFalse(self.matches(work, words[-1]))  # past the cap: not in doc
+        for words in (title, people, abstract, note):
+            self.assertTrue(self.matches(work, words[0]))
+            self.assertFalse(self.matches(work, words[-1]))  # past the cap: not in doc
         row = self.row(work)
         assert row is not None
-        self.assertTrue(row["text_norm"].endswith(words[-1]))  # the infix fallback keeps all of it
+        self.assertTrue(row["text_norm"].endswith(note[-1]))  # the infix fallback keeps all of it
 
     def test_the_primary_manifestation_overrides_title_and_abstract(self) -> None:
         work = self.library.add_work("Work title", abstract="Work abstract")
