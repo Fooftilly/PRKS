@@ -535,20 +535,32 @@ def _rebuild_derived(args: argparse.Namespace, db: Database, io: _Io) -> int:
         try:
             libraries = [library_id for library_id in rebuild.library_ids(db)
                          if args.library is None or library_id == args.library]
-            if not libraries:
-                io.refuse("No Library has that id." if args.library else "There is no Library to rebuild.")
-                return EXIT_REFUSED
-            queued = sum(rebuild.request_rebuild(db, library_id, scopes) is not None
-                         for library_id in libraries)
         except DatabaseError:
-            io.refuse("The database could not be reached; nothing more was queued.")
+            io.refuse("The database could not be reached; nothing was queued.")
             return EXIT_REFUSED
+        if not libraries:
+            io.refuse("No Library has that id." if args.library else "There is no Library to rebuild.")
+            return EXIT_REFUSED
+        outcomes: dict[Optional[rebuild.Requested], int] = {}
+        for library_id in libraries:  # one transaction each: a failure does not stop the others
+            try:
+                outcome: Optional[rebuild.Requested] = rebuild.request_rebuild(db, library_id, scopes)
+            except DatabaseError:
+                outcome = None
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
         what = ", ".join(scopes)
-        if queued:
+        if queued := outcomes.get(rebuild.Requested.QUEUED, 0):
             io.say(f"Queued the {what} rebuild for {_libraries(queued)}; the worker runs it.")
-        if queued < len(libraries):
-            io.say(f"{_libraries(len(libraries) - queued)} already had it queued or are in maintenance.")
-        return EXIT_OK
+        if waiting := outcomes.get(rebuild.Requested.ALREADY_QUEUED, 0):
+            io.say(f"{_libraries(waiting)} already had it queued.")
+        refused = False
+        if busy := outcomes.get(rebuild.Requested.UNAVAILABLE, 0):
+            io.refuse(f"{_libraries(busy)} in maintenance got nothing queued; run it again afterwards.")
+            refused = True
+        if failed := outcomes.get(None, 0):
+            io.refuse(f"Nothing was queued for {_libraries(failed)}: the database could not be reached.")
+            refused = True
+        return EXIT_REFUSED if refused else EXIT_OK
 
     return _started_root(args, db, enqueue)
 

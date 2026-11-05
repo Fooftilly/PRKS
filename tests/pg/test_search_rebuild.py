@@ -19,6 +19,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.search import rebuild, refresh
 from backend.domain.search import text as search_text
 from backend.domain.works import notes
+from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import Outcome
 from backend.pg_facade import context as facade_context
@@ -281,6 +282,26 @@ class ConcurrencyTests(RebuildTestCase):
         self.assertIsNone(self.row(doomed))
         self.assertEqual(self.refresh(doomed), [])
         self.assertIsNone(self.row(doomed))
+
+    def test_a_heartbeat_waiting_on_a_batch_lets_the_batch_save_its_cursor(self) -> None:
+        """The batch holds its job row ``FOR SHARE`` and then updates it; a heartbeat queued behind it waits."""
+        self.library.add_work("Existing")
+        self.sql("DELETE FROM prks.jobs")
+        beats: list[Any] = []
+
+        def beat() -> None:
+            [row] = self.sql("SELECT id, kind, library_id, library_epoch, lease_id, attempts, max_attempts"
+                             " FROM prks.jobs WHERE state = 'running'")
+            job = queue.ClaimedJob(payload={}, **row)
+            thread = threading.Thread(target=lambda: beats.append(queue.heartbeat(self.db, job)))
+            thread.start()
+            beats.insert(0, thread)
+            self.wait_for_lock_waiter()
+
+        self.run_paused_in_search_batch(beat)  # asserts the run succeeded: no deadlock was detected
+        beats[0].join(10)
+        self.assertEqual(beats[1:], [True])
+        self.assertEqual(self.rebuild_job()["state"], "succeeded")
 
 
 class RepairTests(RebuildTestCase):
