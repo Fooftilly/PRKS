@@ -280,8 +280,9 @@ flake-acceptance matrix:
   an in-flight connectivity probe must not prematurely demote an offline
   Work-capable PDF viewer or produce duplicate viewer/toolbar instances.
 - `offline-person-membership-coherence` ([#1009](https://github.com/Fooftilly/PRKS/issues/1009)):
-  Person create/delete must invalidate the correct People and Person Group
-  cache generations without invalidating unrelated domains.
+  Person creation reconciles a new durable intent without invalidating
+  any cached-domain generation; confirmed deletion advances People and
+  Person Group generations, but leaves unrelated domains unchanged.
 
 Each test is present in the complete six-shard source and packaged Chromium
 suite, but **none is included in the dormant 14-case packaged-smoke floor**.
