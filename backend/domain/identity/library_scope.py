@@ -44,7 +44,8 @@ whether it comes from a browser, a durable operation or a job.
 
 **Changing the Library row.** Content commands share the Library row
 (``FOR SHARE``), so they run concurrently. A command that updates
-``prks.libraries`` itself (settings, its name) must say so with
+``prks.libraries`` itself (settings, its name, or a job recording the
+search folding of a completed rebuild, §8.6) must say so with
 ``updates_library=True``: it locks the row ``FOR NO KEY UPDATE`` at step 3
 instead, so two such commands queue on the row rather than both holding a
 share lock and deadlocking when each tries to upgrade it. It waits for
@@ -105,7 +106,7 @@ from backend.domain.identity.authorization import (
     Refusal,
     authorize,
 )
-from backend.domain.identity.request_context import RequestContext
+from backend.domain.identity.request_context import RequestContext, Source
 
 T = TypeVar("T")
 
@@ -237,13 +238,14 @@ def library_command(
     Raises :class:`AccessRefused` with nothing written when a check fails.
     ``fn`` may be called again when a SERIALIZABLE command is retried, each
     time with a new scope. ``updates_library=True`` (an ``ADMIN_LIBRARY``
-    command that changes the ``prks.libraries`` row) locks that row for
-    update before authorizing; see the module docs.
+    command, or a job recording derived state such as the search folding,
+    that changes the ``prks.libraries`` row) locks that row for update
+    before authorizing; see the module docs.
     """
     if capability not in MUTATION_CAPABILITIES:
         raise ValueError("library_command takes EDIT_LIBRARY or ADMIN_LIBRARY")
-    if updates_library and capability is not Capability.ADMIN_LIBRARY:
-        raise ValueError("only an ADMIN_LIBRARY command changes the Library row")
+    if updates_library and capability is not Capability.ADMIN_LIBRARY and ctx.source is not Source.WORKER:
+        raise ValueError("only an ADMIN_LIBRARY command or a job changes the Library row")
     row_lock = _EPOCH_FOR_UPDATE_SQL if updates_library else _EPOCH_FOR_SHARE_SQL
     library_id = ctx.library_id
     if library_id is None:

@@ -55,3 +55,15 @@ BEGIN ATOMIC
     'prks.search_unaccent'::regdictionary,
     casefold(normalize(s, NFC) COLLATE pg_unicode_fast));
 END;
+
+-- The current search folding (§8.6): the rules file of prks.search_unaccent
+-- and the server's version, which carries its Unicode tables. Stored and
+-- queried text fold alike only while this is the value a Library's last
+-- completed search and text rebuild recorded (libraries.search_folding).
+CREATE FUNCTION prks.search_folding() RETURNS text
+  LANGUAGE sql STABLE PARALLEL SAFE
+BEGIN ATOMIC
+  SELECT d.dictinitoption || ';server=' || current_setting('server_version_num')
+  FROM pg_catalog.pg_ts_dict d
+  WHERE d.oid = 'prks.search_unaccent'::regdictionary;
+END;

@@ -21,7 +21,9 @@ CREATE TABLE prks.libraries (
   maintenance     text CHECK (maintenance IN ('restore', 'rebuild')),
   maintenance_run uuid,                -- the restore/rebuild run that set it (§11.4)
   epoch           bigint NOT NULL DEFAULT 1 CHECK (epoch >= 1),  -- +1 on every restore (§11.4)
-  search_folding  text,                -- folding of the last completed search+text rebuild (§8.6)
+  -- Folding of the last completed search+text rebuild (§8.6). A new Library
+  -- has nothing to fold, so it starts with the current folding.
+  search_folding  text DEFAULT prks.search_folding(),
   created_at      timestamptz NOT NULL DEFAULT now()
 );
 

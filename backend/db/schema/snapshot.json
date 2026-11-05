@@ -23,6 +23,12 @@
       "strict": true,
       "volatility": "i"
     },
+    "prks.search_folding()": {
+      "definition": "CREATE OR REPLACE FUNCTION prks.search_folding()\n RETURNS text\n LANGUAGE sql\n STABLE PARALLEL SAFE\nBEGIN ATOMIC\n SELECT ((d.dictinitoption || ';server='::text) || current_setting('server_version_num'::text))\n    FROM pg_ts_dict d\n   WHERE (d.oid = ('prks.search_unaccent'::regdictionary)::oid);\nEND\n",
+      "parallel": "s",
+      "strict": false,
+      "volatility": "s"
+    },
     "prks.search_norm(text)": {
       "definition": "CREATE OR REPLACE FUNCTION prks.search_norm(s text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT ext.unaccent('prks.search_unaccent'::regdictionary, casefold((NORMALIZE(s, NFC) COLLATE pg_unicode_fast))) AS unaccent;\nEND\n",
       "parallel": "s",
@@ -1674,6 +1680,7 @@
           "type": "bigint"
         },
         {
+          "default": "prks.search_folding()",
           "name": "search_folding",
           "not_null": false,
           "type": "text"
