@@ -338,6 +338,31 @@ missing-ID failure independently. **No automatic or manual selector,
 required check, workflow trigger, shard count or retry behavior changes.**
 The dormant reduced packaged mode is still **not authorized**.
 
+## Manual Person Recently Added click actionability trace (#740)
+
+The existing manual
+[Offline Person Durability Profile](../.github/workflows/e2e-offline-person-profile.yml)
+now accepts a `trace_recent_click` dispatch input. It defaults to **false**:
+the original two-scenario, counterbalanced baseline/trial benchmark is
+unchanged. With the input **true**, the workflow instead runs **one**
+existing Person Create Chromium E2E on a fresh disposable PostgreSQL
+identity, server and browser context, with `PRKS_E2E_PROFILE=1`,
+`PRKS_E2E_PERSON_RECENT_TRIAL=0`, and Playwright `DEBUG=pw:api`.
+
+Inspect the GitHub job log around the `Recently Added` tab's real
+`locator.click()` alongside the test's
+`person_create_link_nav_recent_click` profile marker. Playwright's
+API trace can distinguish waiting for actionability/navigation from
+test-side phase timing; it does **not** isolate page-handler execution
+without further instrumentation. This is a **manual, single-test,
+synthetic-fixture diagnostic**, not a startup benchmark, automatic
+PR gate, test replacement, proof of UI slowdown or measured speedup.
+No additional snapshots, screenshots, traces or diagnostic artifacts
+are uploaded. The existing UI click, Work-card readiness, offline
+queue, reload and server assertions stay in that one test.
+Compare only runs on a recorded exact commit; no production tuning
+should precede a source-backed cause.
+
 ## Read-only, same-commit full-gate cost breakdown (#992)
 
 To compare a **successful, first-attempt** PR source-checkout six-shard run
