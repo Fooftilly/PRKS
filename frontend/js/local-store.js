@@ -3497,20 +3497,16 @@
                     const already = mine.find(r => r.operation === 'DELETE_ARGUMENT');
                     if (already) { setResult(already); return; }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
-                    /* A Work deletion may be waiting for a source revision.
-                     * Do not fold away its durable operation until that Work
-                     * deletion has been dispatched. Other hard dependencies
-                     * retain their normal success requirements. */
+                    /* Only actual hard dependencies prevent cancelling an
+                     * unsent source edit. Work deletion waits on that edit via
+                     * a live ordering barrier, not depends_on: deleting the
+                     * Argument supersedes its unsent source selection, so the
+                     * source can be cancelled and the Work delete released. */
                     const hasExternalDependent = row => rows.some(r =>
                         r.status !== STATUS_ACKNOWLEDGED &&
-                        !mine.some(m => m.op_id === r.op_id) && (
-                            (Array.isArray(r.depends_on) &&
-                                r.depends_on.indexOf(row.op_id) !== -1) ||
-                            (r.operation === 'DELETE_WORK' &&
-                                row.operation === 'SET_ARGUMENT_SOURCES' &&
-                                row.local_context &&
-                                Array.isArray(row.local_context.pending_work_deletions) &&
-                                row.local_context.pending_work_deletions.indexOf(r.entity_id) !== -1)));
+                        !mine.some(m => m.op_id === r.op_id) &&
+                        Array.isArray(r.depends_on) &&
+                        r.depends_on.indexOf(row.op_id) !== -1);
                     const creation = mine.find(r => r.operation === 'CREATE_ARGUMENT' &&
                         r.entity_id === argumentId);
                     if (creation && neverSent(creation) &&
@@ -3527,7 +3523,10 @@
                             !(row.operation === 'CREATE_ARGUMENT' &&
                                 row.entity_id === argumentId)) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
-                        } else {
+                        } else if (row.operation !== 'SET_ARGUMENT_SOURCES') {
+                            /* An attempted source write may conflict. Its
+                             * ordering is enforced by the Argument handler,
+                             * not a requirement that the revision edit win. */
                             waitFor.push(row.op_id);
                         }
                     }
