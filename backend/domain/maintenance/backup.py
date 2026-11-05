@@ -55,25 +55,27 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from backend.db.schema_snapshot import catalog_snapshot
 from backend.domain.maintenance import tables
-from backend.fs_durability import fsync_directory, fsync_open_file
+from backend.domain.maintenance.format import (
+    BACKUP_EXTENSION,
+    DEVICES_MEMBER,
+    FORMAT_ID,
+    FORMAT_VERSION,
+    IO_CHUNK_SIZE,
+    MANIFEST_NAME,
+    USERS_MEMBER,
+    schema_fingerprint,
+    table_member,
+)
+from backend.domain.maintenance.archive import ArchiveRefused, check_schema, open_archive
 from backend.domain.maintenance.connection import maintenance_connection, pin_interchange_settings
+from backend.domain.maintenance.staging import drop_staging, stage
+from backend.fs_durability import fsync_directory, fsync_open_file
 from backend.storage.objects import (
-    NAMESPACE_ASSET_OBJECTS,
-    NAMESPACE_PORTRAITS,
     StorageBackend,
     StorageKey,
     StorageObjectError,
 )
-
-FORMAT_ID = "prks-backup"
-FORMAT_VERSION = tables.FORMAT_VERSION
-BACKUP_EXTENSION = ".prks-backup"
-MANIFEST_NAME = "manifest.json"
-USERS_MEMBER = "identities/users.csv"
-DEVICES_MEMBER = "identities/devices.csv"
-IO_CHUNK_SIZE = 64 * 1024
 
 # A run renews its lease while it works; recovery fails a run whose lease
 # expired (§11.4).
@@ -117,21 +119,6 @@ class BackupResult:
     size: int
     sha256: str
     manifest: dict[str, Any] = field(repr=False)
-
-
-def table_member(table: str) -> str:
-    """``db/works.csv`` for ``prks.works``."""
-    schema, name = tables.split_name(table)
-    if schema != "prks":
-        raise ValueError(f"{table} is not exported")
-    return f"db/{name}.csv"
-
-
-def schema_fingerprint(conn: psycopg.Connection[Any]) -> str:
-    """SHA-256 of the normalized catalog (§4.4), the same data the schema gate compares."""
-    snapshot = catalog_snapshot(conn)
-    canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # -- run bookkeeping --------------------------------------------------------------------------
@@ -408,6 +395,27 @@ def _check_archive(path: str, manifest: dict[str, Any], renew: Callable[[], None
                 raise BackupFailed("verify", f"The archive member {name} does not match its manifest.")
 
 
+_OWNER_SQL: LiteralString = (
+    "SELECT user_id FROM prks.library_memberships WHERE library_id = %s AND role = 'owner' ORDER BY user_id LIMIT 1"
+)
+
+
+def _verify_by_staging(conn: psycopg.Connection[Any], path: str, run_id: uuid.UUID, library_id: str,
+                       renew: Callable[[], None]) -> None:
+    """Load the archive into a scratch schema exactly as restore stages it, then drop it (§11.4)."""
+    try:
+        archive = open_archive(path, staging_dir=os.path.dirname(path))
+        check_schema(conn, archive)
+        owner = conn.execute(_OWNER_SQL, (library_id,)).fetchone()
+        if owner is None:
+            raise BackupFailed("verify", "The Library has no owner to map unknown identities to.")
+        stage(conn, archive, run_id=run_id, target_library_id=library_id, owner_user_id=owner[0], renew=renew)
+    except ArchiveRefused as exc:
+        raise BackupFailed("verify", f"The written archive does not stage: {exc.message}") from exc
+    finally:
+        drop_staging(conn, run_id)
+
+
 def _hash_file(path: str, renew: Callable[[], None] = lambda: None) -> tuple[int, str]:
     digest = hashlib.sha256()
     size = 0
@@ -497,6 +505,7 @@ def _run(conn: psycopg.Connection[Any], conninfo: str, storage: StorageBackend, 
         raise BackupFailed("io", "The backup archive could not be made durable.")
     reach(PHASE_VERIFY)
     _verify_archive(path, manifest, lease.tick)
+    _verify_by_staging(conn, path, run_id, library_id, lease.tick)
     size, sha256 = _hash_file(path, lease.tick)
     with conn.transaction():
         if conn.execute(_PUBLISH_SQL, (size, sha256, run_id)).rowcount != 1:

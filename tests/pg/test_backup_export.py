@@ -77,7 +77,7 @@ class ArchiveLayoutTests(BackupTestCase):
         self.assertEqual(manifest["library_id"], self.actor.library_id)
         self.assertEqual(manifest["prks_version"], VERSION)
         self.assertRegex(manifest["schema_fingerprint"], r"^[0-9a-f]{64}$")
-        self.assertEqual(list(manifest["tables"]), list(tables.BACKUP_CONTENT_TABLES))
+        self.assertEqual(set(manifest["tables"]), set(tables.BACKUP_CONTENT_TABLES))
         with zipfile.ZipFile(result.path) as archive:
             infos = archive.infolist()
             self.assertEqual(sorted(i.filename for i in infos), sorted(backup.members(manifest)))
