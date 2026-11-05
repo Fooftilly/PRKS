@@ -98,11 +98,11 @@ WITH src AS (
   WHERE w.library_id = %(library_id)s AND w.id = ANY(%(locked)s::text[])
 )
 UPDATE derived.work_search s
-SET doc = setweight(to_tsvector('prks.prks_search', prks.search_fold(src.title)), 'A')
+SET doc = setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.title, 50000))), 'A')
        || setweight(to_tsvector('prks.prks_search',
-                                prks.search_fold(src.people || ' ' || src.author_text)), 'B')
-       || setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.abstract, 60000))), 'C')
-       || setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.notes, 60000))), 'D'),
+                                prks.search_fold(left(src.people || ' ' || src.author_text, 50000))), 'B')
+       || setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.abstract, 50000))), 'C')
+       || setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.notes, 50000))), 'D'),
     title_norm = prks.search_norm(src.title),
     people_norm = prks.search_norm(src.people),
     text_norm = prks.search_norm(src.title || ' ' || src.author_text || ' ' || src.abstract

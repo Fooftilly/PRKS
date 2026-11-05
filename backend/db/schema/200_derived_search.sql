@@ -68,11 +68,12 @@ END;
 -- The *_norm columns are plain columns that the refresh writes through
 -- prks.search_norm; nothing generates or indexes that function's output.
 --   doc         title A, linked people and author text B, abstract C,
---               Research Note D (to_tsvector of prks.search_fold); the
---               abstract and the Research Note each contribute their first
---               60000 characters, so a long note can never make the
---               tsvector exceed PostgreSQL's 1 MB limit and fail the
---               command that saved it. The rest stays in text_norm.
+--               Research Note D (to_tsvector of prks.search_fold); each
+--               of the four inputs contributes its first 50000 characters
+--               (at most about 700 kB of tsvector even for short distinct
+--               words), so a long note can never exceed PostgreSQL's 1 MB
+--               tsvector limit and fail the command that saved it. The rest
+--               stays in text_norm.
 --   title_norm  search_norm(displayed title)
 --   people_norm search_norm of each linked person's name and each alias,
 --               one per line
