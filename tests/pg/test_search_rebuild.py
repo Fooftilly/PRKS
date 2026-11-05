@@ -243,7 +243,10 @@ class ConcurrencyTests(RebuildTestCase):
             finally:
                 release.set()
                 thread.join(10)
-        self.assertEqual(outcomes, [Outcome.SUCCEEDED])
+        # The loop may also run a job the concurrent command queued (a
+        # delete's reindex) once that command commits.
+        self.assertEqual(self.rebuild_job()["state"], "succeeded")
+        self.assertEqual(set(outcomes), {Outcome.SUCCEEDED})
 
     def test_a_metadata_edit_during_a_batch_waits_and_keeps_its_projection(self) -> None:
         work = self.library.add_work("Original title")
@@ -302,7 +305,6 @@ class ConcurrencyTests(RebuildTestCase):
         self.run_paused_in_search_batch(beat)  # asserts the run succeeded: no deadlock was detected
         beats[0].join(10)
         self.assertEqual(beats[1:], [True])
-        self.assertEqual(self.rebuild_job()["state"], "succeeded")
 
 
 class RepairTests(RebuildTestCase):
