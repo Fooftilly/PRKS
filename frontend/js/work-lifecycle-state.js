@@ -555,6 +555,28 @@
         reconcile: data => root.prksOfflineReconcileCreatedWork(data),
     };
 
+    /* Work deletion follows outstanding Argument construction and citation
+     * replacements that reference it, even when a never-sent source op has
+     * already removed this Work from its payload. This is an ordering-only
+     * barrier: a terminal refusal does not invalidate the user's separate
+     * decision to delete the Work. Unlike hard depends_on, it survives
+     * coalescing and cannot strand deletion behind a refused Argument. */
+    function workDeleteReadyToSend(deletion, byId) {
+        for (const other of byId.values()) {
+            if (other.status !== 'pending' && other.status !== 'syncing') continue;
+            if (other.operation !== 'CREATE_ARGUMENT' &&
+                other.operation !== 'SET_ARGUMENT_SOURCES') continue;
+            const citesWork = other.payload && Array.isArray(other.payload.sources) &&
+                other.payload.sources.some(s => s && s.work_id === deletion.entity_id);
+            const sourceEditedForDeletion = other.operation === 'SET_ARGUMENT_SOURCES' &&
+                other.local_context &&
+                Array.isArray(other.local_context.pending_work_deletions) &&
+                other.local_context.pending_work_deletions.indexOf(deletion.entity_id) !== -1;
+            if (citesWork || sourceEditedForDeletion) return false;
+        }
+        return true;
+    }
+
     const deleteHandler = {
         isResult: function (data, op) {
             if (!data || data.work_id !== op.entity_id) return false;
@@ -562,6 +584,7 @@
         },
         terminal: data => ({ conflict: { code: data.code } }),
         reconcile: data => root.prksOfflineReconcileDeletedWork(data),
+        readyToSend: workDeleteReadyToSend,
     };
 
     Object.assign(root, {

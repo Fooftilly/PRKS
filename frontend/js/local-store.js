@@ -2442,17 +2442,28 @@
                                 /* Preserve the original op_id and all dependents: the
                                  * coordinator cannot claim this row concurrently with
                                  * the same IndexedDB readwrite transaction. */
+                                /* An existing Argument's source revision must
+                                 * settle before Work deletion. Once the deleted
+                                 * Work has been removed from payload.sources,
+                                 * retain a local-only ordering marker on the
+                                 * source op, not a hard success prerequisite on
+                                 * DELETE_WORK. The source can conflict or be
+                                 * coalesced, and Work deletion remains valid. */
+                                const context = Object.assign({}, row.local_context);
+                                if (!foldCreate && row.operation === 'SET_ARGUMENT_SOURCES') {
+                                    const ids = Array.isArray(context.pending_work_deletions)
+                                        ? context.pending_work_deletions.slice() : [];
+                                    if (ids.indexOf(workId) === -1) ids.push(workId);
+                                    context.pending_work_deletions = ids;
+                                }
                                 await request(STORE_OPERATIONS, s => s.put(Object.assign({}, row, {
                                     payload: Object.assign({}, row.payload, { sources: sources }),
+                                    local_context: Object.keys(context).length ? context : row.local_context,
                                 })));
-                                /* An existing Argument's source revision must be
-                                 * settled before DELETE_WORK can advance it. */
-                                if (!foldCreate && row.operation === 'SET_ARGUMENT_SOURCES') {
-                                    waitFor.push(row.op_id);
-                                }
-                            } else {
-                                waitFor.push(row.op_id);
                             }
+                            /* Possibly-sent envelopes stay immutable. The Work
+                             * delete handler orders itself after those still
+                             * referencing this Work in the live queue. */
                             continue;
                         }
                         if (foldCreate || (neverSent(row) && row.operation !== 'CREATE_WORK')) {
@@ -3381,11 +3392,17 @@
                                 'This argument’s sources are syncing or need resolution.');
                         }
                         if (same(existing.payload.sources || [])) { setResult(existing); return; }
-                        /* DELETE_WORK can depend on this op: reusing its id is
-                         * essential to keep that durable prerequisite valid. */
-                        const required = rows.some(r => r.status !== STATUS_ACKNOWLEDGED &&
-                            Array.isArray(r.depends_on) &&
-                            r.depends_on.indexOf(existing.op_id) !== -1);
+                        /* A pending Work deletion may be waiting on this
+                         * source replacement. Reuse its id and local-only
+                         * ordering marker when coalescing, or the deletion
+                         * could race its source revision and conflict. */
+                        const pendingWorkDeletions = existing.local_context &&
+                            existing.local_context.pending_work_deletions || [];
+                        const required = rows.some(r => r.status !== STATUS_ACKNOWLEDGED && (
+                            (Array.isArray(r.depends_on) &&
+                                r.depends_on.indexOf(existing.op_id) !== -1) ||
+                            (r.operation === 'DELETE_WORK' &&
+                                pendingWorkDeletions.indexOf(r.entity_id) !== -1)));
                         if (required) {
                             const updated = Object.assign({}, existing, {
                                 payload: Object.assign({}, existing.payload, { sources: desired }),
@@ -3480,13 +3497,20 @@
                     const already = mine.find(r => r.operation === 'DELETE_ARGUMENT');
                     if (already) { setResult(already); return; }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
-                    /* A Work deletion may require an Argument source operation.
-                     * Do not fold away or remove an external prerequisite. */
+                    /* A Work deletion may be waiting for a source revision.
+                     * Do not fold away its durable operation until that Work
+                     * deletion has been dispatched. Other hard dependencies
+                     * retain their normal success requirements. */
                     const hasExternalDependent = row => rows.some(r =>
                         r.status !== STATUS_ACKNOWLEDGED &&
-                        !mine.some(m => m.op_id === r.op_id) &&
-                        Array.isArray(r.depends_on) &&
-                        r.depends_on.indexOf(row.op_id) !== -1);
+                        !mine.some(m => m.op_id === r.op_id) && (
+                            (Array.isArray(r.depends_on) &&
+                                r.depends_on.indexOf(row.op_id) !== -1) ||
+                            (r.operation === 'DELETE_WORK' &&
+                                row.operation === 'SET_ARGUMENT_SOURCES' &&
+                                row.local_context &&
+                                Array.isArray(row.local_context.pending_work_deletions) &&
+                                row.local_context.pending_work_deletions.indexOf(r.entity_id) !== -1)));
                     const creation = mine.find(r => r.operation === 'CREATE_ARGUMENT' &&
                         r.entity_id === argumentId);
                     if (creation && neverSent(creation) &&
