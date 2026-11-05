@@ -116,9 +116,10 @@ class RebuildTests(RebuildTestCase):
         self.assertEqual(self.rebuild(), [Outcome.SUCCEEDED])
         self.assertEqual(self.snapshot(), fresh)
         self.assertEqual(self.extracted, [])  # the stored text was kept
+        current = self.scalar("SELECT prks.search_folding()")
         self.assertEqual(self.rebuild_job()["payload"],
                          {"scopes": ["research", "search", "text"], "done": ["search", "text", "research"],
-                          "cursor": None})
+                          "cursor": None, "folding": current})
         self.sql("DELETE FROM prks.jobs")
         self.assertEqual(self.rebuild(), [Outcome.SUCCEEDED])
         self.assertEqual(self.snapshot(), fresh)
@@ -301,3 +302,125 @@ class RepairTests(RebuildTestCase):
             self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])
         self.assertEqual(self.snapshot()["search"], fresh)
         self.assertTrue(self.command(rebuild.consistency).consistent)
+
+
+class FoldingTests(RebuildTestCase):
+    """§8.6 folding check: a changed folding queues one search and text rebuild, which stores it."""
+
+    def stored(self) -> Any:
+        return self.scalar("SELECT search_folding FROM prks.libraries WHERE id = %s",
+                           self.actor.context.library_id)
+
+    def current(self) -> str:
+        return str(self.scalar("SELECT prks.search_folding()"))
+
+    def set_stored(self, value: str | None) -> None:
+        self.sql("UPDATE prks.libraries SET search_folding = %s WHERE id = %s",
+                 (value, self.actor.context.library_id))
+
+    def rebuilds(self) -> list[tuple[list[str], str]]:
+        rows = self.sql("SELECT payload, state FROM prks.jobs WHERE kind = %s AND library_id = %s"
+                        " ORDER BY created_at, id", (rebuild.KIND, self.actor.context.library_id))
+        return [(row["payload"]["scopes"], row["state"]) for row in rows]
+
+    def check(self) -> list[str]:
+        return rebuild.check_folding(self.db)
+
+    def test_a_new_library_records_the_current_folding(self) -> None:
+        self.assertIn(";server=", self.current())
+        self.assertEqual(self.stored(), self.current())
+        self.assertEqual(self.check(), [])
+
+    def test_a_changed_folding_queues_one_rebuild_that_stores_it(self) -> None:
+        self.pdf_work("Paper", "folded words")
+        self.run_jobs()
+        self.set_stored("rules=old;server=1")
+        library = self.actor.context.library_id
+        self.assertEqual(self.check(), [library])
+        self.assertEqual(self.check(), [])  # the queued rebuild will store the current folding
+        self.assertEqual(self.rebuilds(), [(["search", "text"], "queued")])
+        self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])
+        self.assertEqual(self.stored(), self.current())
+        self.assertEqual(self.sql("SELECT payload->>'folding' AS f FROM prks.jobs WHERE kind = %s",
+                                  (rebuild.KIND,))[0]["f"], self.current())
+        self.assertEqual(self.check(), [])
+
+    def test_two_processes_checking_together_queue_it_once(self) -> None:
+        self.set_stored(None)
+        results: list[Any] = []
+        start = threading.Barrier(2)
+
+        def run() -> None:
+            start.wait(10)
+            results.append(self.check())
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        self.assertEqual(sorted(len(found) for found in results), [0, 1])
+        self.assertEqual(self.rebuilds(), [(["search", "text"], "queued")])
+
+    def test_a_queued_search_only_rebuild_does_not_suppress_it(self) -> None:
+        self.enqueue("search")
+        self.set_stored("rules=old;server=1")
+        self.assertEqual(len(self.check()), 1)
+        self.assertEqual(self.rebuilds(), [(["search"], "queued"), (["search", "text"], "queued")])
+
+    def test_a_queued_full_rebuild_suppresses_it(self) -> None:
+        self.enqueue()
+        self.set_stored("rules=old;server=1")
+        self.assertEqual(self.check(), [])
+
+    def test_a_running_rebuild_suppresses_it_only_with_the_current_folding(self) -> None:
+        self.set_stored("rules=old;server=1")
+        self.enqueue("search", "text")
+        library = self.actor.context.library_id
+        for folding, queued in (("rules=older;server=0", [library]), (self.current(), [])):
+            with self.subTest(folding=folding):
+                self.sql("DELETE FROM prks.jobs WHERE payload->'scopes' = '[\"search\", \"text\"]'::jsonb"
+                         " AND state = 'queued' AND payload ? 'folding' IS FALSE AND id NOT IN"
+                         " (SELECT id FROM prks.jobs WHERE kind = %s ORDER BY created_at LIMIT 1)",
+                         (rebuild.KIND,))
+                self.sql("UPDATE prks.jobs SET state = 'running', lease_id = gen_random_uuid(),"
+                         " locked_until = now() + interval '1 hour',"
+                         " payload = payload || jsonb_build_object('folding', %s::text)"
+                         " WHERE kind = %s", (folding, rebuild.KIND))
+                self.assertEqual(self.check(), queued)
+
+    def test_a_failed_or_cancelled_folding_rebuild_leaves_the_folding_and_is_queued_again(self) -> None:
+        self.pdf_work("Paper", "words")
+        self.run_jobs()
+        self.sql("DELETE FROM derived.asset_text")
+        self.set_stored("rules=old;server=1")
+        self.check()
+        with mock.patch.object(self, "fake", PDFTextExtractorUnavailable()):
+            self.assertEqual(self.run_jobs(), [Outcome.RETRYING])
+        self.assertEqual(self.stored(), "rules=old;server=1")
+        self.sql("UPDATE prks.jobs SET state = 'cancelled', finished_at = now() WHERE kind = %s",
+                 (rebuild.KIND,))
+        self.assertEqual(len(self.check()), 1)  # the next start queues it again
+        self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])
+        self.assertEqual(self.stored(), self.current())
+
+    def test_the_idle_tick_checks_at_start_and_again_when_the_folding_changes(self) -> None:
+        now = [0.0]
+        tick = rebuild.SearchMaintenance(clock=lambda: now[0]).tick
+        self.sql("DELETE FROM derived.work_search WHERE work_id = %s", (self.library.add_work("Unindexed"),))
+        self.sql("DELETE FROM prks.jobs")
+        tick(self.db)  # the start: the consistency count and the folding check
+        kinds = [row["kind"] for row in self.sql("SELECT kind FROM prks.jobs ORDER BY created_at")]
+        self.assertEqual(kinds, [rebuild.REPAIR_KIND])
+        self.sql("DELETE FROM prks.jobs")
+        self.set_stored("rules=old;server=1")
+        now[0] = 30.0
+        tick(self.db)  # within the minute: nothing read
+        self.assertEqual(self.rebuilds(), [])
+        now[0] = 90.0
+        tick(self.db)  # the folding the worker last checked is unchanged: no check
+        self.assertEqual(self.rebuilds(), [])
+        with mock.patch.object(rebuild, "_CURRENT_FOLDING", "SELECT 'rules=new;server=2' AS folding"):
+            now[0] = 200.0
+            tick(self.db)  # a restart on a new release, seen on a later tick
+        self.assertEqual(self.rebuilds(), [(["search", "text"], "queued")])

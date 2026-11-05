@@ -161,15 +161,19 @@ class JobRun:
         fn: Callable[[LibraryScope], T],
         *,
         isolation: Isolation = Isolation.READ_COMMITTED,
+        updates_library: bool = False,
     ) -> T:
         """Run ``fn`` as ``library_command`` for this Library job, fenced by its lease and epoch.
 
         Raises :class:`LeaseLost` when the lease is gone, and ``AccessRefused``
         (``LIBRARY_EPOCH_CHANGED``) with nothing written after a restore.
+        ``updates_library=True`` locks the Library row for update first, for
+        a job that records derived state on it (the search folding, §8.6).
         """
         ctx = self.context()
         return self._in_fenced(
-            lambda: library_command(self.db, ctx, capability, fn, isolation=isolation)
+            lambda: library_command(self.db, ctx, capability, fn, isolation=isolation,
+                                    updates_library=updates_library)
         )
 
     def _in_fenced(self, fn: Callable[[], T]) -> T:

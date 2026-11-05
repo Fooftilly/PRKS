@@ -1,8 +1,7 @@
 """``derived.rebuild`` and the search repair (L-S-1 #637; ``docs/postgresql-architecture.md`` §8.6).
 
-``prks admin rebuild-derived`` (and, from PR 6 on, restore and the folding
-check) enqueues one ``derived.rebuild`` job per Library with a set of
-scopes, ``search``, ``text`` and ``research``. It recomputes the ``derived``
+``prks admin rebuild-derived`` and the folding check (below) enqueue
+one ``derived.rebuild`` job per Library with a set of scopes, ``search``, ``text`` and ``research``. It recomputes the ``derived``
 rows while ordinary commands keep running, and never truncates a table that
 commands also write. Each scope walks the Library in id order in short
 transactions and stores its cursor in the job's payload **in the
@@ -45,13 +44,33 @@ scopes coalesces and two rebuilds of one Library never run at once.
 ``search.repair`` when either is non-zero; the job refreshes the Works that
 have no row, in batches through the same refresh path, and deletes rows
 whose Work is gone.
+
+**Folding check.** ``prks.search_folding()`` is the rules name of
+``prks.search_unaccent`` plus ``server_version_num``; a new Library starts
+with it (the column default). A rebuild whose scopes cover search and text
+captures it into its payload when it starts and, only once every scope is
+done, stores it in ``libraries.search_folding`` (a job transaction that
+locks the Library row for update), so a failed or cancelled run stores
+nothing. :class:`SearchMaintenance`, every worker's idle task (the embedded
+one included), runs the consistency count for every Library and
+:func:`check_folding` on its first tick, then reads the current folding at
+most once a minute and checks again when it changed: under each stale
+Library's row lock, the folding rebuild is queued unless a queued rebuild
+of search and text, or a running one that captured the current folding,
+will store it. These host checks act for no actor: they lock the Library
+row, skip a Library in maintenance and enqueue with the epoch read under
+the lock (``queue.enqueue_library_job_for_host``).
 """
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import timedelta
 from typing import Any, LiteralString, Optional
 
 from backend.db.database import Database, Transaction
@@ -65,10 +84,15 @@ from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import JobRun
 from backend.storage.objects import StorageBackend
 
+LOGGER = logging.getLogger("prks.search.rebuild")
+
 KIND = "derived.rebuild"
 REPAIR_KIND = "search.repair"
 # The order a run works through its scopes.
 SCOPES = ("search", "text", "research")
+# A rebuild of both of these refolds every stored value, so it records the
+# folding it ran under (§8.6, folding check).
+FOLDING_SCOPES = ("search", "text")
 BATCH = 200
 
 
@@ -147,21 +171,29 @@ WHERE d.library_id = %(library_id)s
 
 @dataclass
 class _Progress:
-    """The payload a run keeps current: its scopes, the ones done, and the cursor of the next."""
+    """The payload a run keeps current: its scopes, the ones done, the cursor of the next, its folding."""
 
     scopes: list[str]
     done: list[str]
     cursor: Optional[str]
+    folding: Optional[str] = None
 
     @classmethod
     def of(cls, payload: Any) -> _Progress:
         scopes = scope_key(payload.get("scopes") or ())
         done = [name for name in payload.get("done") or () if name in scopes]
-        cursor = payload.get("cursor")
-        return cls(scopes, done, cursor if isinstance(cursor, str) and cursor else None)
+        cursor, folding = payload.get("cursor"), payload.get("folding")
+        return cls(scopes, done, cursor if isinstance(cursor, str) and cursor else None,
+                   folding if isinstance(folding, str) else None)
 
     def payload(self) -> dict[str, Any]:
-        return {"scopes": self.scopes, "done": self.done, "cursor": self.cursor}
+        out: dict[str, Any] = {"scopes": self.scopes, "done": self.done, "cursor": self.cursor}
+        if self.folding is not None:
+            out["folding"] = self.folding
+        return out
+
+    def records_folding(self) -> bool:
+        return all(name in self.scopes for name in FOLDING_SCOPES)
 
     def pending(self) -> list[str]:
         return [name for name in SCOPES if name in self.scopes and name not in self.done]
@@ -177,10 +209,26 @@ class Rebuild:
 
     def handle(self, run: JobRun) -> None:
         progress = _Progress.of(run.payload)
+        if progress.records_folding() and progress.folding is None:
+            def capture(scope: LibraryScope) -> str:
+                folding = current_folding(scope)
+                queue.save_library_job_payload(scope, run.job, replace(progress, folding=folding).payload())
+                return folding
+
+            run.check()
+            progress.folding = run.library_command(Capability.EDIT_LIBRARY, capture)
         for name in progress.pending():
             walk = {"search": self._search, "text": self._text, "research": self._research}[name]
             walk(run, progress)
             self._finish(run, progress, name)
+        folding = progress.folding
+        if folding is not None:
+            # Only a completed run gets here: a failed or cancelled one
+            # leaves the Library's folding as it was.
+            run.check()
+            run.library_command(Capability.EDIT_LIBRARY,
+                                lambda scope: scope.execute(_STORE_FOLDING, {"folding": folding}),
+                                updates_library=True)
 
     # Each walk returns once its last batch is committed; ``progress.cursor``
     # is the cursor stored with that batch.
@@ -254,7 +302,7 @@ class Rebuild:
         def finish(scope: LibraryScope) -> None:
             for statement in statements:
                 scope.execute(statement)
-            done = _Progress(progress.scopes, [*progress.done, name], None)
+            done = replace(progress, done=[*progress.done, name], cursor=None)
             queue.save_library_job_payload(scope, run.job, done.payload())
 
         run.check()
@@ -270,7 +318,7 @@ def _ids_after(scope: LibraryScope, statement: LiteralString, after: Optional[st
 
 def _save(scope: LibraryScope, run: JobRun, progress: _Progress, cursor: str) -> None:
     """Store ``cursor`` with the batch in ``scope``'s transaction; the local copy follows it."""
-    queue.save_library_job_payload(scope, run.job, _Progress(progress.scopes, progress.done, cursor).payload())
+    queue.save_library_job_payload(scope, run.job, replace(progress, cursor=cursor).payload())
     progress.cursor = cursor
 
 
@@ -336,19 +384,44 @@ def repair(run: JobRun) -> None:
     run.library_command(Capability.EDIT_LIBRARY, lambda scope: scope.execute(_SEARCH_ORPHANS))
 
 
-# -- host maintenance: the admin command (§8.6) ----------------------------------------------
+# -- host maintenance: the admin command, the start checks and the folding check (§8.6) ------
 
-# These run for no actor (the host admin CLI). Each Library is handled in one
-# host transaction that locks its row, skips it while in maintenance (a
-# restore queues its own rebuild), and enqueues with the epoch it read under
-# that lock (``queue.enqueue_library_job_for_host``).
+# These run for no actor: in the admin CLI, and in a worker (the embedded one
+# included) after its start check. Each Library is handled in one host
+# transaction that locks its row, skips it while in maintenance (a restore
+# queues its own rebuild), and enqueues with the epoch it read under that
+# lock (``queue.enqueue_library_job_for_host``).
 
+_CURRENT_FOLDING: LiteralString = "SELECT prks.search_folding() AS folding"
+_STORE_FOLDING: LiteralString = "UPDATE prks.libraries SET search_folding = %(folding)s WHERE id = %(library_id)s"
 _LIBRARY_IDS: LiteralString = "SELECT id FROM prks.libraries ORDER BY id"
+_STALE_LIBRARY_IDS: LiteralString = """
+SELECT id FROM prks.libraries WHERE search_folding IS DISTINCT FROM prks.search_folding() ORDER BY id
+"""
 _LOCK_LIBRARY: LiteralString = """
-SELECT epoch, maintenance IS NOT NULL AS in_maintenance
+SELECT epoch, maintenance IS NOT NULL AS in_maintenance,
+       search_folding IS DISTINCT FROM prks.search_folding() AS folding_due
 FROM prks.libraries WHERE id = %(library_id)s
 FOR NO KEY UPDATE
 """
+# Whether a rebuild that will store the current folding is already there: a
+# queued one covering search and text (it captures the folding when it
+# starts), or a running one that captured the current folding.
+_FOLDING_COVERED: LiteralString = """
+SELECT EXISTS (
+  SELECT 1 FROM prks.jobs j
+  WHERE j.library_id = %(library_id)s AND j.library_epoch = %(epoch)s AND j.kind = %(kind)s
+    AND j.payload->'scopes' ?& %(scopes)s::text[]
+    AND (j.state = 'queued' OR (j.state = 'running' AND j.payload->>'folding' = prks.search_folding()))
+) AS covered
+"""
+
+
+def current_folding(scope: LibraryScope) -> str:
+    """The folding stored and queried text use now: the rules name and the server version."""
+    row = scope.execute_unscoped(_CURRENT_FOLDING).fetchone()
+    assert row is not None and row["folding"] is not None
+    return str(row["folding"])
 
 
 def _host_enqueue(tx: Transaction, library_id: str, epoch: int, scopes: Iterable[str]) -> Optional[uuid.UUID]:
@@ -359,29 +432,112 @@ def _host_enqueue(tx: Transaction, library_id: str, epoch: int, scopes: Iterable
 
 
 def _for_library(db: Database, library_id: str,
-                 fn: Callable[[Transaction, int], Optional[uuid.UUID]]) -> Optional[uuid.UUID]:
-    """Run ``fn(tx, epoch)`` under the Library row lock; None for a gone Library or one in maintenance."""
+                 fn: Callable[[Transaction, int, bool], Optional[uuid.UUID]]) -> Optional[uuid.UUID]:
+    """Run ``fn(tx, epoch, folding_due)`` under the Library row lock; None for a gone Library or one in maintenance."""
     def run(tx: Transaction) -> Optional[uuid.UUID]:
         row = tx.execute(_LOCK_LIBRARY, {"library_id": library_id}).fetchone()
         if row is None or row["in_maintenance"]:
             return None
-        return fn(tx, int(row["epoch"]))
+        return fn(tx, int(row["epoch"]), bool(row["folding_due"]))
 
     return db.command(run)
 
 
-def library_ids(db: Database) -> list[str]:
-    return [str(row["id"]) for row in db.query(lambda tx: tx.execute(_LIBRARY_IDS).fetchall())]
+def library_ids(db: Database, *, stale_folding: bool = False) -> list[str]:
+    statement = _STALE_LIBRARY_IDS if stale_folding else _LIBRARY_IDS
+    return [str(row["id"]) for row in db.query(lambda tx: tx.execute(statement).fetchall())]
 
 
 def request_rebuild(db: Database, library_id: str, scopes: Iterable[str] = SCOPES) -> Optional[uuid.UUID]:
     """``prks admin rebuild-derived``: queue the Library's rebuild; None when it is already queued or unavailable."""
-    return _for_library(db, library_id, lambda tx, epoch: _host_enqueue(tx, library_id, epoch, scopes))
+    return _for_library(db, library_id, lambda tx, epoch, _due: _host_enqueue(tx, library_id, epoch, scopes))
+
+
+def check_folding(db: Database) -> list[str]:
+    """Queue the folding rebuild of every Library whose stored folding is not the current one.
+
+    Each Library is decided under its row ``FOR NO KEY UPDATE``, so two
+    processes checking together queue it once. A queued search-only rebuild
+    does not count: the folding rebuild is then queued beside it, as its own
+    job. Returns the Libraries queued.
+    """
+    def due(library_id: str) -> Callable[[Transaction, int, bool], Optional[uuid.UUID]]:
+        def decide(tx: Transaction, epoch: int, folding_due: bool) -> Optional[uuid.UUID]:
+            if not folding_due:
+                return None
+            covered = tx.execute(_FOLDING_COVERED, {"library_id": library_id, "epoch": epoch, "kind": KIND,
+                                                    "scopes": list(FOLDING_SCOPES)}).fetchone()
+            if covered is not None and covered["covered"]:
+                return None
+            return _host_enqueue(tx, library_id, epoch, FOLDING_SCOPES)
+
+        return decide
+
+    return [library_id for library_id in library_ids(db, stale_folding=True)
+            if _for_library(db, library_id, due(library_id)) is not None]
+
+
+def schedule_repairs(db: Database) -> list[str]:
+    """The startup consistency count of every Library; returns those a repair was queued for."""
+    def count(library_id: str) -> Callable[[Transaction, int, bool], Optional[uuid.UUID]]:
+        def decide(tx: Transaction, epoch: int, _due: bool) -> Optional[uuid.UUID]:
+            row = tx.execute(_COUNT, {"library_id": library_id}).fetchone()
+            if row is None or not (row["missing"] or row["orphaned"]):
+                return None
+            return queue.enqueue_library_job_for_host(tx, library_id, epoch, REPAIR_KIND, {},
+                                                      dedupe_key=library_id)
+
+        return decide
+
+    return [library_id for library_id in library_ids(db)
+            if _for_library(db, library_id, count(library_id)) is not None]
+
+
+class SearchMaintenance:
+    """The idle task: the startup checks, then the folding check whenever the folding changes.
+
+    The first tick (the worker's start, the embedded one included) runs the
+    consistency count and the folding check for every Library. Later ticks,
+    at most once per ``every``, read the current folding with one catalog
+    query and run the folding check again when it differs from the one this
+    worker last checked: the database can restart on a new release under a
+    running worker, whose pool simply reconnects.
+    """
+
+    def __init__(self, *, every: timedelta = timedelta(minutes=1),
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self._every = every.total_seconds()
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last: Optional[float] = None
+        self._repaired = False
+        self._checked: Optional[str] = None
+
+    def tick(self, db: Database) -> None:
+        now = self._clock()
+        with self._lock:
+            if self._last is not None and now - self._last < self._every:
+                return
+            self._last = now
+            if not self._repaired:
+                repaired = schedule_repairs(db)
+                self._repaired = True
+                if repaired:
+                    LOGGER.info("search_repair_scheduled libraries=%s", len(repaired))
+            row = db.query(lambda tx: tx.execute(_CURRENT_FOLDING).fetchone())
+            folding = None if row is None else row["folding"]
+            if folding == self._checked:
+                return
+            queued = check_folding(db)
+            self._checked = folding
+        if queued:
+            LOGGER.info("search_folding_rebuild_queued libraries=%s", len(queued))
 
 
 def attach(registry: HandlerRegistry, storage: StorageBackend) -> Rebuild:
-    """Register ``derived.rebuild`` and ``search.repair`` on a worker's own registry."""
+    """Register ``derived.rebuild``, ``search.repair`` and the search idle task on a worker's own registry."""
     rebuild = Rebuild(storage)
     registry.register(KIND, rebuild.handle)
     registry.register(REPAIR_KIND, repair)
+    registry.add_idle_task(SearchMaintenance().tick)
     return rebuild
