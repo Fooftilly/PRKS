@@ -236,7 +236,7 @@ def _discover_complete_e2e_ids(*, default_modules: bool = False) -> list[str]:
 # substring-matched classes or a statement of full defect equivalence.
 # Keep the real policy's nine smoke IDs and five packaged extras as the only
 # smoke-selector source of truth; this table does not select tests.
-COVERAGE_OBLIGATION_VERSION = 2
+COVERAGE_OBLIGATION_VERSION = 3
 CRITICAL_BROWSER_OBLIGATIONS = (
     ("app-shell-navigation",
      "tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation"),
@@ -248,6 +248,10 @@ CRITICAL_BROWSER_OBLIGATIONS = (
      "tests.e2e.test_offline.OfflineFoundationTests.test_persistence_setup_abandons_on_disconnect_before_worker_install"),
     ("offline-default-navigation",
      "tests.e2e.test_folders_offline.FoldersOfflineTests.test_default_offline_launch_lands_on_the_cached_hierarchy"),
+    # #457: a valid stale browse projection is not equivalent to one offline
+    # cached Work or Folder route surviving a reload.
+    ("offline-browse-projection-invalidation",
+     "tests.e2e.test_browse_offline.BrowseOfflineTests.test_display_changes_stale_all_three_projections"),
     ("durable-operation-reload",
      "tests.e2e.test_local_store_durability.LocalStoreDurabilityTests.test_a_pending_operation_survives_a_page_reload"),
     ("durable-field-reconciliation",
@@ -265,6 +269,10 @@ CRITICAL_BROWSER_OBLIGATIONS = (
      "tests.e2e.test_offline.OfflineFoundationTests.test_cached_pdf_reopened_offline_keeps_annotation_tools"),
     ("offline-annotation-reconnect",
      "tests.e2e.test_offline.OfflineFoundationTests.test_pending_annotation_survives_disconnect_and_resumes_on_reconnect"),
+    # #1008: an in-flight reconnect probe must not prematurely switch a
+    # cached PDF out of Work-capable offline mode or duplicate its viewer.
+    ("offline-pdf-reconnect-probe",
+     "tests.e2e.test_offline.OfflineFoundationTests.test_reconnect_probe_race_settles_pdf_to_online_work_capable_state"),
     ("pdf-annotation-persistence",
      "tests.e2e.test_app.PdfPersistenceTests.test_highlight_persists_through_handshake_reload_and_delete"),
     # #1007: durable recovery following a failed highlight write is distinct
@@ -274,6 +282,10 @@ CRITICAL_BROWSER_OBLIGATIONS = (
      "tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again"),
     ("graph-offline-navigation",
      "tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions"),
+    # #1009: People/Person Groups cache generations after durable Person
+    # create/delete are a distinct cross-domain coherence contract.
+    ("offline-person-membership-coherence",
+     "tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence"),
     ("vue-processing-route-ready",
      "tests.e2e.test_processing_route_surface.ProcessingRouteSurfaceTests.test_processing_files_page_mounts_from_the_route"),
     ("research-notes-draft-recovery",
