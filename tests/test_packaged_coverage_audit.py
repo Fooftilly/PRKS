@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import io
 import os
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts.ci import plan_packaged_e2e as staged
@@ -32,7 +34,7 @@ class PackagedCoverageAuditTests(unittest.TestCase):
 
     def test_curated_smoke_is_not_critical_defect_equivalence(self):
         report = self.audit()
-        self.assertEqual(report["version"], 1)
+        self.assertEqual(report["version"], 2)
         self.assertTrue(report["coverage_complete"])
         self.assertFalse(report["active"])
         self.assertEqual(report["effective_mode"], "full")
@@ -48,6 +50,18 @@ class PackagedCoverageAuditTests(unittest.TestCase):
         self.assertEqual(rows["vue-processing-route-ready"]["status"], "excluded_from_smoke")
         self.assertEqual(rows["offline-install-disconnect"]["status"], "excluded_from_smoke")
         self.assertEqual(rows["durable-field-reconciliation"]["status"], "excluded_from_smoke")
+        # #1091 reproduced under the packaged frontend and #1007 tests the
+        # failed-write recovery contract. None is supplied by the 14-ID floor.
+        for obligation in (
+            "offline-work-source-coalescing",
+            "offline-work-source-return-to-base",
+            "pdf-failed-highlight-recovery",
+        ):
+            with self.subTest(obligation=obligation):
+                self.assertEqual(rows[obligation]["status"], "excluded_from_smoke")
+                self.assertTrue(rows[obligation]["source_full"])
+                self.assertTrue(rows[obligation]["packaged_full"])
+                self.assertFalse(rows[obligation]["packaged_smoke"])
         self.assertEqual(rows["service-worker-upgrade-rollback"]["status"], "separate_guard_only")
         self.assertIn("independently", rows["service-worker-upgrade-rollback"]["guard_verification"])
         self.assertEqual(report["missing_required_ids"], [])
@@ -81,6 +95,58 @@ class PackagedCoverageAuditTests(unittest.TestCase):
                 row = next(r for r in result["critical_rows"] if r["test_id"] == victim)
                 self.assertEqual(row["status"], "missing_from_discovery")
                 self.assertIn("fail closed", staged.format_packaged_coverage_audit(result))
+
+    def test_new_regression_ids_exist_as_real_unittest_methods(self):
+        # Guard the three new defect-class oracles against accidental renames,
+        # without launching Chromium, PostgreSQL or the full E2E runner.
+        names = (
+            "offline-work-source-coalescing",
+            "offline-work-source-return-to-base",
+            "pdf-failed-highlight-recovery",
+        )
+        indexed = dict(staged.CRITICAL_BROWSER_OBLIGATIONS)
+        self.assertEqual(len(indexed), len(staged.CRITICAL_BROWSER_OBLIGATIONS))
+        for obligation in names:
+            with self.subTest(obligation=obligation):
+                test_id = indexed[obligation]
+                module, class_name, method_name = test_id.rsplit(".", 2)
+                source = (Path(__file__).resolve().parents[1]
+                          / (module.replace(".", "/") + ".py"))
+                tree = ast.parse(source.read_text(encoding="utf-8"))
+                classes = [
+                    node for node in tree.body
+                    if isinstance(node, ast.ClassDef) and node.name == class_name
+                ]
+                self.assertEqual(len(classes), 1)
+                methods = [
+                    node for node in classes[0].body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == method_name
+                ]
+                self.assertEqual(len(methods), 1)
+
+    def test_new_regressions_cannot_disappear_or_be_credited_by_smoke(self):
+        full, modules = complete_fixture()
+        indexed = dict(staged.CRITICAL_BROWSER_OBLIGATIONS)
+        for name in (
+            "offline-work-source-coalescing",
+            "offline-work-source-return-to-base",
+            "pdf-failed-highlight-recovery",
+        ):
+            victim = indexed[name]
+            with self.subTest(name=name):
+                without = [tid for tid in full if tid != victim]
+                report = staged.audit_packaged_coverage(
+                    without, required_modules=modules
+                )
+                self.assertFalse(report["coverage_complete"])
+                self.assertIn(victim, report["missing_required_ids"])
+                row = next(
+                    r for r in report["critical_rows"] if r["obligation"] == name
+                )
+                self.assertEqual(row["status"], "missing_from_discovery")
+                self.assertFalse(row["packaged_smoke"])
+                self.assertIn("fail closed", staged.format_packaged_coverage_audit(report))
 
     def test_empty_invalid_and_incomplete_module_inventory_fail_closed(self):
         all_ids, modules = complete_fixture()

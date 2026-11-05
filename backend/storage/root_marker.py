@@ -66,6 +66,12 @@ ROOT_LOCK_NAME = "root.lock"
 # The claim lock (§11.1): held exclusive by claim_root only, for one
 # read-check-write-read of an unclaimed marker. Lives beside root.lock.
 CLAIM_LOCK_NAME = "root.claim"
+# The content lock (L-D-1 #630): until the PostgreSQL cutover (PG-C1) the
+# Library's content is the SQLite store under the root, which one process at
+# a time may open. A web process paired with PostgreSQL holds root.lock
+# shared (beside its worker and migrate) and this lock exclusive for its
+# whole run. Lives beside root.lock; never touched by the SQLite runtime.
+CONTENT_LOCK_NAME = "content.lock"
 MARKER_FORMAT = 1
 LAYOUT_VERSION = 1
 
@@ -319,6 +325,11 @@ def _require_lease(root: str, lease: ExclusiveFileLock) -> None:
 def claim_lock_path(root: str) -> str:
     """``<root>/.prks-maintenance/root.claim``, the claim lock (§11.1)."""
     return os.path.join(root, MAINTENANCE_DIRNAME, CLAIM_LOCK_NAME)
+
+
+def content_lock_path(root: str) -> str:
+    """``<root>/.prks-maintenance/content.lock``, the interim content lock."""
+    return os.path.join(root, MAINTENANCE_DIRNAME, CONTENT_LOCK_NAME)
 
 
 def require_shared_lease(root: str, lease: SharedFileLock) -> None:
