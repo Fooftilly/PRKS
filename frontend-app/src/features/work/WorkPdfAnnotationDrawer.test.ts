@@ -924,6 +924,13 @@ describe('annotation delete confirm focus', () => {
     deleteButton.focus()
     deleteButton.click()
     await flushPromises()
+    // ModalHost deliberately focuses the topmost confirm on the next frame.
+    // A synthetic click before that handoff is not an actionable user click,
+    // and leaves its queued focus callback free to steal focus after Cancel.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+    expect(document.activeElement).toBe(document.getElementById('prks-modal-confirm-cancel'))
     const dialog = document.getElementById('prks-modal-confirm')
     expect(dialog?.classList.contains('hidden')).toBe(false)
     expect(deleteButton.disabled).toBe(true)
