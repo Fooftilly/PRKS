@@ -145,6 +145,14 @@ class ExtractionTests(TextTestCase):
         self.assertEqual(self.extracted, [])
         self.assertEqual(len(self.rows(work)), 1)
 
+    def test_a_row_of_an_older_extractor_version_is_not_searched(self) -> None:
+        work = self.pdf_work("Paper", "versioned words")
+        self.run_jobs()
+        self.assertEqual(self.found("versioned"), [work])
+        self.sql("UPDATE derived.asset_text SET extractor_version = %s",
+                 (search_text.EXTRACTOR_VERSION + 1,))
+        self.assertEqual(self.found("versioned"), [])
+
     def test_a_text_too_long_for_a_tsvector_is_cut_and_marked(self) -> None:
         work = self.pdf_work("Long", "")
         self.fake = " ".join(f"w{i:07d}" for i in range(200_000))

@@ -174,7 +174,7 @@ def extract_asset(run: JobRun, storage: StorageBackend, asset_id: str,
             text, truncated = extractor(path)
         status = "indexed" if text.strip() else "empty"
     except PDFTextExtractionError as exc:
-        LOGGER.info("text_extract_failed asset=%s reason=%s", asset_id, exc.reason)
+        LOGGER.info("text_extract_failed reason=%s", exc.reason)
         text, truncated, status = "", False, "failed"
     if status != "indexed":
         text, truncated = "", False
@@ -235,8 +235,10 @@ def attach(registry: HandlerRegistry, storage: StorageBackend) -> TextExtraction
 
 # -- reads -----------------------------------------------------------------------------
 
-# The Works whose primary managed PDF's current bytes hold every token as a
-# prefix, best match first (``PRKSTextIndex.search_work_ids``).
+# The Works whose primary managed PDF's current bytes, read by this
+# extractor version, hold every token as a prefix (``PRKSTextIndex.search_work_ids``).
+# ``doc`` keeps no positions, so a rank could not tell matches apart: they
+# come most recently updated first.
 _PDF_TEXT_SQL: LiteralString = """
 WITH q AS (
   SELECT to_tsquery('prks.prks_search'::regconfig,
@@ -252,8 +254,8 @@ JOIN prks.assets a
 JOIN derived.asset_text t
   ON t.library_id = a.library_id AND t.asset_id = a.id AND t.content_sha256 = a.content_sha256
 WHERE w.library_id = %(library_id)s AND a.kind = 'managed_file' AND t.status = 'indexed'
-  AND t.doc @@ q.query
-ORDER BY ts_rank(t.doc, q.query) DESC, w.updated_at DESC, w.id COLLATE "C"
+  AND t.extractor_version = %(version)s AND t.doc @@ q.query
+ORDER BY w.updated_at DESC, w.id COLLATE "C"
 LIMIT %(limit)s
 """
 
@@ -265,5 +267,6 @@ def pdf_text_work_ids(scope: LibraryScope, text: str, limit: int = 2000) -> list
     tokens = split_query(text)
     if not tokens:
         return []
-    rows = scope.execute(_PDF_TEXT_SQL, {"tokens": tokens, "limit": max(1, int(limit))})
+    rows = scope.execute(_PDF_TEXT_SQL, {"tokens": tokens, "version": EXTRACTOR_VERSION,
+                                         "limit": max(1, int(limit))})
     return [str(row["work_id"]) for row in rows]

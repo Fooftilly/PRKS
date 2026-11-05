@@ -61,7 +61,6 @@ from backend.jobs.worker import (
     open_worker_database,
     schema_start_check,
 )
-from backend.storage.objects import LocalFilesystemStorage
 from backend.storage.root_binding import assert_config_matches_bound_root
 
 LOGGER = logging.getLogger("prks.jobs")
@@ -119,8 +118,9 @@ class EmbeddedWorker:
         """Bind the object maintenance jobs and ``text.extract`` to the process's bound data root; before :meth:`start`."""
         if self._thread.ident is not None:
             raise RuntimeError("the objects lane must be attached before the worker starts")
-        object_jobs.attach(self.registry, root)
-        search_text.attach(self.registry, LocalFilesystemStorage(root))
+        maintenance = object_jobs.attach(self.registry, root)
+        if maintenance is not None:
+            search_text.attach(self.registry, maintenance.storage)
 
     def start(self) -> None:
         LOGGER.info("embedded_worker_starting name=%s", self.worker.name)

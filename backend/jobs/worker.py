@@ -77,7 +77,6 @@ from backend.jobs.queue import DEFAULT_BACKOFF, DEFAULT_LEASE, Backoff, ClaimedJ
 from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import SharedFileLock
-from backend.storage.objects import LocalFilesystemStorage
 from backend.storage.root_binding import acquire_shared_root_lease
 from backend.storage.root_marker import read_marker
 
@@ -460,7 +459,8 @@ def _attaching_objects(check: StartCheck, registry: HandlerRegistry, root: Joine
     """``check``, then (once, before the first claim) the lanes that read the paired root.
 
     The objects lane (cleanup and sweep) and ``text.extract``, which reads
-    the managed PDFs it indexes.
+    the managed PDFs it indexes through the objects lane's storage (neither
+    is attached when the root is refused).
     """
     attached = False
 
@@ -469,8 +469,9 @@ def _attaching_objects(check: StartCheck, registry: HandlerRegistry, root: Joine
         if not check():
             return False
         if not attached:
-            object_jobs.attach(registry, root.path)
-            search_text.attach(registry, LocalFilesystemStorage(root.path))
+            maintenance = object_jobs.attach(registry, root.path)
+            if maintenance is not None:
+                search_text.attach(registry, maintenance.storage)
             attached = True
         return True
 
