@@ -18,6 +18,7 @@ import tempfile
 import uuid
 from collections.abc import Callable
 from typing import Any, Optional
+from unittest import mock
 
 import psycopg
 from psycopg import errors
@@ -273,6 +274,20 @@ class AbortTests(RestoreTestCase):
 
         error = self.refused(self.archive, "53100", hooks={restore.HOOK_COMMITTING: disk_full})
         self.assertIn("53100", error.message)
+        self.assert_unchanged_after_abort(self.before, 1, "53100")
+
+    def test_a_full_disk_in_r1_fails_the_run_and_drops_the_staging_schema(self) -> None:
+        real_stage = restore.stage
+
+        def stage_until_full(conn: Any, *args: Any, **kwargs: Any) -> Any:
+            # Leave a schema behind, as a crash between R1 statements could, to prove R5 drops it.
+            run_id = kwargs["run_id"]
+            conn.execute(f"CREATE SCHEMA {staging_schema(run_id)}".encode())
+            raise errors.DiskFull("could not extend file")
+
+        with mock.patch.object(restore, "stage", stage_until_full):
+            self.refused(self.archive, "53100")
+        self.assertIs(restore.stage, real_stage)
         self.assert_unchanged_after_abort(self.before, 1, "53100")
 
     def test_a_refused_archive_fails_the_run_before_r2(self) -> None:
