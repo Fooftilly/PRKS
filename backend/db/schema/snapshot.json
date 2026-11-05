@@ -48,7 +48,7 @@
       "volatility": "i"
     },
     "prks.work_search_doc(text,text,text,text,text)": {
-      "definition": "CREATE OR REPLACE FUNCTION prks.work_search_doc(title text, people text, author_text text, abstract text, notes text)\n RETURNS tsvector\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT (((setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(title)), 'A'::\"char\") || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(((people || ' '::text) || author_text))), 'B'::\"char\")) || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(abstract)), 'C'::\"char\")) || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(notes)), 'D'::\"char\"));\nEND\n",
+      "definition": "CREATE OR REPLACE FUNCTION prks.work_search_doc(title text, people text, author_text text, abstract text, notes text)\n RETURNS tsvector\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nBEGIN ATOMIC\n SELECT (((setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(title)), 'A'::\"char\") || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(((people || ' '::text) || author_text))), 'B'::\"char\")) || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(\"left\"(abstract, 60000))), 'C'::\"char\")) || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(\"left\"(notes, 60000))), 'D'::\"char\"));\nEND\n",
       "parallel": "s",
       "strict": true,
       "volatility": "i"
@@ -4133,6 +4133,10 @@
           ],
           [
             "hword_numpart",
+            "prks.search_unaccent"
+          ],
+          [
+            "hword_numpart",
             "simple"
           ],
           [
@@ -4149,7 +4153,15 @@
           ],
           [
             "numhword",
+            "prks.search_unaccent"
+          ],
+          [
+            "numhword",
             "simple"
+          ],
+          [
+            "numword",
+            "prks.search_unaccent"
           ],
           [
             "numword",
