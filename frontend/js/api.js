@@ -225,11 +225,24 @@ async function fetchWorks(options = {}) {
  */
 async function fetchFolders(options = {}) {
     const errorOwner = prksApiErrorOwner(options);
-    if (typeof prksEffectiveFolderCatalogue !== 'function') return [];
+    if (typeof prksEffectiveFolderCatalogue !== 'function') {
+        if (options.requireAvailable) throw new Error('Folder catalogue is unavailable.');
+        return [];
+    }
     try {
-        const rows = await prksEffectiveFolderCatalogue();
-        return Array.isArray(rows) ? rows : [];
+        const value = await prksEffectiveFolderCatalogue(undefined, options);
+        if (options.withSource) {
+            if (!value || !Array.isArray(value.rows)) {
+                throw new Error('Folder catalogue is unavailable.');
+            }
+            return value;
+        }
+        if (!Array.isArray(value) && options.requireAvailable) {
+            throw new Error('Folder catalogue is unavailable.');
+        }
+        return Array.isArray(value) ? value : [];
     } catch (e) {
+        if (options.requireAvailable) throw e;
         if (prksAbortFallback(e)) return [];
         prksSetApiError('folders', 'Could not load folders.', '', errorOwner);
         prksReportApiClientError('folders');
@@ -347,20 +360,35 @@ async function fetchSearch(query, tagName, options = {}) {
 }
 async function fetchTags(options = {}) {
     if (!options.used && typeof prksReadTagsIndex === 'function') {
-        try { const result = await prksReadTagsIndex(options); return result.value || []; }
-        catch (_) { return []; }
+        try {
+            const result = await prksReadTagsIndex(options);
+            if (options.requireAvailable && (!result || !Array.isArray(result.value))) {
+                throw new Error('Tag catalogue is unavailable.');
+            }
+            const rows = result && Array.isArray(result.value) ? result.value : [];
+            return options.withSource ? { rows, source: result && result.source || 'unavailable' } : rows;
+        } catch (error) {
+            if (options.requireAvailable) throw error;
+            return options.withSource ? { rows: [], source: 'unavailable' } : [];
+        }
     }
     const errorOwner = prksApiErrorOwner(options);
     const params = new URLSearchParams();
-    if (options.used) {
-        params.set('used', '1');
-    }
+    if (options.used) params.set('used', '1');
     const q = params.toString() ? '?' + params.toString() : '';
     try {
-        const res = await prksRequest('/api/tags' + q, { signal: prksApiSignal(options) }, prksCatalogReadPolicy());
+        const res = await prksRequest('/api/tags' + q, { signal: prksApiSignal(options) },
+            prksCatalogReadPolicy());
+        if (options.requireAvailable) {
+            if (!res.ok) throw new Error('Tag catalogue is unavailable.');
+            const result = await res.json();
+            if (!Array.isArray(result)) throw new Error('Invalid tag catalogue.');
+            return options.withSource ? { rows: result, source: 'network' } : result;
+        }
         const data = await prksParseJsonResponse(res, [], 'tags', errorOwner);
         return Array.isArray(data) ? data : [];
     } catch (e) {
+        if (options.requireAvailable) throw e;
         if (prksAbortFallback(e)) return [];
         prksSetApiError('tags', 'Could not load tags.', '', errorOwner);
         prksReportApiClientError('tags');
