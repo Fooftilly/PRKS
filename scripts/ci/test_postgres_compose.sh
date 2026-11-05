@@ -3,10 +3,11 @@
 #
 # Runs docker-compose.postgres.yml as an operator would: db, migrate, web and
 # worker on a fresh data root, first-run setup with `prks_app.py admin`, then
-# restarts, an upgrade-style migrate beside a running stack, a database copy
-# refused after the original restarted, a simulated migrate killed between its
-# database bump and its marker write (set with psql: no fault hooks in the
-# image), and a recreated database volume that bootstrap refuses.
+# restarts (web and worker alone too), an upgrade-style migrate beside a running
+# stack, database copies refused after the original moved on (by migrate, web
+# and worker), a simulated migrate killed between its database bump and its
+# marker write (set with psql: no fault hooks in the image), and a recreated
+# database volume that bootstrap refuses.
 #
 # Environment: PRKS_COMPOSE_SKIP_BUILD=1 reuses an existing prks:latest;
 # PRKS_COMPOSE_EXTRA_FILE adds one more Compose file (a local image override).
@@ -104,6 +105,32 @@ is_healthy() {
 }
 is_paired() { [[ "$(db_state)" == "$(marker_state)" ]]; }
 
+stale_start() {
+  # stale_start SERVICE DATABASE ROLE...: runs prks_app.py ROLE in a one-off
+  # SERVICE container against DATABASE (a copy) instead of prks.
+  local service=$1
+  shift
+  "${compose[@]}" run --rm --no-deps --entrypoint sh "$service" -c '
+    copy=$1
+    shift
+    PRKS_DATABASE_URL="$(sed "s#/prks\$#/$copy#" /run/secrets/prks_database_url)" \
+    PRKS_DATABASE_URL_FILE= exec python /app/prks_app.py "$@"
+  ' sh "$@"
+}
+
+refuses_stale() {
+  # refuses_stale SERVICE DATABASE ROLE...: the start fails as a stale copy and
+  # changes neither the copy nor the marker.
+  local copy_before refusal
+  copy_before=$(db_state "$2")
+  if refusal=$(stale_start "$@" 2>&1); then
+    fail "$1 started on the stale copy $2"
+  fi
+  grep -q "stale copy" <<<"$refusal" || fail "$1 refused $2 for another reason: $refusal"
+  [[ "$(db_state "$2")" == "$copy_before" ]] || fail "$1 bumped the refused copy $2"
+  is_paired || fail "$1 on the refused copy $2 changed the marker"
+}
+
 wait_settled() {
   # web ready and healthy, every start done: database and marker equal, at
   # generation $1.
@@ -196,23 +223,26 @@ wait_settled 7
 [[ "$(query "SELECT count(*) FROM prks.users")" == 1 ]] || fail "the owner did not survive down/up"
 pass "down/up keeps the database volume; every start bumped once (generation 7)"
 
-stale=("${compose[@]}" run --rm --no-deps --entrypoint sh migrate -c
-       'PRKS_DATABASE_URL="$(sed "s#/prks\$#/prks_copy#" /run/secrets/prks_database_url)" \
-        PRKS_DATABASE_URL_FILE= exec python /app/prks_app.py migrate')
-copy_before=$(db_state prks_copy)
-if refusal=$("${stale[@]}" 2>&1); then
-  fail "a database copy taken before the restart started against the root"
-fi
-grep -q "stale copy" <<<"$refusal" || fail "the copy was refused for another reason: $refusal"
-[[ "$(db_state prks_copy)" == "$copy_before" ]] || fail "the refused copy was bumped"
-is_paired || fail "the refused copy changed the marker"
+refuses_stale migrate prks_copy migrate
 pass "a database copy taken before the restart is refused against the root"
 
 "${compose[@]}" up --detach --force-recreate
 wait_settled 10
 pass "container recreation keeps the data; generation 10"
 
+# web and worker restarted without migrate still move the marker, one bump each.
+"${compose[@]}" restart web worker
+wait_settled 12
+pass "restart of web and worker alone bumps database and marker (generation 12)"
+
 # --- migrate killed between its database bump and its marker write ----------------
+
+# A copy taken before the interrupted bump. web and worker come back without
+# migrate (`compose start` would also start the finished migrate again).
+"${compose[@]}" stop web worker
+query "CREATE DATABASE prks_before_bump TEMPLATE prks" >/dev/null
+"${compose[@]}" up --detach --no-deps web worker
+wait_settled 14
 
 query "UPDATE prks.instance SET prev_start_token = start_token, start_token = md5(random()::text), \
        start_generation = start_generation + 1" >/dev/null
@@ -220,8 +250,18 @@ is_not_ready() { [[ "$(readyz)" == 503 ]]; }
 wait_for 30 "web to turn not ready" is_not_ready
 out=$("${compose[@]}" run --rm --no-deps migrate)
 grep -q "reconciled an interrupted start" <<<"$out" || fail "migrate did not reconcile: $out"
-wait_settled 12
+wait_settled 16
 pass "a bump without its marker write keeps web not ready until the next start reconciles it"
+
+# The copy from before that bump is now an older cluster: every role refuses it.
+# A second web would first meet the running web's content lock, so web stops.
+refuses_stale migrate prks_before_bump migrate
+refuses_stale worker prks_before_bump worker
+"${compose[@]}" stop web
+refuses_stale web prks_before_bump serve --host 0.0.0.0
+"${compose[@]}" up --detach --no-deps web
+wait_settled 17
+pass "a copy taken before the interrupted bump is refused by migrate, worker and web"
 
 # --- a recreated database volume: bootstrap refuses the used root -------------------
 
@@ -236,9 +276,15 @@ printf '%s' "$token" | "${compose[@]}" exec -T web sh -c 'umask 077; cat > /tmp/
 printf '%s' "owner-password-$(openssl rand -hex 8)" \
   | "${compose[@]}" exec -T web sh -c 'umask 077; cat > /tmp/owner-password'
 "${admin[@]}" issue-token --root /data
-if "${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password; then
+if refusal=$("${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password 2>&1); then
   fail "bootstrap claimed a root an earlier database used"
 fi
+# Refused for the marker's instance id: the root holds no stored file yet.
+grep -q "belongs to an earlier database" <<<"$refusal" \
+  || fail "bootstrap refused the used root for another reason: $refusal"
+holds=$("${compose[@]}" exec -T web python -c \
+  'from backend.storage.objects import root_holds_objects; print(root_holds_objects("/data"))')
+[[ "$holds" == False ]] || fail "the root holds stored objects, so the refusal does not isolate the marker"
 [[ "$(sha256sum "$temp/data/prks-root.json")" == "$marker_before" ]] || fail "the used root's marker changed"
 [[ "$(readyz)" != 200 ]] || fail "web is ready against an empty database"
 pass "a recreated database volume: bootstrap refuses the used root and leaves it untouched"
