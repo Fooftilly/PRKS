@@ -334,17 +334,21 @@ def _copy_object(storage: StorageBackend, ref: ObjectRef, out: Sink) -> None:
         raise BackupFailed("object_unreadable", f"The stored object {ref.key} cannot be read.") from None
     if stat is None:
         raise BackupFailed("object_missing", f"The stored object {ref.key} is missing.")
+    unreadable = BackupFailed("object_unreadable", f"The stored object {ref.key} cannot be read.")
     try:
-        with storage.open_read(ref.key) as handle:
-            while True:
-                chunk = handle.read(IO_CHUNK_SIZE)
-                if not chunk:
-                    break
-                out.write(chunk)
-    except BackupFailed:
-        raise
+        handle = storage.open_read(ref.key)
     except Exception:
-        raise BackupFailed("object_unreadable", f"The stored object {ref.key} cannot be read.") from None
+        raise unreadable from None
+    with handle:
+        while True:
+            try:
+                chunk = handle.read(IO_CHUNK_SIZE)
+            except Exception:
+                raise unreadable from None
+            if not chunk:
+                break
+            # Outside the read's handler: a ZIP write or lease renewal failure keeps its own reason.
+            out.write(chunk)
 
 
 def _verify_archive(path: str, manifest: dict[str, Any], renew: Callable[[], None] = lambda: None) -> None:

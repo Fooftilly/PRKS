@@ -149,9 +149,9 @@ class IdentityTests(BackupTestCase):
 
 
 class ObjectSafetyTests(BackupTestCase):
-    def assert_failed(self, reason: str) -> None:
+    def assert_failed(self, reason: str, **kwargs: Any) -> None:
         with self.assertRaises(BackupFailed) as caught:
-            self.backup()
+            self.backup(**kwargs)
         self.assertEqual(caught.exception.reason, reason)
         (run,) = self.runs()
         self.assertEqual((run["state"], run["error_code"]), ("failed", reason))
@@ -204,17 +204,34 @@ class ObjectSafetyTests(BackupTestCase):
 
     def test_the_lease_is_renewed_while_one_large_member_streams(self) -> None:
         self.create(self.put(b"x" * (backup.IO_CHUNK_SIZE * 8)))
-        renewals: list[int] = []
+        ticks = iter(range(0, 10**9, 1000))  # every reading is a whole lease later
+        renewed: list[float] = []
         real = backup._Lease.tick
 
-        def counting(lease: Any) -> None:
-            renewals.append(1)
+        def recording(lease: Any) -> None:
+            before = lease._renewed
+            real(lease)  # renews in the database; raises lease_lost when the update matches no run
+            if lease._renewed != before:
+                renewed.append(lease._renewed)
+
+        with mock.patch.object(backup._Lease.__init__, "__defaults__", (lambda: float(next(ticks)),)), \
+                mock.patch.object(backup._Lease, "tick", recording):
+            result = self.backup()
+        # More renewals than members: they also happen between the chunks of one member.
+        self.assertGreater(len(renewed), len(list(backup.members(result.manifest))) + 8)
+
+    def test_a_lease_renewal_failure_during_an_object_copy_is_a_database_failure(self) -> None:
+        self.create(self.put(b"x" * (backup.IO_CHUNK_SIZE * 4)))
+        real = backup._Lease.tick
+
+        def failing_in_objects(lease: Any) -> None:
+            if objects_reached:
+                raise psycopg.OperationalError("connection lost")
             real(lease)
 
-        with mock.patch.object(backup._Lease, "tick", counting):
-            result = self.backup()
-        # More renewal checks than members: they also run between the chunks of one member.
-        self.assertGreater(len(renewals), len(list(backup.members(result.manifest))) + 8)
+        objects_reached: list[bool] = []
+        with mock.patch.object(backup._Lease, "tick", failing_in_objects):
+            self.assert_failed("database", hooks={backup.PHASE_OBJECTS: lambda: objects_reached.append(True)})
 
     def test_a_failed_listing_never_publishes(self) -> None:
         self.create(self.put())
