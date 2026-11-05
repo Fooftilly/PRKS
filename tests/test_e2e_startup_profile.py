@@ -145,8 +145,9 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         workflow = (
             root / ".github/workflows/e2e-offline-person-profile.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("workflow_dispatch: {}", workflow)
-        self.assertNotIn("inputs:", workflow)
+        self.assertIn("  workflow_dispatch:\n    inputs:\n", workflow)
+        self.assertIn("      trace_recent_click:\n", workflow)
+        self.assertIn("        type: boolean\n        default: false\n", workflow)
         self.assertIn("for SCENARIO in create edit; do", workflow)
         targets = re.findall(
             r"^\s*(create|edit)\) TARGET=(tests\.e2e\.[A-Za-z_0-9.]+) ;;$",
@@ -349,6 +350,41 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 [("profile_prefix", f"person_{mode}")],
                 target,
             )
+
+    def test_manual_api_trace_is_one_real_click_case_and_not_default_ci(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (
+            root / ".github/workflows/e2e-offline-person-profile.yml"
+        ).read_text(encoding="utf-8")
+        # The existing counterbalanced paired profiler remains the default.
+        self.assertIn("if: ${{ !inputs.trace_recent_click }}", workflow)
+        self.assertEqual(workflow.count("  workflow_dispatch:"), 1)
+        self.assertNotIn("  pull_request:", workflow)
+        self.assertNotIn("  push:", workflow)
+
+        mark = "      - name: Trace one real Recently Added click (manual diagnostic only)\n"
+        self.assertEqual(workflow.count(mark), 1)
+        trace = workflow.split(mark, 1)[1].split(
+            "\n      - name: Upload failure diagnostics only", 1
+        )[0]
+        self.assertIn("if: ${{ inputs.trace_recent_click }}", trace)
+        self.assertIn('PRKS_E2E_PROFILE: "1"', trace)
+        self.assertIn('PRKS_E2E_PERSON_RECENT_TRIAL: "0"', trace)
+        self.assertIn('DEBUG: "pw:api"', trace)
+        self.assertEqual(trace.count("python tests/e2e/run.py"), 1)
+        self.assertIn("--jobs 1 --no-pointer-capture --profile", trace)
+        self.assertNotIn("for SCENARIO", trace)
+        self.assertNotIn("for MODE", trace)
+        self.assertNotIn("for trial", trace)
+        targets = dict(re.findall(
+            r"^\s*(create|edit)\) TARGET=(tests\.e2e\.[A-Za-z_0-9.]+) ;;$",
+            workflow, flags=re.MULTILINE,
+        ))
+        self.assertEqual(len(targets), 2)
+        self.assertIn(targets["create"], trace)
+        self.assertNotIn(targets["edit"], trace)
+        # The trace must use the same test runner as normal E2E. It cannot
+        # substitute trial=True for the actual UI click or drop assertions.
 
     def test_person_phase_timers_are_not_additive_infrastructure(self):
         from tests.e2e import run as runner
