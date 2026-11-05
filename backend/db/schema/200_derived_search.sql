@@ -66,11 +66,11 @@ CREATE FUNCTION prks.work_search_doc(title text, people text, author_text text, 
                                      notes text) RETURNS tsvector
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 BEGIN ATOMIC
-  SELECT setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(title)), 'A')
+  SELECT setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(left(title, 50000))), 'A')
       || setweight(to_tsvector('prks.prks_search'::regconfig,
-                               prks.search_fold(people || ' ' || author_text)), 'B')
-      || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(left(abstract, 60000))), 'C')
-      || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(left(notes, 60000))), 'D');
+                               prks.search_fold(left(people || ' ' || author_text, 50000))), 'B')
+      || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(left(abstract, 50000))), 'C')
+      || setweight(to_tsvector('prks.prks_search'::regconfig, prks.search_fold(left(notes, 50000))), 'D');
 END;
 
 CREATE FUNCTION prks.work_search_text(title text, author_text text, abstract text, notes text)
@@ -92,11 +92,12 @@ END;
 -- The *_norm columns are plain columns that the refresh writes through
 -- prks.search_norm; nothing generates or indexes that function's output.
 --   doc         title A, linked people and author text B, abstract C,
---               Research Note D (to_tsvector of prks.search_fold); the
---               abstract and the Research Note each contribute their first
---               60000 characters, so a long note can never make the
---               tsvector exceed PostgreSQL's 1 MB limit and fail the
---               command that saved it. The rest stays in text_norm.
+--               Research Note D (to_tsvector of prks.search_fold); each
+--               of the four inputs contributes its first 50000 characters
+--               (at most about 700 kB of tsvector even for short distinct
+--               words), so a long note can never exceed PostgreSQL's 1 MB
+--               tsvector limit and fail the command that saved it. The rest
+--               stays in text_norm.
 --   title_norm  search_norm(displayed title)
 --   people_norm search_norm of each linked person's name and each alias,
 --               one per line
