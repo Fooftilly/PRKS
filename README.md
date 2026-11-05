@@ -131,7 +131,7 @@ docker compose -f docker-compose.postgres.yml exec web python /app/prks_app.py a
 docker compose -f docker-compose.postgres.yml exec web python /app/prks_app.py admin bootstrap complete --root /data --login alice
 ```
 
-`web` then starts serving at [http://127.0.0.1:8080](http://127.0.0.1:8080) and turns healthy. Loopback is the default publish address. Expose PRKS on a network only behind an HTTPS reverse proxy, with `PRKS_PUBLISH_HOST`, `PRKS_PUBLIC_ORIGIN` and `PRKS_TRUSTED_PROXIES` set in `.env`.
+`web` then starts serving at [http://127.0.0.1:8080](http://127.0.0.1:8080) and turns healthy. Loopback is the default publish address. Expose PRKS on a network only behind an HTTPS reverse proxy, with `PRKS_PUBLISH_HOST`, `PRKS_PUBLIC_ORIGIN` and `PRKS_TRUSTED_PROXIES` set in `.env`. `PRKS_TRUSTED_PROXIES` must name only the proxy, and the web port must then be reachable only by that proxy (keep it on loopback, or drop the published port and put the proxy on the Compose network). Anyone who reaches the port from a trusted address can set `X-Forwarded-For` and spread their sign-in attempts over invented addresses.
 
 **Health and stopping.** `GET /healthz` answers 200 while the process runs. `GET /readyz` answers 200 only when the database is reachable, its schema is exactly this image's, setup is complete and the data root is still paired with this database; otherwise 503. Neither shows any detail. On `docker compose stop` (SIGTERM) `web` stops accepting connections and exits, and `worker` claims nothing more and finishes its running job or hands it back, within `stop_grace_period` (30 s).
 

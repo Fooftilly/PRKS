@@ -103,14 +103,14 @@ is_healthy() {
   [[ "$(docker inspect --format '{{.State.Health.Status}}' "$("${compose[@]}" ps -q web)")" == healthy ]]
 }
 is_paired() { [[ "$(db_state)" == "$(marker_state)" ]]; }
-generation() { db_state | cut -d: -f1; }
 
 wait_settled() {
   # web ready and healthy, every start done: database and marker equal, at
   # generation $1.
-  local deadline=$((SECONDS + 60)) database marker
+  local deadline database marker
   wait_for 120 "web to be ready" is_ready
   wait_for 120 "web to be healthy" is_healthy
+  deadline=$((SECONDS + 60))
   while true; do
     database=$(db_state)
     marker=$(marker_state)
@@ -140,6 +140,20 @@ for service in web worker; do
   [[ "$secret" == yes ]] || fail "$service does not list the prks_database_url secret"
 done
 pass "volume at /var/lib/postgresql, no db host port, web and worker list the URL secret"
+
+# The bridge interface needs the password (never trust), and the cluster has
+# the builtin locale, which a restart never changes on an existing volume.
+if "${compose[@]}" exec -T db sh -eu -c '
+  export PGPASSWORD="definitely-not-the-generated-password"
+  exec psql --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --username prks --dbname prks --host db --command "SELECT 1"
+' >/dev/null 2>&1; then
+  fail "db accepted an incorrect password on its bridge interface"
+fi
+[[ "$(query "SELECT current_setting('server_version_num')::int / 10000")" == 18 ]] || fail "not PostgreSQL 18"
+[[ "$(query "SELECT datlocprovider::text || '|' || datlocale FROM pg_database WHERE datname = current_database()")" \
+   == "b|PG_UNICODE_FAST" ]] || fail "db does not use the builtin PG_UNICODE_FAST locale"
+pass "db refuses a wrong password; PostgreSQL 18 with the builtin locale"
 
 # migrate applied the schema and left the root alone: nothing is set up yet.
 [[ "$(query "SELECT count(*) FROM prks.instance")" == 0 ]] || fail "an instance row before setup"
