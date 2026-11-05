@@ -267,6 +267,36 @@ skip, CI-runner reduction, or change to required PR gates is authorized.
 A separate maintainer decision with real defect-class and timing evidence
 would be needed.
 
+### November 2026: offline catalogue and reconnect risk classes (#740)
+
+The advisory packaged-smoke coverage inventory advances from v2 to **v3**,
+adding three independent real-browser cases from the existing opt-in
+flake-acceptance matrix:
+
+- `offline-browse-projection-invalidation` ([#457](https://github.com/Fooftilly/PRKS/issues/457)):
+  a display change invalidates all three cached Browse projections; checking
+  only that an individual Work or Folder opens offline would miss this.
+- `offline-pdf-reconnect-probe` ([#1008](https://github.com/Fooftilly/PRKS/issues/1008)):
+  an in-flight connectivity probe must not prematurely demote an offline
+  Work-capable PDF viewer or produce duplicate viewer/toolbar instances.
+- `offline-person-membership-coherence` ([#1009](https://github.com/Fooftilly/PRKS/issues/1009)):
+  Person creation reconciles a new durable intent without invalidating
+  any cached-domain generation; confirmed deletion advances People and
+  Person Group generations, but leaves unrelated domains unchanged.
+
+Each test is present in the complete six-shard source and packaged Chromium
+suite, but **none is included in the dormant 14-case packaged-smoke floor**.
+All three were already stress-tested in the existing optional workflow; this
+change does not rerun or widen those cases. The audit's method-definition
+guards verify that these IDs refer to actual E2E unittest methods, its
+missing-ID tests fail closed, and a separate mapping check ensures the three
+risk IDs still match their real flake-stress matrix cases. This does not
+claim a current product defect or prove any selected subset equivalent to
+full-packaged testing. **Both full six-shard gates, isolation, assertions,
+CI path selection and required status contexts are unchanged**, and the
+reduced packaged candidate remains inactive pending maintainer approval
+and real defect-equivalence evidence.
+
 ### November 2026: Work-source and failed-highlight regression classes (#740)
 
 The advisory critical-obligation inventory is now **v2**, adding three
