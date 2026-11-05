@@ -28,7 +28,7 @@ Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `ima
 
 ## PostgreSQL deployment (preview)
 
-These settings apply only to the PostgreSQL deployment preview, `docker-compose.postgres.yml` (README, "PostgreSQL deployment (preview)"; `docs/postgresql-architecture.md` §4.3, §9.3, §11.1, §12.3). PostgreSQL is not the production backend until the cutover. Without `PRKS_AUTH`, PRKS runs the SQLite application and ignores everything below except the Compose variables. A setting that is set but unusable stops the process with exit status 2. PRKS never falls back to a default.
+These settings apply only to the PostgreSQL deployment preview, `docker-compose.postgres.yml` (README, "PostgreSQL deployment (preview)"; `docs/postgresql-architecture.md` §4.3, §9.3, §11.1, §12.3). PostgreSQL is not the production backend until the cutover. Without `PRKS_AUTH`, `serve` runs the SQLite application and ignores the `serve` settings below. `migrate`, `worker` and `admin` are PostgreSQL commands whatever `PRKS_AUTH` says: they always need the database URL. A setting that is set but unusable stops the process with exit status 2. PRKS never falls back to a default.
 
 ### Process roles
 
@@ -50,7 +50,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_AUTH` | `serve` | Turns on PostgreSQL sign-in. `session` uses passwords and `prks_session` cookies. `loopback-owner` acts as the bootstrap owner on every request: it works only for a testing instance (`--testing`) bound to a loopback address, and it is never a default. Unset (the default), the SQLite application runs. |
 | `PRKS_DATABASE_URL` | all roles | PostgreSQL connection string. It is a secret: it never appears in errors or logs. Set this or `PRKS_DATABASE_URL_FILE`, never both. |
 | `PRKS_DATABASE_URL_FILE` | all roles | Path of a file holding the connection string (a Compose secret, `/run/secrets/prks_database_url`). Preferred over `PRKS_DATABASE_URL`. |
-| `PRKS_DB_POOL_MAX` | `serve` | Largest connection pool of the web process, at least 1. Default `10`. The worker's pool stays at `4`. |
+| `PRKS_DB_POOL_MAX` | `serve`, `migrate` | Largest connection pool of the web process (and of `migrate`, which opens the same pool), at least 1. Default `10`. The worker's pool stays at `4`. |
 | `PRKS_MIGRATE_ON_START` | `serve` | `1` (default) applies the schema at start. `0` leaves that to `migrate` and only verifies it: the web process still refuses a schema other than its code's. `worker` never applies the schema and always verifies it. Compose sets `0`. |
 | `PRKS_EMBEDDED_WORKER` | `serve` | `1` (default) runs a job worker inside the web process. `0` runs none, for a separate `worker`. Compose sets `0`. |
 | `PRKS_PUBLIC_ORIGIN` | `serve` | The origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org`: scheme, host and optional port only. Sign-in checks `Origin` against it, and its host is accepted as a `Host`. |
@@ -58,7 +58,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_SESSION_IDLE_DAYS` | `serve` | Days a session stays valid without use, 1 to 365. Default `30`. |
 | `PRKS_LOGIN_WINDOW_SECONDS` | `serve` | Length of the sign-in rate-limit window, 1 second to 1 day. Default `900` (15 minutes). |
 | `PRKS_LOGIN_ACCOUNT_LIMIT` | `serve` | Sign-in attempts allowed per account per window from a browser that is not a known sign-in device for it, 1 to 10000. Default `5`. |
-| `PRKS_LOGIN_ADDRESS_LIMIT` | `serve` | Sign-in attempts allowed per client address per window, 1 to 10000. Default `20`. |
+| `PRKS_LOGIN_ADDRESS_LIMIT` | `serve` | Sign-in attempts allowed per client address per window, 1 to 10000. Default `20`. It counts the same attempts as the account limit; attempts from a known sign-in device count only against the device limit. |
 | `PRKS_LOGIN_DEVICE_LIMIT` | `serve` | Sign-in attempts allowed per known sign-in device per window, 1 to 10000. Default `5`. |
 
 `PRKS_STORAGE` selects the data root, as above. In Compose it is `/data`.
@@ -79,7 +79,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 
 ### Health endpoints
 
-`GET /healthz` answers 200 while the process runs, with no I/O. `GET /readyz` answers 200 only when the database is reachable, its schema is exactly the code's, setup is complete and the data root is still paired with this database. Otherwise it answers 503, with no detail. Without `PRKS_AUTH`, `/readyz` always answers 503.
+`GET /healthz` answers 200 while the process runs, with no I/O. `GET /readyz` answers 200 only when the database is reachable, its schema is exactly the code's, setup is complete and the data root is still paired with this database. Otherwise it answers 503, with no detail. On a first run, `serve` waits for setup before it opens its port, so until setup is complete `/readyz` cannot be reached at all rather than answering 503. Without `PRKS_AUTH`, `/readyz` always answers 503.
 
 ## Database migrations
 
