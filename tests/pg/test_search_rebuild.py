@@ -19,6 +19,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.search import rebuild, refresh
 from backend.domain.search import text as search_text
 from backend.domain.works import notes
+from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import Outcome
 from backend.pg_facade import context as facade_context
@@ -283,6 +284,26 @@ class ConcurrencyTests(RebuildTestCase):
         self.assertEqual(self.refresh(doomed), [])
         self.assertIsNone(self.row(doomed))
 
+    def test_a_heartbeat_waiting_on_a_batch_lets_the_batch_save_its_cursor(self) -> None:
+        """The batch holds its job row ``FOR SHARE`` and then updates it; a heartbeat queued behind it waits."""
+        self.library.add_work("Existing")
+        self.sql("DELETE FROM prks.jobs")
+        beats: list[Any] = []
+
+        def beat() -> None:
+            [row] = self.sql("SELECT id, kind, library_id, library_epoch, lease_id, attempts, max_attempts"
+                             " FROM prks.jobs WHERE state = 'running'")
+            job = queue.ClaimedJob(payload={}, **row)
+            thread = threading.Thread(target=lambda: beats.append(queue.heartbeat(self.db, job)))
+            thread.start()
+            beats.insert(0, thread)
+            self.wait_for_lock_waiter()
+
+        self.run_paused_in_search_batch(beat)  # asserts the run succeeded: no deadlock was detected
+        beats[0].join(10)
+        self.assertEqual(beats[1:], [True])
+        self.assertEqual(self.rebuild_job()["state"], "succeeded")
+
 
 class RepairTests(RebuildTestCase):
     def test_a_gap_schedules_a_repair_that_closes_it(self) -> None:
@@ -388,6 +409,31 @@ class FoldingTests(RebuildTestCase):
                          " payload = payload || jsonb_build_object('folding', %s::text)"
                          " WHERE kind = %s", (folding, rebuild.KIND))
                 self.assertEqual(self.check(), queued)
+
+    def test_a_running_rebuild_that_has_not_captured_a_folding_yet_suppresses_it(self) -> None:
+        self.set_stored("rules=old;server=1")
+        self.enqueue("search", "text")
+        self.sql("UPDATE prks.jobs SET state = 'running', lease_id = gen_random_uuid(),"
+                 " locked_until = now() + interval '1 hour' WHERE kind = %s", (rebuild.KIND,))
+        self.assertEqual(self.check(), [])
+
+    def test_a_resume_under_a_changed_folding_walks_every_scope_again(self) -> None:
+        works = [self.library.add_work(f"Work {i}") for i in range(3)]
+        self.pdf_work("Paper", "folded words")
+        self.run_jobs()
+        self.set_stored("rules=old;server=1")
+        self.check()
+        # A run that got through search under an older folding, then failed:
+        # what it already wrote must be written again under the current one.
+        self.sql("DELETE FROM derived.work_search")
+        self.sql("UPDATE prks.jobs SET payload = payload || jsonb_build_object("
+                 "'folding', 'rules=older;server=0', 'done', '[\"search\"]'::jsonb, 'cursor', NULL)"
+                 " WHERE kind = %s", (rebuild.KIND,))
+        self.assertEqual(self.check(), [])  # the queued resume covers it
+        self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])
+        self.assertEqual(self.stored(), self.current())
+        for work in works:
+            self.assertIsNotNone(self.row(work))
 
     def test_a_failed_or_cancelled_folding_rebuild_leaves_the_folding_and_is_queued_again(self) -> None:
         self.pdf_work("Paper", "words")

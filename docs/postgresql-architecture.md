@@ -1390,7 +1390,9 @@ tokens use the new one, and searches would silently miss existing Works.
   rebuild is a `derived.rebuild` job with scope `search,text`. It, and any
   `derived.rebuild` whose scope covers both (restore's included), captures
   the current folding when it starts and records it in its job row's
-  payload. Its final transaction, fenced by
+  payload. A resumed run whose recorded folding is no longer the current
+  one discards its progress and walks every scope again under the current
+  folding, so batches done under the old folding are never kept. Its final transaction, fenced by
   `library_epoch` like every job transaction (§12.1), stores that value.
   A failed or cancelled run stores nothing. Creating a Library stores the
   current folding (there is nothing to fold yet), and R4 sets the column
@@ -1401,8 +1403,9 @@ tokens use the new one, and searches would silently miss existing Works.
   suppresses it is a `derived.rebuild` whose scope covers **both** search
   and text, the same condition under which a rebuild stores the value, and
   that will store the current folding: a queued one (it captures the
-  folding when it starts), or a running one whose recorded folding equals
-  the current one. A search-only rebuild, or a running one that captured an
+  folding when it starts, and a stale resume starts over), or a running one
+  whose recorded folding equals the current one or that has not recorded
+  one yet. A search-only rebuild, or a running one that captured an
   older folding, does not suppress it. So a rebuild that failed, or was
   cancelled before it finished, is enqueued again on the next start, and
   two processes starting together enqueue it once.
