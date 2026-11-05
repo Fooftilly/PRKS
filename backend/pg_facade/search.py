@@ -25,19 +25,22 @@ T = TypeVar("T")
 
 
 class SearchMixin(FacadeMixin):
-    """Work search and its author and publisher filters."""
+    """Work search, its author and publisher filters, and the Tag filter."""
 
     def _search_read(self, fn: Callable[[LibraryScope], T]) -> T:
         from backend.domain.identity.library_scope import library_query
 
         return library_query(self._database, current_context(), fn)
 
-    def _summaries(self, scope: LibraryScope, work_ids: List[str]) -> List[dict]:
-        """Work summaries in ``work_ids`` order (``get_work_summaries_by_ids_ordered``'s shape)."""
+    def _summaries(self, scope: LibraryScope, work_ids: List[str], *, with_folder: bool = True) -> List[dict]:
+        """Work summaries in ``work_ids`` order (``get_work_summaries_by_ids_ordered``'s shape).
+
+        ``with_folder=False`` is the shape SQLite's Tag filter selects (no ``folder_id``).
+        """
         from backend.domain.works import projection, queries
 
         by_id = queries.works_by_ids(scope, work_ids)
-        return [projection.work_summary(by_id[i]) for i in work_ids if i in by_id]
+        return [projection.work_summary(by_id[i], with_folder=with_folder) for i in work_ids if i in by_id]
 
     def _finish_summaries(self, rows: List[dict]) -> List[dict]:
         from backend.db_manager import finish_work_summary_rows
@@ -115,3 +118,15 @@ class SearchMixin(FacadeMixin):
         extra = (set(queries.author_work_ids(scope, term))
                  | set(queries.publisher_work_ids(scope, term))) - seen
         return self._summaries(scope, ids + queries.by_recency(scope, sorted(extra)))
+
+    @ported
+    def get_works_by_tag_name(self, tag_name: str) -> List[dict]:
+        """The Works tagged with the Tag whose name or alias is ``tag_name``, newest first."""
+        from backend.domain.search import queries
+
+        name = (tag_name or "").strip()
+        if not name:
+            return []
+        rows = self._search_read(
+            lambda scope: self._summaries(scope, queries.tagged_work_ids(scope, name), with_folder=False))
+        return self._finish_summaries(rows)

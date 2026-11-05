@@ -116,8 +116,14 @@ Any code path that changes a work's managed PDF identity must synchronize the
 text index or rely on the central reconciliation mechanism.
 
 Do not write extracted PDF text into the canonical main DB solely for search.
+On PostgreSQL, extracted text goes only into the `derived` schema
+(`derived.asset_text`, keyed by Asset and `content_sha256`), never into a
+`prks` table; a command that gives a managed-file Asset new bytes calls
+`backend.domain.search.text.content_changed` in its own transaction, and the
+`text.extract` job writes the row (`docs/postgresql-architecture.md` §8.3,
+§16 decision 5).
 
-Do not add text-index files to backups.
+Do not add text-index files, or the `derived` schema, to backups.
 
 Do not treat an extraction exception as a successful empty PDF.
 
