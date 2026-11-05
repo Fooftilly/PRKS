@@ -73,6 +73,7 @@
     "140_annotations.sql",
     "150_objects.sql",
     "160_processing.sql",
+    "170_backup.sql",
     "200_derived_search.sql"
   ],
   "schemas": [
@@ -876,6 +877,86 @@
         "assets_storage_locator": "CREATE INDEX assets_storage_locator ON prks.assets USING btree (storage_locator) WHERE (storage_locator IS NOT NULL)",
         "assets_supersedes": "CREATE INDEX assets_supersedes ON prks.assets USING btree (library_id, supersedes_asset_id, manifestation_id) WHERE (supersedes_asset_id IS NOT NULL)",
         "assets_work": "CREATE INDEX assets_work ON prks.assets USING btree (library_id, work_id)"
+      }
+    },
+    "prks.backup_runs": {
+      "columns": [
+        {
+          "default": "uuidv7()",
+          "name": "id",
+          "not_null": true,
+          "type": "uuid"
+        },
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "'running'::text",
+          "name": "state",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "started_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "default": "(now() + '00:05:00'::interval)",
+          "name": "locked_until",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "finished_at",
+          "not_null": false,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archive_bytes",
+          "not_null": false,
+          "type": "bigint"
+        },
+        {
+          "name": "archive_sha256",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "error_code",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "error_message",
+          "not_null": false,
+          "type": "text"
+        }
+      ],
+      "constraints": {
+        "backup_runs_archive_bytes_check": "CHECK (archive_bytes >= 0)",
+        "backup_runs_archive_sha256_check": "CHECK (archive_sha256 ~ '^[0-9a-f]{64}$'::text)",
+        "backup_runs_error_check": "CHECK ((error_code IS NULL OR state = 'failed'::text) AND (error_message IS NULL OR error_code IS NOT NULL))",
+        "backup_runs_error_code_check": "CHECK (error_code ~ '^[A-Za-z0-9_]{1,64}$'::text)",
+        "backup_runs_error_message_check": "CHECK (octet_length(error_message) <= 2000)",
+        "backup_runs_finished_check": "CHECK ((state = 'running'::text) = (finished_at IS NULL))",
+        "backup_runs_id_not_null": "NOT NULL id",
+        "backup_runs_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
+        "backup_runs_library_id_not_null": "NOT NULL library_id",
+        "backup_runs_locked_until_not_null": "NOT NULL locked_until",
+        "backup_runs_pkey": "PRIMARY KEY (id)",
+        "backup_runs_published_check": "CHECK ((state = 'published'::text) = (archive_bytes IS NOT NULL AND archive_sha256 IS NOT NULL))",
+        "backup_runs_started_at_not_null": "NOT NULL started_at",
+        "backup_runs_state_check": "CHECK (state = ANY (ARRAY['running'::text, 'published'::text, 'failed'::text]))",
+        "backup_runs_state_not_null": "NOT NULL state"
+      },
+      "indexes": {
+        "backup_runs_library": "CREATE INDEX backup_runs_library ON prks.backup_runs USING btree (library_id, started_at)",
+        "backup_runs_pkey": "CREATE UNIQUE INDEX backup_runs_pkey ON prks.backup_runs USING btree (id)",
+        "backup_runs_running": "CREATE INDEX backup_runs_running ON prks.backup_runs USING btree (library_id) WHERE (state = 'running'::text)"
       }
     },
     "prks.bootstrap_tokens": {
@@ -3211,13 +3292,41 @@
           "name": "finished_at",
           "not_null": false,
           "type": "timestamp with time zone"
+        },
+        {
+          "default": "'validate'::text",
+          "name": "phase",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "(now() + '00:05:00'::interval)",
+          "name": "locked_until",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "error_code",
+          "not_null": false,
+          "type": "text"
+        },
+        {
+          "name": "error_message",
+          "not_null": false,
+          "type": "text"
         }
       ],
       "constraints": {
+        "restore_runs_error_check": "CHECK ((error_code IS NULL OR state = 'failed'::text) AND (error_message IS NULL OR error_code IS NOT NULL))",
+        "restore_runs_error_code_check": "CHECK (error_code ~ '^[A-Za-z0-9_]{1,64}$'::text)",
+        "restore_runs_error_message_check": "CHECK (octet_length(error_message) <= 2000)",
         "restore_runs_finished_check": "CHECK ((state = 'running'::text) = (finished_at IS NULL))",
         "restore_runs_id_not_null": "NOT NULL id",
         "restore_runs_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE CASCADE",
         "restore_runs_library_id_not_null": "NOT NULL library_id",
+        "restore_runs_locked_until_not_null": "NOT NULL locked_until",
+        "restore_runs_phase_check": "CHECK (phase = ANY (ARRAY['validate'::text, 'stage'::text, 'enter'::text, 'drain'::text, 'commit'::text, 'release'::text]))",
+        "restore_runs_phase_not_null": "NOT NULL phase",
         "restore_runs_pkey": "PRIMARY KEY (id)",
         "restore_runs_started_at_not_null": "NOT NULL started_at",
         "restore_runs_state_check": "CHECK (state = ANY (ARRAY['running'::text, 'committed'::text, 'failed'::text]))",

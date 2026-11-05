@@ -1408,6 +1408,8 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/processing/imports.py",
                 "backend/domain/processing/items.py",
                 "backend/domain/processing/uploads.py",
+                "backend/domain/maintenance/__init__.py",
+                "backend/domain/maintenance/tables.py",
                 "backend/domain/saved_views/__init__.py",
                 "backend/domain/saved_views/views.py",
                 "backend/domain/settings/__init__.py",
