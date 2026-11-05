@@ -64,11 +64,18 @@ operations both use.
 | `frontend/js/person-state.js` | Pending Person overlay, CREATE_PERSON handler |
 | `frontend/js/sync-diagnostics.js` | Settings -> Diagnostics, for every family |
 
-A client handler answers three questions and nothing else: `isResult` (is this
+A client handler answers three response questions: `isResult` (is this
 a well-formed answer for this operation), `reconcile` (apply an acknowledgement
 to the disposable cache), `terminal` (`{conflict}` for an outcome the user
-resolves, `{discard}` for one with no resolution worth offering). The
-coordinator names no family: adding one is a registration.
+resolves, `{discard}` for one with no resolution worth offering). A family
+with additional send-ordering requirements may also declare a **read-only**
+`readyToSend(op, byId)` predicate. The coordinator checks successful hard
+`depends_on` prerequisites first, then calls this optional predicate against
+the current operation snapshot on each drain. `false` delays that send; the
+callback must not mutate the queue or initiate transport. This accommodates
+ordering barriers that do **not** require a dependent operation to succeed
+(for example, a Group child creation that may be cancelled or refused).
+The coordinator names no family: adding one is a registration.
 
 ## Storage and ownership
 
@@ -1851,6 +1858,20 @@ reaches the server.
 A group carrying a pending deletion accepts nothing else. The only possible
 outcome for a later edit would be `ENTITY_NOT_FOUND` -- born unsendable -- so it
 is refused at enqueue time, in the terms the user was working in.
+
+Deleting an offline-created Group that was never sent preserves independently
+authored child Group creations: their durable IDs and edits survive, and their
+pending construction is rebased to the deleted Group's intended ancestor (or
+root). If a pending move or potentially-sent operation makes that rewrite
+unsafe, the deletion refuses without changing any queue rows.
+
+For a server-existing or possibly-sent Group, outstanding child creations and
+moves *into* that Group must settle before its deletion is dispatched. These are
+**ordering-only** barriers, checked by the Person Group delete handler via
+`readyToSend`, not `depends_on` prerequisites. A pending child move can be
+coalesced/replaced and a child creation can fail with a visible conflict:
+neither should strand the independent parent deletion. The handler considers
+only pending/syncing children and moves; terminal conflicts do not block it.
 
 ### Canonical rules stay canonical
 

@@ -649,11 +649,32 @@
         reconcile: (data, op) => root.prksOfflineReconcilePersonGroupMember(data, op),
     };
 
+    /* A group delete must be sent after any pending child CREATE and
+     * any pending move INTO it. These are ordering barriers, not mandatory
+     * successful dependencies: a move can coalesce away and a child CREATE
+     * can be refused without invalidating the parent's independent delete.
+     * Inspect the live durable queue snapshot at each coordinator drain. */
+    function groupDeleteReadyToSend(deletion, byId) {
+        for (const other of byId.values()) {
+            if (other.status !== 'pending' && other.status !== 'syncing') continue;
+            if (other.entity_type !== 'person-group' ||
+                other.entity_id === deletion.entity_id || !other.payload) continue;
+            const childCreate = other.operation === 'CREATE_PERSON_GROUP' &&
+                other.payload.parent_id === deletion.entity_id;
+            const childMove = other.operation === 'SET_PERSON_GROUP_FIELD' &&
+                other.payload.field === 'parent_id' &&
+                other.payload.value === deletion.entity_id;
+            if (childCreate || childMove) return false;
+        }
+        return true;
+    }
+
     const deleteHandler = {
         isResult: (data, op) => !!data && data.group_id === op.entity_id &&
             data.code === 'ACKNOWLEDGED' && typeof data.changed === 'boolean',
         terminal: data => ({ conflict: { code: data.code } }),
         reconcile: data => root.prksOfflineReconcileDeletedPersonGroup(data),
+        readyToSend: groupDeleteReadyToSend,
     };
 
     Object.assign(root, {
