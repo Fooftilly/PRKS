@@ -207,28 +207,14 @@
             for (let i = 0; i < deps.length; i += 1) {
                 if (!dependencySucceeded(byId.get(deps[i]))) return false;
             }
-            /* Deleting a Person Group must follow pending child construction
-             * and moves INTO that group. Unlike depends_on, this is only an
-             * ordering barrier: pending edits can be coalesced or cancelled,
-             * and a child creation can fail without preventing the parent
-             * deletion. Inspect the current durable queue on every drain
-             * rather than capturing mutable child op IDs in a hard dependency.
-             * After a child ACK/refusal/cancellation, its move no longer needs
-             * ordering; the server will reparent any successful child. */
-            if (op.operation === 'DELETE_PERSON_GROUP') {
-                for (const other of byId.values()) {
-                    if (other.status !== 'pending' && other.status !== 'syncing') continue;
-                    if (other.entity_type !== 'person-group' ||
-                        other.entity_id === op.entity_id || !other.payload) continue;
-                    const childCreate = other.operation === 'CREATE_PERSON_GROUP' &&
-                        other.payload.parent_id === op.entity_id;
-                    const childMove = other.operation === 'SET_PERSON_GROUP_FIELD' &&
-                        other.payload.field === 'parent_id' &&
-                        other.payload.value === op.entity_id;
-                    if (childCreate || childMove) return false;
-                }
-            }
-            return true;
+            /* A family may declare an additional read-only ordering barrier
+             * beyond mandatory successful dependencies. The handler owns its
+             * domain's semantics; the coordinator supplies the current queue
+             * snapshot and never interprets family-specific operation names
+             * or payloads. The predicate must not mutate the queue. */
+            const handler = handlers[op.operation];
+            return !handler || typeof handler.readyToSend !== 'function' ||
+                handler.readyToSend(op, byId);
         }
         /* Everything waiting on a failed prerequisite becomes unresolvable --
          * TRANSITIVELY, and in one atomic step, which is why the store does the

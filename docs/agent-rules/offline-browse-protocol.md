@@ -133,8 +133,11 @@ registration, never another branch in a growing conditional.
 A handler decides what a server answer MEANS: `isResult` (is this a
 well-formed answer for this operation), `reconcile` (apply an acknowledgement
 to the disposable cache), `terminal` (`{conflict}` for an outcome the user
-resolves, `{discard}` for one with no resolution worth offering). The
-coordinator must name no family and no result code beyond the envelope-level
+resolves, `{discard}` for one with no resolution worth offering). An optional
+read-only `readyToSend(op, byId)` handler callback may add a family-specific
+ordering barrier after generic successful dependencies have been checked,
+using the current queue snapshot. It must not mutate intent or send requests.
+The coordinator must name no family and no result code beyond the envelope-level
 protocol errors; `tests/test_frontend_work_open_sync.py` pins that.
 
 The families are deliberately different in kind, and that is the point:
