@@ -1104,9 +1104,9 @@ ALTER TEXT SEARCH CONFIGURATION prks.prks_search
 ```
 
 Every token type that can hold a non-ASCII letter is mapped, those that mix
-letters and digits included, so `cafe2026` finds `café2026`. The abstract and
-the Research Note each contribute only their first 60000 characters to a
-Work's `doc`: PostgreSQL refuses a `tsvector` over 1 MB, and a longer note
+letters and digits included, so `cafe2026` finds `café2026`. Each of a Work's
+four weighted inputs (title; people and author text; abstract; Research
+Note) contributes only its first 50000 characters to its `doc`: PostgreSQL refuses a `tsvector` over 1 MB, and a longer note
 would otherwise fail the command that saved it. The full text stays in
 `text_norm`, which the infix fallback searches.
 
