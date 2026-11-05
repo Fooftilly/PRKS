@@ -1,36 +1,20 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 69,
+      "number": 639,
       "set": {
         "Agent": "Claude Code",
-        "Execution": "Agent",
-        "Status": "Ready"
+        "Status": "Ready",
+        "Execution": "Agent"
       },
       "expected_before": {
-        "Agent": null,
+        "Agent": "Claude Code",
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Maintainer requested additional ready Claude Code implementation tasks. EF-004 is accepted and unblocked. Current master has a basic typed slice covering 116 scopes but leaves backend/api/saved_views.py and backend/api/processing.py outside; take one narrow, genuine type-check expansion with invariants and CI, avoiding overlap with active PG or Vue PRs. Reviewed #651, open PR changed paths and native blockers.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 745,
-      "set": {
-        "Agent": "Claude Code",
-        "Execution": "Agent",
-        "Status": "Ready"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Maintainer requested ready Claude Code work. Accepted documentation roadmap #745 is open, has no native blockers and no active overlapping accessibility-statement PR; issue's bounded ACCESSIBILITY.md and README/docs scope can proceed without asserting unverified WCAG conformance, while retaining #651 accessibility test ownership.",
+      "reason": "P1 PostgreSQL format-2 backup/restore is the next release-critical implementation lane. On 2026-11-05 all seven live native predecessors #628/#632/#633/#634/#635/#636/#637 are closed (including newly completed #637), no open PR owns #639, and #640 remains blocked until #639 and #630 finish. Maintain existing Claude Code ownership; mark Ready and Execution Agent for implementation, no merge authorization.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
