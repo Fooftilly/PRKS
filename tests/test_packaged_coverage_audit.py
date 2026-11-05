@@ -167,7 +167,7 @@ class PackagedCoverageAuditTests(unittest.TestCase):
                 marker = f"          - case: {case}\n"
                 self.assertEqual(workflow.count(marker), 1)
                 row = workflow.split(marker, 1)[1].split(
-                    "\\n          - case: ", 1
+                    "\n          - case: ", 1
                 )[0]
                 self.assertIn(
                     f"            test_id: {indexed[obligation]}\n",
