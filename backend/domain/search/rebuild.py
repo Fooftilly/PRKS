@@ -50,10 +50,11 @@ whose Work is gone.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
+from backend.db.database import Database, Transaction
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.research import reindex
@@ -333,6 +334,49 @@ def repair(run: JobRun) -> None:
         run.heartbeat()
     run.check()
     run.library_command(Capability.EDIT_LIBRARY, lambda scope: scope.execute(_SEARCH_ORPHANS))
+
+
+# -- host maintenance: the admin command (§8.6) ----------------------------------------------
+
+# These run for no actor (the host admin CLI). Each Library is handled in one
+# host transaction that locks its row, skips it while in maintenance (a
+# restore queues its own rebuild), and enqueues with the epoch it read under
+# that lock (``queue.enqueue_library_job_for_host``).
+
+_LIBRARY_IDS: LiteralString = "SELECT id FROM prks.libraries ORDER BY id"
+_LOCK_LIBRARY: LiteralString = """
+SELECT epoch, maintenance IS NOT NULL AS in_maintenance
+FROM prks.libraries WHERE id = %(library_id)s
+FOR NO KEY UPDATE
+"""
+
+
+def _host_enqueue(tx: Transaction, library_id: str, epoch: int, scopes: Iterable[str]) -> Optional[uuid.UUID]:
+    chosen = scope_key(scopes)
+    return queue.enqueue_library_job_for_host(
+        tx, library_id, epoch, KIND, {"scopes": chosen},
+        dedupe_key=f"{library_id}:{','.join(chosen)}", singleton_key=f"derived:{library_id}")
+
+
+def _for_library(db: Database, library_id: str,
+                 fn: Callable[[Transaction, int], Optional[uuid.UUID]]) -> Optional[uuid.UUID]:
+    """Run ``fn(tx, epoch)`` under the Library row lock; None for a gone Library or one in maintenance."""
+    def run(tx: Transaction) -> Optional[uuid.UUID]:
+        row = tx.execute(_LOCK_LIBRARY, {"library_id": library_id}).fetchone()
+        if row is None or row["in_maintenance"]:
+            return None
+        return fn(tx, int(row["epoch"]))
+
+    return db.command(run)
+
+
+def library_ids(db: Database) -> list[str]:
+    return [str(row["id"]) for row in db.query(lambda tx: tx.execute(_LIBRARY_IDS).fetchall())]
+
+
+def request_rebuild(db: Database, library_id: str, scopes: Iterable[str] = SCOPES) -> Optional[uuid.UUID]:
+    """``prks admin rebuild-derived``: queue the Library's rebuild; None when it is already queued or unavailable."""
+    return _for_library(db, library_id, lambda tx, epoch: _host_enqueue(tx, library_id, epoch, scopes))
 
 
 def attach(registry: HandlerRegistry, storage: StorageBackend) -> Rebuild:

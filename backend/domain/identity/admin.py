@@ -521,54 +521,33 @@ def _unlock_login(args: argparse.Namespace, db: Database, io: _Io) -> int:
     return EXIT_OK
 
 
-_LIBRARIES_SQL = "SELECT id, epoch FROM prks.libraries ORDER BY id"
-
-
 def _libraries(n: int) -> str:
     return "1 Library" if n == 1 else f"{n} Libraries"
 
 
 def _rebuild_derived(args: argparse.Namespace, db: Database, io: _Io) -> int:
     """Queue one ``derived.rebuild`` per Library (or the one ``--library``); the workers run it (§8.6)."""
-    from backend.domain.identity.authorization import AccessRefused, Capability
-    from backend.domain.identity.library_scope import library_command
-    from backend.domain.identity.request_context import RequestContext
     from backend.domain.search import rebuild
 
     scopes = rebuild.scope_key([args.only] if args.only else rebuild.SCOPES)
 
     def enqueue() -> int:
         try:
-            rows = db.query(lambda tx: tx.execute(_LIBRARIES_SQL).fetchall())
+            libraries = [library_id for library_id in rebuild.library_ids(db)
+                         if args.library is None or library_id == args.library]
+            if not libraries:
+                io.refuse("No Library has that id." if args.library else "There is no Library to rebuild.")
+                return EXIT_REFUSED
+            queued = sum(rebuild.request_rebuild(db, library_id, scopes) is not None
+                         for library_id in libraries)
         except DatabaseError:
-            io.refuse("The database could not be reached; nothing was changed.")
+            io.refuse("The database could not be reached; nothing more was queued.")
             return EXIT_REFUSED
-        libraries = [(str(row["id"]), int(row["epoch"])) for row in rows
-                     if args.library is None or row["id"] == args.library]
-        if not libraries:
-            io.refuse("No Library has that id." if args.library else "There is no Library to rebuild.")
-            return EXIT_REFUSED
-        queued = waiting = refused = 0
-        for library_id, epoch in libraries:
-            ctx = RequestContext.for_admin(library_id=library_id, epoch=epoch)
-            try:
-                job = library_command(db, ctx, Capability.ADMIN_LIBRARY,
-                                      lambda scope: rebuild.enqueue(scope, scopes))
-            except (AccessRefused, DatabaseError):
-                refused += 1
-                continue
-            if job is None:
-                waiting += 1
-            else:
-                queued += 1
         what = ", ".join(scopes)
         if queued:
             io.say(f"Queued the {what} rebuild for {_libraries(queued)}; the worker runs it.")
-        if waiting:
-            io.say(f"The same rebuild was already queued for {_libraries(waiting)}.")
-        if refused:
-            io.refuse(f"{_libraries(refused)} could not be queued (in maintenance or unreachable); run it again later.")
-            return EXIT_REFUSED
+        if queued < len(libraries):
+            io.say(f"{_libraries(len(libraries) - queued)} already had it queued or are in maintenance.")
         return EXIT_OK
 
     return _started_root(args, db, enqueue)

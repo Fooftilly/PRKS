@@ -52,7 +52,7 @@ class RebuildDerivedTests(RootPairingTestCase):
         self.assertIn("Queued the research, search, text rebuild for 1 Library", out)
         code, out, _err = self.run_cli()
         self.assertEqual(code, admin.EXIT_OK)
-        self.assertIn("already queued for 1 Library", out)
+        self.assertIn("1 Library already had it queued", out)
         self.assertEqual([(job["payload"], job["state"], job["ours"]) for job in self.jobs()],
                          [({"scopes": ["research", "search", "text"]}, "queued", True)])
 

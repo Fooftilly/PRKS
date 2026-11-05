@@ -290,6 +290,37 @@ def enqueue_instance_job_for_library(
     return row["id"]
 
 
+def enqueue_library_job_for_host(
+    tx: Transaction,
+    library_id: str,
+    library_epoch: int,
+    kind: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    *,
+    dedupe_key: Optional[str] = None,
+    singleton_key: Optional[str] = None,
+    priority: int = 0,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+) -> Optional[uuid.UUID]:
+    """Enqueue a Library job from host maintenance that acts for no actor, in the caller's transaction.
+
+    For the checks a process runs at start or on its idle tick, and for the
+    host admin CLI (the Search lane's rebuild and repair, §8.6). The caller
+    holds the Library row lock and read ``library_epoch`` in this same
+    transaction, so a restore that advances the epoch later fences the job
+    as it fences any other (§11.4). Returns ``None`` on a dedupe hit.
+    """
+    params = _job_params(
+        kind=kind, payload=payload, dedupe_key=dedupe_key, singleton_key=singleton_key,
+        priority=priority, delay=timedelta(0), max_attempts=max_attempts, created_by=None,
+    )
+    row = tx.execute(_INSERT_SQL, {**params, "library_id": library_id, "library_epoch": library_epoch}).fetchone()
+    if row is None:
+        return None
+    tx.execute(_NOTIFY_SQL)
+    return row["id"]
+
+
 _SAVE_PAYLOAD_SQL: LiteralString = """
 UPDATE prks.jobs SET payload = %(payload)s::jsonb
  WHERE library_id = %(library_id)s AND id = %(id)s AND lease_id = %(lease_id)s AND state = 'running'
