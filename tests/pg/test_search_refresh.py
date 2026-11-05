@@ -192,10 +192,10 @@ class RefreshTests(SearchTestCase):
         assert row is not None
         self.assertEqual(row["doc"], "'alpha':1A 'beta':2B 'delta':4 'gamma':3C")
 
-    def test_a_research_note_too_long_for_a_tsvector_is_capped_in_doc_only(self) -> None:
+    def test_inputs_too_long_for_a_tsvector_are_capped_in_doc_only(self) -> None:
         # 40000 distinct words (about 1.3 MB): a tsvector of all of them exceeds 1 MB.
         words = [f"w{i:05d}{hashlib.md5(str(i).encode()).hexdigest()}" for i in range(40000)]
-        work = self.library.add_work("Long notes", text_content=" ".join(words))
+        work = self.library.add_work("Long notes", text_content=" ".join(words), author_text=" ".join(words))
         self.assertEqual(self.refresh(work), [work])
         self.assertTrue(self.matches(work, words[0]))
         self.assertFalse(self.matches(work, words[-1]))  # past the cap: not in doc
