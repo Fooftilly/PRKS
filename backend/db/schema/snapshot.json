@@ -4114,6 +4114,10 @@
           ],
           [
             "hword_numpart",
+            "prks.search_unaccent"
+          ],
+          [
+            "hword_numpart",
             "simple"
           ],
           [
@@ -4130,7 +4134,15 @@
           ],
           [
             "numhword",
+            "prks.search_unaccent"
+          ],
+          [
+            "numhword",
             "simple"
+          ],
+          [
+            "numword",
+            "prks.search_unaccent"
           ],
           [
             "numword",

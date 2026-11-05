@@ -11,6 +11,8 @@ with sleeps.
 
 from __future__ import annotations
 
+import hashlib
+
 import threading
 import unicodedata
 from collections.abc import Callable, Iterator
@@ -150,7 +152,8 @@ class FoldingTests(SearchTestCase):
 
     def test_the_configuration_folds_case_sigma_and_diacritics(self) -> None:
         for indexed, query in [("Σωκράτης", "ΣΩΚΡΑΤΗΣ"), ("Σωκράτης", "σωκρατησ"), ("Πολιτεία", "Πολιτ"),
-                               ("ćevapi", "cevapi"), ("cevapi", "ćevapi")]:
+                               ("ćevapi", "cevapi"), ("cevapi", "ćevapi"), ("café2026", "cafe2026"),
+                               ("Čaj-2b", "caj-2b"), ("x-ćevap2", "cevap2")]:
             with self.subTest(indexed=indexed, query=query):
                 self.assertTrue(self.scalar(
                     "SELECT to_tsvector('prks.prks_search', prks.search_fold(%s))"
@@ -188,6 +191,17 @@ class RefreshTests(SearchTestCase):
         row = self.row(work)
         assert row is not None
         self.assertEqual(row["doc"], "'alpha':1A 'beta':2B 'delta':4 'gamma':3C")
+
+    def test_a_research_note_too_long_for_a_tsvector_is_capped_in_doc_only(self) -> None:
+        # 40000 distinct words (about 1.3 MB): a tsvector of all of them exceeds 1 MB.
+        words = [f"w{i:05d}{hashlib.md5(str(i).encode()).hexdigest()}" for i in range(40000)]
+        work = self.library.add_work("Long notes", text_content=" ".join(words))
+        self.assertEqual(self.refresh(work), [work])
+        self.assertTrue(self.matches(work, words[0]))
+        self.assertFalse(self.matches(work, words[-1]))  # past the cap: not in doc
+        row = self.row(work)
+        assert row is not None
+        self.assertTrue(row["text_norm"].endswith(words[-1]))  # the infix fallback keeps all of it
 
     def test_the_primary_manifestation_overrides_title_and_abstract(self) -> None:
         work = self.library.add_work("Work title", abstract="Work abstract")

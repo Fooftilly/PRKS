@@ -101,8 +101,8 @@ UPDATE derived.work_search s
 SET doc = setweight(to_tsvector('prks.prks_search', prks.search_fold(src.title)), 'A')
        || setweight(to_tsvector('prks.prks_search',
                                 prks.search_fold(src.people || ' ' || src.author_text)), 'B')
-       || setweight(to_tsvector('prks.prks_search', prks.search_fold(src.abstract)), 'C')
-       || setweight(to_tsvector('prks.prks_search', prks.search_fold(src.notes)), 'D'),
+       || setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.abstract, 60000))), 'C')
+       || setweight(to_tsvector('prks.prks_search', prks.search_fold(left(src.notes, 60000))), 'D'),
     title_norm = prks.search_norm(src.title),
     people_norm = prks.search_norm(src.people),
     text_norm = prks.search_norm(src.title || ' ' || src.author_text || ' ' || src.abstract

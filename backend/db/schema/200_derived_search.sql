@@ -10,11 +10,14 @@
 -- prks.search_fold (NFC, then full case folding pinned to pg_unicode_fast):
 -- Greek final and medial sigma fold together and one Unicode
 -- implementation, PostgreSQL's, folds both sides. Diacritics fold through
--- prks.search_unaccent, the dictionary prks.search_norm uses. No stemming
--- (§8.3): prefix matching stands in for inflection.
+-- prks.search_unaccent, the dictionary prks.search_norm uses, for every
+-- token type that can hold a non-ASCII letter (words, hyphenated words and
+-- their parts, with or without digits: `café2026` folds like `cafe2026`).
+-- No stemming (§8.3): prefix matching stands in for inflection.
 CREATE TEXT SEARCH CONFIGURATION prks.prks_search (COPY = pg_catalog.simple);
 ALTER TEXT SEARCH CONFIGURATION prks.prks_search
-  ALTER MAPPING FOR hword, hword_part, word WITH prks.search_unaccent, simple;
+  ALTER MAPPING FOR hword, hword_part, word, numword, numhword, hword_numpart
+  WITH prks.search_unaccent, simple;
 
 -- NFC and full case folding, the step before to_tsvector and to_tsquery
 -- (§8.3). Every function it calls is IMMUTABLE.
@@ -65,7 +68,11 @@ END;
 -- The *_norm columns are plain columns that the refresh writes through
 -- prks.search_norm; nothing generates or indexes that function's output.
 --   doc         title A, linked people and author text B, abstract C,
---               Research Note D (to_tsvector of prks.search_fold)
+--               Research Note D (to_tsvector of prks.search_fold); the
+--               abstract and the Research Note each contribute their first
+--               60000 characters, so a long note can never make the
+--               tsvector exceed PostgreSQL's 1 MB limit and fail the
+--               command that saved it. The rest stays in text_norm.
 --   title_norm  search_norm(displayed title)
 --   people_norm search_norm of each linked person's name and each alias,
 --               one per line
