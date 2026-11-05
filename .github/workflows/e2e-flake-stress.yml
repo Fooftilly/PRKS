@@ -61,6 +61,12 @@ jobs:
             test_id: tests.e2e.test_app.SettingsCategoryWorkflowTests.test_nav_orientation_updates_on_runtime_viewport_transition
           - case: pdf-recovery-1007
             test_id: tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
+          # #1007: do not infer packaged recovery safety from unbundled source
+          # trials. Repeat the same strict failed-write recovery oracle on
+          # the built production distribution, independently of source runs.
+          - case: packaged-pdf-recovery-1007
+            packaged: true
+            test_id: tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again
           - case: pdf-reconnect-probe-1008
             test_id: tests.e2e.test_offline.OfflineFoundationTests.test_reconnect_probe_race_settles_pdf_to_online_work_capable_state
           - case: person-membership-1009
@@ -71,7 +77,8 @@ jobs:
             test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_returning_to_the_acknowledged_video_leaves_no_intent
           # #1091 originally failed on the production bundle. Repeat the same
           # UI oracle against the exact deterministic distribution, not just
-          # the source frontend. All other historical stress cases stay source.
+          # the source frontend. The #1007 PDF recovery scenario now also
+          # runs both distributions; other historical cases remain source.
           - case: packaged-work-source-coalesce-1091
             packaged: true
             test_id: tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_changing_the_video_twice_before_it_sends_is_one_operation

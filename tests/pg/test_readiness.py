@@ -27,6 +27,7 @@ from backend.db.database import Database
 from backend.domain.identity import root_pairing
 from backend.readiness import PostgresReadiness
 from backend.storage import root_binding, root_marker
+from backend.storage.config import StorageConfig
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -137,40 +138,128 @@ class ReadinessTests(RootPairingTestCase):
 class WebProcessTests(RootPairingTestCase):
     """``python prks_app.py --testing`` with ``PRKS_AUTH``, as a real process."""
 
-    def test_web_answers_readyz_once_its_start_check_passed(self) -> None:
+    def migrated(self) -> str:
         name = self.harness.create_database("web", empty=True)
         self.addCleanup(self.harness.drop_database, name)
-        conninfo = self.harness.conninfo(name)
         from backend.db.migrate import migrate
 
-        migrate(conninfo)
-        root = self.new_root()
+        migrate(self.harness.conninfo(name))
+        return name
+
+    def environment(self, name: str) -> dict[str, str]:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PRKS_") or k == "PRKS_TEST_DATABASE_URL"}
+        env.update({
+            "PRKS_AUTH": "loopback-owner",
+            "PRKS_DATABASE_URL": self.harness.conninfo(name),
+            "PRKS_EMBEDDED_WORKER": "0",
+        })
+        return env
+
+    def spawn(self, name: str, *args: str) -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [sys.executable, "prks_app.py", *args],
+            cwd=_PROJECT_DIR, env=self.environment(name),
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+
+    def web(self, name: str, root: str, port: int) -> subprocess.Popen[str]:
+        return self.spawn(name, "--testing", "--storage-root", root, "--port", str(port))
+
+    def stop(self, proc: subprocess.Popen[str]) -> str:
+        proc.send_signal(signal.SIGTERM)
+        _out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, err)
+        return err
+
+    def bootstrapped(self, name: str, root: str) -> None:
         lease = root_binding.acquire_shared_root_lease(root)
         try:
             self.bootstrap(name, root, lease=lease)
         finally:
             lease.release()
         self.close(name)
+
+    def test_web_answers_readyz_once_its_start_check_passed(self) -> None:
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
         port = _free_port()
-        env = {k: v for k, v in os.environ.items() if not k.startswith("PRKS_") or k == "PRKS_TEST_DATABASE_URL"}
-        env.update({
-            "PRKS_AUTH": "loopback-owner",
-            "PRKS_DATABASE_URL": conninfo,
-            "PRKS_EMBEDDED_WORKER": "0",
-        })
-        proc = subprocess.Popen(
-            [sys.executable, "prks_app.py", "--testing", "--storage-root", root, "--port", str(port)],
-            cwd=_PROJECT_DIR, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-        )
+        proc = self.web(name, root, port)
         try:
             status = _wait_for(port, "/readyz", proc)
             self.assertEqual(status, 200)
             self.assertEqual(self.db_state(name), self.marker(root).start_state)
             self.assertEqual(self.db_state(name).generation, 2)  # bootstrap, then this start
         finally:
-            proc.send_signal(signal.SIGTERM)
-            _out, err = proc.communicate(timeout=60)
-        self.assertEqual(proc.returncode, 0, err)
+            self.stop(proc)
+
+    def test_a_worker_and_migrate_run_beside_web_on_the_shared_lease(self) -> None:
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
+        port = _free_port()
+        web = self.web(name, root, port)
+        worker: subprocess.Popen[str] | None = None
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", web), 200)
+            worker = self.spawn(name, "worker", "--testing", "--storage-root", root)
+            deadline = time.monotonic() + 60
+            while self.db_state(name).generation < 3:
+                self.assertIsNone(worker.poll(), "the worker exited beside web")
+                self.assertLess(time.monotonic(), deadline, "the worker never bumped")
+                time.sleep(0.2)
+            migrate = subprocess.run(
+                [sys.executable, "prks_app.py", "migrate", "--testing", "--storage-root", root],
+                cwd=_PROJECT_DIR, env=self.environment(name), capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(migrate.returncode, 0, migrate.stderr)
+            self.assertIn("start generation 4", migrate.stdout)
+            # Every start elsewhere completed, so web stays ready.
+            self.assertEqual(_wait_for(port, "/readyz", web), 200)
+            # A second web is refused: one web process serves the root's content.
+            second = self.web(name, root, _free_port())
+            _out, err = second.communicate(timeout=120)
+            self.assertEqual(second.returncode, 2, err)
+            self.assertIn("already served by another PRKS web process", err)
+        finally:
+            if worker is not None:
+                self.stop(worker)
+            self.stop(web)
+
+    def test_a_first_run_web_binds_the_root_and_waits_for_setup(self) -> None:
+        name = self.migrated()
+        root = os.path.join(self.tmp, "first-run")
+        port = _free_port()
+        proc = self.web(name, root, port)
+        try:
+            deadline = time.monotonic() + 60
+            while not os.path.exists(root_marker.marker_path(root)):
+                self.assertIsNone(proc.poll(), "web exited instead of binding the root")
+                self.assertLess(time.monotonic(), deadline, "web never bound the root")
+                time.sleep(0.2)
+            time.sleep(1.0)
+            self.assertIsNone(proc.poll(), "web exited instead of waiting for setup")
+            self.assertIsNone(self.marker(root).instance_id)  # nothing claimed, nothing served
+            self.bootstrapped(name, root)
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            # The claim is generation 1; web's start after setup is the one bump.
+            self.assertEqual(self.db_state(name).generation, 2)
+            self.assertEqual(self.db_state(name), self.marker(root).start_state)
+        finally:
+            err = self.stop(proc)
+        self.assertIn("waiting for setup", err)
+
+    def test_a_stop_while_waiting_for_setup_exits_0(self) -> None:
+        name = self.migrated()
+        root = self.new_root()
+        proc = self.web(name, root, _free_port())
+        assert proc.stderr is not None
+        line = proc.stderr.readline()
+        self.assertIn("waiting for setup", line)
+        err = self.stop(proc)
+        self.assertIn("stopped while waiting for setup", err)
+        # Both of its locks are gone.
+        root_binding.open_storage_root(StorageConfig.for_testing(root), register=False).release()
 
 
 class MigrateOnStartTests(RootPairingTestCase):
