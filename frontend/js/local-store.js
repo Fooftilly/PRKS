@@ -2395,11 +2395,20 @@
         }
 
         /**
-         * Delete a Work, cancelling the intents it makes pointless.
+         * Delete a Work without deleting independent Argument/Stance authorship.
          *
-         * Same rule every other destruction uses: never-sent ops naming this
-         * Work are cancelled; possibly-sent ones are waited for. A Work this
-         * device created and never sent folds away entirely.
+         * An unsent Argument creation or sources replacement that cites this
+         * Work is a separate user decision. Only the citation is cancelled;
+         * its name, body, targets, other sources and dependent edits survive.
+         * An envelope is changed in place ONLY while still pending and never
+         * attempted: retaining its id keeps dependent operations valid. A
+         * possibly-sent envelope remains immutable and the Work deletion waits
+         * for its result so the server can remove the citation afterwards.
+         *
+         * An acknowledged Argument's source replacement is ordered before
+         * deleting the Work: otherwise Work deletion can advance the source
+         * revision before the replacement applies, creating a false conflict.
+         * All writes and the deletion marker share this IndexedDB transaction.
          */
         function deleteWork(workId) {
             if (!isNonBlankString(workId)) {
@@ -2423,21 +2432,39 @@
                     }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
                     const creation = mine.find(r => r.operation === 'CREATE_WORK');
-                    if (creation && neverSent(creation) && mine.every(neverSent)) {
-                        for (const row of mine) {
-                            await request(STORE_OPERATIONS, s => s.delete(row.op_id));
-                        }
-                        await clearWorkLifecycleIn(request, workId);
-                        setResult(null);
-                        return;
-                    }
+                    const foldCreate = !!creation && neverSent(creation) && mine.every(neverSent);
                     const waitFor = [];
                     for (const row of mine) {
-                        if (neverSent(row) && row.operation !== 'CREATE_WORK') {
+                        if (row.operation === 'CREATE_ARGUMENT' ||
+                            row.operation === 'SET_ARGUMENT_SOURCES') {
+                            if (neverSent(row)) {
+                                const sources = row.payload.sources.filter(s => s.work_id !== workId);
+                                /* Preserve the original op_id and all dependents: the
+                                 * coordinator cannot claim this row concurrently with
+                                 * the same IndexedDB readwrite transaction. */
+                                await request(STORE_OPERATIONS, s => s.put(Object.assign({}, row, {
+                                    payload: Object.assign({}, row.payload, { sources: sources }),
+                                })));
+                                /* An existing Argument's source revision must be
+                                 * settled before DELETE_WORK can advance it. */
+                                if (!foldCreate && row.operation === 'SET_ARGUMENT_SOURCES') {
+                                    waitFor.push(row.op_id);
+                                }
+                            } else {
+                                waitFor.push(row.op_id);
+                            }
+                            continue;
+                        }
+                        if (foldCreate || (neverSent(row) && row.operation !== 'CREATE_WORK')) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
                         } else {
                             waitFor.push(row.op_id);
                         }
+                    }
+                    if (foldCreate) {
+                        await clearWorkLifecycleIn(request, workId);
+                        setResult(null);
+                        return;
                     }
                     const op = await insertEnvelopeIn(request, {
                         operation: 'DELETE_WORK', entity_type: 'work',
@@ -3234,6 +3261,9 @@
             return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    for (const source of sources) {
+                        assertWorkIsNotBeingDeleted(rows, source.work_id, 'cited');
+                    }
                     const waitFor = argumentTargetDependencies(rows, targets, []);
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'CREATE_ARGUMENT', entity_type: 'argument',
@@ -3335,6 +3365,9 @@
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
                     assertArgumentIsNotBeingDeleted(rows, argumentId, 'cited');
+                    for (const source of desired) {
+                        assertWorkIsNotBeingDeleted(rows, source.work_id, 'cited');
+                    }
                     const waitFor = [];
                     const createOp = argumentCreationDependency(rows, argumentId,
                         'its sources cannot be changed');
@@ -3348,6 +3381,19 @@
                                 'This argument’s sources are syncing or need resolution.');
                         }
                         if (same(existing.payload.sources || [])) { setResult(existing); return; }
+                        /* DELETE_WORK can depend on this op: reusing its id is
+                         * essential to keep that durable prerequisite valid. */
+                        const required = rows.some(r => r.status !== STATUS_ACKNOWLEDGED &&
+                            Array.isArray(r.depends_on) &&
+                            r.depends_on.indexOf(existing.op_id) !== -1);
+                        if (required) {
+                            const updated = Object.assign({}, existing, {
+                                payload: Object.assign({}, existing.payload, { sources: desired }),
+                            });
+                            await request(STORE_OPERATIONS, s => s.put(updated));
+                            setResult(updated);
+                            return;
+                        }
                         await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                     }
                     if (same(observed.sources)) { setResult(null); return; }
@@ -3434,9 +3480,17 @@
                     const already = mine.find(r => r.operation === 'DELETE_ARGUMENT');
                     if (already) { setResult(already); return; }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
+                    /* A Work deletion may require an Argument source operation.
+                     * Do not fold away or remove an external prerequisite. */
+                    const hasExternalDependent = row => rows.some(r =>
+                        r.status !== STATUS_ACKNOWLEDGED &&
+                        !mine.some(m => m.op_id === r.op_id) &&
+                        Array.isArray(r.depends_on) &&
+                        r.depends_on.indexOf(row.op_id) !== -1);
                     const creation = mine.find(r => r.operation === 'CREATE_ARGUMENT' &&
                         r.entity_id === argumentId);
-                    if (creation && neverSent(creation) && mine.every(neverSent)) {
+                    if (creation && neverSent(creation) &&
+                        mine.every(r => neverSent(r) && !hasExternalDependent(r))) {
                         for (const row of mine) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
                         }
@@ -3445,7 +3499,8 @@
                     }
                     const waitFor = [];
                     for (const row of mine) {
-                        if (neverSent(row) && !(row.operation === 'CREATE_ARGUMENT' &&
+                        if (neverSent(row) && !hasExternalDependent(row) &&
+                            !(row.operation === 'CREATE_ARGUMENT' &&
                                 row.entity_id === argumentId)) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
                         } else {
