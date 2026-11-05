@@ -1,24 +1,49 @@
 #!/usr/bin/env bash
-# Opt-in PostgreSQL 18 Compose database smoke (#630). Never launches PRKS web.
+# PostgreSQL Compose acceptance (docs/postgresql-architecture.md §12.3, §11.1; L-D-1 #630).
+#
+# Runs docker-compose.postgres.yml as an operator would: db, migrate, web and
+# worker on a fresh data root, first-run setup with `prks_app.py admin`, then
+# restarts, an upgrade-style migrate beside a running stack, a database copy
+# refused after the original restarted, a simulated migrate killed between its
+# database bump and its marker write (set with psql: no fault hooks in the
+# image), and a recreated database volume that bootstrap refuses.
+#
+# Environment: PRKS_COMPOSE_SKIP_BUILD=1 reuses an existing prks:latest;
+# PRKS_COMPOSE_EXTRA_FILE adds one more Compose file (a local image override).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temp="$(mktemp -d)"
 umask 077
-export PRKS_DB_PASSWORD_FILE="$temp/db_password"
-openssl rand -hex 32 > "$PRKS_DB_PASSWORD_FILE"
 project="prkspg${GITHUB_RUN_ID:-$$}${GITHUB_RUN_ATTEMPT:-1}"
-# Ensure ordinary SQLite-only Compose startup does not need a PostgreSQL secret.
-env -u PRKS_DB_PASSWORD_FILE docker compose --file "$root/docker-compose.yml" config --quiet
-compose=(docker compose --project-name "$project" --file "$root/docker-compose.yml" \
-  --file "$root/docker-compose.postgres.yml" --profile postgres)
+port="${PRKS_PUBLISH_PORT:-18080}"
+
+password="$(openssl rand -hex 32)"
+printf '%s\n' "$password" > "$temp/db_password"
+printf 'postgresql://prks:%s@db:5432/prks\n' "$password" > "$temp/database_url"
+mkdir -m 700 "$temp/data"
+export PRKS_DB_PASSWORD_FILE="$temp/db_password"
+export PRKS_DB_URL_FILE="$temp/database_url"
+export PRKS_DATA_DIR="$temp/data"
+export PRKS_PUBLISH_PORT="$port"
+export UID
+GID="$(id -g)"
+export GID
+
+# The SQLite Compose file still needs no PostgreSQL secret.
+env -u PRKS_DB_PASSWORD_FILE -u PRKS_DB_URL_FILE docker compose --file "$root/docker-compose.yml" config --quiet
+
+compose=(docker compose --project-name "$project" --file "$root/docker-compose.postgres.yml")
+if [[ -n "${PRKS_COMPOSE_EXTRA_FILE:-}" ]]; then
+  compose+=(--file "$PRKS_COMPOSE_EXTRA_FILE")
+fi
 
 cleanup() {
   status=$?
   trap - EXIT
   if (( status != 0 )); then
-    printf '%s\n' "PostgreSQL Compose volume smoke failed; recent database logs:"
-    "${compose[@]}" logs --tail 35 db 2>&1 || true
+    printf '%s\n' "PostgreSQL Compose acceptance failed; recent logs:"
+    "${compose[@]}" logs --tail 40 2>&1 || true
   fi
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$temp"
@@ -26,91 +51,196 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"${compose[@]}" config --quiet
-"${compose[@]}" up --detach --wait --wait-timeout 120 db
-container=$("${compose[@]}" ps -q db)
-if [[ -z "$container" ]]; then
-  echo "No PostgreSQL container started" >&2
+fail() {
+  echo "FAIL: $*" >&2
   exit 1
-fi
-# Verify the exact Compose-managed named volume, not merely a directory
-# mounted at the expected path (a bind mount could survive by accident).
-mount=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}{{.Type}}:{{.Name}}{{end}}{{end}}' "$container")
-if [[ "$mount" != "volume:${project}_pgdata" ]]; then
-  echo "PostgreSQL does not use the expected named volume at /var/lib/postgresql" >&2
-  exit 1
-fi
-bindings=$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$container")
-if [[ "$bindings" != "null" && "$bindings" != "{}" ]]; then
-  echo "PostgreSQL unexpectedly publishes a host port" >&2
-  exit 1
-fi
-if [[ -n "$("${compose[@]}" ps -q prks)" ]]; then
-  echo "Database-only start unexpectedly launched the SQLite PRKS service" >&2
-  exit 1
-fi
+}
+
+pass() {
+  echo "ok: $*"
+}
 
 query() {
-  # Authenticate to the bridge-network service with the Compose secret, never a socket's
-  # implicit local-trust rule. The password is read inside the container, not
-  # passed as a host shell argument or logged.
+  # Over the bridge network with the secret, read inside the container.
   "${compose[@]}" exec -T db sh -eu -c '
-    password="$(cat /run/secrets/prks_db_password)"
-    export PGPASSWORD="$password"
+    PGPASSWORD="$(cat /run/secrets/prks_db_password)"
+    export PGPASSWORD
     exec psql --no-psqlrc --tuples-only --no-align \
-      --set ON_ERROR_STOP=1 --username prks --dbname prks \
+      --set ON_ERROR_STOP=1 --username prks --dbname "${2:-prks}" \
       --host db --command "$1"
-  ' sh "$1"
+  ' sh "$1" "${2:-prks}"
 }
 
-# The external bridge interface must require password authentication, not
-# trust. An incorrect password may never pass, even on a fresh cluster.
+db_state() {
+  query "SELECT start_generation || ':' || start_token FROM prks.instance" "${1:-prks}"
+}
+
+marker_state() {
+  python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+print("%s:%s" % (doc.get("start_generation", 0), doc.get("start_token", "")))
+' "$temp/data/prks-root.json"
+}
+
+readyz() {
+  curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
+    "http://127.0.0.1:$port/readyz" || true
+}
+
+wait_for() {
+  # wait_for SECONDS DESCRIPTION COMMAND...
+  local deadline=$((SECONDS + $1)) what=$2
+  shift 2
+  until "$@"; do
+    (( SECONDS < deadline )) || fail "timed out waiting for $what"
+    sleep 2
+  done
+}
+
+is_ready() { [[ "$(readyz)" == 200 ]]; }
+is_healthy() {
+  [[ "$(docker inspect --format '{{.State.Health.Status}}' "$("${compose[@]}" ps -q web)")" == healthy ]]
+}
+is_paired() { [[ "$(db_state)" == "$(marker_state)" ]]; }
+
+wait_settled() {
+  # web ready and healthy, every start done: database and marker equal, at
+  # generation $1.
+  local deadline database marker
+  wait_for 120 "web to be ready" is_ready
+  wait_for 120 "web to be healthy" is_healthy
+  deadline=$((SECONDS + 60))
+  while true; do
+    database=$(db_state)
+    marker=$(marker_state)
+    [[ "${database%%:*}" == "$1" && "$database" == "$marker" ]] && return 0
+    (( SECONDS < deadline )) \
+      || fail "generation $1 on both sides; database ${database%%:*}, marker ${marker%%:*}"
+    sleep 2
+  done
+}
+
+if [[ "${PRKS_COMPOSE_SKIP_BUILD:-0}" != 1 ]]; then
+  "${compose[@]}" build web
+fi
+"${compose[@]}" config --quiet
+
+# --- first run --------------------------------------------------------------------
+
+"${compose[@]}" up --detach
+db=$("${compose[@]}" ps -q db)
+mount=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}{{.Type}}:{{.Name}}{{end}}{{end}}' "$db")
+[[ "$mount" == "volume:${project}_pgdata" ]] || fail "db does not use the named volume at /var/lib/postgresql"
+bindings=$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$db")
+[[ "$bindings" == "null" || "$bindings" == "{}" ]] || fail "db publishes a host port"
+for service in web worker; do
+  container=$("${compose[@]}" ps -q "$service")
+  secret=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/run/secrets/prks_database_url"}}yes{{end}}{{end}}' "$container")
+  [[ "$secret" == yes ]] || fail "$service does not list the prks_database_url secret"
+done
+pass "volume at /var/lib/postgresql, no db host port, web and worker list the URL secret"
+
+# The bridge interface needs the password (never trust), and the cluster has
+# the builtin locale, which a restart never changes on an existing volume.
 if "${compose[@]}" exec -T db sh -eu -c '
   export PGPASSWORD="definitely-not-the-generated-password"
-  exec psql --no-psqlrc --tuples-only --no-align \
-    --set ON_ERROR_STOP=1 --username prks --dbname prks \
-    --host db --command "SELECT 1"
+  exec psql --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --username prks --dbname prks --host db --command "SELECT 1"
 ' >/dev/null 2>&1; then
-  echo "PostgreSQL accepted an incorrect password on its bridge interface" >&2
-  exit 1
+  fail "db accepted an incorrect password on its bridge interface"
 fi
+[[ "$(query "SELECT current_setting('server_version_num')::int / 10000")" == 18 ]] || fail "not PostgreSQL 18"
+[[ "$(query "SELECT datlocprovider::text || '|' || datlocale FROM pg_database WHERE datname = current_database()")" \
+   == "b|PG_UNICODE_FAST" ]] || fail "db does not use the builtin PG_UNICODE_FAST locale"
+pass "db refuses a wrong password; PostgreSQL 18 with the builtin locale"
 
-major=$(query "SELECT current_setting('server_version_num')::int / 10000")
-if [[ "$major" != 18 ]]; then
-  echo "Expected PostgreSQL 18; got an unexpected major version" >&2
-  exit 1
+# migrate applied the schema and left the root alone: nothing is set up yet.
+[[ "$(query "SELECT count(*) FROM prks.instance")" == 0 ]] || fail "an instance row before setup"
+wait_for 60 "web to bind the new root" test -f "$temp/data/prks-root.json"
+[[ "$(readyz)" != 200 ]] || fail "web is ready before setup"
+"${compose[@]}" ps --status running --services | grep -qx worker || fail "the worker is not waiting"
+pass "first run: schema applied, root bound by web, web not ready and worker waiting before setup"
+
+# --- setup -------------------------------------------------------------------------
+
+token="$(openssl rand -hex 32)"
+printf '%s' "$token" | "${compose[@]}" exec -T web sh -c 'umask 077; cat > /tmp/bootstrap-token'
+printf '%s' "owner-password-$(openssl rand -hex 8)" \
+  | "${compose[@]}" exec -T web sh -c 'umask 077; cat > /tmp/owner-password'
+admin=("${compose[@]}" exec -T -e PRKS_BOOTSTRAP_TOKEN_FILE=/tmp/bootstrap-token web
+       python /app/prks_app.py admin bootstrap)
+"${admin[@]}" issue-token --root /data
+"${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password
+# The claim is generation 1; web and the worker each bump once when they see setup ready.
+wait_settled 3
+pass "bootstrap; web ready and healthy; database and marker at generation 3"
+[[ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$port/healthz")" == 200 ]] \
+  || fail "/healthz"
+
+# --- an upgrade-style migrate beside the running stack ------------------------------
+
+out=$("${compose[@]}" run --rm --no-deps migrate)
+grep -q "start generation 4" <<<"$out" || fail "migrate beside web and worker did not bump: $out"
+wait_settled 4
+pass "migrate runs and bumps under the shared lease while web and worker hold it"
+
+# --- restart; a copy taken before it is refused afterwards --------------------------
+
+"${compose[@]}" stop web worker
+query "CREATE DATABASE prks_copy TEMPLATE prks" >/dev/null
+"${compose[@]}" down
+"${compose[@]}" up --detach
+# migrate, web and worker each bump once.
+wait_settled 7
+[[ "$(query "SELECT count(*) FROM prks.users")" == 1 ]] || fail "the owner did not survive down/up"
+pass "down/up keeps the database volume; every start bumped once (generation 7)"
+
+stale=("${compose[@]}" run --rm --no-deps --entrypoint sh migrate -c
+       'PRKS_DATABASE_URL="$(sed "s#/prks\$#/prks_copy#" /run/secrets/prks_database_url)" \
+        PRKS_DATABASE_URL_FILE= exec python /app/prks_app.py migrate')
+copy_before=$(db_state prks_copy)
+if refusal=$("${stale[@]}" 2>&1); then
+  fail "a database copy taken before the restart started against the root"
 fi
-# Cluster creation locale is persistent; a restart will NOT apply changed
-# POSTGRES_INITDB_ARGS to an existing PostgreSQL volume.
-locale=$(query "SELECT datlocprovider::text || '|' || datlocale FROM pg_database WHERE datname = current_database()")
-if [[ "$locale" != "b|PG_UNICODE_FAST" ]]; then
-  echo "PostgreSQL database does not use builtin PG_UNICODE_FAST locale" >&2
-  exit 1
+grep -q "stale copy" <<<"$refusal" || fail "the copy was refused for another reason: $refusal"
+[[ "$(db_state prks_copy)" == "$copy_before" ]] || fail "the refused copy was bumped"
+is_paired || fail "the refused copy changed the marker"
+pass "a database copy taken before the restart is refused against the root"
+
+"${compose[@]}" up --detach --force-recreate
+wait_settled 10
+pass "container recreation keeps the data; generation 10"
+
+# --- migrate killed between its database bump and its marker write ----------------
+
+query "UPDATE prks.instance SET prev_start_token = start_token, start_token = md5(random()::text), \
+       start_generation = start_generation + 1" >/dev/null
+is_not_ready() { [[ "$(readyz)" == 503 ]]; }
+wait_for 30 "web to turn not ready" is_not_ready
+out=$("${compose[@]}" run --rm --no-deps migrate)
+grep -q "reconciled an interrupted start" <<<"$out" || fail "migrate did not reconcile: $out"
+wait_settled 12
+pass "a bump without its marker write keeps web not ready until the next start reconciles it"
+
+# --- a recreated database volume: bootstrap refuses the used root -------------------
+
+"${compose[@]}" down
+docker volume rm "${project}_pgdata" >/dev/null
+marker_before=$(sha256sum "$temp/data/prks-root.json")
+"${compose[@]}" up --detach
+schema_applied() { [[ "$(query "SELECT count(*) FROM prks.schema_migrations" 2>/dev/null)" =~ ^[1-9] ]]; }
+wait_for 60 "migrate to apply the schema" schema_applied
+token="$(openssl rand -hex 32)"
+printf '%s' "$token" | "${compose[@]}" exec -T web sh -c 'umask 077; cat > /tmp/bootstrap-token'
+printf '%s' "owner-password-$(openssl rand -hex 8)" \
+  | "${compose[@]}" exec -T web sh -c 'umask 077; cat > /tmp/owner-password'
+"${admin[@]}" issue-token --root /data
+if "${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password; then
+  fail "bootstrap claimed a root an earlier database used"
 fi
-query "CREATE TABLE public.pg_compose_smoke (id integer PRIMARY KEY, marker text NOT NULL)" >/dev/null
-query "INSERT INTO public.pg_compose_smoke VALUES (1, 'kept')" >/dev/null
-check_marker() {
-  if [[ "$(query 'SELECT marker FROM public.pg_compose_smoke WHERE id = 1')" != 'kept' ]]; then
-    echo "PostgreSQL lost the persisted marker row" >&2
-    exit 1
-  fi
-}
-check_marker
+[[ "$(sha256sum "$temp/data/prks-root.json")" == "$marker_before" ]] || fail "the used root's marker changed"
+[[ "$(readyz)" != 200 ]] || fail "web is ready against an empty database"
+pass "a recreated database volume: bootstrap refuses the used root and leaves it untouched"
 
-# Compose down without --volumes must keep the PostgreSQL 18 named volume.
-"${compose[@]}" down --remove-orphans
-"${compose[@]}" up --detach --wait --wait-timeout 120 db
-check_marker
-
-# Removing and recreating the container must not affect the named volume.
-old_container=$("${compose[@]}" ps -q db)
-"${compose[@]}" rm --force --stop db >/dev/null
-"${compose[@]}" up --detach --wait --wait-timeout 120 db
-new_container=$("${compose[@]}" ps -q db)
-if [[ -z "$new_container" || "$old_container" == "$new_container" ]]; then
-  echo "PostgreSQL container was not recreated" >&2
-  exit 1
-fi
-check_marker
-
-echo "PostgreSQL 18 Compose: secret mount, internal network, volume path, down/up and container recreation PASS"
+echo "PostgreSQL Compose acceptance PASS"
