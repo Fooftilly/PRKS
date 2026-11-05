@@ -64,6 +64,7 @@ the lock (``queue.enqueue_library_job_for_host``).
 
 from __future__ import annotations
 
+import enum
 import logging
 import threading
 import time
@@ -71,7 +72,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import timedelta
-from typing import Any, LiteralString, Optional
+from typing import Any, LiteralString, Optional, TypeVar
 
 from backend.db.database import Database, Transaction
 from backend.domain.identity.authorization import Capability
@@ -431,10 +432,12 @@ def _host_enqueue(tx: Transaction, library_id: str, epoch: int, scopes: Iterable
         dedupe_key=f"{library_id}:{','.join(chosen)}", singleton_key=f"derived:{library_id}")
 
 
-def _for_library(db: Database, library_id: str,
-                 fn: Callable[[Transaction, int, bool], Optional[uuid.UUID]]) -> Optional[uuid.UUID]:
+_T = TypeVar("_T")
+
+
+def _for_library(db: Database, library_id: str, fn: Callable[[Transaction, int, bool], _T]) -> Optional[_T]:
     """Run ``fn(tx, epoch, folding_due)`` under the Library row lock; None for a gone Library or one in maintenance."""
-    def run(tx: Transaction) -> Optional[uuid.UUID]:
+    def run(tx: Transaction) -> Optional[_T]:
         row = tx.execute(_LOCK_LIBRARY, {"library_id": library_id}).fetchone()
         if row is None or row["in_maintenance"]:
             return None
@@ -448,9 +451,21 @@ def library_ids(db: Database, *, stale_folding: bool = False) -> list[str]:
     return [str(row["id"]) for row in db.query(lambda tx: tx.execute(statement).fetchall())]
 
 
-def request_rebuild(db: Database, library_id: str, scopes: Iterable[str] = SCOPES) -> Optional[uuid.UUID]:
-    """``prks admin rebuild-derived``: queue the Library's rebuild; None when it is already queued or unavailable."""
-    return _for_library(db, library_id, lambda tx, epoch, _due: _host_enqueue(tx, library_id, epoch, scopes))
+class Requested(enum.Enum):
+    """What :func:`request_rebuild` did for one Library."""
+
+    QUEUED = "queued"
+    ALREADY_QUEUED = "already_queued"  # the same rebuild waits in the queue
+    UNAVAILABLE = "unavailable"  # in maintenance (or gone): nothing was queued
+
+
+def request_rebuild(db: Database, library_id: str, scopes: Iterable[str] = SCOPES) -> Requested:
+    """``prks admin rebuild-derived``: queue the Library's rebuild under its row lock."""
+    def enqueue(tx: Transaction, epoch: int, _due: bool) -> Requested:
+        queued = _host_enqueue(tx, library_id, epoch, scopes) is not None
+        return Requested.QUEUED if queued else Requested.ALREADY_QUEUED
+
+    return _for_library(db, library_id, enqueue) or Requested.UNAVAILABLE
 
 
 def check_folding(db: Database) -> list[str]:

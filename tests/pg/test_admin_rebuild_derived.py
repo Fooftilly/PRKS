@@ -76,3 +76,11 @@ class RebuildDerivedTests(RootPairingTestCase):
         self.assertEqual((code, out), (admin.EXIT_REFUSED, ""))
         self.assertTrue(err.startswith("rebuild-derived: "))
         self.assertEqual(self.jobs(name), [])
+
+    def test_a_library_in_maintenance_gets_nothing_and_the_command_says_so(self) -> None:
+        with psycopg.connect(self.harness.conninfo(self.name)) as conn:
+            conn.execute("UPDATE prks.libraries SET maintenance = 'restore', maintenance_run = gen_random_uuid()")
+        code, out, err = self.run_cli()
+        self.assertEqual((code, out), (admin.EXIT_REFUSED, ""))
+        self.assertIn("1 Library in maintenance got nothing queued", err)
+        self.assertEqual(self.jobs(), [])
