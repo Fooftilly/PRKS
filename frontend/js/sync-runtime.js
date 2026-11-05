@@ -207,7 +207,14 @@
             for (let i = 0; i < deps.length; i += 1) {
                 if (!dependencySucceeded(byId.get(deps[i]))) return false;
             }
-            return true;
+            /* A family may declare an additional read-only ordering barrier
+             * beyond mandatory successful dependencies. The handler owns its
+             * domain's semantics; the coordinator supplies the current queue
+             * snapshot and never interprets family-specific operation names
+             * or payloads. The predicate must not mutate the queue. */
+            const handler = handlers[op.operation];
+            return !handler || typeof handler.readyToSend !== 'function' ||
+                handler.readyToSend(op, byId);
         }
         /* Everything waiting on a failed prerequisite becomes unresolvable --
          * TRANSITIVELY, and in one atomic step, which is why the store does the

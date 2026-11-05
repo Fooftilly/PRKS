@@ -3761,6 +3761,9 @@
                      * editor that typed the parent. Leave every operation row
                      * as it was. */
                     if (!callerStillOwns(stillOwns)) { setResult(null); return; }
+                    if (payload.parent_id) {
+                        assertGroupIsNotBeingDeleted(rows, payload.parent_id, 'made a parent');
+                    }
                     /* A group created under a parent this device also created
                      * offline waits for that parent: the server validates the
                      * hierarchy, and a parent it has never heard of is a
@@ -3884,6 +3887,10 @@
                          * offline waits for that group too: the server
                          * validates the hierarchy, and a parent it has never
                          * heard of is a refusal rather than a tree. */
+                        if (field === 'parent_id' && desired &&
+                            !(createdParent && createdParent.entity_id === desired)) {
+                            assertGroupIsNotBeingDeleted(rows, desired, 'made a parent');
+                        }
                         const parentOp = field === 'parent_id' && desired
                             ? (createdParent && createdParent.entity_id === desired
                                 ? createdParent
@@ -4011,7 +4018,54 @@
                     if (already) { setResult(already); return; }
                     const neverSent = r => r.status === STATUS_PENDING && !r.attempt_count;
                     const creation = mine.find(r => r.operation === 'CREATE_PERSON_GROUP');
+                    /* Independent children and moves can reference this parent.
+                     * Cancelling its create without repairing their prerequisites
+                     * would strand them forever. PostgreSQL keeps/reparents children. */
+                    const referencesParent = r => r.operation === 'CREATE_PERSON_GROUP'
+                        ? r.payload && r.payload.parent_id === groupId
+                        : r.operation === 'SET_PERSON_GROUP_FIELD' &&
+                            r.payload && r.payload.field === 'parent_id' &&
+                            r.payload.value === groupId;
+                    const external = rows.filter(r => r &&
+                        r.status !== STATUS_ACKNOWLEDGED &&
+                        !mine.some(m => m.op_id === r.op_id) &&
+                        (referencesParent(r) || (creation &&
+                            Array.isArray(r.depends_on) &&
+                            r.depends_on.indexOf(creation.op_id) !== -1)));
                     if (creation && neverSent(creation) && mine.every(neverSent)) {
+                        /* An edited parent or an already-attempted child cannot
+                         * be safely rewritten. Abort this entire transaction,
+                         * preserving every authored operation for explicit
+                         * resolution rather than cancelling a prerequisite. */
+                        const changedParent = mine.some(r =>
+                            r.operation === 'SET_PERSON_GROUP_FIELD' &&
+                            r.payload && r.payload.field === 'parent_id');
+                        const safeChildren = !changedParent && external.every(r =>
+                            r.operation === 'CREATE_PERSON_GROUP' &&
+                            r.payload && r.payload.parent_id === groupId &&
+                            neverSent(r) &&
+                            Array.isArray(r.depends_on) &&
+                            r.depends_on.indexOf(creation.op_id) !== -1);
+                        if (!safeChildren) {
+                            throw localStoreError('scope_busy',
+                                'Move or finish syncing child groups and pending group moves ' +
+                                'before deleting this unsent parent group.');
+                        }
+                        const ancestor = creation.payload.parent_id || '';
+                        for (const child of external) {
+                            const deps = child.depends_on.filter(id => id !== creation.op_id);
+                            for (const dep of creation.depends_on || []) {
+                                if (deps.indexOf(dep) === -1) deps.push(dep);
+                            }
+                            /* Same IndexedDB transaction as the cancelled create,
+                             * and only a never-attempted child may be rebased.
+                             * Its id remains stable for independently authored
+                             * later edits and nested child dependencies. */
+                            await request(STORE_OPERATIONS, s => s.put(Object.assign({}, child, {
+                                payload: Object.assign({}, child.payload, { parent_id: ancestor }),
+                                depends_on: deps,
+                            })));
+                        }
                         for (const row of mine) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
                         }
@@ -4026,6 +4080,13 @@
                             waitFor.push(row.op_id);
                         }
                     }
+                    /* A server-existing or possibly-sent parent's children/moves
+                     * must settle before its deletion. Those are ORDERING
+                     * barriers, not successful-create prerequisites: child rows
+                     * can be coalesced away or rejected by the server. The
+                     * coordinator checks the live durable queue when scheduling
+                     * DELETE_PERSON_GROUP instead of recording volatile op IDs
+                     * in depends_on (which would strand this delete forever). */
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'DELETE_PERSON_GROUP', entity_type: 'person-group',
                         entity_id: groupId, payload: {},

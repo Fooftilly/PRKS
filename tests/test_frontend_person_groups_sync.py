@@ -58,6 +58,26 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
                 # can neither understand nor decide about.
                 self.assertIn(family, diagnostics)
 
+    def test_child_ordering_lives_in_registered_family_handler(self):
+        """Group hierarchy rules belong in handlers, not the shared sender."""
+        runtime = (FRONTEND / 'sync-runtime.js').read_text()
+        sender = runtime[:runtime.index('root.createPrksSyncRuntime = createRuntime;')]
+        for domain_name in ('DELETE_PERSON_GROUP', 'CREATE_PERSON_GROUP',
+                            'SET_PERSON_GROUP_FIELD', 'parent_id', 'person-group'):
+            with self.subTest(domain_name=domain_name):
+                self.assertNotIn(domain_name, sender)
+        self.assertIn("typeof handler.readyToSend !== 'function'", sender)
+        self.assertIn('handler.readyToSend(op, byId)', sender)
+        self.assertIn('readyToSend: groupDeleteReadyToSend', self.state)
+        order = self.state[self.state.index('function groupDeleteReadyToSend('):
+                           self.state.index('const deleteHandler = {')]
+        for intent in ("other.status !== 'pending'",
+                       "other.status !== 'syncing'",
+                       "'CREATE_PERSON_GROUP'",
+                       "'SET_PERSON_GROUP_FIELD'",
+                       'other.payload.value === deletion.entity_id'):
+            self.assertIn(intent, order)
+
     def test_construction_mints_a_permanent_distributed_id(self):
         """No temporary local id is ever remapped to a server id: the id in the
         envelope is the id SQLite stores."""

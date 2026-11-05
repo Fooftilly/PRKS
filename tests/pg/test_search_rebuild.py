@@ -74,6 +74,10 @@ class RebuildTestCase(TextTestCase):
         self.sql("INSERT INTO derived.asset_text (library_id, asset_id, content_sha256, extractor_version,"
                  " status, doc) SELECT library_id, 'gone-asset', repeat('a', 64), 1, 'empty', ''::tsvector"
                  " FROM prks.works WHERE id = %s", (works[0],))
+        self.sql("INSERT INTO derived.asset_text (library_id, asset_id, content_sha256, extractor_version,"
+                 " status, doc) SELECT library_id, id, repeat('b', 64), 1, 'empty', ''::tsvector"
+                 " FROM prks.assets WHERE library_id = (SELECT library_id FROM prks.works WHERE id = %s)"
+                 " ORDER BY id LIMIT 1", (works[0],))  # bytes the Asset no longer has
         self.sql("DELETE FROM derived.concept_mentions")
         self.sql("INSERT INTO derived.work_note_state (library_id, work_id, content_hash)"
                  " SELECT library_id, 'gone-work', 'x' FROM prks.works WHERE id = %s", (works[0],))
