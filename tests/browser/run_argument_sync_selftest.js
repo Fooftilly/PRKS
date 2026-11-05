@@ -317,12 +317,144 @@ function argumentDetailUsesGuardedOfflineRead() {
         "Argument index must continue refreshing online and warming its offline cache");
 }
 
+async function deletingWorkPreservesIndependentArgumentIntent() {
+    const workId = "W-EXISTING";
+    const otherWork = "W-OTHER";
+    const source = { work_id: workId, pages: "12" };
+    const otherSource = { work_id: otherWork, pages: "3-5" };
+
+    // A separately authored, unsent Stance must remain even if its cited Work
+    // is deleted before sync. Field edits retain their creation dependency.
+    const store = newStore();
+    const created = await store.createArgument({
+        name: "Independently authored", kind: "stance",
+        main_text: "Keep this research",
+        sources: [source, otherSource],
+    });
+    const edit = await store.saveArgumentFields(created.entity_id,
+        { main_text: "Keep this revised research" },
+        fieldBase({ main_text: "Keep this research" }));
+    const deleted = await store.deleteWork(workId);
+    assert.equal(deleted.operation, "DELETE_WORK");
+    const rows = await operations(store);
+    const preserved = rows.find(r => r.op_id === created.op_id);
+    assert.ok(preserved, "unsent Argument create survives deleting its source Work");
+    assert.deepEqual(preserved.payload, {
+        name: "Independently authored", kind: "stance",
+        main_text: "Keep this research", sources: [otherSource], targets: [],
+    }, "only the deleted Work citation disappears");
+    assert.deepEqual(rows.find(r => r.op_id === edit[0].op_id).depends_on, [created.op_id],
+        "dependent field edit still has a live creation");
+    assert.equal(rows.some(r => r.op_id === deleted.op_id), true);
+    assert.equal(deleted.depends_on.includes(created.op_id), false,
+        "unsent independent Argument does not block Work deletion");
+    assert.deepEqual(globalThis.prksEffectiveArguments([], rows).map(r => r.id),
+        [created.entity_id], "pending Argument remains visible after Work deletion");
+
+    // Existing Argument source aggregate is independently authored too, but
+    // must ACK before Work deletion, which otherwise changes source revision.
+    const existing = newStore();
+    const sourcesWrite = await existing.setArgumentSources("A-SERVER",
+        [source, otherSource], sourcesBase([source], 7));
+    const deleteExisting = await existing.deleteWork(workId);
+    const persistedSource = (await operations(existing))
+        .find(r => r.op_id === sourcesWrite.op_id);
+    assert.deepEqual(persistedSource.payload.sources, [otherSource],
+        "unsent source replacement retains other citations");
+    assert.deepEqual(persistedSource.depends_on, sourcesWrite.depends_on,
+        "preserving the original source op does not break dependencies");
+    assert.ok(deleteExisting.depends_on.includes(sourcesWrite.op_id),
+        "Work delete waits for the source replacement revision");
+
+    // A replacement after DELETE_WORK must preserve the Work deletion's
+    // prerequisite; new citations of the deleted Work must be refused.
+    const nextSources = [otherSource, { work_id: "W-THIRD", pages: "9" }];
+    const updated = await existing.setArgumentSources("A-SERVER", nextSources,
+        sourcesBase([source], 7));
+    assert.equal(updated.op_id, sourcesWrite.op_id,
+        "coalesced source replacement preserves Work delete's dependency id");
+    assert.deepEqual((await operations(existing)).find(r => r.op_id === updated.op_id)
+        .payload.sources, nextSources, "new independent source selection is preserved");
+    await assert.rejects(() => existing.setArgumentSources("A-SERVER",
+        [source], sourcesBase([source], 7)),
+        error => error.prksLocalStoreCode === "entity_deleted",
+        "new citations cannot re-add a Work being deleted");
+    await assert.rejects(() => existing.createArgument({
+        name: "Invalid new citation", sources: [source],
+    }), error => error.prksLocalStoreCode === "entity_deleted",
+    "a new Argument cannot cite a Work being deleted");
+    const argumentDeleted = await existing.deleteArgument("A-SERVER");
+    assert.ok(argumentDeleted.depends_on.includes(updated.op_id),
+        "deleting the Argument retains the source operation needed by Work deletion");
+    const retained = await operations(existing);
+    assert.ok(retained.some(r => r.op_id === updated.op_id),
+        "Argument deletion cannot cancel another entity's prerequisite");
+    assert.ok(retained.every(r => r.depends_on.every(dep =>
+        retained.some(other => other.op_id === dep))),
+        "cross-entity cancellation leaves no missing dependency");
+
+    // Once attempted, neither construction nor sources may be rewritten.
+    const attempted = newStore();
+    const onWire = await attempted.createArgument({ name: "Already sent", sources: [source] });
+    await attempted.updateOperationSyncState(onWire.op_id,
+        { status: "syncing", bump_attempt: true });
+    const waitingDelete = await attempted.deleteWork(workId);
+    assert.deepEqual((await operations(attempted)).find(r => r.op_id === onWire.op_id)
+        .payload.sources, [source], "possibly sent CREATE_ARGUMENT remains immutable");
+    assert.ok(waitingDelete.depends_on.includes(onWire.op_id),
+        "DELETE_WORK waits for an attempted Argument before canonical cleanup");
+
+    // Folding an unsent locally created Work must not take independent
+    // Argument authorship or its dependent field edit with it.
+    globalThis.prksIsValidYoutubeUrl = url => url.includes("youtube.com/watch");
+    const local = newStore();
+    const createdWork = (await local.createWork({
+        title: "Never sent", source: {
+            kind: "video", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        },
+    })).create;
+    const localArg = await local.createArgument({
+        name: "Keep after fold", sources: [{ work_id: createdWork.entity_id }],
+    });
+    const localEdit = await local.saveArgumentFields(localArg.entity_id,
+        { main_text: "Owned draft" }, fieldBase({ main_text: "" }));
+    assert.equal(await local.deleteWork(createdWork.entity_id), null,
+        "unsent Work create folds away without a DELETE_WORK");
+    const localRows = await operations(local);
+    assert.equal(localRows.some(r => r.op_id === createdWork.op_id), false);
+    assert.deepEqual(localRows.find(r => r.op_id === localArg.op_id).payload.sources, [],
+        "fold removes only the Work citation from still-pending Argument");
+    assert.ok(localRows.some(r => r.op_id === localEdit[0].op_id &&
+        r.depends_on.includes(localArg.op_id)), "dependent author edit is not stranded");
+    assert.ok(localRows.every(r => r.depends_on.every(dep =>
+        localRows.some(other => other.op_id === dep))),
+        "no pending operation has a deleted prerequisite");
+
+    // A locally created Argument whose edited source aggregate was preserved
+    // as another entity's prerequisite must not be folded away on its own delete.
+    const cross = newStore();
+    const crossArg = await cross.createArgument({ name: "Pending", sources: [source] });
+    const crossSources = await cross.setArgumentSources(crossArg.entity_id,
+        [source, otherSource], sourcesBase([source], 0));
+    const crossDeleteWork = await cross.deleteWork(workId);
+    assert.ok(crossDeleteWork.depends_on.includes(crossSources.op_id));
+    assert.ok(await cross.deleteArgument(crossArg.entity_id),
+        "pending Argument with external dependent gets a durable delete, not fold-away");
+    const crossRows = await operations(cross);
+    assert.ok(crossRows.some(r => r.op_id === crossArg.op_id));
+    assert.ok(crossRows.some(r => r.op_id === crossSources.op_id));
+    assert.ok(crossRows.every(r => r.depends_on.every(dep =>
+        crossRows.some(other => other.op_id === dep))),
+        "deleting the Argument retains all externally required prerequisites");
+}
+
 async function main() {
     argumentDetailUsesGuardedOfflineRead();
     await constructionAndDependencies();
     await scalarCoalescingAndIndependence();
     await orderedAggregatesCoalesceAndCancel();
     await deletionAndImmutability();
+    await deletingWorkPreservesIndependentArgumentIntent();
     await validation();
     await failedRootBlocksDescendants();
     await commitWritesOnlyDirtyUnits();
