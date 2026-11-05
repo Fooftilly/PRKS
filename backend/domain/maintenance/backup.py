@@ -38,6 +38,7 @@ archive and raises :class:`BackupFailed`. The archive is a ZIP with stored
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -339,7 +340,7 @@ def _copy_object(storage: StorageBackend, ref: ObjectRef, out: Sink) -> None:
         handle = storage.open_read(ref.key)
     except Exception:
         raise unreadable from None
-    with handle:
+    try:
         while True:
             try:
                 chunk = handle.read(IO_CHUNK_SIZE)
@@ -349,6 +350,15 @@ def _copy_object(storage: StorageBackend, ref: ObjectRef, out: Sink) -> None:
                 break
             # Outside the read's handler: a ZIP write or lease renewal failure keeps its own reason.
             out.write(chunk)
+    except BaseException:
+        # The failure already raised wins over any trouble closing the reader.
+        with contextlib.suppress(Exception):
+            handle.close()
+        raise
+    try:
+        handle.close()
+    except Exception:
+        raise unreadable from None
 
 
 def _verify_archive(path: str, manifest: dict[str, Any], renew: Callable[[], None] = lambda: None) -> None:

@@ -169,6 +169,25 @@ class ObjectSafetyTests(BackupTestCase):
         with mock.patch.object(self.objects, "open_read", side_effect=PermissionError("denied")):
             self.assert_failed("object_unreadable")
 
+    def test_an_object_reader_that_fails_to_close_fails_as_unreadable(self) -> None:
+        obj = self.put()
+        self.create(obj)
+        real = self.objects.open_read
+
+        def closing_badly(key: str) -> Any:
+            handle = real(key)
+            close = handle.close
+
+            def failing_close() -> None:
+                close()
+                raise OSError(5, "Input/output error")
+
+            handle.close = failing_close
+            return handle
+
+        with mock.patch.object(self.objects, "open_read", closing_badly):
+            self.assert_failed("object_unreadable")
+
     def test_an_object_whose_bytes_changed_fails_the_backup(self) -> None:
         obj = self.put(b"original bytes")
         self.create(obj)
