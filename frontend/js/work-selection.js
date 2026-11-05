@@ -19,6 +19,8 @@
         ids: new Set(),
         submitting: false,
         sheetKind: null,
+        catalogueReady: false,
+        catalogueLoadId: 0,
         inited: false,
         inFlightGen: null,
         inFlightHash: '',
@@ -347,6 +349,8 @@
             sheet.setAttribute('aria-hidden', 'true');
         }
         state.sheetKind = null;
+        state.catalogueReady = false;
+        state.catalogueLoadId += 1;
         state.submitting = false;
     }
 
@@ -561,8 +565,12 @@
     function canApplySheet() {
         if (state.ids.size === 0) return false;
         if (state.sheetKind === 'status') return !!selectedStatus();
-        if (state.sheetKind === 'folder') return selectedFolderId() !== undefined;
-        if (state.sheetKind === 'tags') return selectedTagIds().length > 0 && !!selectedTagOp();
+        if (state.sheetKind === 'folder') {
+            return state.catalogueReady && selectedFolderId() !== undefined;
+        }
+        if (state.sheetKind === 'tags') {
+            return state.catalogueReady && selectedTagIds().length > 0 && !!selectedTagOp();
+        }
         return false;
     }
 
@@ -576,13 +584,15 @@
             text = st ? 'Set ' + n + ' ' + filesWord(n) + ' to ' + st + '?' : 'Choose a status, then apply.';
         } else if (state.sheetKind === 'folder') {
             const fid = selectedFolderId();
-            if (fid === undefined) text = 'Choose a folder, then apply.';
+            if (!state.catalogueReady) text = 'Folder choices are not available yet.';
+            else if (fid === undefined) text = 'Choose a folder, then apply.';
             else if (fid === null) text = 'Remove ' + n + ' ' + filesWord(n) + ' from their folders?';
             else text = 'Move ' + n + ' ' + filesWord(n) + ' to ' + (selectedFolderName() || 'the selected folder') + '?';
         } else if (state.sheetKind === 'tags') {
             const tags = selectedTagIds();
             const op = selectedTagOp();
-            if (!tags.length) text = 'Select one or more tags.';
+            if (!state.catalogueReady) text = 'Tag choices are not available yet.';
+            else if (!tags.length) text = 'Select one or more tags.';
             else if (op === 'remove') {
                 text = 'Remove ' + tags.length + (tags.length === 1 ? ' tag' : ' tags') + ' from ' + n + ' ' + filesWord(n) + '?';
             } else {
@@ -696,7 +706,9 @@
         if (kind !== 'organize' && state.ids.size === 0) return;
         const parts = sheetParts();
         if (!parts.body) return;
+        const loadId = ++state.catalogueLoadId;
         state.sheetKind = kind;
+        state.catalogueReady = kind === 'status' || kind === 'organize';
         setSheetError('');
         parts.sheet.classList.remove('hidden');
         parts.sheet.setAttribute('aria-hidden', 'false');
@@ -711,30 +723,36 @@
         if (kind === 'status') {
             parts.title.textContent = 'Set progress';
             parts.body.innerHTML = renderStatusBody();
-        } else if (kind === 'folder') {
-            parts.title.textContent = 'Move to folder';
-            parts.body.innerHTML = '<p class="meta-row">Loading folders…</p>';
-            let folders = [];
+        } else if (kind === 'folder' || kind === 'tags') {
+            const label = kind === 'folder' ? 'folders' : 'tags';
+            parts.title.textContent = kind === 'folder' ? 'Move to folder' : 'Tags';
+            parts.body.innerHTML = '<p class="meta-row">Loading ' + label + '…</p>';
+            updateSheetConfirm();
+            let result;
             try {
-                const fn = typeof root.fetchFolders === 'function' ? root.fetchFolders : null;
-                folders = fn ? await fn() : [];
+                const fn = kind === 'folder' ? root.fetchFolders : root.fetchTags;
+                if (typeof fn !== 'function') throw new Error('Catalogue reader unavailable.');
+                result = await fn({ requireAvailable: true, withSource: true });
+                if (!result || !Array.isArray(result.rows)) {
+                    throw new Error('Catalogue reader returned no valid rows.');
+                }
             } catch (_e) {
-                folders = [];
+                if (state.sheetKind !== kind || state.catalogueLoadId !== loadId) return;
+                state.catalogueReady = false;
+                setSheetError('Could not load ' + label +
+                    '. No changes can be applied. Retry to load the choices.');
+                parts.body.innerHTML =
+                    '<button type="button" class="prks-btn prks-btn--secondary" data-bulk-retry="' +
+                    kind + '">Retry loading ' + esc(label) + '</button>';
+                updateSheetConfirm();
+                return;
             }
-            if (state.sheetKind !== 'folder') return;
-            parts.body.innerHTML = renderFolderBody(folders);
-        } else if (kind === 'tags') {
-            parts.title.textContent = 'Tags';
-            parts.body.innerHTML = '<p class="meta-row">Loading tags…</p>';
-            let tags = [];
-            try {
-                const fn = typeof root.fetchTags === 'function' ? root.fetchTags : null;
-                tags = fn ? await fn() : [];
-            } catch (_e) {
-                tags = [];
-            }
-            if (state.sheetKind !== 'tags') return;
-            parts.body.innerHTML = renderTagsBody(tags);
+            if (state.sheetKind !== kind || state.catalogueLoadId !== loadId) return;
+            state.catalogueReady = true;
+            const cached = result.source === 'cache' || result.source === 'stale-cache';
+            const note = cached ? '<p class="meta-row">Using cached ' + label + '.</p>' : '';
+            parts.body.innerHTML = note +
+                (kind === 'folder' ? renderFolderBody(result.rows) : renderTagsBody(result.rows));
         }
         if (typeof root.prksRefreshIcons === 'function') root.prksRefreshIcons(parts.sheet);
         updateSheetConfirm();
@@ -746,6 +764,11 @@
         if (t.closest('[data-bulk-cancel]')) {
             if (state.submitting) return;
             closeSheet();
+            return;
+        }
+        const retry = t.closest('[data-bulk-retry]');
+        if (retry) {
+            if (!state.submitting) void openSheet(retry.getAttribute('data-bulk-retry'));
             return;
         }
         const openKind = t.closest('[data-bulk-open]');
