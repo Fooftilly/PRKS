@@ -164,6 +164,7 @@ def backup_storage_inventory() -> BackupStorageInventory:
             root_marker.MARKER_FILENAME,
             f"{MAINTENANCE_DIRNAME}/{root_binding.ROOT_LOCK_NAME}",
             f"{MAINTENANCE_DIRNAME}/{root_binding.CLAIM_LOCK_NAME}",
+            f"{MAINTENANCE_DIRNAME}/{root_binding.CONTENT_LOCK_NAME}",
         ),
         external_operational=("bootstrap_config", "bootstrap_config_lock"),
     )

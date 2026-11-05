@@ -38,9 +38,12 @@ later fenced transactions are refused because the lease is gone.
 prune enqueue is logged as a code and retried on the next poll; it never
 stops the worker.
 
-Until the PostgreSQL cutover the SQLite web process holds ``root.lock``
-exclusively, so ``prks worker`` cannot run beside it; the web process runs
-its own embedded worker instead (:mod:`backend.jobs.embedded`).
+The SQLite web process holds ``root.lock`` exclusively, so ``prks worker``
+is refused beside it; that web process runs its own embedded worker instead
+(:mod:`backend.jobs.embedded`). A web process paired with PostgreSQL
+(``PRKS_AUTH``) holds it shared, so a worker runs beside it. Only the moment
+such a web binds a new root runs under the exclusive lease; a worker that
+meets it is refused and its next start (Compose restarts it) joins.
 """
 
 from __future__ import annotations

@@ -236,7 +236,7 @@ def _discover_complete_e2e_ids(*, default_modules: bool = False) -> list[str]:
 # substring-matched classes or a statement of full defect equivalence.
 # Keep the real policy's nine smoke IDs and five packaged extras as the only
 # smoke-selector source of truth; this table does not select tests.
-COVERAGE_OBLIGATION_VERSION = 1
+COVERAGE_OBLIGATION_VERSION = 2
 CRITICAL_BROWSER_OBLIGATIONS = (
     ("app-shell-navigation",
      "tests.e2e.test_app.AppShellAndNavigationTests.test_app_loads_and_real_navigation"),
@@ -252,6 +252,13 @@ CRITICAL_BROWSER_OBLIGATIONS = (
      "tests.e2e.test_local_store_durability.LocalStoreDurabilityTests.test_a_pending_operation_survives_a_page_reload"),
     ("durable-field-reconciliation",
      "tests.e2e.test_work_metadata_offline.OfflineWorkMetadataTests.test_offline_field_edit_survives_reload_and_synchronizes"),
+    # #1091: a packaged-only editor-disabled failure was reproduced after the
+    # first durable offline save. Both independent user intents are required:
+    # coalescing a never-sent video change and cancelling it back to base.
+    ("offline-work-source-coalescing",
+     "tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_changing_the_video_twice_before_it_sends_is_one_operation"),
+    ("offline-work-source-return-to-base",
+     "tests.e2e.test_work_source_offline.OfflineWorkSourceTests.test_returning_to_the_acknowledged_video_leaves_no_intent"),
     ("offline-pdf-reopen",
      "tests.e2e.test_offline.OfflineFoundationTests.test_previously_opened_pdf_reopens_offline"),
     ("offline-pdf-annotation-tools",
@@ -260,6 +267,11 @@ CRITICAL_BROWSER_OBLIGATIONS = (
      "tests.e2e.test_offline.OfflineFoundationTests.test_pending_annotation_survives_disconnect_and_resumes_on_reconnect"),
     ("pdf-annotation-persistence",
      "tests.e2e.test_app.PdfPersistenceTests.test_highlight_persists_through_handshake_reload_and_delete"),
+    # #1007: durable recovery following a failed highlight write is distinct
+    # from ordinary annotation persistence; the recovery oracle must not be
+    # credited by a smoke test that only opens the PDF.
+    ("pdf-failed-highlight-recovery",
+     "tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again"),
     ("graph-offline-navigation",
      "tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions"),
     ("vue-processing-route-ready",

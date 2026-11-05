@@ -267,6 +267,47 @@ skip, CI-runner reduction, or change to required PR gates is authorized.
 A separate maintainer decision with real defect-class and timing evidence
 would be needed.
 
+### November 2026: Work-source and failed-highlight regression classes (#740)
+
+The advisory critical-obligation inventory is now **v2**, adding three
+individual Chromium test IDs that are absent from the current 14-case
+dormant packaged smoke floor:
+
+- `offline-work-source-coalescing` — two offline video source selections
+  must coalesce as a never-sent pending operation.
+- `offline-work-source-return-to-base` — restoring the acknowledged video
+  must cancel the never-sent intent without disabling the editor.
+- `pdf-failed-highlight-recovery` — a failed durable highlight save must
+  retain its warning/unsaved state and recover through the subsequent
+  canonical annotation comment save, without losing authored content.
+
+The [#1091 incident](https://github.com/Fooftilly/PRKS/issues/1091)
+**did reproduce two packaged Chromium editor-disabled failures**, on
+[#1085](https://github.com/Fooftilly/PRKS/actions/runs/41344399734)
+and [#1087](https://github.com/Fooftilly/PRKS/actions/runs/41344469022).
+After the production race fix [#1093](https://github.com/Fooftilly/PRKS/pull/1093),
+the [#1108 opt-in acceptance](https://github.com/Fooftilly/PRKS/actions/runs/41893032997)
+passed **20/20** repetitions of each Work-source test in both source and
+packaged distributions. This is direct evidence that the source-only or
+14-case smoke selection would have missed the named risk before its fix;
+it is not proof that every regression needs six shards.
+
+For [#1007](https://github.com/Fooftilly/PRKS/issues/1007), the original
+historical PDF error occurred during a broadly timed-out shard and **has no
+verified PDF-specific root cause**. A later
+[20/20 Chromium stress job](https://github.com/Fooftilly/PRKS/actions/runs/41893032997/job/126795142518)
+and the deliberate-failure negative control passed. The added obligation
+represents a valuable distinct *recovery contract*, not an assertion that
+a product bug remains.
+
+A missing or renamed exact method is reported as `missing_from_discovery`
+and makes the inventory incomplete; a method present in the full suite but
+not the smoke floor is `excluded_from_smoke`. The updated no-browser
+contract tests also require the three methods to exist and verify each
+missing-ID failure independently. **No automatic or manual selector,
+required check, workflow trigger, shard count or retry behavior changes.**
+The dormant reduced packaged mode is still **not authorized**.
+
 ## Read-only, same-commit full-gate cost breakdown (#992)
 
 To compare a **successful, first-attempt** PR source-checkout six-shard run
