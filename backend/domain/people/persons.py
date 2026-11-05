@@ -30,6 +30,7 @@ from backend import person_metadata_sync as rules
 from backend import work_metadata_sync as meta
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import groups
+from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions
 from backend.person_image import PersonImageUrlError
 from backend.person_sync import FIELDS
@@ -285,6 +286,10 @@ def set_field(scope: LibraryScope, person_id: str, field: str, value: str) -> tu
         scope.execute(_TOUCH_SQL, params)
     else:
         scope.execute(_SET_SQL[field], params)
+    if field in search_refresh.PERSON_FIELDS:
+        # Every Work credited to the Person searches its name (§8.3, fan-out);
+        # the caller's row lock comes before the Works are collected.
+        search_refresh.refresh_person_works(scope, person_id)
     return True, revisions.advance(scope, SCOPE_TYPE, scope_id(person_id, field))
 
 

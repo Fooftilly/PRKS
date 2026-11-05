@@ -53,6 +53,7 @@ from typing import Any, Iterable, LiteralString, Optional
 from backend import work_role_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons
+from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions
 
 SCOPE_TYPE = rules.SCOPE_TYPE
@@ -384,6 +385,10 @@ def _write(scope: LibraryScope, role: Role, existing: Optional[str], desired: Op
         scope.execute(_UPDATE_CREDIT_SQL, params)
     _promote(scope, role.person_id, aliases)
     scope.execute(_TOUCH_WORK_SQL, {"work_id": role.work_id})
+    # The Person row is held (FOR SHARE, or FOR NO KEY UPDATE when its
+    # aliases change), so a concurrent rename either already committed or
+    # waits for this link and then refreshes this Work too (§8.3, fan-out).
+    search_refresh.refresh_work_search(scope, [role.work_id])
     return revisions.advance(scope, scope_type, scope_id)
 
 
@@ -530,6 +535,8 @@ def insert_initial_roles(scope: LibraryScope, work_id: str, wanted: list[Initial
         if credit:
             _promote(scope, item.person_id, promoted_aliases(scope, item.person_id, credit))
         inserted += 1
+    if inserted:
+        search_refresh.refresh_work_search(scope, [work_id])
     return inserted
 
 
