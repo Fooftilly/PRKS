@@ -176,6 +176,46 @@ class ObjectSafetyTests(BackupTestCase):
         with mock.patch.object(self.objects, "open_read", return_value=changed):
             self.assert_failed("object_changed")
 
+    def test_a_changed_pristine_source_fails_the_backup(self) -> None:
+        self.create(self.put(b"%PDF working"))
+        source = self.put(b"%PDF damaged")  # the source key now holds other bytes than the upload's
+        self.sql("UPDATE prks.assets SET source_locator = %s, ingest_sha256 = %s",
+                 (source.key.name, hashlib.sha256(b"%PDF original").hexdigest()))
+        self.assert_failed("object_changed")
+
+    def test_a_disk_error_while_writing_is_a_backup_failure(self) -> None:
+        self.create(self.put())
+        with mock.patch.object(backup, "fsync_open_file", side_effect=OSError(28, "No space left on device")):
+            self.assert_failed("io")
+
+    def test_the_archive_is_synced_only_once_its_zip_directory_is_written(self) -> None:
+        self.create(self.put())
+        complete: list[bool] = []
+        real = backup.fsync_open_file
+
+        def check_then_sync(fd: int) -> None:
+            with open(f"/proc/self/fd/{fd}", "rb") as handle:
+                complete.append(zipfile.is_zipfile(handle))
+            real(fd)
+
+        with mock.patch.object(backup, "fsync_open_file", check_then_sync):
+            self.backup()
+        self.assertEqual(complete, [True])
+
+    def test_the_lease_is_renewed_while_one_large_member_streams(self) -> None:
+        self.create(self.put(b"x" * (backup.IO_CHUNK_SIZE * 8)))
+        renewals: list[int] = []
+        real = backup._Lease.tick
+
+        def counting(lease: Any) -> None:
+            renewals.append(1)
+            real(lease)
+
+        with mock.patch.object(backup._Lease, "tick", counting):
+            result = self.backup()
+        # More renewal checks than members: they also run between the chunks of one member.
+        self.assertGreater(len(renewals), len(list(backup.members(result.manifest))) + 8)
+
     def test_a_failed_listing_never_publishes(self) -> None:
         self.create(self.put())
         with mock.patch.object(self.objects, "stat", side_effect=OSError("I/O error")):

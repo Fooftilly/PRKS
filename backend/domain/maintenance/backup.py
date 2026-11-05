@@ -213,7 +213,7 @@ _OBJECTS_SQL: LiteralString = """
 SELECT 'asset-objects' AS namespace, storage_locator AS name, content_sha256 AS sha256, byte_size AS size
   FROM prks.assets WHERE library_id = %(library_id)s AND storage_locator IS NOT NULL
 UNION ALL
-SELECT 'asset-objects', source_locator, NULL, NULL
+SELECT 'asset-objects', source_locator, ingest_sha256, NULL
   FROM prks.assets WHERE library_id = %(library_id)s AND source_locator IS NOT NULL
 UNION ALL
 SELECT 'asset-objects', object_locator, sha256, byte_size
@@ -302,8 +302,9 @@ class Sink(Protocol):
 class _HashingSink:
     """Counts and hashes what is written through it into a ZIP member."""
 
-    def __init__(self, inner: IO[bytes]) -> None:
+    def __init__(self, inner: IO[bytes], renew: Callable[[], None]) -> None:
         self._inner = inner
+        self._renew = renew
         self.digest = hashlib.sha256()
         self.size = 0
 
@@ -311,15 +312,17 @@ class _HashingSink:
         self._inner.write(data)
         self.digest.update(data)
         self.size += len(data)
+        self._renew()  # a long COPY or object copy keeps the lease (cheap: renews every third of it)
         return len(data)
 
 
-def _write_member(archive: zipfile.ZipFile, name: str, fill: Callable[[Sink], object]) -> tuple[int, str]:
+def _write_member(archive: zipfile.ZipFile, name: str, fill: Callable[[Sink], object],
+                  renew: Callable[[], None] = lambda: None) -> tuple[int, str]:
     info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
     info.compress_type = zipfile.ZIP_STORED
     info.external_attr = 0o100600 << 16
     with archive.open(info, "w", force_zip64=True) as member:
-        out = _HashingSink(member)
+        out = _HashingSink(member, renew)
         fill(out)
     return out.size, out.digest.hexdigest()
 
@@ -344,15 +347,15 @@ def _copy_object(storage: StorageBackend, ref: ObjectRef, out: Sink) -> None:
         raise BackupFailed("object_unreadable", f"The stored object {ref.key} cannot be read.") from None
 
 
-def _verify_archive(path: str, manifest: dict[str, Any]) -> None:
+def _verify_archive(path: str, manifest: dict[str, Any], renew: Callable[[], None] = lambda: None) -> None:
     """Re-read the archive and check every member against the manifest."""
     try:
-        _check_archive(path, manifest)
+        _check_archive(path, manifest, renew)
     except (zipfile.BadZipFile, OSError, ValueError, KeyError) as exc:
         raise BackupFailed("verify", "The written archive does not read back.") from exc
 
 
-def _check_archive(path: str, manifest: dict[str, Any]) -> None:
+def _check_archive(path: str, manifest: dict[str, Any], renew: Callable[[], None]) -> None:
     expected: dict[str, tuple[int, str]] = {}
     for table, entry in manifest["tables"].items():
         expected[table_member(table)] = (entry["size"], entry["sha256"])
@@ -378,11 +381,12 @@ def _check_archive(path: str, manifest: dict[str, Any]) -> None:
                         break
                     digest.update(chunk)
                     total += len(chunk)
+                    renew()
             if total != size or digest.hexdigest() != sha256:
                 raise BackupFailed("verify", f"The archive member {name} does not match its manifest.")
 
 
-def _hash_file(path: str) -> tuple[int, str]:
+def _hash_file(path: str, renew: Callable[[], None] = lambda: None) -> tuple[int, str]:
     digest = hashlib.sha256()
     size = 0
     with open(path, "rb") as handle:
@@ -392,6 +396,7 @@ def _hash_file(path: str) -> tuple[int, str]:
                 break
             digest.update(chunk)
             size += len(chunk)
+            renew()
     return size, digest.hexdigest()
 
 
@@ -429,6 +434,8 @@ def write_backup(
                 reason, message = exc.reason, exc.message
             elif isinstance(exc, psycopg.Error):
                 reason, message = "database", "The backup failed in the database."
+            elif isinstance(exc, (OSError, zipfile.BadZipFile, zipfile.LargeZipFile)):
+                reason, message = "io", "The backup archive could not be written."
             else:
                 reason, message = "internal", "The backup failed."
             _fail_run(conninfo, run_id, reason, message)
@@ -440,6 +447,8 @@ def write_backup(
                 raise
             if isinstance(exc, psycopg.Error):
                 raise BackupFailed("database", "The backup failed in the database.") from exc
+            if reason == "io":
+                raise BackupFailed(reason, message) from exc
             raise
         return result
 
@@ -456,7 +465,26 @@ def _run(conn: psycopg.Connection[Any], conninfo: str, storage: StorageBackend, 
     conn.execute(_OBJECTS_LOCK_SHARED_SQL, (library_id,))
     reach(PHASE_LOCKED)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+    with os.fdopen(fd, "wb") as raw:
+        manifest = _write_archive(conn, storage, library_id, raw, prks_version=prks_version, lease=lease,
+                                  reach=reach)
+        # Only now is the ZIP complete: closing it wrote the central directory.
+        raw.flush()
+        fsync_open_file(raw.fileno())
+    fsync_directory(os.path.dirname(path))
+    reach(PHASE_VERIFY)
+    _verify_archive(path, manifest, lease.tick)
+    size, sha256 = _hash_file(path, lease.tick)
+    with conn.transaction():
+        if conn.execute(_PUBLISH_SQL, (size, sha256, run_id)).rowcount != 1:
+            raise BackupFailed("lease_lost", "The backup run lost its lease.")
+    return BackupResult(run_id=run_id, path=path, size=size, sha256=sha256, manifest=manifest)
+
+
+def _write_archive(conn: psycopg.Connection[Any], storage: StorageBackend, library_id: str, raw: IO[bytes], *,
+                   prks_version: str, lease: _Lease, reach: Callable[[str], None]) -> dict[str, Any]:
+    """Write every member and the manifest, and close the ZIP (its central directory) into ``raw``."""
+    with zipfile.ZipFile(raw, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
         table_entries: dict[str, dict[str, Any]] = {}
         identity_entries: dict[str, dict[str, Any]] = {}
         with conn.transaction():
@@ -474,7 +502,7 @@ def _run(conn: psycopg.Connection[Any], conninfo: str, storage: StorageBackend, 
                     sql.SQL("SELECT count(*) FROM ({}) q").format(query)).fetchone()
                 assert count_row is not None
                 size, sha256 = _write_member(
-                    archive, table_member(table), lambda out, q=query: _copy_to(conn, q, out))
+                    archive, table_member(table), lambda out, q=query: _copy_to(conn, q, out), lease.tick)
                 table_entries[table] = {"rows": int(count_row[0]), "size": size, "sha256": sha256}
                 lease.tick()
             user_ids, device_ids = _identity_ids(conn, library_id)
@@ -488,13 +516,15 @@ def _run(conn: psycopg.Connection[Any], conninfo: str, storage: StorageBackend, 
             for member, kind, query in ((USERS_MEMBER, "users", users), (DEVICES_MEMBER, "devices", devices)):
                 count_row = conn.execute(sql.SQL("SELECT count(*) FROM ({}) q").format(query)).fetchone()
                 assert count_row is not None
-                size, sha256 = _write_member(archive, member, lambda out, q=query: _copy_to(conn, q, out))
+                size, sha256 = _write_member(archive, member, lambda out, q=query: _copy_to(conn, q, out),
+                                             lease.tick)
                 identity_entries[kind] = {"rows": int(count_row[0]), "size": size, "sha256": sha256}
             refs = _object_refs(conn, library_id)
         reach(PHASE_OBJECTS)
         object_entries: dict[str, dict[str, Any]] = {}
         for ref in refs:
-            size, sha256 = _write_member(archive, ref.member, lambda out, r=ref: _copy_object(storage, r, out))
+            size, sha256 = _write_member(archive, ref.member, lambda out, r=ref: _copy_object(storage, r, out),
+                                         lease.tick)
             if (ref.size is not None and size != ref.size) or (ref.sha256 is not None and sha256 != ref.sha256):
                 raise BackupFailed("object_changed",
                                    f"The stored object {ref.key} does not match its catalogue entry.")
@@ -518,16 +548,7 @@ def _run(conn: psycopg.Connection[Any], conninfo: str, storage: StorageBackend, 
         }
         payload = json.dumps(manifest, sort_keys=True, indent=1, ensure_ascii=False).encode("utf-8")
         _write_member(archive, MANIFEST_NAME, lambda out: out.write(payload))
-        raw.flush()
-        fsync_open_file(raw.fileno())
-    fsync_directory(os.path.dirname(path))
-    reach(PHASE_VERIFY)
-    _verify_archive(path, manifest)
-    size, sha256 = _hash_file(path)
-    with conn.transaction():
-        if conn.execute(_PUBLISH_SQL, (size, sha256, run_id)).rowcount != 1:
-            raise BackupFailed("lease_lost", "The backup run lost its lease.")
-    return BackupResult(run_id=run_id, path=path, size=size, sha256=sha256, manifest=manifest)
+    return manifest
 
 
 def _iso(value: datetime) -> str:
