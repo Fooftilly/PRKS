@@ -672,14 +672,17 @@
     const targetsHandler = aggregateHandler(TARGETS_REFUSALS,
         (data, op) => root.prksOfflineReconcileArgumentTargets(data, op));
 
-    /* A source replacement possibly already on the wire must settle before
-     * deleting its Argument. It need not succeed: a refused source revision
-     * does not invalidate the user's independent decision to delete the
-     * Argument, and must not strand its tombstone in the durable queue. */
+    /* Potentially sent edits must settle before deleting their Argument.
+     * Their success is not a prerequisite for deletion: a field, source, or
+     * target revision conflict must not strand an independent delete. The
+     * queue read is a family-owned ordering barrier, never a mutation. */
     function argumentDeleteReadyToSend(deletion, byId) {
         for (const other of byId.values()) {
-            if (other.operation !== 'SET_ARGUMENT_SOURCES' ||
+            if (other.entity_type !== 'argument' ||
                 other.entity_id !== deletion.entity_id) continue;
+            if (other.operation !== 'SET_ARGUMENT_FIELD' &&
+                other.operation !== 'SET_ARGUMENT_SOURCES' &&
+                other.operation !== 'SET_ARGUMENT_TARGETS') continue;
             if (other.status === 'pending' || other.status === 'syncing') return false;
         }
         return true;

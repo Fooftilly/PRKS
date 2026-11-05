@@ -46,13 +46,16 @@ class ArgumentSyncFrontendTests(unittest.TestCase):
         self.assertIn("failDependentsOnConflict: true", create)
         deletion = src[src.index("function argumentDeleteReadyToSend("):
                        src.index("Object.assign(root, {", src.index("const deleteHandler = {"))]
-        self.assertIn("other.operation !== 'SET_ARGUMENT_SOURCES'", deletion)
+        for operation in ("SET_ARGUMENT_FIELD", "SET_ARGUMENT_SOURCES",
+                          "SET_ARGUMENT_TARGETS"):
+            self.assertIn("other.operation !== '%s'" % operation, deletion)
+            self.assertIn("row.operation === '%s'" % operation, self.store)
         self.assertIn("other.status === 'pending'", deletion)
         self.assertIn("other.status === 'syncing'", deletion)
         self.assertIn("readyToSend: argumentDeleteReadyToSend", deletion)
         store = self.store[self.store.index("function deleteArgument("):
                            self.store.index("/* ---- Playlists", self.store.index("function deleteArgument("))]
-        self.assertIn("row.operation !== 'SET_ARGUMENT_SOURCES'", store)
+        self.assertIn("row.entity_id === argumentId", store)
         self.assertIn("Array.isArray(r.depends_on)", store)
         coordinator = (JS / "sync-runtime.js").read_text()
         coordinator = coordinator[:coordinator.index("root.createPrksSyncRuntime = createRuntime;")]

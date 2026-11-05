@@ -2056,12 +2056,14 @@ that has already removed the deleted Work from its payload carries the
 `local_context.pending_work_deletions` marker until it settles; its original
 op id is retained across coalescing while the Argument remains. If the user
 also deletes the Argument, an unsent source replacement is superseded and
-cancelled, releasing the Work's ordering barrier. A potentially sent source
-replacement remains immutable: the Argument delete handler waits for its
-**terminal outcome** using its own `readyToSend` predicate, not a success-only
-`depends_on` link. The marker is local only, never part of the sync wire
-protocol. Terminally refused Argument/source edits stay visible for
-Diagnostics but do not block independent Work or Argument deletion; an
+cancelled, releasing the Work's ordering barrier. Potentially sent edits to
+that Argument (field, source, and target changes) remain immutable: the
+Argument delete handler waits for their **terminal outcomes** using its own
+`readyToSend` predicate, not success-only `depends_on` links. This includes
+revision conflicts: deleting an Argument does not require an earlier edit to
+succeed, and the refused edit remains visible in Diagnostics. The marker is
+local only, never part of the sync wire protocol. Terminally refused
+Argument/source edits do not block independent Work or Argument deletion; an
 unrelated Argument change does not delay Work deletion.
 
 Acknowledgement fences Concepts, Arguments, People, Person Groups, Folders,

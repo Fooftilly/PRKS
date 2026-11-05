@@ -701,6 +701,120 @@ async function deletionBarriersSurviveArgumentSourceRefusals() {
     }
 }
 
+
+async function argumentDeletionMustNotRequireSuccessOfDiscardedEdits() {
+    const id = 'A-SERVER';
+    const sourceTargets = [{ type: 'position', id: 'P-SERVER', verdict_id: 'supports' }];
+    const silent = handler => Object.assign({}, handler, { reconcile: async () => true });
+    const handlers = {
+        SET_ARGUMENT_FIELD: silent(globalThis.prksArgumentFieldSyncHandler),
+        SET_ARGUMENT_TARGETS: silent(globalThis.prksArgumentTargetsSyncHandler),
+        DELETE_ARGUMENT: silent(globalThis.prksArgumentDeleteSyncHandler),
+    };
+    // Existing terminal field and target conflicts must not become hard
+    // prerequisites to a new independent Argument deletion.
+    {
+        const store = newStore();
+        const fields = await store.saveArgumentFields(id, { name: 'Revised' },
+            fieldBase({ name: 'Original' }));
+        const targets = await store.setArgumentTargets(id,
+            sourceTargets, targetsBase([], 7));
+        for (const op of [fields[0], targets]) {
+            await store.updateOperationSyncState(op.op_id, {
+                status: 'conflict',
+                server_result: { code: 'REVISION_CONFLICT', current_revision: 5 },
+            });
+        }
+        const deleted = await store.deleteArgument(id);
+        for (const op of [fields[0], targets]) {
+            assert.ok(!deleted.depends_on.includes(op.op_id),
+                'terminal Argument edit conflicts cannot block its deletion');
+        }
+        const sent = [];
+        const runtime = globalThis.createPrksSyncRuntime({
+            store, online: () => true, handlers,
+            request: async (_url, options) => {
+                const op = JSON.parse(options.body);
+                sent.push(op.operation);
+                assert.equal(op.operation, 'DELETE_ARGUMENT',
+                    'do not retry a terminally conflicted edit');
+                return { ok: true, status: 200, json: async () => ({
+                    code: 'ACKNOWLEDGED', argument_id: id, changed: true,
+                }) };
+            },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['DELETE_ARGUMENT']);
+        const remaining = await operations(store);
+        assert.equal(remaining.length, 2, 'conflicts are retained for Diagnostics');
+        assert.ok(remaining.every(op => op.status === 'conflict'));
+    }
+
+    // A possibly-sent field/target edit must settle before deletion. If
+    // those edits are refused, their failures remain visible, but the
+    // independent deletion still dispatches. Reverse enumeration ensures
+    // the family-owned barrier, not ordinary list order, protects sending.
+    {
+        const store = createPrksLocalStore({
+            dbName: 'prks-local-v2:attempted-field-target',
+            indexedDB: createFakeIndexedDBFactory(), uuid,
+            now: () => Date.now() - 60000,
+        });
+        const fields = await store.saveArgumentFields(id, { name: 'New' },
+            fieldBase({ name: 'Old' }));
+        const targets = await store.setArgumentTargets(id,
+            sourceTargets, targetsBase([], 7));
+        for (const op of [fields[0], targets]) {
+            await store.updateOperationSyncState(op.op_id,
+                { status: 'syncing', bump_attempt: true });
+        }
+        const deleted = await store.deleteArgument(id);
+        for (const op of [fields[0], targets]) {
+            assert.equal(deleted.depends_on.includes(op.op_id), false,
+                'attempted Argument edits are ordering-only barriers');
+            assert.equal((await operations(store)).find(r => r.op_id === op.op_id)
+                .attempt_count, 1, 'possibly-sent envelope was not rewritten');
+        }
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = globalThis.createPrksSyncRuntime({
+            store, online: () => true, handlers,
+            request: async (_url, options) => {
+                const op = JSON.parse(options.body);
+                sent.push(op.operation);
+                if (op.operation === 'DELETE_ARGUMENT') return {
+                    ok: true, status: 200, json: async () => ({
+                        code: 'ACKNOWLEDGED', argument_id: id, changed: true,
+                    }),
+                };
+                const result = {
+                    code: 'REVISION_CONFLICT', argument_id: id, current_revision: 9,
+                };
+                if (op.operation === 'SET_ARGUMENT_FIELD') {
+                    result.field = op.payload.field;
+                    result.current_value = 'Canonical value';
+                }
+                return { ok: false, status: 409, json: async () => result };
+            },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent.slice(0, 2).sort(),
+            ['SET_ARGUMENT_FIELD', 'SET_ARGUMENT_TARGETS'],
+            'both potentially-sent edits settle before Argument deletion');
+        assert.equal(sent.at(-1), 'DELETE_ARGUMENT',
+            'deletion proceeds despite both revision conflicts');
+        const remaining = await operations(store);
+        assert.equal(remaining.length, 2);
+        assert.ok(remaining.every(op => op.status === 'conflict' &&
+            op.server_result.code === 'REVISION_CONFLICT'),
+            'both refused source-independent edits remain visible in Diagnostics');
+    }
+}
 async function main() {
     argumentDetailUsesGuardedOfflineRead();
     await constructionAndDependencies();
@@ -710,6 +824,7 @@ async function main() {
     await deletingWorkPreservesIndependentArgumentIntent();
     await workDeletionWaitsForArgumentOutcomeEvenWhenTheArgumentFails();
     await deletionBarriersSurviveArgumentSourceRefusals();
+    await argumentDeletionMustNotRequireSuccessOfDiscardedEdits();
     await validation();
     await failedRootBlocksDescendants();
     await commitWritesOnlyDirtyUnits();

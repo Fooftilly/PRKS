@@ -3523,10 +3523,15 @@
                             !(row.operation === 'CREATE_ARGUMENT' &&
                                 row.entity_id === argumentId)) {
                             await request(STORE_OPERATIONS, s => s.delete(row.op_id));
-                        } else if (row.operation !== 'SET_ARGUMENT_SOURCES') {
-                            /* An attempted source write may conflict. Its
-                             * ordering is enforced by the Argument handler,
-                             * not a requirement that the revision edit win. */
+                        } else if (!(row.entity_type === 'argument' &&
+                                row.entity_id === argumentId &&
+                                (row.operation === 'SET_ARGUMENT_SOURCES' ||
+                                 row.operation === 'SET_ARGUMENT_FIELD' ||
+                                 row.operation === 'SET_ARGUMENT_TARGETS'))) {
+                            /* A possibly-sent edit to this Argument may
+                             * conflict. The family delete handler orders
+                             * around all three edit families without
+                             * requiring their successful acknowledgements. */
                             waitFor.push(row.op_id);
                         }
                     }
