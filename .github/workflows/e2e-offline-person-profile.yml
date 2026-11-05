@@ -2,12 +2,7 @@ name: E2E Offline Person Durability Profile
 
 # Manual-only diagnostic under #740. Normal PR/master E2E costs are unchanged.
 on:
-  workflow_dispatch:
-    inputs:
-      trace_recent_click:
-        description: "Trace one synthetic Person Create click with Playwright pw:api (instead of paired profiling)"
-        type: boolean
-        default: false
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -72,7 +67,6 @@ jobs:
         run: python tests/e2e/install_browser.py
 
       - name: Profile both isolated offline Person scenarios
-        if: ${{ !inputs.trace_recent_click }}
         shell: bash
         env:
           PRKS_E2E_PROFILE: "1"
@@ -231,23 +225,6 @@ jobs:
               with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
                   out.write(output)
           PY
-
-      - name: Trace one real Recently Added click (manual diagnostic only)
-        if: ${{ inputs.trace_recent_click }}
-        shell: bash
-        env:
-          PRKS_E2E_PROFILE: "1"
-          PRKS_E2E_PERSON_RECENT_TRIAL: "0"
-          DEBUG: "pw:api"
-        run: |
-          set -euo pipefail
-          # A single existing real user-flow Chromium test on disposable PG,
-          # storage and browser context. DEBUG traces the whole test process
-          # so Playwright actionability waits can be compared to its existing
-          # person_create_link_nav_recent_click phase in the same run.
-          # No automatic trigger, screenshot, trace zip, or log artifact.
-          python tests/e2e/run.py --jobs 1 --no-pointer-capture --profile \
-            tests.e2e.test_person_create_offline.OfflinePersonCreateTests.test_a_person_created_offline_can_be_linked_and_both_reach_the_server
 
       - name: Upload failure diagnostics only
         if: failure()
