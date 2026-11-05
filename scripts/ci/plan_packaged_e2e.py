@@ -282,8 +282,8 @@ CRITICAL_BROWSER_OBLIGATIONS = (
      "tests.e2e.test_app.PdfAnnotationCommentEditTests.test_a_failed_highlight_is_settled_by_saving_it_again"),
     ("graph-offline-navigation",
      "tests.e2e.test_research_graph_offline.ResearchGraphOfflineTests.test_record_graph_navigation_both_directions"),
-    # #1009: People/Person Groups cache generations after durable Person
-    # create/delete are a distinct cross-domain coherence contract.
+    # #1009: durable Person creation preserves all domain generations;
+    # deletion invalidates People/Person Groups, and no unrelated domain.
     ("offline-person-membership-coherence",
      "tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence"),
     ("vue-processing-route-ready",
