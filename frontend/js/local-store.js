@@ -4025,12 +4025,13 @@
                             waitFor.push(row.op_id);
                         }
                     }
-                    /* For a server-existing or already-attempted parent, children
-                     * must be created/moved first; PostgreSQL then reparents
-                     * them during DELETE_PERSON_GROUP. Do not rewrite sent rows. */
-                    for (const child of external) {
-                        if (waitFor.indexOf(child.op_id) === -1) waitFor.push(child.op_id);
-                    }
+                    /* A server-existing or possibly-sent parent's children/moves
+                     * must settle before its deletion. Those are ORDERING
+                     * barriers, not successful-create prerequisites: child rows
+                     * can be coalesced away or rejected by the server. The
+                     * coordinator checks the live durable queue when scheduling
+                     * DELETE_PERSON_GROUP instead of recording volatile op IDs
+                     * in depends_on (which would strand this delete forever). */
                     setResult(await insertEnvelopeIn(request, {
                         operation: 'DELETE_PERSON_GROUP', entity_type: 'person-group',
                         entity_id: groupId, payload: {},

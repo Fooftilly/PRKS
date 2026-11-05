@@ -971,8 +971,8 @@ async function unsafeParentDeletionFailsWithoutDroppingAnyIntent() {
         name: "New child", parent_id: existingParent,
     });
     const removal = await existing.deletePersonGroup(existingParent);
-    assert.deepEqual(removal.depends_on, [external.op_id],
-        "server-existing parent's delete waits for the child create");
+    assert.deepEqual(removal.depends_on, [],
+        "volatile child creation cannot be a hard dependency of a parent delete");
     await assert.rejects(() => existing.createPersonGroup({
         name: "Late", parent_id: existingParent,
     }), e => e.prksLocalStoreCode === "entity_deleted",
@@ -991,9 +991,174 @@ async function unsafeParentDeletionFailsWithoutDroppingAnyIntent() {
         { status: "syncing", bump_attempt: true });
     const sentParentRemoval = await inFlightParent.deletePersonGroup(syncingParent.entity_id);
     assert.ok(sentParentRemoval.depends_on.includes(syncingParent.op_id));
-    assert.ok(sentParentRemoval.depends_on.includes(waitingChild.op_id),
-        "a possibly sent parent must await child construction");
+    assert.ok(!sentParentRemoval.depends_on.includes(waitingChild.op_id),
+        "in-flight child construction is an ordering barrier, not a hard dependency");
 }
+
+/** A parent deletion waits for live child state, not an immutable prerequisite
+ * pointing at an operation that a later edit can cancel. Unlike a hard
+ * dependency, a rejected child also counts as finished ordering-wise. */
+async function deletionOrdersChildrenWithoutStrandingOnCoalescingOrConflicts() {
+    const parent = 'PG-SERVER-PARENT';
+    const child = 'PG-SERVER-CHILD';
+    const originalParent = 'PG-ORIGINAL';
+    const moveBase = baseAt({ parent_id: 5 }, { parent_id: originalParent });
+    const ackDelete = op => ({
+        code: 'ACKNOWLEDGED', group_id: op.entity_id, changed: true,
+    });
+
+    // An unchanged pending move must reach the server before the deletion.
+    {
+        const store = newStore();
+        const [move] = await store.savePersonGroupFields(child,
+            { parent_id: parent }, moveBase);
+        const deletion = await store.deletePersonGroup(parent);
+        assert.deepEqual(deletion.depends_on, [],
+            'a child move is a mutable ordering barrier, not a hard dependency');
+        // Deliberately enumerate deletion BEFORE its pending child move.
+        // The ordering guarantee must come from the coordinator's live-queue
+        // check, not the IDB store's usual sequence sort.
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = runtimeFor(store, async (_url, options) => {
+            const op = JSON.parse(options.body);
+            sent.push(op.operation);
+            return { ok: true, status: 200, json: async () =>
+                op.operation === 'DELETE_PERSON_GROUP' ? ackDelete(op) : fieldAck(op, 6) };
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['SET_PERSON_GROUP_FIELD', 'DELETE_PERSON_GROUP'],
+            'successful child move is settled before parent deletion');
+        assert.deepEqual(await store.listOperations(), [],
+            'successful move and subsequent parent deletion both retire');
+    }
+
+    // A->B->A cancels the never-sent move. The parent's deletion must
+    // progress without holding an old op ID that no longer exists.
+    {
+        const idb = createFakeIndexedDBFactory();
+        const opts = { dbName: 'prks-local-v2:reopen', indexedDB: idb, uuid };
+        const store = createPrksLocalStore(opts);
+        const [original] = await store.savePersonGroupFields(child,
+            { parent_id: parent }, moveBase);
+        await store.deletePersonGroup(parent);
+        const cancelled = await store.savePersonGroupFields(child,
+            { parent_id: originalParent }, moveBase);
+        assert.deepEqual(cancelled, [], 'moving back to the base cancels the edit');
+        const rows = await store.listOperations();
+        assert.equal(rows.length, 1, 'only the pending parent deletion survives');
+        assert.equal(rows[0].operation, 'DELETE_PERSON_GROUP');
+        assert.equal(rows[0].depends_on.includes(original.op_id), false,
+            'parent deletion has no dependency on a cancelled child op');
+
+        // A new store instance exercises persisted IndexedDB after a reload.
+        const reopened = createPrksLocalStore(opts);
+        const sent = [];
+        const runtime = runtimeFor(reopened, async (_url, options) => {
+            const op = JSON.parse(options.body);
+            sent.push(op.operation);
+            return { ok: true, status: 200, json: async () => ackDelete(op) };
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['DELETE_PERSON_GROUP'],
+            'parent delete dispatches after child move cancellation and reload');
+        assert.deepEqual(await reopened.listOperations(), [],
+            'no stranded pending operation remains after reconnect');
+    }
+
+    // Replacing the move with a different destination also deletes the old
+    // row. A live-query barrier must not retain the old op ID.
+    {
+        const store = newStore();
+        const [old] = await store.savePersonGroupFields(child,
+            { parent_id: parent }, moveBase);
+        await store.deletePersonGroup(parent);
+        const [replacement] = await store.savePersonGroupFields(child,
+            { parent_id: 'PG-OTHER' }, moveBase);
+        assert.notEqual(old.op_id, replacement.op_id);
+        const queued = await store.listOperations();
+        assert.equal(queued.some(r => r.op_id === old.op_id), false);
+        assert.ok(queued.some(r => r.op_id === replacement.op_id));
+        const sent = [];
+        const runtime = runtimeFor(store, async (_url, options) => {
+            const op = JSON.parse(options.body);
+            sent.push(op.operation);
+            return { ok: true, status: 200, json: async () =>
+                op.operation === 'DELETE_PERSON_GROUP' ? ackDelete(op) : fieldAck(op, 6) };
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.equal(sent.includes('DELETE_PERSON_GROUP'), true,
+            'parent delete proceeds after an unrelated replacement move');
+        assert.deepEqual(await store.listOperations(), []);
+    }
+
+    // Independently authored child creation can be rejected by the server
+    // (e.g. a duplicate name). Its conflict remains visible in Diagnostics,
+    // but the existing parent still can and should be deleted.
+    {
+        const store = newStore();
+        const created = await store.createPersonGroup({
+            name: 'Duplicate name', parent_id: parent,
+        });
+        const deletion = await store.deletePersonGroup(parent);
+        assert.equal(deletion.depends_on.includes(created.op_id), false);
+        const sent = [];
+        const runtime = runtimeFor(store, async (_url, options) => {
+            const op = JSON.parse(options.body);
+            sent.push(op.operation);
+            if (op.operation === 'CREATE_PERSON_GROUP') {
+                return { ok: false, status: 409, json: async () => ({
+                    code: 'NAME_TAKEN', group_id: op.entity_id,
+                }) };
+            }
+            return { ok: true, status: 200, json: async () => ackDelete(op) };
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['CREATE_PERSON_GROUP', 'DELETE_PERSON_GROUP'],
+            'terminally rejected child does not block the parent deletion');
+        const leftover = await store.listOperations();
+        assert.equal(leftover.some(r => r.op_id === deletion.op_id), false,
+            'parent delete acknowledges despite child refusal');
+        assert.equal(leftover.length, 1);
+        assert.equal(leftover[0].op_id, created.op_id);
+        assert.equal(leftover[0].status, 'conflict',
+            'rejected independent child is preserved for diagnostics');
+        assert.equal(leftover[0].server_result.code, 'NAME_TAKEN');
+    }
+
+    // A never-sent child creation can be folded away, leaving the parent
+    // deletion to dispatch without the cancelled child.
+    {
+        const store = newStore();
+        const created = await store.createPersonGroup({
+            name: 'Never sent child', parent_id: parent,
+        });
+        await store.deletePersonGroup(parent);
+        assert.equal(await store.deletePersonGroup(created.entity_id), null);
+        const sent = [];
+        const runtime = runtimeFor(store, async (_url, options) => {
+            const op = JSON.parse(options.body);
+            sent.push(op.operation);
+            return { ok: true, status: 200, json: async () => ackDelete(op) };
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['DELETE_PERSON_GROUP'],
+            'folding an unsent child does not leave the parent deletion stuck');
+        assert.deepEqual(await store.listOperations(), []);
+    }
+}
+
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
@@ -1010,6 +1175,7 @@ async function main() {
     await deletingAGroupCreatedHereFoldsItAwayEntirely();
     await deletingUnsentParentRebasesChildAndKeepsDescendants();
     await unsafeParentDeletionFailsWithoutDroppingAnyIntent();
+    await deletionOrdersChildrenWithoutStrandingOnCoalescingOrConflicts();
     await aSentOperationIsWaitedForRatherThanRewritten();
     await aPendingDeletionIsATombstoneNotADestruction();
     await deletingAPersonCancelsWhatWasNeverSent();
