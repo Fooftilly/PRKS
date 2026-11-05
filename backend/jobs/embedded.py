@@ -23,9 +23,10 @@ web process, on its own ``worker`` connection pool:
   and shown in the diagnostics; it never stops the web process from serving.
 - **Objects.** ``prks_app`` calls :meth:`WebJobs.bind_root` with the root it
   opened and leased (anchored, after ``bind_storage``) before serving, which
-  binds the object maintenance jobs (:mod:`backend.domain.objects.jobs`) to
-  that root on the worker's own copy of the registry. A worker whose root
-  was never bound runs without them.
+  binds the object maintenance jobs (:mod:`backend.domain.objects.jobs`),
+  ``text.extract``, ``derived.rebuild`` and ``search.repair`` to that root
+  on the worker's own copy of the registry. A worker whose root was never
+  bound runs without them.
 
 ``PRKS_EMBEDDED_WORKER=0`` runs no worker here (a separate ``prks worker``
 runs the jobs once the cutover allows one beside ``web``). The SQLite
@@ -50,6 +51,7 @@ from backend.db.database import Database
 from backend.db.errors import DatabaseError
 from backend.db.migrate import SCHEMA_DIR
 from backend.domain.objects import jobs as object_jobs
+from backend.domain.search import rebuild as search_rebuild
 from backend.domain.search import text as search_text
 from backend.jobs.diagnostics import queue_depth
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
@@ -115,12 +117,13 @@ class EmbeddedWorker:
         self._finished = threading.Event()
 
     def attach_objects(self, root: str) -> None:
-        """Bind the object maintenance jobs and ``text.extract`` to the process's bound data root; before :meth:`start`."""
+        """Bind the object maintenance and Search jobs to the process's bound data root; before :meth:`start`."""
         if self._thread.ident is not None:
             raise RuntimeError("the objects lane must be attached before the worker starts")
         maintenance = object_jobs.attach(self.registry, root)
         if maintenance is not None:
             search_text.attach(self.registry, maintenance.storage)
+            search_rebuild.attach(self.registry, maintenance.storage)
 
     def start(self) -> None:
         LOGGER.info("embedded_worker_starting name=%s", self.worker.name)

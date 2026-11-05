@@ -3,7 +3,9 @@
 Every function here is one statement in its own transaction, except
 :func:`enqueue` and :func:`enqueue_library_job`, which run inside the
 caller's command transaction so the job commits with the change that needs
-it (the transactional outbox).
+it (the transactional outbox), and :func:`save_library_job_payload`, which
+runs inside one of the job's own fenced transactions so a batched handler's
+cursor commits with its batch.
 
 **Lease fencing.** Every claim, including a reclaim of a job whose worker
 died, mints a new ``lease_id``. :func:`heartbeat`, :func:`complete`,
@@ -286,6 +288,26 @@ def enqueue_instance_job_for_library(
         return None
     scope.execute_unscoped(_NOTIFY_SQL)
     return row["id"]
+
+
+_SAVE_PAYLOAD_SQL: LiteralString = """
+UPDATE prks.jobs SET payload = %(payload)s::jsonb
+ WHERE library_id = %(library_id)s AND id = %(id)s AND lease_id = %(lease_id)s AND state = 'running'
+"""
+
+
+def save_library_job_payload(scope: LibraryScope, job: ClaimedJob, payload: Mapping[str, Any]) -> None:
+    """Replace the running Library job's payload inside one of its own fenced transactions.
+
+    A batched handler stores its cursor this way in the transaction that
+    did the batch, so a retry or a reclaim resumes after the last committed
+    batch (the claim returns the stored payload). Raises
+    :class:`LeaseLost` when the job is no longer this lease's.
+    """
+    text = json.dumps(dict(payload), separators=(",", ":"), allow_nan=False)
+    params = {"payload": text, "id": job.id, "lease_id": job.lease_id}
+    if scope.execute(_SAVE_PAYLOAD_SQL, params).rowcount != 1:
+        raise LeaseLost()
 
 
 # --- claim and reclaim --------------------------------------------------------------
