@@ -414,6 +414,150 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.assertEqual(seen, [], 'the durable path never issues the old PATCH')
         o._wait_content_contains(page, 'Renamed while connected')
 
+    def test_cancelling_unsent_parent_preserves_child_across_reconnect(self):
+        """Offline parent cancellation must not orphan a child's dependency."""
+        server, page, context = self.start()
+        self.index(page)
+        o._wait_list_cached(page, 'person-groups:index')
+        self.offline(page, context)
+
+        draft = page.evaluate("""async () => {
+            const grandparent = await prksCreatePersonGroupDurably({
+                name: 'Offline Grandparent',
+            });
+            const parent = await prksCreatePersonGroupDurably({
+                name: 'Offline Cancelled Parent',
+                parent_id: grandparent.entity_id,
+            });
+            const child = await prksCreatePersonGroupDurably({
+                name: 'Offline Kept Child',
+                parent_id: parent.entity_id,
+                description: 'Must survive deletion',
+            });
+            const cancelled = await prksDeletePersonGroupDurably(parent.entity_id);
+            const rows = await prksSync.store.listOperations();
+            return {
+                grandparent: grandparent.entity_id,
+                parent: parent.entity_id,
+                child: child.entity_id,
+                cancelled,
+                rows,
+            };
+        }""")
+        self.assertIsNone(draft['cancelled'])
+        operations = {row['entity_id']: row for row in draft['rows']}
+        self.assertNotIn(draft['parent'], operations)
+        self.assertEqual(operations[draft['child']]['payload']['parent_id'],
+                         draft['grandparent'])
+        self.assertEqual(operations[draft['child']]['depends_on'],
+                         [operations[draft['grandparent']]['op_id']])
+        self.assertTrue(all(dep in {op['op_id'] for op in draft['rows']}
+                            for op in draft['rows'] for dep in op['depends_on']))
+
+        self.index(page)
+        o._wait_content_contains(page, 'Offline Kept Child')
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('#sidebar')
+        self.offline(page, context)
+        self.index(page)
+        o._wait_content_contains(page, 'Offline Kept Child')
+
+        self.online(page, context)
+        wait_for_async(
+            page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=50000, message='reparented Group operations did not drain')
+        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
+                          schema_path=str(SCHEMA))
+        saved = db.get_person_group(draft['child'])
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved['name'], 'Offline Kept Child')
+        self.assertEqual(saved['description'], 'Must survive deletion')
+        self.assertEqual(saved['parent_id'], draft['grandparent'])
+        self.assertIsNone(db.get_person_group(draft['parent']))
+
+    def test_cancelled_child_move_does_not_strand_parent_delete_on_reconnect(self):
+        """The parent deletion survives a cancelled offline move and reload."""
+        server, page, context = self.start()
+        ids = server.ids
+        self.cache(page, ids)
+        page.evaluate("id => prksReadPersonGroupState(id)", ids['person_group'])
+        o._wait_entity_cached(page, 'person-group-state', ids['person_group'])
+        self.offline(page, context)
+
+        snapshot = page.evaluate("""async ids => {
+            const child = ids.person_group;
+            const parent = ids.group_unvisited;
+            const baseline = await prksAcknowledgedPersonGroupBase(
+                child, await prksSync.store.listOperations());
+            if (!baseline || baseline.parent_id.value !== ids.group_parent) {
+                throw new Error('Acknowledged Group parent base is unavailable');
+            }
+            const [moving] = await prksSavePersonGroupFieldsDurably(
+                child, {parent_id: parent}, baseline);
+            const removing = await prksDeletePersonGroupDurably(parent);
+            const cancelled = await prksSavePersonGroupFieldsDurably(
+                child, {parent_id: ids.group_parent}, baseline);
+            return {
+                moveId: moving.op_id,
+                deleteId: removing.op_id,
+                cancelled,
+                remaining: await prksSync.store.listOperations(),
+            };
+        }""", ids)
+        self.assertEqual(snapshot['cancelled'], [])
+        self.assertEqual(
+            [(r['operation'], r['entity_id']) for r in snapshot['remaining']],
+            [('DELETE_PERSON_GROUP', ids['group_unvisited'])])
+        self.assertNotIn(snapshot['moveId'],
+                         snapshot['remaining'][0]['depends_on'])
+
+        page.reload(wait_until='domcontentloaded')
+        page.wait_for_selector('#sidebar')
+        self.offline(page, context)
+        self.online(page, context)
+        wait_for_async(
+            page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
+            timeout=50000, message='parent deletion stalled after child move cancellation')
+        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
+                          schema_path=str(SCHEMA))
+        self.assertIsNone(db.get_person_group(ids['group_unvisited']))
+        self.assertEqual(db.get_person_group(ids['person_group'])['parent_id'],
+                         ids['group_parent'])
+
+    def test_rejected_child_does_not_block_existing_parent_deletion(self):
+        """A rejected child remains a conflict, but parent deletion can finish."""
+        server, page, context = self.start()
+        ids = server.ids
+        self.index(page)
+        o._wait_list_cached(page, 'person-groups:index')
+        self.offline(page, context)
+        draft = page.evaluate("""async parent => {
+            const child = await prksCreatePersonGroupDurably({
+                name: 'Parent Branch', parent_id: parent,
+            });
+            const removal = await prksDeletePersonGroupDurably(parent);
+            return {child: child.entity_id, removal: removal.op_id,
+                    dependsOn: removal.depends_on};
+        }""", ids['group_unvisited'])
+        self.assertEqual(draft['dependsOn'], [],
+                         'rejected child must not be a hard deletion prerequisite')
+
+        self.online(page, context)
+        wait_for_async(
+            page, """async ([child, removal]) => {
+                const rows = await prksSync.store.listOperations();
+                return rows.some(op => op.entity_id === child &&
+                    op.status === 'conflict' &&
+                    op.server_result && op.server_result.code === 'NAME_TAKEN') &&
+                    !rows.some(op => op.op_id === removal);
+            }""",
+            arg=[draft['child'], draft['removal']], timeout=50000,
+            message='rejected child kept parent deletion permanently pending')
+        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
+                          schema_path=str(SCHEMA))
+        self.assertIsNone(db.get_person_group(ids['group_unvisited']))
+        self.assertIsNone(db.get_person_group(draft['child']))
+
     def test_a_delete_confirmed_after_a_disconnect_records_a_tombstone(self):
         """The connection can drop while the confirmation dialog is open. The
         deletion is durable either way, so what matters is that it is recorded
