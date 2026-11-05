@@ -67,6 +67,7 @@ from backend.storage.preflight import (
 )
 from backend.storage.root_marker import (
     CLAIM_LOCK_NAME,
+    CONTENT_LOCK_NAME,
     MAINTENANCE_DIRNAME,
     MARKER_FILENAME,
     ROOT_LOCK_NAME,
@@ -150,6 +151,9 @@ OVERLAY_FILESYSTEM_TYPES = frozenset({"overlay", "overlayfs"})
 # V11: how many directory entries the bounded scan for nested markers reads.
 _NESTED_MARKER_SCAN_LIMIT = 2000
 
+# Lock files PRKS keeps in .prks-maintenance/; alone, each is scaffold.
+_LOCK_FILE_NAMES = frozenset({ROOT_LOCK_NAME, CLAIM_LOCK_NAME, CONTENT_LOCK_NAME})
+
 UNMARKED_EMPTY = "empty"
 UNMARKED_PRKS = "prks"
 UNMARKED_FOREIGN = "foreign"
@@ -157,15 +161,22 @@ UNMARKED_FOREIGN = "foreign"
 
 @dataclass
 class BoundRoot:
-    """A storage root this process has opened and holds the lease on."""
+    """A storage root this process has opened and holds the lease on.
+
+    The SQLite runtime holds ``root.lock`` exclusive. A web process paired
+    with PostgreSQL (``open_storage_root(paired=True)``) holds it shared,
+    beside its worker and ``migrate``, and holds the interim content lock
+    exclusive instead (``content_lock``).
+    """
 
     root: str
     root_real: str
     source: Optional[str]
     marker: RootMarker
-    lease: ExclusiveFileLock
+    lease: ExclusiveFileLock | SharedFileLock
     created: bool = False
     adopted: bool = False
+    content_lock: Optional[ExclusiveFileLock] = None
     # Warnings raised while opening, held back by ``defer_logs`` until
     # ``log_binding()`` runs with logging configured.
     deferred_records: list[logging.LogRecord] = field(default_factory=list, repr=False)
@@ -203,6 +214,16 @@ class BoundRoot:
         with _ACTIVE_GUARD:
             if _ACTIVE is self:
                 _ACTIVE = None
+        self._release_locks()
+
+    @property
+    def shared(self) -> bool:
+        """Whether this process holds ``root.lock`` shared (a paired PostgreSQL web)."""
+        return isinstance(self.lease, SharedFileLock)
+
+    def _release_locks(self) -> None:
+        if self.content_lock is not None:
+            self.content_lock.release()
         self.lease.release()
 
 
@@ -369,6 +390,7 @@ def _check_log_file_not_operational(
         os.path.join(root_real, MARKER_FILENAME),
         os.path.join(maintenance, ROOT_LOCK_NAME),
         os.path.join(maintenance, CLAIM_LOCK_NAME),
+        os.path.join(maintenance, CONTENT_LOCK_NAME),
     ]
     if config_file_path:
         config_real = os.path.realpath(config_file_path)
@@ -474,8 +496,9 @@ def _find_nested_marker(root_real: str) -> Optional[str]:
 def _maintenance_is_scaffold(path: str) -> bool:
     """A ``.prks-maintenance/`` holding only lone lock files and/or preflight scaffold.
 
-    The lock files are ``root.lock`` and the claim lock ``root.claim``
-    (postgresql-architecture §11.1): each alone is scaffold, never content.
+    The lock files are ``root.lock``, the claim lock ``root.claim``
+    (postgresql-architecture §11.1) and the interim content lock
+    ``content.lock``: each alone is scaffold, never content.
     """
     st = _lstat(path)
     if st is None:
@@ -488,7 +511,7 @@ def _maintenance_is_scaffold(path: str) -> bool:
         return False
     for name in names:
         child = os.path.join(path, name)
-        if name in (ROOT_LOCK_NAME, CLAIM_LOCK_NAME):
+        if name in _LOCK_FILE_NAMES:
             child_st = _lstat(child)
             if child_st is not None and (
                 is_link_or_reparse_point(child_st) or not stat.S_ISREG(child_st.st_mode)
@@ -1051,6 +1074,29 @@ def acquire_shared_root_lease(root_real: str) -> SharedFileLock:
         ) from exc
 
 
+def acquire_content_lock(root_real: str) -> ExclusiveFileLock:
+    """Take ``content.lock`` exclusive, without waiting (interim, until PG-C1).
+
+    The paired web process holds it for its whole run, so at most one
+    process opens the root's SQLite content store while ``root.lock`` is
+    only held shared.
+    """
+    maintenance = _ensure_maintenance_dir(root_real)
+    try:
+        return ExclusiveFileLock.acquire(os.path.join(maintenance, CONTENT_LOCK_NAME), timeout=0.0)
+    except LockBusy as exc:
+        raise StorageRootInUse(
+            "content_in_use",
+            "This PRKS storage root is already served by another PRKS web process. "
+            "Until the PostgreSQL cutover one web process serves a storage root.",
+        ) from exc
+    except LockUnavailable as exc:
+        raise StorageRootRefused(
+            exc.reason,
+            "The storage root lock file .prks-maintenance/content.lock is not usable.",
+        ) from exc
+
+
 # --- entry point -------------------------------------------------------------------
 
 
@@ -1086,8 +1132,16 @@ def open_storage_root(
     now: Optional[datetime] = None,
     register: bool = True,
     defer_logs: bool = False,
+    paired: bool = False,
 ) -> BoundRoot:
     """Validate, lease and mark ``config.root`` for this process.
+
+    With ``paired`` (a web process paired with PostgreSQL, L-D-1 #630) the
+    root's ``root.lock`` is held **shared** and the interim content lock
+    exclusive, so ``worker`` and ``migrate`` run beside it, and the marker
+    is never rewritten: its pairing fields belong to the start check
+    (§11.1). A root without a marker is first bound as usual, under the
+    exclusive lease, which is then turned shared.
 
     Raises a ``StorageRootError`` subclass with a stable ``reason`` on refusal,
     after releasing anything it acquired. With ``register`` (the default) the
@@ -1107,6 +1161,7 @@ def open_storage_root(
             home=home,
             now=now,
             register=register,
+            paired=paired,
         )
     buffer = _RecordBuffer()
     try:
@@ -1119,6 +1174,7 @@ def open_storage_root(
                 home=home,
                 now=now,
                 register=register,
+                paired=paired,
             )
     except BaseException:
         # A refusal goes out now, with the warnings that led up to it.
@@ -1138,6 +1194,7 @@ def _open_storage_root(
     home: Optional[str],
     now: Optional[datetime],
     register: bool,
+    paired: bool = False,
 ) -> BoundRoot:
     testing = config.mode == "testing"
     root = config.root
@@ -1172,20 +1229,32 @@ def _open_storage_root(
         expected_storage_root_id=expected_storage_root_id,
     )
 
-    lease = acquire_root_lease(root_real)
-    try:
-        bound = _open_under_lease(
+    if paired and read_marker(root_real) is not None:
+        bound = _open_paired(
             config,
             root=root,
             root_real=root_real,
-            lease=lease,
-            db_filename=db_filename,
             expected_storage_root_id=expected_storage_root_id,
-            now=now,
         )
-    except BaseException:
-        lease.release()
-        raise
+    else:
+        lease = acquire_root_lease(root_real)
+        try:
+            bound = _open_under_lease(
+                config,
+                root=root,
+                root_real=root_real,
+                lease=lease,
+                db_filename=db_filename,
+                expected_storage_root_id=expected_storage_root_id,
+                now=now,
+            )
+        except BaseException:
+            lease.release()
+            raise
+        if paired:
+            # The first bind of a paired web: with the marker written, take
+            # the content lock and turn the lease shared.
+            _share(bound)
     if register:
         _register(bound)
     return bound
@@ -1243,6 +1312,82 @@ def _create_new_root(root: str, root_real: str) -> None:
         raise InvalidStorageRoot("root_not_creatable", f"The storage root {root} could not be created.")
 
 
+def _share(bound: BoundRoot) -> None:
+    """Take ``bound``'s content lock, then turn its exclusive lease shared; release all on failure."""
+    lease = bound.lease
+    assert isinstance(lease, ExclusiveFileLock)
+    try:
+        bound.content_lock = acquire_content_lock(bound.root_real)
+        try:
+            bound.lease = lease.downgrade()
+        except LockBusy as exc:
+            raise StorageRootInUse(
+                "root_in_use",
+                "Another PRKS process took this storage root exclusively while it was being opened.",
+            ) from exc
+        except LockUnavailable as exc:
+            raise StorageRootRefused(
+                exc.reason, "The storage root lock file .prks-maintenance/root.lock is not usable."
+            ) from exc
+    except BaseException:
+        bound._release_locks()
+        raise
+
+
+def _open_paired(
+    config: Any,
+    *,
+    root: str,
+    root_real: str,
+    expected_storage_root_id: Optional[str],
+) -> BoundRoot:
+    """Open a bound root for a paired web: ``root.lock`` shared, the content lock exclusive.
+
+    Nothing in the marker is written: under the shared lease only the root
+    claim and the start check change it (§11.1). Everything else checked at
+    an exclusive open is checked here too, and the preflight probes run
+    under the content lock, which no other process running beside this one
+    takes.
+    """
+    lease = acquire_shared_root_lease(root_real)
+    try:
+        content_lock = acquire_content_lock(root_real)
+    except BaseException:
+        lease.release()
+        raise
+    try:
+        marker = read_marker(root_real)
+        if marker is None:
+            raise StorageRootRefused(
+                "root_unbound",
+                "The storage root lost its prks-root.json while it was being opened.",
+            )
+        _refuse_unless_bindable(marker, expected_storage_root_id)
+        fs_type = (detect_filesystem_type(root_real) or "").lower()
+        if fs_type in OVERLAY_FILESYSTEM_TYPES:
+            LOGGER.warning("storage_root_overlay_file_devices_unchecked")
+        _check_no_mount_points(root_real)
+        _check_tree(root_real, file_devices=fs_type not in OVERLAY_FILESYSTEM_TYPES)
+        cached = marker.document.get("filesystem_probe")
+        device = os.stat(root_real).st_dev
+        need_capabilities = not (isinstance(cached, dict) and cached.get("device") == device)
+        # The capability answer is not recorded: the marker is not this process's to write.
+        run_preflight(os.path.join(root_real, MAINTENANCE_DIRNAME), capabilities=need_capabilities)
+        _startup_warnings(root_real)
+    except BaseException:
+        content_lock.release()
+        lease.release()
+        raise
+    return BoundRoot(
+        root=root,
+        root_real=root_real,
+        source=getattr(config, "root_source", None),
+        marker=marker,
+        lease=lease,
+        content_lock=content_lock,
+    )
+
+
 def _register(bound: BoundRoot) -> None:
     """Make ``bound`` this process's root, releasing any earlier registration."""
     global _ACTIVE
@@ -1250,7 +1395,7 @@ def _register(bound: BoundRoot) -> None:
         previous = _ACTIVE
         _ACTIVE = bound
     if previous is not None and previous is not bound:
-        previous.lease.release()
+        previous._release_locks()
 
 
 def _refuse_unless_bindable(marker: RootMarker, expected: Optional[str]) -> None:

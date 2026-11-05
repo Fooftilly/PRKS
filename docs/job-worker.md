@@ -49,9 +49,12 @@ It acts on the storage root `prks_app.py` selects for every role
 worker with the root given directly.
 
 It joins a data root the web process already bound and holds that root's
-**shared** lease while it runs. Until the PostgreSQL cutover the SQLite web
-process holds the root exclusively, so `prks worker` cannot run beside it;
-use the embedded worker until then. Exit status: 0 after a graceful stop
+**shared** lease while it runs. A web process with `PRKS_AUTH` holds the
+root shared too, so `prks worker` runs beside it (set
+`PRKS_EMBEDDED_WORKER=0` on that web process). The SQLite web process,
+without `PRKS_AUTH`, holds the root exclusively, so a worker is refused
+beside it, and so is a worker that meets a web process at the moment it
+binds a new root; started again, it joins. Exit status: 0 after a graceful stop
 (SIGTERM or SIGINT), 1 when the start check refuses, 2 for a usage or
 configuration error. Output is fixed text, never a connection string.
 

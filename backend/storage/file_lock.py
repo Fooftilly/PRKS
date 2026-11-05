@@ -167,6 +167,25 @@ class ExclusiveFileLock(_HeldFileLock):
 
     _shared = False
 
+    def downgrade(self) -> "SharedFileLock":
+        """Turn this lock into a shared one on the same handle; this object is then released.
+
+        ``flock`` does not promise the conversion is atomic: another
+        process waiting for the lock exclusive may take it in between. Then
+        nothing is held, the handle is closed and ``LockBusy`` is raised, so
+        a caller never goes on believing it holds a lock it lost. Windows
+        has no shared mode (``shared_lock_unsupported``).
+        """
+        fd, self._fd = self._fd, None
+        if fd is None:
+            raise LockUnavailable("lock_not_held")
+        try:
+            _try_lock(fd, shared=True)
+        except BaseException:
+            _close_quietly(fd)
+            raise
+        return SharedFileLock(self._path, fd)
+
 
 class SharedFileLock(_HeldFileLock):
     """A held shared lock on ``path``. Create with :meth:`acquire`.

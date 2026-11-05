@@ -20,6 +20,7 @@ PHASES = frozenset({
     "startup_imports",
     "startup_dependency_gate",
     "startup_config",
+    "startup_identity_config",
     "startup_identity",
     "startup_jobs",
     "startup_storage_open",
