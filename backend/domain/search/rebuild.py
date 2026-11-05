@@ -48,16 +48,17 @@ whose Work is gone.
 **Folding check.** ``prks.search_folding()`` is the rules name of
 ``prks.search_unaccent`` plus ``server_version_num``; a new Library starts
 with it (the column default). A rebuild whose scopes cover search and text
-captures it into its payload when it starts and, only once every scope is
-done, stores it in ``libraries.search_folding`` (a job transaction that
+captures it into its payload when it starts (a resume that finds the folding
+changed since starts every scope over under the current one) and, only once
+every scope is done, stores it in ``libraries.search_folding`` (a job transaction that
 locks the Library row for update), so a failed or cancelled run stores
 nothing. :class:`SearchMaintenance`, every worker's idle task (the embedded
 one included), runs the consistency count for every Library and
 :func:`check_folding` on its first tick, then reads the current folding at
 most once a minute and checks again when it changed: under each stale
 Library's row lock, the folding rebuild is queued unless a queued rebuild
-of search and text, or a running one that captured the current folding,
-will store it. These host checks act for no actor: they lock the Library
+of search and text, or a running one that captured the current folding or
+has not captured one yet, will store it. These host checks act for no actor: they lock the Library
 row, skip a Library in maintenance and enqueue with the epoch read under
 the lock (``queue.enqueue_library_job_for_host``).
 """
@@ -210,14 +211,22 @@ class Rebuild:
 
     def handle(self, run: JobRun) -> None:
         progress = _Progress.of(run.payload)
-        if progress.records_folding() and progress.folding is None:
-            def capture(scope: LibraryScope) -> str:
+        if progress.records_folding():
+            start = progress
+
+            def capture(scope: LibraryScope) -> _Progress:
                 folding = current_folding(scope)
-                queue.save_library_job_payload(scope, run.job, replace(progress, folding=folding).payload())
-                return folding
+                if start.folding == folding:
+                    return start
+                # The first start, or a resume after the folding changed: the
+                # batches already done used the old folding, so walk every
+                # scope again under the current one.
+                fresh = _Progress(start.scopes, [], None, folding)
+                queue.save_library_job_payload(scope, run.job, fresh.payload())
+                return fresh
 
             run.check()
-            progress.folding = run.library_command(Capability.EDIT_LIBRARY, capture)
+            progress = run.library_command(Capability.EDIT_LIBRARY, capture)
         for name in progress.pending():
             walk = {"search": self._search, "text": self._text, "research": self._research}[name]
             walk(run, progress)
@@ -406,14 +415,16 @@ FROM prks.libraries WHERE id = %(library_id)s
 FOR NO KEY UPDATE
 """
 # Whether a rebuild that will store the current folding is already there: a
-# queued one covering search and text (it captures the folding when it
-# starts), or a running one that captured the current folding.
+# queued one covering search and text (each start captures the folding, and a
+# resume under a changed folding walks every scope again), or a running one
+# that captured the current folding or has not captured one yet.
 _FOLDING_COVERED: LiteralString = """
 SELECT EXISTS (
   SELECT 1 FROM prks.jobs j
   WHERE j.library_id = %(library_id)s AND j.library_epoch = %(epoch)s AND j.kind = %(kind)s
     AND j.payload->'scopes' ?& %(scopes)s::text[]
-    AND (j.state = 'queued' OR (j.state = 'running' AND j.payload->>'folding' = prks.search_folding()))
+    AND (j.state = 'queued'
+         OR (j.state = 'running' AND coalesce(j.payload->>'folding', prks.search_folding()) = prks.search_folding()))
 ) AS covered
 """
 

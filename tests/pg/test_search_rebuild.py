@@ -410,6 +410,31 @@ class FoldingTests(RebuildTestCase):
                          " WHERE kind = %s", (folding, rebuild.KIND))
                 self.assertEqual(self.check(), queued)
 
+    def test_a_running_rebuild_that_has_not_captured_a_folding_yet_suppresses_it(self) -> None:
+        self.set_stored("rules=old;server=1")
+        self.enqueue("search", "text")
+        self.sql("UPDATE prks.jobs SET state = 'running', lease_id = gen_random_uuid(),"
+                 " locked_until = now() + interval '1 hour' WHERE kind = %s", (rebuild.KIND,))
+        self.assertEqual(self.check(), [])
+
+    def test_a_resume_under_a_changed_folding_walks_every_scope_again(self) -> None:
+        works = [self.library.add_work(f"Work {i}") for i in range(3)]
+        self.pdf_work("Paper", "folded words")
+        self.run_jobs()
+        self.set_stored("rules=old;server=1")
+        self.check()
+        # A run that got through search under an older folding, then failed:
+        # what it already wrote must be written again under the current one.
+        self.sql("DELETE FROM derived.work_search")
+        self.sql("UPDATE prks.jobs SET payload = payload || jsonb_build_object("
+                 "'folding', 'rules=older;server=0', 'done', '[\"search\"]'::jsonb, 'cursor', NULL)"
+                 " WHERE kind = %s", (rebuild.KIND,))
+        self.assertEqual(self.check(), [])  # the queued resume covers it
+        self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])
+        self.assertEqual(self.stored(), self.current())
+        for work in works:
+            self.assertIsNotNone(self.row(work))
+
     def test_a_failed_or_cancelled_folding_rebuild_leaves_the_folding_and_is_queued_again(self) -> None:
         self.pdf_work("Paper", "words")
         self.run_jobs()
