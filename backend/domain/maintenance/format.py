@@ -20,6 +20,8 @@ MANIFEST_NAME = "manifest.json"
 USERS_MEMBER = "identities/users.csv"
 DEVICES_MEMBER = "identities/devices.csv"
 IO_CHUNK_SIZE = 64 * 1024
+# What a manifest records as ``prks_version`` until PRKS has one release version source.
+PRKS_VERSION = "0.8.0.dev0"
 
 
 def table_member(table: str) -> str:

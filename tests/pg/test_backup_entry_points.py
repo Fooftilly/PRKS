@@ -1,0 +1,153 @@
+"""Backup and restore entry points: ``backup.create``, recovery task, ``prks admin backup|restore`` (L-B-1 #639).
+
+The job is queued by an ``ADMIN_LIBRARY`` command (owners only, once per
+Library at a time) and writes a verified archive into the root's private
+archive directory; the idle task recovers expired runs and removes archives
+no published run owns. The admin commands back up and restore after the
+start check, and a restore through the CLI round-trips a Library.
+"""
+
+from __future__ import annotations
+
+import io
+import os
+import stat
+import uuid
+from datetime import timedelta
+from typing import Any
+
+import psycopg
+
+from backend.db.config import DatabaseConfig
+from backend.db.database import Database
+from backend.domain.identity import admin
+from backend.domain.identity.authorization import AccessRefused
+from backend.domain.maintenance import jobs as backup_jobs
+from backend.jobs import queue
+from backend.jobs.handlers import HandlerRegistry
+from backend.jobs.runner import JobRun
+from tests.pg.test_backup_export import BackupTestCase
+from tests.pg.test_root_pairing import OWNER, RootPairingTestCase
+
+
+class BackupJobTests(BackupTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.lane = backup_jobs.BackupMaintenance(self.objects, self.storage.root,
+                                                  recover_every=timedelta(0))
+
+    def claim(self) -> JobRun:
+        self.sql("DELETE FROM prks.jobs WHERE kind <> %s", (backup_jobs.BACKUP_KIND,))
+        job = queue.claim(self.db, "test", lease=timedelta(minutes=5))
+        assert job is not None
+        return JobRun(self.db, job, lease=timedelta(minutes=5))
+
+    def test_an_owner_queues_one_backup_and_the_handler_publishes_it(self) -> None:
+        obj = self.put(b"%PDF backed up")
+        self.create(obj)
+        first = backup_jobs.request_backup(self.db, self.actor.context)
+        self.assertIsNotNone(first)
+        self.assertIsNone(backup_jobs.request_backup(self.db, self.actor.context))
+        run = self.claim()
+        self.lane.backup(run)
+        (published,) = self.runs()
+        self.assertEqual(published["state"], "published")
+        directory = backup_jobs.archive_dir(self.storage.root)
+        self.assertEqual(stat.S_IMODE(os.stat(directory).st_mode), 0o700)
+        name = f"{published['id']}.prks-backup"
+        self.assertEqual(os.listdir(directory), [name])
+        progress = self.sql("SELECT progress FROM prks.jobs WHERE id = %s", (first,))[0]["progress"]
+        self.assertEqual(progress["backup_run"], str(published["id"]))
+
+    def test_readers_cannot_queue_a_backup(self) -> None:
+        with self.assertRaises(AccessRefused):
+            backup_jobs.request_backup(self.db, self.reader_context())
+
+    def test_attach_registers_the_job_and_the_idle_task(self) -> None:
+        registry = HandlerRegistry()
+        backup_jobs.attach(registry, self.objects, self.storage.root)
+        self.assertIn(backup_jobs.BACKUP_KIND, registry.kinds())
+        self.assertEqual(len(registry.idle_tasks()), 1)
+
+    def test_the_idle_task_recovers_runs_and_removes_unpublished_archives(self) -> None:
+        directory = backup_jobs.archive_dir(self.storage.root)
+        published = self.backup(library_id=None)
+        os.replace(published.path, os.path.join(directory, os.path.basename(published.path)))
+        crashed = self.sql("INSERT INTO prks.backup_runs (library_id, locked_until) "
+                           "VALUES (%s, now() - interval '1 s') RETURNING id", (self.actor.library_id,))[0]["id"]
+        unknown = uuid.uuid4()
+        for run_id in (crashed, unknown):
+            with open(os.path.join(directory, f"{run_id}.prks-backup"), "wb") as handle:
+                handle.write(b"partial")
+        with open(os.path.join(directory, "notes.txt"), "wb") as handle:
+            handle.write(b"not ours")
+        self.lane.tick(self.db)
+        self.assertEqual(sorted(os.listdir(directory)),
+                         sorted([os.path.basename(published.path), "notes.txt"]))
+        states = {row["id"]: row["state"] for row in self.runs()}
+        self.assertEqual(states[crashed], "failed")
+
+
+class AdminBackupRestoreTests(RootPairingTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.name, self.root = self.database(), self.new_root("lib")
+        self.boot = self.bootstrap(self.name, self.root)
+        self.out = os.path.join(self.tmp, "out")
+        os.mkdir(self.out)
+
+    def open_db(self) -> Database:
+        return Database(DatabaseConfig(conninfo=self.harness.conninfo(self.name), role="test", pool_min=0))
+
+    def run_cli(self, *argv: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        code = admin.main([*argv, "--root", self.root, "--testing"], environ={}, stdout=out, stderr=err,
+                          open_database=lambda _env: self.open_db())
+        return code, out.getvalue(), err.getvalue()
+
+    def sql(self, statement: str, params: Any = None) -> list[Any]:
+        with psycopg.connect(self.harness.conninfo(self.name), autocommit=True) as conn:
+            cursor = conn.execute(statement.encode(), params)
+            return cursor.fetchall() if cursor.description else []
+
+    def test_backup_then_restore_round_trips_the_library(self) -> None:
+        self.sql("INSERT INTO prks.library_settings (library_id, key, value) VALUES (%s, 'theme', 'Before')",
+                 (self.boot.library_id,))
+        code, out, err = self.run_cli("backup", "--library", self.boot.library_id, "--out", self.out)
+        self.assertEqual((code, err), (admin.EXIT_OK, ""), err)
+        (archive,) = os.listdir(self.out)
+        self.assertIn(archive, out)
+        self.sql("UPDATE prks.library_settings SET value = 'After'")
+        code, out, err = self.run_cli("restore", "--library", self.boot.library_id,
+                                      "--archive", os.path.join(self.out, archive), "--owner", OWNER.login_name)
+        self.assertEqual((code, err), (admin.EXIT_OK, ""), err)
+        self.assertIn("epoch 2", out)
+        self.assertEqual(self.sql("SELECT value FROM prks.library_settings"), [("Before",)])
+        # The private copy is gone; nothing is left in the restore staging directory.
+        self.assertEqual(os.listdir(os.path.join(self.root, ".prks-maintenance", "restore")), [])
+
+    def test_restore_refusals_name_the_reason(self) -> None:
+        code, _out, err = self.run_cli("backup", "--library", self.boot.library_id, "--out", self.out)
+        self.assertEqual(code, admin.EXIT_OK, err)
+        (archive,) = os.listdir(self.out)
+        path = os.path.join(self.out, archive)
+        code, _out, err = self.run_cli("restore", "--library", self.boot.library_id, "--archive", path,
+                                       "--owner", "nobody")
+        self.assertEqual(code, admin.EXIT_REFUSED)
+        self.assertIn("No account has that login.", err)
+        self.sql("UPDATE prks.libraries SET maintenance = 'rebuild', maintenance_run = gen_random_uuid()")
+        code, _out, err = self.run_cli("restore", "--library", self.boot.library_id, "--archive", path,
+                                       "--owner", OWNER.login_name)
+        self.assertEqual(code, admin.EXIT_REFUSED)
+        self.assertIn("(MAINTENANCE)", err)
+        code, _out, err = self.run_cli("restore", "--library", self.boot.library_id,
+                                       "--archive", os.path.join(self.out, "missing"), "--owner", OWNER.login_name)
+        self.assertEqual(code, admin.EXIT_USAGE)
+
+    def test_backup_refuses_a_missing_out_directory_and_an_unknown_library(self) -> None:
+        code, _out, _err = self.run_cli("backup", "--library", self.boot.library_id,
+                                        "--out", os.path.join(self.out, "nope"))
+        self.assertEqual(code, admin.EXIT_USAGE)
+        code, _out, err = self.run_cli("backup", "--library", "LIB-" + "0" * 32, "--out", self.out)
+        self.assertEqual(code, admin.EXIT_REFUSED)
+        self.assertIn("does not exist", err)

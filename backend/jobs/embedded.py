@@ -50,6 +50,7 @@ from typing import Any, Optional, Protocol
 from backend.db.database import Database
 from backend.db.errors import DatabaseError
 from backend.db.migrate import SCHEMA_DIR
+from backend.domain.maintenance import jobs as backup_jobs
 from backend.domain.objects import jobs as object_jobs
 from backend.domain.search import rebuild as search_rebuild
 from backend.domain.search import text as search_text
@@ -124,6 +125,7 @@ class EmbeddedWorker:
         if maintenance is not None:
             search_text.attach(self.registry, maintenance.storage)
             search_rebuild.attach(self.registry, maintenance.storage)
+            backup_jobs.attach(self.registry, maintenance.storage, root)
 
     def start(self) -> None:
         LOGGER.info("embedded_worker_starting name=%s", self.worker.name)
