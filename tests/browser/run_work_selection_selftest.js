@@ -583,9 +583,91 @@ root.prksWorkSelectionSubmitPayload({
         action: 'set_status',
         status: 'Completed',
     });
-}).then(function (res) {
+}).then(async function (res) {
     assert('stale marked', res && res.stale === true);
     assertEq('stale did not extra-navigate', navCalls, 0);
+
+    // Exercise a failed catalogue with a valid bulk POST still available.
+    root.prksWorkSelectionResetForTests();
+    root.prksWorkSelectionEnter();
+    root.prksWorkSelectionToggle('W-1');
+    let bulkCalls = 0;
+    root.bulkUpdateWorks = async function () { bulkCalls++; return { status: 'updated' }; };
+    // This minimal DOM fixture does not parse nested markup: attach actual
+    // sheet sub-elements for the catalogue-loading path.
+    const fixture = document.getElementById('prks-bulk-sheet');
+    for (const [cls, tag] of [
+        ['prks-bulk-sheet__title', 'h3'], ['prks-bulk-sheet__body', 'div'],
+        ['prks-bulk-sheet__confirm', 'p'], ['prks-bulk-sheet__error', 'p'],
+    ]) {
+        if (!fixture.querySelector('.' + cls)) {
+            const el = document.createElement(tag);
+            el.className = cls;
+            fixture.appendChild(el);
+        }
+    }
+    const requests = [];
+    root.fetchFolders = async opts => {
+        requests.push(opts);
+        throw new Error('HTTP 500');
+    };
+    await root.prksWorkSelectionOpenSheet('folder');
+    const sheet = document.getElementById('prks-bulk-sheet');
+    const body = sheet.querySelector('.prks-bulk-sheet__body');
+    const error = sheet.querySelector('.prks-bulk-sheet__error');
+    const apply = sheet.querySelector('[data-bulk-apply]');
+    assert('Folder reader requests strict source-aware results',
+        !!requests[0].requireAvailable && !!requests[0].withSource);
+    assert('failed Folder read shows retry, never No folder',
+        body.innerHTML.includes('data-bulk-retry="folder"') &&
+        !body.innerHTML.includes('No folder'));
+    assert('failed Folder read is visible',
+        error.textContent.includes('Could not load folders'));
+    assert('Apply disabled for failed Folder read', !!apply.disabled);
+    // Even if stale UI retained a checked radio it cannot unfile Works.
+    const forged = document.createElement('input');
+    forged.name = 'prks-bulk-folder';
+    forged.setAttribute('name', 'prks-bulk-folder');
+    forged.checked = true;
+    forged.value = '';
+    body.appendChild(forged);
+    sheet.listeners.find(x => x.type === 'click').fn({ target: apply });
+    await Promise.resolve();
+    assertEq('failed Folder read emits no bulk POST', bulkCalls, 0);
+    assert('failed catalogue remains closed even with a stale radio', apply.disabled);
+    root.fetchFolders = async () => ({rows: [], source: 'network'});
+    const retry = body.querySelector('[data-bulk-retry]');
+    sheet.listeners.find(x => x.type === 'click').fn({ target: retry });
+    await new Promise(resolve => setImmediate(resolve));
+    assert('genuinely empty Folder catalogue offers No folder',
+        body.innerHTML.includes('No folder'));
+    root.fetchFolders = async () => ({
+        rows: [{id: 'F-1',title:'Actual folder'}],source:'cache',
+    });
+    await root.prksWorkSelectionOpenSheet('folder');
+    assert('cached Folder catalogue is labeled',
+        body.innerHTML.includes('Using cached folders.') &&
+        body.innerHTML.includes('Actual folder'));
+    root.fetchTags = async () => { throw new Error('HTTP 500'); };
+    await root.prksWorkSelectionOpenSheet('tags');
+    assert('failed Tag read shows Retry instead of fake empty list',
+        body.innerHTML.includes('data-bulk-retry="tags"') &&
+        !body.innerHTML.includes('No tags in the library yet.'));
+    assert('Tag failure disables Apply', !!apply.disabled);
+    root.fetchTags = async () => ({rows:[],source:'network'});
+    await root.prksWorkSelectionOpenSheet('tags');
+    assert('genuinely empty Tag catalogue is recognized',
+        body.innerHTML.includes('No tags in the library yet.'));
+    let finishOld;
+    root.fetchFolders = () => new Promise(resolve => { finishOld = resolve; });
+    const pending = root.prksWorkSelectionOpenSheet('folder');
+    await root.prksWorkSelectionOpenSheet('tags');
+    finishOld({rows:[{id:'F-LATE',title:'Late folder'}],source:'network'});
+    await pending;
+    assert('stale Folder response cannot overwrite a different sheet',
+        !body.innerHTML.includes('Late folder') &&
+        body.innerHTML.includes('No tags in the library yet.'));
+    assertEq('no unintended bulk mutation after failed/stale reads', bulkCalls, 0);
 
     const storeKeys = Object.keys(sandbox.localStorage.store);
     assert('no localStorage selection', storeKeys.every(function (k) { return k.indexOf('select') < 0; }));
