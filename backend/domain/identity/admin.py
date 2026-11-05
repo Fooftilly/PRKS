@@ -1,7 +1,7 @@
 """``prks admin`` (``docs/postgresql-architecture.md`` §9.2, §9.3, §12; L-ID-1 #626).
 
 Run as ``python -m backend.domain.identity.admin …`` until the ``prks``
-entry point exists (L-D-1). Two commands:
+entry point exists (L-D-1). Three commands:
 
 ``unlock-login LOGIN --root ROOT`` deletes the account-wide (``acct:``) row
 of the login attempt limiter for the account named ``LOGIN`` (matched by its
@@ -10,6 +10,12 @@ while a guessing campaign keeps the limit tripped. Address and device rows
 are left alone. An unknown login is refused. Like every data-changing
 command it first runs the start check and bump against the bound data root
 (§11.1) and refuses a database that is not paired with it.
+
+``rebuild-derived --root ROOT [--library ID] [--only search|text|research]``
+queues one ``derived.rebuild`` job per Library (every Library, or the one
+named), after the same start check; a worker runs it with progress while
+ordinary commands keep running (§8.6, :mod:`backend.domain.search.rebuild`).
+The same rebuild already queued is reported, not queued twice.
 
 ``bootstrap`` is first-time setup, in two separate steps, so the operator
 never holds a token that is already spent:
@@ -126,6 +132,14 @@ def _parser() -> argparse.ArgumentParser:
     unlock.add_argument("login", help="the account's login name")
     unlock.add_argument("--root", required=True, help="the bound PRKS data root")
     unlock.add_argument("--testing", action="store_true", help="a disposable testing instance")
+
+    rebuild = commands.add_parser(
+        "rebuild-derived", help="queue the rebuild of the derived search, PDF text and research rows"
+    )
+    rebuild.add_argument("--root", required=True, help="the bound PRKS data root")
+    rebuild.add_argument("--library", help="the id of one Library (default: every Library)")
+    rebuild.add_argument("--only", choices=("search", "text", "research"), help="rebuild one scope only")
+    rebuild.add_argument("--testing", action="store_true", help="a disposable testing instance")
     return parser
 
 
@@ -448,15 +462,12 @@ def _remove_dead_token_file(environ: Mapping[str, str], db: Database, io: _Io) -
         return
 
 
-def _unlock_login(args: argparse.Namespace, db: Database, io: _Io) -> int:
-    try:
-        identity_key(args.login)
-    except UnsupportedTextError:  # no stored login holds such text
-        io.refuse("No account has that login.")
-        return EXIT_REFUSED
-    # A data-changing admin command runs the start check and bump (§11.1)
-    # under the shared root lease, so it never changes a database that is
-    # not the one paired with this data root.
+def _started_root(args: argparse.Namespace, db: Database, fn: Callable[[], int]) -> int:
+    """Run ``fn`` after the start check and bump (§11.1) under the shared root lease.
+
+    A data-changing admin command never changes a database that is not the
+    one paired with this data root, nor one whose setup is not complete.
+    """
     root = _real_root(args.root)
     _check_root_bound(root)
     try:
@@ -468,24 +479,90 @@ def _unlock_login(args: argparse.Namespace, db: Database, io: _Io) -> int:
             db, root=root, lease=lease, testing=bool(args.testing), bump=True
         )
         if started.status is not root_pairing.StartStatus.READY:
-            raise RootPairingRefused(
-                "setup_pending", "Setup is not complete; there is no account to unlock."
-            )
+            raise RootPairingRefused("setup_pending", "Setup is not complete; there is nothing to change yet.")
+        return fn()
+    finally:
+        lease.release()
+
+
+def _unlock_login(args: argparse.Namespace, db: Database, io: _Io) -> int:
+    try:
+        identity_key(args.login)
+    except UnsupportedTextError:  # no stored login holds such text
+        io.refuse("No account has that login.")
+        return EXIT_REFUSED
+    unlocked: list[Optional[bool]] = []
+
+    def unlock() -> int:
         try:
-            unlocked = login_limiter.unlock_account(db, args.login)
+            unlocked.append(login_limiter.unlock_account(db, args.login))
         except DatabaseError:
             io.refuse("The database could not be reached; nothing was changed.")
             return EXIT_REFUSED
-    finally:
-        lease.release()
-    if unlocked is None:
+        return EXIT_OK
+
+    try:
+        code = _started_root(args, db, unlock)
+    except RootPairingRefused as exc:
+        if exc.reason == "setup_pending":
+            raise RootPairingRefused(
+                "setup_pending", "Setup is not complete; there is no account to unlock."
+            ) from None
+        raise
+    if code != EXIT_OK:
+        return code
+    if unlocked[0] is None:
         io.refuse("No account has that login.")
         return EXIT_REFUSED
-    if unlocked:
+    if unlocked[0]:
         io.say("Cleared the account-wide login limit.")
     else:
         io.say("The account-wide login limit was not set; nothing to clear.")
     return EXIT_OK
+
+
+def _libraries(n: int) -> str:
+    return "1 Library" if n == 1 else f"{n} Libraries"
+
+
+def _rebuild_derived(args: argparse.Namespace, db: Database, io: _Io) -> int:
+    """Queue one ``derived.rebuild`` per Library (or the one ``--library``); the workers run it (§8.6)."""
+    from backend.domain.search import rebuild
+
+    scopes = rebuild.scope_key([args.only] if args.only else rebuild.SCOPES)
+
+    def enqueue() -> int:
+        try:
+            libraries = [library_id for library_id in rebuild.library_ids(db)
+                         if args.library is None or library_id == args.library]
+        except DatabaseError:
+            io.refuse("The database could not be reached; nothing was queued.")
+            return EXIT_REFUSED
+        if not libraries:
+            io.refuse("No Library has that id." if args.library else "There is no Library to rebuild.")
+            return EXIT_REFUSED
+        outcomes: dict[Optional[rebuild.Requested], int] = {}
+        for library_id in libraries:  # one transaction each: a failure does not stop the others
+            try:
+                outcome: Optional[rebuild.Requested] = rebuild.request_rebuild(db, library_id, scopes)
+            except DatabaseError:
+                outcome = None
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        what = ", ".join(scopes)
+        if queued := outcomes.get(rebuild.Requested.QUEUED, 0):
+            io.say(f"Queued the {what} rebuild for {_libraries(queued)}; the worker runs it.")
+        if waiting := outcomes.get(rebuild.Requested.ALREADY_QUEUED, 0):
+            io.say(f"{_libraries(waiting)} already had it queued.")
+        refused = False
+        if busy := outcomes.get(rebuild.Requested.UNAVAILABLE, 0):
+            io.refuse(f"{_libraries(busy)} in maintenance got nothing queued; run it again afterwards.")
+            refused = True
+        if failed := outcomes.get(None, 0):
+            io.refuse(f"Nothing was queued for {_libraries(failed)}: the database could not be reached.")
+            refused = True
+        return EXIT_REFUSED if refused else EXIT_OK
+
+    return _started_root(args, db, enqueue)
 
 
 def main(
@@ -511,10 +588,11 @@ def main(
     except DatabaseConfigError as exc:
         io.refuse(exc.message)
         return EXIT_USAGE
-    if args.command == "unlock-login":
+    if args.command in ("unlock-login", "rebuild-derived"):
+        run = _unlock_login if args.command == "unlock-login" else _rebuild_derived
         try:
             with db:
-                return _unlock_login(args, db, io)
+                return run(args, db, io)
         except RootPairingRefused as exc:
             io.refuse(exc.message)
             return EXIT_REFUSED

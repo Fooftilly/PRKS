@@ -1379,7 +1379,7 @@ match committed data. It runs automatically after restore and is the
 documented step after a PostgreSQL major upgrade. Normal startup never runs
 a full verification; a cheap consistency count (`works` without
 `work_search` rows, or `work_search` rows without a Work) schedules a
-repair job, which uses the same refresh path.
+repair job (`search.repair`), which uses the same refresh path.
 
 **Folding check.** `doc` vectors, `asset_text.doc` and the `*_norm` columns
 all fold through the same `unaccent` rules and the server's Unicode tables,
@@ -2666,7 +2666,7 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
   maintenance job; failed rows are kept until dismissed.
 - **0.8 job kinds** (only workloads that exist today): `text.extract`,
   `research.reindex_work`, `objects.cleanup`, `objects.sweep`,
-  `search.rebuild`, `derived.rebuild`, `backup.create`,
+  `search.repair`, `derived.rebuild`, `backup.create`,
   `pdf.materialize` (if the Assets lane moves materialization off the request
   path), `sessions.prune`, `jobs.prune`. Thumbnails stay on-demand and cached
   as derived files.
