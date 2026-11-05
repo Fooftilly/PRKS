@@ -188,6 +188,11 @@ class ObjectSafetyTests(BackupTestCase):
         with mock.patch.object(backup, "fsync_open_file", side_effect=OSError(28, "No space left on device")):
             self.assert_failed("io")
 
+    def test_an_unsynced_archive_directory_is_a_backup_failure(self) -> None:
+        self.create(self.put())
+        with mock.patch.object(backup, "fsync_directory", return_value=False):
+            self.assert_failed("io")
+
     def test_the_archive_is_synced_only_once_its_zip_directory_is_written(self) -> None:
         self.create(self.put())
         complete: list[bool] = []

@@ -475,7 +475,8 @@ def _run(conn: psycopg.Connection[Any], conninfo: str, storage: StorageBackend, 
         # Only now is the ZIP complete: closing it wrote the central directory.
         raw.flush()
         fsync_open_file(raw.fileno())
-    fsync_directory(os.path.dirname(path))
+    if not fsync_directory(os.path.dirname(path)):
+        raise BackupFailed("io", "The backup archive could not be made durable.")
     reach(PHASE_VERIFY)
     _verify_archive(path, manifest, lease.tick)
     size, sha256 = _hash_file(path, lease.tick)
