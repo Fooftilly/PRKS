@@ -1,49 +1,36 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 1111,
+      "number": 69,
       "set": {
-        "Agent": "ChatGPT/Codex",
-        "Execution": "Agent"
+        "Agent": "Claude Code",
+        "Execution": "Agent",
+        "Status": "Ready"
       },
       "expected_before": {
         "Agent": null,
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Maintainer explicitly requested ChatGPT/Codex ownership; reviewed PG-C1/PG-C2, candidate EF-173 scope and open PR overlap. Preserve Inbox: audit candidate is not approved for implementation.",
+      "reason": "Maintainer requested additional ready Claude Code implementation tasks. EF-004 is accepted and unblocked. Current master has a basic typed slice covering 116 scopes but leaves backend/api/saved_views.py and backend/api/processing.py outside; take one narrow, genuine type-check expansion with invariants and CI, avoiding overlap with active PG or Vue PRs. Reviewed #651, open PR changed paths and native blockers.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1112,
+      "number": 745,
       "set": {
-        "Agent": "ChatGPT/Codex",
-        "Execution": "Agent"
+        "Agent": "Claude Code",
+        "Execution": "Agent",
+        "Status": "Ready"
       },
       "expected_before": {
         "Agent": null,
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "Maintainer explicitly requested ChatGPT/Codex ownership; reviewed PG-C1/PG-C2, candidate EF-174 and open Vue create-form PR #1056, which does not own the offline deletion dependency. Preserve Inbox pending acceptance.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1113,
-      "set": {
-        "Agent": "ChatGPT/Codex",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Maintainer explicitly requested ChatGPT/Codex ownership; reviewed PG-C1/PG-C2, candidate EF-175 and PR overlap; assignment only, retain Inbox pending acceptance.",
+      "reason": "Maintainer requested ready Claude Code work. Accepted documentation roadmap #745 is open, has no native blockers and no active overlapping accessibility-statement PR; issue's bounded ACCESSIBILITY.md and README/docs scope can proceed without asserting unverified WCAG conformance, while retaining #651 accessibility test ownership.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
