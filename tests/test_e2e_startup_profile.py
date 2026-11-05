@@ -364,7 +364,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
             self.assertNotIn("    inputs:", workflow)
             self.assertNotIn("  pull_request:", workflow)
             self.assertNotIn("  push:", workflow)
-            self.assertIn("permissions:\\n  contents: read", workflow)
+            self.assertIn("permissions:\n  contents: read", workflow)
             self.assertIn("PRKS_TEST_DATABASE_URL:", workflow)
             self.assertIn("python scripts/ci/install_pinned_python.py e2e", workflow)
             self.assertIn("python tests/e2e/install_browser.py", workflow)
@@ -375,7 +375,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         self.assertIn("for trial in 1 2 3; do", paired)
         self.assertNotIn('DEBUG: "pw:api"', paired)
 
-        marker = "      - name: Trace one existing Person Create Chromium scenario\\n"
+        marker = "      - name: Trace one existing Person Create Chromium scenario\n"
         self.assertEqual(trace.count(marker), 1)
         self.assertIn('PRKS_E2E_PROFILE: "1"', trace)
         self.assertIn('PRKS_E2E_PERSON_RECENT_TRIAL: "0"', trace)
@@ -386,7 +386,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         self.assertNotIn("for MODE", trace)
         self.assertNotIn("for trial", trace)
         targets = dict(re.findall(
-            r"^\\s*(create|edit)\\) TARGET=(tests\\.e2e\\.[A-Za-z_0-9.]+) ;;$",
+            r"^\s*(create|edit)\) TARGET=(tests\.e2e\.[A-Za-z_0-9.]+) ;;$",
             paired, flags=re.MULTILINE,
         ))
         self.assertEqual(len(targets), 2)
