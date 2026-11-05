@@ -16,7 +16,9 @@ COMMITTED Library command:
    ``ingest_sha256`` and ``byte_size`` to the new document: the upload is
    the new pristine source, kept as ``source_locator`` only when it differs
    from the working key, as at ingest;
-4. records cleanup claims for the old working and source keys
+4. drops the Asset's PDF text of the old bytes and queues the extraction
+   of the new (``search.text.content_changed``);
+5. records cleanup claims for the old working and source keys
    (``lifecycle.release``), each only when no row of the Library still names
    it, so another Asset's key is never claimed.
 
@@ -52,6 +54,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
 from backend.domain.objects.ingest import IngestedPdf
 from backend.domain.people import roles
+from backend.domain.search import text as search_text
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, StorageKey
 
 NOT_FOUND = "ENTITY_NOT_FOUND"
@@ -136,6 +139,7 @@ def commit(scope: LibraryScope, storage: StorageBackend, work_id: str,
     scope.execute(_SWITCH, target.params(
         storage_locator=written.working.key.name, source_locator=source, sha256=written.working.sha256,
         ingest_sha256=written.source.sha256, size=written.working.size, materialized=materialized))
+    search_text.content_changed(scope, asset_id, written.working.sha256)
     new = {written.working.key.name, written.source.key.name}
     stale = sorted({str(name) for name in (old["storage_locator"], old["source_locator"])
                     if name is not None} - new)

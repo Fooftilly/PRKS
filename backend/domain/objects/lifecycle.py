@@ -62,6 +62,7 @@ from typing import Any, LiteralString, Optional
 
 from backend.db.database import Database, Transaction
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.search import text as search_text
 from backend.jobs import queue
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
@@ -306,8 +307,9 @@ def replace_object(scope: LibraryScope, storage: StorageBackend, asset_id: str,
     """Point a managed-file Asset at the new object ``obj`` (a rewrite, §11.2).
 
     Locks the Asset's Work, then the Asset row (the Works order), adopts the new key, switches ``storage_locator``,
-    ``content_sha256`` and ``byte_size``, and releases the old key, all in
-    the caller's transaction. Returns the old key's name, or None when this
+    ``content_sha256`` and ``byte_size``, drops the PDF text of the old bytes
+    and queues the extraction of the new (``search.text.content_changed``),
+    and releases the old key, all in the caller's transaction. Returns the old key's name, or None when this
     Library has no such managed-file Asset. Checking the annotation revision
     the bytes were made from is the caller's (materialization).
     """
@@ -322,6 +324,7 @@ def replace_object(scope: LibraryScope, storage: StorageBackend, asset_id: str,
     adopt(scope, storage, obj)
     scope.execute(_SWITCH_ASSET_OBJECT, {"asset_id": asset_id, "name": obj.key.name,
                                          "sha256": obj.sha256, "size": obj.size})
+    search_text.content_changed(scope, asset_id, obj.sha256)
     if old != obj.key.name:
         release(scope, StorageKey(NAMESPACE_ASSET_OBJECTS, old))
     return old

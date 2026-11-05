@@ -50,6 +50,7 @@ from backend.db.database import Database
 from backend.db.errors import DatabaseError
 from backend.db.migrate import SCHEMA_DIR
 from backend.domain.objects import jobs as object_jobs
+from backend.domain.search import text as search_text
 from backend.jobs.diagnostics import queue_depth
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.worker import (
@@ -114,10 +115,12 @@ class EmbeddedWorker:
         self._finished = threading.Event()
 
     def attach_objects(self, root: str) -> None:
-        """Bind the object maintenance jobs to the process's bound data root; before :meth:`start`."""
+        """Bind the object maintenance jobs and ``text.extract`` to the process's bound data root; before :meth:`start`."""
         if self._thread.ident is not None:
             raise RuntimeError("the objects lane must be attached before the worker starts")
-        object_jobs.attach(self.registry, root)
+        maintenance = object_jobs.attach(self.registry, root)
+        if maintenance is not None:
+            search_text.attach(self.registry, maintenance.storage)
 
     def start(self) -> None:
         LOGGER.info("embedded_worker_starting name=%s", self.worker.name)

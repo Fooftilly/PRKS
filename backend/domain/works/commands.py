@@ -32,6 +32,7 @@ from backend.domain.objects import lifecycle
 from backend.domain.organization import folders, playlists
 from backend.domain.people import roles
 from backend.domain.search import refresh as search_refresh
+from backend.domain.search import text as search_text
 from backend.domain.works import metadata, revisions
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, StorageKey
 
@@ -218,6 +219,8 @@ def _insert_asset(scope: LibraryScope, ids: dict[str, Optional[str]], asset: New
                       provider=source.provider, provider_id=source.provider_id, url=source.url,
                       byte_size=None, sha256=None, ingest_sha256=None, origin=None)
     scope.execute(_INSERT_ASSET, values)
+    if isinstance(source, ManagedFile):
+        search_text.content_changed(scope, str(ids["asset_id"]), source.sha256)
 
 
 # -- open events ----------------------------------------------------------------
@@ -291,6 +294,9 @@ SELECT source_locator FROM prks.assets
 WHERE library_id = %(library_id)s AND work_id = %(work_id)s AND source_locator IS NOT NULL
 ORDER BY 1
 """
+_WORK_ASSETS: LiteralString = (
+    "SELECT id FROM prks.assets WHERE library_id = %(library_id)s AND work_id = %(work_id)s"
+)
 _LOCATOR_STILL_USED: LiteralString = """
 SELECT 1 FROM prks.assets
 WHERE library_id = %(library_id)s AND storage_locator = %(locator)s
@@ -340,7 +346,8 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     a base taken before the delete is stale on a Work recreated under the id.
     A ``research.reindex_work`` enqueued here drops the Work's derived
     mentions once the delete commits (§8.4), and the Work's
-    ``derived.work_search`` row is deleted after the Work (§8.3).
+    ``derived.work_search`` row and its Assets' ``derived.asset_text`` rows
+    are deleted after the Work (§8.3).
     Every stored key of the Work's Assets (working and pristine) that no
     other Asset of the Library names gets a cleanup claim in this
     transaction (``objects.lifecycle.release``, §11.2); the bytes are
@@ -357,6 +364,7 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
         return None
     locator = row["storage_locator"] if row["asset_kind"] == "managed_file" else None
     stored = [str(found["name"]) for found in scope.execute(_WORK_LOCATORS, {"work_id": work_id}).fetchall()]
+    asset_ids = [str(found["id"]) for found in scope.execute(_WORK_ASSETS, {"work_id": work_id}).fetchall()]
     # Filing is construction (no `work-folder` or `work-playlist` row need
     # exist), so the Folder and Playlist rows go here and the scopes are
     # tombstoned with the fixed ones below.
@@ -376,6 +384,9 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     # Then its search row: a refresh that locked the Work first has committed
     # by now, and a later one finds the Work gone and writes nothing (§8.3).
     search_refresh.drop_work(scope, work_id)
+    # And its Assets' PDF text, after the Assets: an extraction holding one
+    # FOR SHARE has committed by now, and a later one finds it gone.
+    search_text.drop_assets(scope, asset_ids)
     # Its reindex runs after this COMMIT and removes whatever an earlier one
     # wrote (§8.4).
     reindex.enqueue(scope, work_id)
