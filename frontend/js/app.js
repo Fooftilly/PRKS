@@ -1891,13 +1891,23 @@ async function prksEffectiveFolderRows(rows, ops) {
 }
 
 /** The same overlay, reading the hierarchy from cache for a caller that has none. */
-async function prksEffectiveFolderCatalogue(ops) {
+async function prksEffectiveFolderCatalogue(ops, options) {
+    const opts = options || {};
     let rows = [];
+    let source = 'unavailable';
     try {
-        const cached = await prksOfflineReadList(PRKS_FOLDERS_LIST_KEY, '/api/folders', {});
-        rows = cached && Array.isArray(cached.value) ? cached.value : [];
-    } catch (_e) { rows = []; }
-    return await prksEffectiveFolderRows(rows, ops);
+        const result = await prksOfflineReadList(PRKS_FOLDERS_LIST_KEY, '/api/folders', {});
+        if (!result || !Array.isArray(result.value)) {
+            if (opts.requireAvailable) throw new Error('Folder catalogue is unavailable.');
+        } else {
+            rows = result.value;
+            source = result.source || 'network';
+        }
+    } catch (error) {
+        if (opts.requireAvailable) throw error;
+    }
+    const effective = await prksEffectiveFolderRows(rows, ops);
+    return opts.withSource ? { rows: effective, source: source } : effective;
 }
 
 /** The Position list this device holds, with pending intent applied. */
