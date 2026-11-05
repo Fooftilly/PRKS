@@ -25,7 +25,7 @@ if _PROJECT_DIR not in sys.path:
 from backend.storage import distribution, paths, preflight, root_binding, root_marker
 from backend.storage.config import StorageConfig
 from backend.storage.errors import InvalidStorageRoot, StorageRootInUse, StorageRootRefused
-from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable
+from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable, SharedFileLock
 
 MARKER = root_marker.MARKER_FILENAME
 MAINT = root_binding.MAINTENANCE_DIRNAME
@@ -930,6 +930,90 @@ class TestFileLock(RootTestCase):
         self.assertEqual(ctx.exception.reason, "lock_file_not_regular")
 
 
+    @unittest.skipIf(sys.platform == "win32", "Windows has no shared lock")
+    def test_downgrade_keeps_the_handle_and_admits_shared_holders(self):
+        path = self.path("x.lock")
+        lock = ExclusiveFileLock.acquire(path)
+        shared = lock.downgrade()
+        self.assertFalse(lock.held)
+        self.assertTrue(shared.held)
+        self.assertIsInstance(shared, SharedFileLock)
+        SharedFileLock.acquire(path).release()  # another shared holder fits
+        with self.assertRaises(LockBusy):
+            ExclusiveFileLock.acquire(path)
+        shared.release()
+        ExclusiveFileLock.acquire(path).release()
+        with self.assertRaises(LockUnavailable):
+            lock.downgrade()  # nothing held any more
+
+
+@unittest.skipIf(sys.platform == "win32", "Windows has no shared lock")
+class TestPairedOpen(RootTestCase):
+    """``open_storage_root(paired=True)``: a web process paired with PostgreSQL (L-D-1 #630)."""
+
+    def test_a_new_root_is_bound_then_held_shared_with_the_content_lock(self):
+        root = self.path("lib")
+        bound = self.open(root, paired=True)
+        self.assertTrue(bound.created)
+        self.assertTrue(bound.shared)
+        self.assertTrue(os.path.isfile(os.path.join(root, MARKER)))
+        # A worker or migrate joins it shared; the SQLite runtime cannot open it.
+        root_binding.acquire_shared_root_lease(root).release()
+        with self.assertRaises(StorageRootInUse) as ctx:
+            self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_in_use")
+        bound.release()
+        self.open(root).release()
+
+    def test_a_bound_root_is_opened_shared_without_rewriting_its_marker(self):
+        root = self.path("lib")
+        self.open(root).release()
+        before = open(os.path.join(root, MARKER), "rb").read()
+        worker = root_binding.acquire_shared_root_lease(root)  # already running beside it
+        self.addCleanup(worker.release)
+        bound = self.open(root, paired=True)
+        self.assertTrue(bound.shared)
+        self.assertFalse(bound.created)
+        self.assertEqual(open(os.path.join(root, MARKER), "rb").read(), before)
+        self.assertFalse(os.path.exists(os.path.join(root, MAINT, preflight.PREFLIGHT_DIRNAME)))
+
+    def test_a_second_paired_web_is_refused_by_the_content_lock(self):
+        root = self.path("lib")
+        self.open(root).release()
+        first = self.open(root, paired=True)
+        with self.assertRaises(StorageRootInUse) as ctx:
+            self.open(root, paired=True)
+        self.assertEqual(ctx.exception.reason, "content_in_use")
+        # The refused open let go of its shared lease: nothing else is held.
+        first.release()
+        self.open(root).release()
+
+    def test_an_exclusive_holder_refuses_a_paired_open(self):
+        root = self.path("lib")
+        held = self.open(root)
+        with self.assertRaises(StorageRootInUse) as ctx:
+            self.open(root, paired=True)
+        self.assertEqual(ctx.exception.reason, "root_in_use")
+        held.release()
+        self.assertFalse(os.path.exists(os.path.join(root, MAINT, root_marker.CONTENT_LOCK_NAME)))
+
+    def test_release_lets_go_of_both_locks(self):
+        root = self.path("lib")
+        bound = self.open(root, paired=True)
+        bound.release()
+        self.open(root).release()
+        self.open(root, paired=True).release()
+
+    def test_a_lone_content_lock_is_scaffold(self):
+        root = self.path("lib")
+        os.makedirs(os.path.join(root, MAINT))
+        open(os.path.join(root, MAINT, root_marker.CONTENT_LOCK_NAME), "w").close()
+        self.assertEqual(
+            root_binding.classify_unmarked_root(root, db_filename="prks_data.db"),
+            root_binding.UNMARKED_EMPTY,
+        )
+
+
 _HOLDER = textwrap.dedent(
     """
     import sys
@@ -1030,7 +1114,7 @@ class TestProcessEntry(RootTestCase):
         order = [
             main.index("ensure_runtime_or_exit()"),
             main.index("StorageConfig.from_env(cli_root=args.storage_root)"),
-            main.index("open_storage(config)"),
+            main.index("open_storage(config"),
             main.index("recover_incomplete_restore(config)"),
             main.index("bind_storage(config)"),
             # The source report needs logging configured, or INFO is dropped.

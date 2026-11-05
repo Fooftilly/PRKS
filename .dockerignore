@@ -28,3 +28,4 @@ secrets/
 !frontend/vendor/prks-pdf-viewer/THIRD_PARTY.md
 to-do.md
 folder_res.json
+.env
