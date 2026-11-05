@@ -2,7 +2,8 @@
 
 Each library is built the same way on this leg's library object and on a
 reference SQLite library, and ``search_works``, ``search_works_any``,
-``work_ids_matching_author`` and ``work_ids_matching_publisher`` must return
+``work_ids_matching_author``, ``work_ids_matching_publisher`` and
+``get_works_by_tag_name`` must return
 the same rows in the same order. The inputs are ASCII, where SQLite's
 ``LOWER`` and FTS5 fold as PostgreSQL does; the Unicode cases where
 PostgreSQL finds more are pinned in ``tests/pg/test_search_queries.py``.
@@ -32,6 +33,9 @@ Pair = tuple[str, str]
 _PG_EDITED = ("UPDATE prks.works SET updated_at = %(at)s::timestamptz"
               " WHERE library_id = %(library_id)s AND id = %(work_id)s")
 _SQLITE_EDITED = "UPDATE works SET updated_at = :at WHERE id = :work_id"
+_PG_CREATED = ("UPDATE prks.works SET created_at = %(at)s::timestamptz"
+               " WHERE library_id = %(library_id)s AND id = %(work_id)s")
+_SQLITE_CREATED = "UPDATE works SET created_at = :at WHERE id = :work_id"
 _PG_OVERRIDE = ("UPDATE prks.manifestations SET abstract = %(abstract)s"
                 " WHERE library_id = %(library_id)s AND id ="
                 " (SELECT primary_manifestation_id FROM prks.works"
@@ -165,6 +169,25 @@ class SearchParityTests(PeopleParityTestCase):
         for needle in ("oxford", "OUP", "university"):
             with self.subTest(needle=needle):
                 self.assertEqual(self.same_ids("work_ids_matching_publisher", needle), ["<W Long>", "<W Short>"])
+
+    # -- the Tag filter
+
+    def test_the_tag_filter_lists_tagged_works_newest_first(self) -> None:
+        works = [self.work_both(label) for label in ("Older", "Newer", "Untagged")]
+        for index, side in enumerate(self.sides()):
+            tag = side.db.add_tag("Physics")
+            side.db.add_tag_alias(tag["id"], "phys")
+            for minute, work in ((1, works[0]), (2, works[1])):
+                side.db.add_tag_to_work(work[index], tag["id"])
+            for minute, work in ((1, works[0]), (2, works[1]), (3, works[2])):
+                zone = "+00" if self._on_postgres(side) else ""
+                self._row(side, _PG_CREATED, _SQLITE_CREATED,
+                          {"work_id": work[index], "at": f"2025-01-01 09:{minute:02d}:00{zone}"})
+        for label in ("physics", "PHYS", " Physics "):
+            with self.subTest(label=label):
+                self.assertEqual(self.listed("get_works_by_tag_name", label), ["<W Newer>", "<W Older>"])
+        self.assertEqual(self.listed("get_works_by_tag_name", "unknown"), [])
+        self.assertEqual(self.listed("get_works_by_tag_name", "  "), [])
 
     # -- OR mode
 

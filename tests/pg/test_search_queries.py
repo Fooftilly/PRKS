@@ -168,3 +168,19 @@ class IsolationTests(SearchQueryTestCase):
         self.assertEqual(self.found("shared"), [mine])
         self.assertNotIn(other, self.library.work_ids_matching_author("ann"))
         self.assertEqual(self.library.work_ids_matching_publisher("press"), [mine])
+
+    def test_another_librarys_tag_of_the_same_name_is_never_used(self) -> None:
+        tag = self.library.add_tag("Physics")
+        self.library.add_tag_alias(tag["id"], "phys")
+        mine = self.library.add_work("Mine")
+        self.library.add_tag_to_work(mine, tag["id"])
+        self.bind(self.other_actor().context)
+        their_tag = self.library.add_tag("Physics")
+        self.library.add_tag_alias(their_tag["id"], "phys")
+        theirs = self.library.add_work("Theirs")
+        self.library.add_tag_to_work(theirs, their_tag["id"])
+        self.assertEqual([row["id"] for row in self.library.get_works_by_tag_name("phys")], [theirs])
+        self.bind(self.actor.context)
+        for label in ("Physics", "phys"):
+            with self.subTest(label=label):
+                self.assertEqual([row["id"] for row in self.library.get_works_by_tag_name(label)], [mine])

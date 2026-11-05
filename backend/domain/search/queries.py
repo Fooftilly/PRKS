@@ -173,3 +173,21 @@ def by_recency(scope: LibraryScope, work_ids: list[str]) -> list[str]:
     if not work_ids:
         return []
     return [str(row["id"]) for row in scope.execute(_BY_RECENCY_SQL, {"work_ids": work_ids})]
+
+
+_TAGGED_SQL: LiteralString = """
+SELECT w.id FROM prks.works w
+JOIN prks.work_tags wt ON wt.library_id = w.library_id AND wt.work_id = w.id
+WHERE w.library_id = %(library_id)s AND wt.tag_id = %(tag_id)s
+ORDER BY w.created_at DESC, w.id COLLATE "C"
+"""
+
+
+def tagged_work_ids(scope: LibraryScope, label: str) -> list[str]:
+    """``get_works_by_tag_name``: the Works tagged with the Tag whose name or alias is ``label``, newest first."""
+    from backend.domain.organization import tags
+
+    tag_id = tags.resolve_label(scope, (label or "").strip())
+    if tag_id is None:
+        return []
+    return [str(row["id"]) for row in scope.execute(_TAGGED_SQL, {"tag_id": tag_id})]
