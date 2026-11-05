@@ -859,6 +859,141 @@ async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
     }
 }
 
+async function deletingUnsentParentRebasesChildAndKeepsDescendants() {
+    const store = newStore();
+    const grandparent = await store.createPersonGroup({ name: "Grandparent" });
+    const parent = await store.createPersonGroup({
+        name: "Unsent parent", parent_id: grandparent.entity_id,
+    });
+    const child = await store.createPersonGroup({
+        name: "Authored child", parent_id: parent.entity_id,
+    });
+    const descendant = await store.createPersonGroup({
+        name: "Descendant", parent_id: child.entity_id,
+    });
+    const [edit] = await store.savePersonGroupFields(child.entity_id,
+        { description: "Independent description" }, baseAt());
+    assert.deepEqual(child.depends_on, [parent.op_id]);
+    assert.equal(await store.deletePersonGroup(parent.entity_id), null,
+        "never-sent parent folds without deleting independently created children");
+    const rows = await store.listOperations();
+    assert.equal(rows.some(r => r.op_id === parent.op_id), false);
+    const preserved = rows.find(r => r.op_id === child.op_id);
+    assert.equal(preserved.payload.parent_id, grandparent.entity_id,
+        "child is reparented to deleted parent's intended ancestor");
+    assert.deepEqual(preserved.depends_on, [grandparent.op_id],
+        "replacement prerequisite targets the ancestor creation");
+    assert.deepEqual(rows.find(r => r.op_id === descendant.op_id).depends_on,
+        [child.op_id], "nested child still depends on preserved creation");
+    assert.ok(rows.some(r => r.op_id === edit.op_id &&
+        r.depends_on.includes(child.op_id)), "independent edit survives");
+    assert.ok(rows.every(r => r.depends_on.every(dep =>
+        rows.some(prerequisite => prerequisite.op_id === dep))),
+        "no orphaned dependency remains in the durable queue");
+
+    const sent = [];
+    const runtime = runtimeFor(store, async (_path, options) => {
+        const op = JSON.parse(options.body);
+        sent.push({id: op.entity_id, parent: op.payload.parent_id,
+                   op: op.operation});
+        if (op.operation === "CREATE_PERSON_GROUP") {
+            return {ok: true, status: 200, json: async () => groupAck(op)};
+        }
+        return {ok: true, status: 200, json: async () => fieldAck(op, 1)};
+    });
+    await runtime.wake();
+    await settle();
+    runtime.stop();
+    assert.ok(sent.find(x => x.id === child.entity_id &&
+        x.parent === grandparent.entity_id), "sync dispatches the reparented child");
+    assert.ok(sent.find(x => x.id === descendant.entity_id &&
+        x.parent === child.entity_id), "nested descendant still syncs");
+    assert.equal((await store.listOperations()).length, 0,
+        "all independent parent/child/grandchild writes retire");
+
+    const rootStore = newStore();
+    const root = await rootStore.createPersonGroup({ name: "Root" });
+    const leaf = await rootStore.createPersonGroup({
+        name: "Leaf", parent_id: root.entity_id,
+    });
+    assert.equal(await rootStore.deletePersonGroup(root.entity_id), null);
+    const remaining = await rootStore.listOperations();
+    assert.deepEqual(remaining.find(r => r.op_id === leaf.op_id).depends_on, []);
+    assert.equal(remaining.find(r => r.op_id === leaf.op_id).payload.parent_id, "",
+        "deleting a root parent reparents the child to root");
+}
+
+async function unsafeParentDeletionFailsWithoutDroppingAnyIntent() {
+    const store = newStore();
+    const parent = await store.createPersonGroup({ name: "Unsent" });
+    const child = await store.createPersonGroup({
+        name: "Must survive", parent_id: parent.entity_id,
+    });
+    const moved = await store.savePersonGroupFields("PG-existing",
+        { parent_id: parent.entity_id }, baseAt({ parent_id: 3 }));
+    const before = await store.listOperations();
+    await assert.rejects(() => store.deletePersonGroup(parent.entity_id),
+        e => e.prksLocalStoreCode === "scope_busy" &&
+            /child groups and pending group moves/.test(e.message),
+        "a pending move into the unsent parent requires explicit resolution");
+    assert.deepEqual(await store.listOperations(), before,
+        "refused deletion rolls back all user-authored operations");
+    assert.deepEqual(moved[0].depends_on, [parent.op_id]);
+
+    const other = newStore();
+    const pending = await other.createPersonGroup({ name: "Pending" });
+    const started = await other.createPersonGroup({
+        name: "Already attempted", parent_id: pending.entity_id,
+    });
+    await other.updateOperationSyncState(started.op_id,
+        { status: "syncing", bump_attempt: true });
+    const immutable = await other.listOperations();
+    await assert.rejects(() => other.deletePersonGroup(pending.entity_id),
+        e => e.prksLocalStoreCode === "scope_busy",
+        "possibly sent child must not be rewritten or orphaned");
+    assert.deepEqual(await other.listOperations(), immutable);
+
+    const edited = newStore();
+    const upstream = await edited.createPersonGroup({ name: "Upstream" });
+    const downstream = await edited.createPersonGroup({
+        name: "Descendant", parent_id: upstream.entity_id,
+    });
+    await edited.savePersonGroupFields(upstream.entity_id,
+        { parent_id: "PG-other" }, baseAt());
+    await assert.rejects(() => edited.deletePersonGroup(upstream.entity_id),
+        e => e.prksLocalStoreCode === "scope_busy",
+        "parent's separate pending move requires resolution before rebase");
+    assert.ok((await edited.listOperations()).some(r => r.op_id === downstream.op_id));
+
+    const existing = newStore();
+    const existingParent = "PG-SERVER";
+    const external = await existing.createPersonGroup({
+        name: "New child", parent_id: existingParent,
+    });
+    const removal = await existing.deletePersonGroup(existingParent);
+    assert.deepEqual(removal.depends_on, [external.op_id],
+        "server-existing parent's delete waits for the child create");
+    await assert.rejects(() => existing.createPersonGroup({
+        name: "Late", parent_id: existingParent,
+    }), e => e.prksLocalStoreCode === "entity_deleted",
+    "new child creation under a deleting group is refused");
+    await assert.rejects(() => existing.savePersonGroupFields("PG-LATE",
+        { parent_id: existingParent }, baseAt()), 
+        e => e.prksLocalStoreCode === "entity_deleted",
+        "new move under a deleting group is refused");
+
+    const inFlightParent = newStore();
+    const syncingParent = await inFlightParent.createPersonGroup({ name: "In-flight" });
+    const waitingChild = await inFlightParent.createPersonGroup({
+        name: "Waited child", parent_id: syncingParent.entity_id,
+    });
+    await inFlightParent.updateOperationSyncState(syncingParent.op_id,
+        { status: "syncing", bump_attempt: true });
+    const sentParentRemoval = await inFlightParent.deletePersonGroup(syncingParent.entity_id);
+    assert.ok(sentParentRemoval.depends_on.includes(syncingParent.op_id));
+    assert.ok(sentParentRemoval.depends_on.includes(waitingChild.op_id),
+        "a possibly sent parent must await child construction");
+}
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
@@ -873,6 +1008,8 @@ async function main() {
     await aPendingRenameReachesTheChipsThatCarryTheName();
     await deletingCancelsWhatWasNeverSent();
     await deletingAGroupCreatedHereFoldsItAwayEntirely();
+    await deletingUnsentParentRebasesChildAndKeepsDescendants();
+    await unsafeParentDeletionFailsWithoutDroppingAnyIntent();
     await aSentOperationIsWaitedForRatherThanRewritten();
     await aPendingDeletionIsATombstoneNotADestruction();
     await deletingAPersonCancelsWhatWasNeverSent();
