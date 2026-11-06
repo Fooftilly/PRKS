@@ -438,6 +438,63 @@ class StagingTests(StagingTestCase):
         self.assertEqual(staged.objects_written, 3)
         self.assertEqual(opened.call_count, 1)  # R0 validates it, and staging reads that same handle
 
+    def held_elsewhere(self, path: str) -> None:
+        """Staging refuses before it records or touches the key."""
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(path)
+        self.assertEqual(caught.exception.reason, "object_in_other_library")
+        self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.restore_run_objects")[0]["n"], 0)
+
+    def test_an_asset_object_another_library_names_is_never_reused(self) -> None:
+        obj = self.put(b"%PDF shared bytes")
+        work_id = self.create(obj)
+        result = self.backup()
+        self.library.delete_work_record(work_id)
+        self.sql("DELETE FROM prks.object_cleanup_claims WHERE name = %s", (obj.key.name,))
+        other = self.other_actor()
+        self.create(obj, ctx=other.context)  # Library B now owns the key, with the same bytes
+        self.held_elsewhere(result.path)
+
+    def test_an_object_another_library_released_is_never_reused(self) -> None:
+        obj = self.put(b"%PDF released bytes")
+        work_id = self.create(obj)
+        result = self.backup()
+        self.library.delete_work_record(work_id)
+        other = self.other_actor()
+        self.sql("UPDATE prks.object_cleanup_claims SET library_id = %s WHERE name = %s",
+                 (other.library_id, obj.key.name))
+        self.held_elsewhere(result.path)
+
+    def test_a_portrait_another_library_names_is_never_reused(self) -> None:
+        from tests.pg.test_objects_lifecycle import key
+        from backend.storage.objects import NAMESPACE_PORTRAITS
+
+        portrait = key("P-portrait.webp", NAMESPACE_PORTRAITS)
+        info = self.objects.put_new(portrait, lambda stream: stream.write(b"webp bytes"), hash=True)
+        person_sql = ("INSERT INTO prks.persons (library_id, id, last_name, image_url, portrait_locator, "
+                      "portrait_sha256, portrait_byte_size, portrait_source_url) "
+                      "VALUES (%s, %s, 'X', 'https://example.test/p.webp', %s, %s, %s, 'https://example.test/p.webp')")
+        mine = generate("P")
+        self.sql(person_sql, (self.actor.library_id, mine, portrait.name, info.sha256, info.size))
+        result = self.backup()
+        self.sql("UPDATE prks.persons SET image_url = '', portrait_locator = NULL, portrait_sha256 = NULL, "
+                 "portrait_byte_size = NULL, portrait_source_url = NULL WHERE id = %s", (mine,))
+        other = self.other_actor()
+        self.sql(person_sql, (other.library_id, generate("P"), portrait.name, info.sha256, info.size))
+        self.held_elsewhere(result.path)
+
+    def test_an_object_another_librarys_restore_is_staging_is_never_reused(self) -> None:
+        obj = self.put(b"%PDF contested bytes")
+        self.create(obj)
+        result = self.backup()
+        other = self.other_actor()
+        run = self.run_row(library_id=other.library_id)
+        self.sql("INSERT INTO prks.restore_run_objects (run_id, namespace, name) VALUES (%s, %s, %s)",
+                 (run, obj.key.namespace, obj.key.name))
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(result.path)
+        self.assertEqual(caught.exception.reason, "object_in_other_library")
+
     def test_a_partial_global_key_held_by_another_library_is_refused(self) -> None:
         obj = self.put(b"%PDF upload")
         item_sql = ("INSERT INTO prks.processing_items (library_id, id, original_filename, object_locator, sha256, "

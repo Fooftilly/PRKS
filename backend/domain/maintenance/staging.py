@@ -34,7 +34,9 @@ data root does not have yet), so nothing it does is visible to the Library:
    restoring one Library over another while the original still holds them).
 4. **Objects** (unless ``objects=False``, as for a backup's own
    verification). For each archive object, under the per-object lock that
-   cleanup's settle also takes, a ``restore_run_objects`` row is inserted
+   cleanup's settle also takes, a key another Library names, released or is
+   restoring refuses the restore (:func:`lifecycle.held_by_another_library`,
+   ``adopt``'s rule); otherwise a ``restore_run_objects`` row is inserted
    and committed; only then is the data root looked at: a missing key is
    written from the archive with exclusive create, a present key with the
    archive's hash is reused, and a present key with another hash aborts the
@@ -58,7 +60,7 @@ from backend.domain.maintenance import tables
 from backend.domain.maintenance.archive import Archive, ArchiveRefused, Member
 from backend.domain.maintenance.format import IO_CHUNK_SIZE, object_references
 from backend.domain.maintenance.connection import pin_interchange_settings
-from backend.domain.objects.lifecycle import OBJECT_LOCK_SQL
+from backend.domain.objects.lifecycle import OBJECT_LOCK_SQL, held_by_another_library
 from backend.storage.objects import InvalidStorageKey, ObjectExists, StorageBackend, StorageKey
 
 STAGING_PREFIX = "restore_"
@@ -354,12 +356,18 @@ _STAGE_OBJECT_SQL: LiteralString = (
 )
 
 
-def _stage_objects(conn: psycopg.Connection[Any], archive: Archive, run_id: uuid.UUID,
+def _stage_objects(conn: psycopg.Connection[Any], archive: Archive, run_id: uuid.UUID, target_library_id: str,
                    storage: StorageBackend, renew: Callable[[], None]) -> tuple[int, int]:
     written = reused = 0
     for obj_key, member in sorted(archive.objects.items(), key=lambda item: str(item[0])):
         with conn.transaction():
             conn.execute(OBJECT_LOCK_SQL, (str(obj_key),))
+            # adopt()'s rule: a key another Library names, released or is
+            # restoring is never this Library's, even with the same bytes.
+            if held_by_another_library(conn.execute, obj_key, target_library_id):
+                raise StagingRefused(
+                    "object_in_other_library",
+                    "Another library here holds a stored object of this backup. Restore it over its own library.")
             conn.execute(_STAGE_OBJECT_SQL, (run_id, obj_key.namespace, obj_key.name))
         # The committed row is a reference cleanup's settle reads under the same
         # lock (lifecycle._STAGED_REFERENCES) while the run is running, so no
@@ -435,7 +443,7 @@ def stage(conn: psycopg.Connection[Any], archive: Archive, *, run_id: uuid.UUID,
         _check_foreign_keys(conn, schema)
     written = reused = 0
     if storage is not None:
-        written, reused = _stage_objects(conn, archive, run_id, storage, renew)
+        written, reused = _stage_objects(conn, archive, run_id, target_library_id, storage, renew)
     return Staged(run_id=run_id, schema=schema, target_library_id=target_library_id, new_devices=new_devices,
                   objects_written=written, objects_reused=reused)
 
