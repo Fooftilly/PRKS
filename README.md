@@ -204,6 +204,7 @@ Exact startup, configuration, and safety contracts stay in this README (host/por
 | Contributor commands | [Developer Reference](docs/wiki/Developer-Reference.md) |
 | Dependencies/vendoring | [Dependencies and Vendoring](docs/wiki/Dependencies-and-Vendoring.md) |
 | Security | [Security and Operations](docs/wiki/Security-and-Operations.md) |
+| Accessibility goals, tested areas, known barriers and reporting | [ACCESSIBILITY.md](ACCESSIBILITY.md) |
 
 Implementation/design authorities that intentionally remain outside the Wiki:
 
