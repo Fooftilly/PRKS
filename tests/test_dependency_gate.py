@@ -1312,7 +1312,15 @@ class RepoGateLiveTests(unittest.TestCase):
         )[1].split("- name: Run Pyright data-flow checks", 1)[0]
         self.assertIn("psycopg(-binary|-pool)?==", static_install)
         self.assertIn("argon2-cffi==", static_install)
-        self.assertEqual(static_install.count("requirements.txt"), 3)
+        self.assertIn("Pillow==", static_install)
+        self.assertEqual(static_install.count("requirements.txt"), 4)
+        # Every validated pin group must actually reach pip.
+        pip_line = next(
+            line for line in static_install.splitlines()
+            if "python -m pip install" in line
+        )
+        for group in ("pg_pins", "argon_pins", "pillow_pins"):
+            self.assertIn(f'"${{{group}[@]}}"', pip_line)
         self.assertNotIn("requirements-dev.txt", static_install)
         expected_unit = dict(runtime, **{
             name: dev[name]
