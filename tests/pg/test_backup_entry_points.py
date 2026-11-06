@@ -14,6 +14,8 @@ import io
 import os
 import shutil
 import tempfile
+import threading
+import time
 import stat
 import uuid
 from datetime import timedelta
@@ -72,6 +74,43 @@ class BackupJobTests(BackupTestCase):
         self.lane.backup(run)
         self.assertTrue(queue.complete(self.db, run.job))
         self.assertIsNotNone(backup_jobs.request_backup(self.db, self.actor.context))
+
+    def test_a_request_racing_another_through_its_claim_queues_nothing(self) -> None:
+        # A checks and finds nothing, B queues a backup and a worker claims it,
+        # then A inserts: without the request lock A's job would be a second backup.
+        checked, resume = threading.Event(), threading.Event()
+        enqueue = queue.enqueue_library_job
+        results: dict[str, Any] = {}
+
+        def paused_enqueue(*args: Any, **kwargs: Any) -> Any:
+            if threading.current_thread().name == "A":
+                checked.set()
+                resume.wait(30)
+            return enqueue(*args, **kwargs)
+
+        def request(name: str) -> None:
+            results[name] = backup_jobs.request_backup(self.db, self.actor.context)
+
+        with mock.patch.object(backup_jobs.queue, "enqueue_library_job", side_effect=paused_enqueue):
+            a = threading.Thread(target=request, args=("A",), name="A")
+            a.start()
+            self.assertTrue(checked.wait(30))
+            b = threading.Thread(target=request, args=("B",), name="B")
+            b.start()
+            deadline = time.monotonic() + 5
+            while b.is_alive() and not self.request_lock_waiters() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if not b.is_alive():  # B got through while A was between its check and insert
+                self.claim()
+            resume.set()
+            a.join(30)
+            b.join(30)
+        jobs = self.sql("SELECT state FROM prks.jobs WHERE kind = %s", (backup_jobs.BACKUP_KIND,))
+        self.assertEqual(len(jobs), 1, f"one backup, not one per request: {results}")
+        self.assertEqual(sum(value is not None for value in results.values()), 1)
+
+    def request_lock_waiters(self) -> int:
+        return int(self.sql("SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")[0]["n"])
 
     def test_readers_cannot_queue_a_backup(self) -> None:
         with self.assertRaises(AccessRefused):

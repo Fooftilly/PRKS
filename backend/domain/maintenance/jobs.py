@@ -67,6 +67,7 @@ LOGGER = logging.getLogger("prks.maintenance")
 _ARCHIVE_NAME_RE = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
                               + re.escape(BACKUP_EXTENSION) + r"$")
 _RUN_STATE_SQL: LiteralString = "SELECT state FROM prks.backup_runs WHERE id = %s"
+_REQUEST_LOCK_SQL: LiteralString = "SELECT pg_advisory_xact_lock(hashtextextended('prks.backup_request:' || %s, 0))"
 _ACTIVE_BACKUP_SQL: LiteralString = (
     "SELECT 1 FROM prks.jobs WHERE library_id = %(library_id)s AND kind = %(kind)s"
     " AND state IN ('queued', 'running') LIMIT 1"
@@ -159,10 +160,15 @@ def prune_restore_copies(root: str) -> int:
 def request_backup(db: Database, ctx: RequestContext) -> Optional[uuid.UUID]:
     """Queue a backup of the actor's Library; None when one is already queued or running.
 
-    The dedupe key only matches a queued job, so a running one is checked
-    first; two requests racing past that check still meet the dedupe key.
+    The dedupe key only matches a queued job, so the check for a queued or
+    running one comes first, under a per-Library transaction lock: a request
+    that waited on another sees its job whether a worker has claimed it yet
+    or not.
     """
     def enqueue(scope: LibraryScope) -> Optional[uuid.UUID]:
+        # Requests of one Library take turns, so the check below always sees a
+        # competing request's job (READ COMMITTED: a fresh snapshot after the wait).
+        scope.execute_unscoped(_REQUEST_LOCK_SQL, (scope.library_id,))
         if scope.execute(_ACTIVE_BACKUP_SQL, {"kind": BACKUP_KIND}).fetchone() is not None:
             return None
         key = f"backup:{scope.library_id}"
