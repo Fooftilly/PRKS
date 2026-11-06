@@ -318,6 +318,22 @@ _COMMIT_RUN_SQL: LiteralString = (
     "WHERE id = %s AND state = 'running'"
 )
 _FORGET_STAGED_SQL: LiteralString = "DELETE FROM prks.restore_run_objects WHERE run_id = %s"
+# Defense in depth for lifecycle.adopt()'s fence: no staged key may be named
+# or claimed by another Library when R4 makes this Library name it.
+_STAGED_HELD_ELSEWHERE_SQL: LiteralString = """
+SELECT 1 FROM prks.restore_run_objects o
+WHERE o.run_id = %(run)s AND (
+  EXISTS (SELECT 1 FROM prks.object_cleanup_claims c
+          WHERE c.namespace = o.namespace AND c.name = o.name AND c.library_id <> %(library_id)s)
+  OR (o.namespace = 'asset-objects' AND (
+        EXISTS (SELECT 1 FROM prks.assets a WHERE a.library_id <> %(library_id)s
+                AND (a.storage_locator = o.name OR a.source_locator = o.name))
+        OR EXISTS (SELECT 1 FROM prks.processing_items p WHERE p.library_id <> %(library_id)s
+                   AND p.object_locator = o.name)))
+  OR (o.namespace = 'portraits' AND EXISTS (
+        SELECT 1 FROM prks.persons pe WHERE pe.library_id <> %(library_id)s AND pe.portrait_locator = o.name)))
+LIMIT 1
+"""
 
 
 def _columns(conn: psycopg.Connection[Any], table: str) -> sql.Composable:
@@ -374,6 +390,9 @@ def _commit(conn: psycopg.Connection[Any], schema: str, library_id: str, run_id:
         row = conn.execute(_LOCK_FOR_COMMIT_SQL, params).fetchone()
         if row is None or conn.execute(_LOCK_RUN_SQL, params).fetchone() is None:
             raise RestoreFailed("lease_lost", "The restore run lost its lease.")
+        if conn.execute(_STAGED_HELD_ELSEWHERE_SQL, params).fetchone() is not None:
+            raise RestoreFailed("object_in_other_library",
+                                "Another library here holds a stored object of this backup.")
         old_keys = sql.SQL(_KEYS_SQL).format(s=sql.Identifier("prks"), lib=sql.Literal(library_id))
         conn.execute(sql.SQL("CREATE TEMP TABLE _restore_old_keys ON COMMIT DROP AS {}").format(old_keys))
         _replace_rows(conn, schema, library_id)

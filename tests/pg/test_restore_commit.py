@@ -285,6 +285,51 @@ class RefusalTests(RestoreTestCase):
         self.refused(self.archive, "library_missing", library_id="LIB-" + "0" * 32)
 
 
+class ObjectIsolationTests(RestoreTestCase):
+    """A key a restore stages stays the restoring Library's until R4 commits it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.obj = self.put(b"%PDF older backup")
+
+    def backed_up_then_forgotten(self) -> str:
+        """A backup naming the key, which the Library then no longer names or claims."""
+        work = self.create(self.obj)
+        archive = self.backup().path
+        self.library.delete_work_record(work)
+        self.assertIs(self.settle(self.obj.key), Settled.REMOVED)
+        self.assertEqual(self.claims(), {})
+        return archive
+
+    def test_another_library_cannot_adopt_a_key_staged_for_the_restore(self) -> None:
+        archive = self.backed_up_then_forgotten()
+        other = self.other_actor()
+        refused: list[bool] = []
+
+        def other_library_adopts() -> None:
+            # R1 wrote the bytes again; the same key is offered to another Library.
+            with self.assertRaises(lifecycle.ObjectMissing):
+                self.create(self.obj, ctx=other.context)
+            refused.append(True)
+
+        self.restore(archive, hooks={restore.HOOK_STAGED: other_library_adopts})
+        self.assertEqual(refused, [True])
+        owners = self.sql("SELECT library_id FROM prks.assets WHERE storage_locator = %s", (self.obj.key.name,))
+        self.assertEqual([row["library_id"] for row in owners], [self.actor.library_id])
+
+    def test_r4_refuses_a_staged_key_another_library_came_to_hold(self) -> None:
+        archive = self.backed_up_then_forgotten()
+        other = self.other_actor()
+
+        def other_library_claims() -> None:
+            # What adopt()'s fence prevents, written directly: R4 still refuses it.
+            self.claim(self.obj.key, other.library_id)
+
+        self.refused(archive, "object_in_other_library", hooks={restore.HOOK_DRAINED: other_library_claims})
+        self.assertEqual(self.work_ids(), [])
+        self.assertEqual(self.library_row()["maintenance"], None)
+
+
 class AbortTests(RestoreTestCase):
     def setUp(self) -> None:
         super().setUp()
