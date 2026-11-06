@@ -247,6 +247,17 @@ class ArchiveContainmentTests(StagingTestCase):
             handle.write(b"\xff" * info.compress_size)
         self.refused(deflated, "not_a_backup")
 
+    def test_a_zero_length_read_of_a_member_returns_nothing_and_refuses_nothing(self) -> None:
+        archive = r0.open_archive(self.good, staging_dir=self.staging_dir)
+        self.addCleanup(archive.close)
+        member = archive.tables["prks.works"]
+        with archive.open_member(member) as handle:
+            self.assertEqual(handle.read(0), b"")
+            data = b""
+            while chunk := handle.read(7):
+                data += chunk
+        self.assertEqual(len(data), member.size)
+
     def test_refusals_never_echo_the_manifests_own_text(self) -> None:
         secret = "Private Diary Title"
         error = self.refused(rewrite(self.good, self.path("v.zip"),

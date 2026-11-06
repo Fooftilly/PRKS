@@ -186,6 +186,8 @@ class BoundedReader:
                     self._done = True
                 return b""
             want = self._left if size < 0 else min(size, self._left)
+            if want == 0:
+                return b""  # a zero-length read consumes nothing, so it proves nothing either
             data = self._inner.read(want)
         if not data:
             raise _mismatch()  # ends before its declared size
