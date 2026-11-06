@@ -13,10 +13,15 @@ import unittest
 from backend.storage.config import StorageConfig
 from tests.e2e.fixtures import MINIMAL_PDF, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.postgres_identity import postgres_library
 
 
 def load_tests(loader, standard_tests, pattern):
-    return standard_tests if os.environ.get("PRKS_E2E") == "1" else unittest.TestSuite()
+    # The path-based inbox is the SQLite Library's page. The PostgreSQL
+    # Library shows the upload queue instead (test_postgres_library_flows).
+    if os.environ.get("PRKS_E2E") != "1" or postgres_library():
+        return unittest.TestSuite()
+    return standard_tests
 
 
 def setUpModule():

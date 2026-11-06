@@ -170,8 +170,15 @@ DEFAULT_E2E_MODULES = (
 # to get named test IDs, last-failed data, timing and targeted reproduction.
 CLASSIC_SW_TRANSITIONS_MODULE = "tests.e2e.test_classic_sw_transitions"
 AXE_ACCESSIBILITY_MODULE = "tests.e2e.test_axe_a11y"
-OPT_IN_E2E_MODULES = (CLASSIC_SW_TRANSITIONS_MODULE, AXE_ACCESSIBILITY_MODULE)
+# PG-C1 flows on the PostgreSQL Library (restore through Settings, the
+# Processing upload queue, the Research-ACK fence). They need the Library's
+# content in PostgreSQL, so only the PostgreSQL leg
+# (PRKS_E2E_LIBRARY_BACKEND=postgres) runs them.
+POSTGRES_LIBRARY_MODULE = "tests.e2e.test_postgres_library_flows"
+OPT_IN_E2E_MODULES = (CLASSIC_SW_TRANSITIONS_MODULE, AXE_ACCESSIBILITY_MODULE, POSTGRES_LIBRARY_MODULE)
 E2E_MODULES = DEFAULT_E2E_MODULES
+if (os.environ.get("PRKS_E2E_LIBRARY_BACKEND") or "").strip() == "postgres":
+    E2E_MODULES += (POSTGRES_LIBRARY_MODULE,)
 if os.environ.get("PRKS_E2E_CLASSIC_SW_TRANSITIONS") == "1":
     E2E_MODULES += (CLASSIC_SW_TRANSITIONS_MODULE,)
 

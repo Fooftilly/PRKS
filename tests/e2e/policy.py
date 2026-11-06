@@ -338,6 +338,10 @@ FEATURES = {
         "description": "Processing Files inbox Vue route surface",
         "selectors": ("tests.e2e.test_processing_route_surface",),
     },
+    "postgres-library": {
+        "description": "PG-C1 flows on the PostgreSQL Library: restore recovery, Processing queue, Research-ACK fence (PostgreSQL leg only)",
+        "selectors": ("tests.e2e.test_postgres_library_flows",),
+    },
     "offline": {
         "description": "Offline foundation + broad offline coherence (Work cache)",
         "selectors": (
@@ -723,6 +727,18 @@ AFFECTED_RULES = (
         ),
         "features": ("processing",),
         "note": "Vue Processing Files inbox (#302 R3) → processing, because test_processing_route_surface opens #/processing-files. Shared route-surface stays unmapped (CI full).",
+    },
+    {
+        "name": "processing-queue-vue",
+        "paths": ("frontend-app/src/features/processing-queue/**",),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("postgres-library",),
+        "note": "Vue Processing queue (PostgreSQL Library, PG-C1 #640) → postgres-library, because test_postgres_library_flows drives #/processing-files on the PostgreSQL leg.",
     },
     {
         "name": "concepts-vue",
