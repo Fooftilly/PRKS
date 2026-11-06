@@ -190,6 +190,44 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         finally:
             self.stop(proc)
 
+    def test_work_routes_read_through_the_facade(self) -> None:
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
+        port = _free_port()
+        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            _status, session, _headers = self.call(port, "GET", "/api/session")
+            headers = {"Origin": f"http://127.0.0.1:{port}",
+                       "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+            _status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Work"}, headers)
+            work_id = created["id"]
+            status, people, _headers = self.call(port, "GET", f"/api/works/{work_id}/people-state")
+            self.assertEqual(status, 200, people)
+            status, source, _headers = self.call(port, "GET", f"/api/works/{work_id}/source-state")
+            self.assertEqual((status, source), (200, {"work_id": work_id, "revision": 0}))
+            # An echoed file_path is dropped; the rest of the patch applies.
+            status, _body, _headers = self.call(port, "PATCH", f"/api/works/{work_id}",
+                                                {"title": "Patched", "file_path": ""}, headers)
+            self.assertEqual(status, 200)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{work_id}")[1]["title"], "Patched")
+            # Changing it is not ported: a 501, never a SQLite fallback.
+            status, refused, _headers = self.call(port, "PATCH", f"/api/works/{work_id}",
+                                                  {"file_path": "/api/pdfs/elsewhere.pdf"}, headers)
+            self.assertEqual((status, refused["code"]), (501, "not_ported"), refused)
+            _status, folder, _headers = self.call(port, "POST", "/api/folders", {"title": "Shelf"}, headers)
+            # Both exist, so the facade decides: a filed Work stays in its one folder.
+            status, body, _headers = self.call(port, "POST", f"/api/folders/{folder['id']}/works",
+                                               {"work_id": work_id}, headers)
+            self.assertEqual((status, body), (409, {"error": "This file is already in another folder."}))
+            self.assertEqual(self.call(port, "POST", "/api/folders/F-missing/works",
+                                       {"work_id": work_id}, headers)[0], 404)
+            self.assertEqual(self.call(port, "POST", f"/api/folders/{folder['id']}/works",
+                                       {"work_id": "W-" + "0" * 32}, headers)[0], 404)
+        finally:
+            self.stop(proc)
+
     def test_the_selection_needs_prks_auth(self) -> None:
         err = self.refused(self.environment(None, PRKS_LIBRARY_BACKEND="postgres"), self.new_root())
         self.assertIn("PRKS_LIBRARY_BACKEND=postgres needs PRKS_AUTH", err)

@@ -542,6 +542,19 @@ def _served_pdf_path(path: str) -> str | None:
 _BACKUP_ROUTE_PREFIX = '/api/backups/'
 
 
+def _stored_work_file_path(work_id: str) -> str:
+    """The Work's stored ``file_path`` (``""`` when none or no such Work).
+
+    On PostgreSQL that is its primary Asset's: there is no ``works.file_path``
+    column, and changing it is not ported (``update_work_metadata`` refuses).
+    """
+    if serves_postgres_library():
+        fields = db.get_primary_thumbnail_fields(work_id)
+        return str((fields or {}).get("file_path") or "")
+    rows = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
+    return (rows[0].get("file_path") or "") if rows else ""
+
+
 def _prks_pixmap_to_pil(pix):
     """PyMuPDF pixmap → Pillow Image (RGB/RGBA). None if Pillow missing or conversion fails."""
     try:
@@ -822,6 +835,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # error raised in the route keeps its own status (§5.4, §9.4).
             from backend.api import session as session_api
             from backend.domain.identity.authorization import AccessRefused
+            from backend.pg_facade.registry import NotPortedError
+
+            if isinstance(exc, NotPortedError):
+                # A documented gap of the PostgreSQL Library, never a fault:
+                # nothing falls back to SQLite (PG-C1 #640).
+                self._send_not_ported(str(exc))
+                return
 
             reply = session_api.route_failure(exc)
             if reply is not None:
@@ -1354,19 +1374,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
                     file_path_changing = False
                     if patched_file_path:
-                        rows = db.execute_query(
-                            "SELECT file_path FROM works WHERE id = ?",
-                            (w_id,),
-                        )
-                        stored_fp = (
-                            (rows[0].get("file_path") or "") if rows else ""
-                        )
+                        stored_fp = _stored_work_file_path(w_id)
                         incoming_fp = body.get("file_path")
                         if str(incoming_fp or "") == str(stored_fp or ""):
                             body.pop("file_path", None)
                             file_path_changing = False
                         else:
                             file_path_changing = True
+                    if file_path_changing and serves_postgres_library():
+                        # Adopting another file is not ported; the SQLite
+                        # adoption guard must not touch the shared root.
+                        self._send_not_ported("Changing a Work's file_path is not ported to PostgreSQL yet.")
+                        return
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
@@ -1437,12 +1456,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 )
                     if file_path_changing:
                         try:
-                            rows = db.execute_query(
-                                "SELECT file_path FROM works WHERE id = ?",
-                                (w_id,),
-                            )
-                            fp = (rows[0].get("file_path") or "") if rows else ""
-                            text_index.sync_work(w_id, fp)
+                            text_index.sync_work(w_id, _stored_work_file_path(w_id))
                         except Exception as e:
                             LOGGER.warning(
                                 "work_patch_text_index_failed work_id=%s error_type=%s",
@@ -2364,7 +2378,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # canonical source value, so duplicating a URL here would
                 # double what this endpoint sends and what IndexedDB stores
                 # for values the client already holds.
-                data = work_source_sync.get_source_state(db, path.split('/')[3])
+                data = db.get_work_source_state(path.split("/")[3])
                 if data is None:
                     self.send_json(404, {"error": "Work not found"})
                 elif data == work_source_sync.INVALID_SOURCE_STATE:
@@ -2398,7 +2412,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # values the client already holds. A scope with a revision and
                 # no live relationship is what tells an offline device its own
                 # pending removal is current rather than stale.
-                data = work_role_sync.get_roles_state(db, path.split('/')[3])
+                data = db.get_work_roles_state(path.split("/")[3])
                 if data is None:
                     self.send_json(404, {"error": "Work not found"})
                 else:
@@ -3571,10 +3585,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     if not w_id:
                         self.send_json(400, {'error': 'work_id is required'})
                         return
-                    if not db.execute_query("SELECT id FROM folders WHERE id = ?", (f_id,)):
+                    if not db.folder_exists(f_id):
                         self.send_json(404, {'error': 'Folder not found'})
                         return
-                    if not db.execute_query("SELECT id FROM works WHERE id = ?", (w_id,)):
+                    if db.get_primary_thumbnail_fields(w_id) is None:
                         self.send_json(404, {'error': 'Work not found'})
                         return
                     try:
@@ -3882,11 +3896,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         files; on PostgreSQL they would rebind the process to SQLite. The
         PostgreSQL backup and restore routes replace them (PG-C1 #640).
         """
-        self.send_json(501, {
-            "error": "Backup and restore are not ported to the PostgreSQL Library yet.",
-            "code": "not_ported",
-            "request_id": self._prks_request_id,
-        })
+        self._send_not_ported("Backup and restore are not ported to the PostgreSQL Library yet.")
+
+    def _send_not_ported(self, message: str) -> None:
+        """501 ``not_ported``: a route the PostgreSQL Library does not serve yet."""
+        self.send_json(501, {"error": message, "code": "not_ported", "request_id": self._prks_request_id})
 
     def _handle_backup_stage(self, parsed_path=None) -> None:
         content_length = self._validate_backup_stage_headers()
