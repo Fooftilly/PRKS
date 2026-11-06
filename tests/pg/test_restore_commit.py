@@ -28,7 +28,7 @@ from psycopg import errors
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity.authorization import AccessRefused
-from backend.domain.maintenance import restore
+from backend.domain.maintenance import backup, restore
 from backend.domain.maintenance.connection import maintenance_connection
 from backend.domain.maintenance.restore import RestoreFailed, RestoreResult
 from backend.domain.maintenance.staging import staging_schema
@@ -502,3 +502,49 @@ class LeaseTests(RestoreTestCase):
         self.assertEqual(self.staging_schemas(), [staging_schema(live)])
         self.assertIsNone(self.library_row()["maintenance"])
         self.assertEqual(self.recover(), restore.Recovered(0, 0, 0, 0))
+
+
+class ImportDuringBackupTests(RestoreTestCase):
+    """§11.5: an import commits in one transaction, so the snapshot holds one side of it, whole."""
+
+    def upload(self) -> dict[str, Any]:
+        data = b"%PDF-1.4\n% racing\n%%EOF\n"
+        return processing.upload(self.db, self.actor.context, self.objects, upload_key=uuid.uuid4().hex,
+                                 filename="racing.pdf", body=io.BytesIO(data), content_length=len(data),
+                                 max_bytes=1024 * 1024).item
+
+    def back_up_importing_at(self, phase: str) -> tuple[Any, str]:
+        item = self.upload()
+        locator = self.sql("SELECT object_locator FROM prks.processing_items WHERE id = %s",
+                           (item["id"],))[0]["object_locator"]
+
+        def import_now() -> None:
+            processing.import_one(self.db, self.actor.context, self.objects, item["id"])
+
+        result = self.backup(hooks={phase: import_now})
+        self.assertEqual(self.sql("SELECT status FROM prks.processing_items WHERE id = %s",
+                                  (item["id"],))[0]["status"], "imported")
+        return result, locator
+
+    def archived(self, result: Any, locator: str) -> tuple[list[str], list[str], bool]:
+        items = [row["status"] for row in self.rows(result, "db/processing_items.csv")]
+        assets = [row["work_id"] for row in self.rows(result, "db/assets.csv")]
+        stored = any(key.endswith("/" + locator) for key in result.manifest["objects"])
+        return items, assets, stored
+
+    def test_an_import_committed_before_the_snapshot_is_archived_imported_with_its_asset(self) -> None:
+        result, locator = self.back_up_importing_at(backup.PHASE_LOCKED)
+        items, assets, stored = self.archived(result, locator)
+        self.assertEqual((items, len(assets), stored), (["imported"], 1, True))
+        self.assertEqual(self.rows(result, "db/assets.csv")[0]["storage_locator"], locator)
+
+    def test_an_import_committed_after_the_snapshot_is_archived_queued_with_its_object(self) -> None:
+        result, locator = self.back_up_importing_at(backup.PHASE_SNAPSHOT)
+        items, assets, stored = self.archived(result, locator)
+        self.assertEqual((items, assets, stored), (["ready"], [], True))
+        # The restored item is ready again, its object present and its upload key reserved.
+        self.restore(result.path)
+        (row,) = self.sql("SELECT status, object_locator FROM prks.processing_items")
+        self.assertEqual((row["status"], row["object_locator"]), ("ready", locator))
+        self.assertTrue(self.stored(locator))
+        self.assertEqual(self.sql("SELECT 1 FROM prks.assets"), [])
