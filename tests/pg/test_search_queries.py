@@ -139,6 +139,14 @@ class OrderTests(SearchQueryTestCase):
         noted = self.library.add_work("Log", text_content="republic platonides")
         self.assertEqual(self.found("republic platonides"), [credited, noted])
 
+    def test_an_abstract_prefix_outranks_a_newer_note_prefix(self) -> None:
+        # ts_filter reads the stored C and D weights (lowercase labels match
+        # them): 0.4 beats 0.2 although recency and the note's density
+        # (its repetitions) both favor the note.
+        by_abstract = self.library.add_work("Essays", abstract="Quillon wrote it")
+        by_note = self.library.add_work("Log", text_content=" ".join(["quillon again"] * 10))
+        self.assertEqual(self.found("quillon"), [by_abstract, by_note])
+
     def test_a_linked_person_outranks_an_abstract_mention(self) -> None:
         mention = self.library.add_work("Essays", abstract="Quillon is cited once")
         credited = self.library.add_work("Collected papers")
