@@ -227,7 +227,123 @@ class ArchiveContainmentTests(StagingTestCase):
                 self.assertEqual(caught.exception.reason, "schema_mismatch")
 
 
+    def test_encrypted_or_corrupt_members_are_refused_as_unreadable(self) -> None:
+        encrypted = rewrite(self.good, self.path("enc.zip"))
+        with open(encrypted, "r+b") as handle:  # set the "encrypted" flag of works.csv's directory entry
+            raw = handle.read()
+            entry = raw.index(b"PK\x01\x02")
+            while raw[entry + 46:entry + 46 + len(b"db/works.csv")] != b"db/works.csv":
+                entry = raw.index(b"PK\x01\x02", entry + 4)
+            handle.seek(entry + 8)
+            handle.write((int.from_bytes(raw[entry + 8:entry + 10], "little") | 0x1).to_bytes(2, "little"))
+        self.refused(encrypted, "not_a_backup")
+        deflated = rewrite(self.good, self.path("deflate.zip"), compress={"db/works.csv"})
+        with zipfile.ZipFile(deflated) as source:
+            info = source.getinfo("db/works.csv")
+        with open(deflated, "r+b") as handle:  # the compressed bytes become an invalid deflate stream
+            handle.seek(info.header_offset + 26)
+            name_len, extra_len = int.from_bytes(handle.read(2), "little"), int.from_bytes(handle.read(2), "little")
+            handle.seek(info.header_offset + 30 + name_len + extra_len)
+            handle.write(b"\xff" * info.compress_size)
+        self.refused(deflated, "not_a_backup")
+
+    def test_refusals_never_echo_the_manifests_own_text(self) -> None:
+        secret = "Private Diary Title"
+        error = self.refused(rewrite(self.good, self.path("v.zip"),
+                                     manifest_edit=lambda m: m.__setitem__("format_version", secret)), "manifest")
+        self.assertNotIn(secret, error.message)
+
+        def other_schema(manifest: dict[str, Any]) -> None:
+            manifest["schema_version"] = secret
+            manifest["schema_fingerprint"] = "0" * 64
+
+        archive = r0.open_archive(rewrite(self.good, self.path("s.zip"), manifest_edit=other_schema),
+                                  staging_dir=self.staging_dir)
+        self.addCleanup(archive.close)
+        with maintenance_connection(self.conninfo) as conn, self.assertRaises(ArchiveRefused) as caught:
+            r0.check_schema(conn, archive)
+        self.assertNotIn(secret, caught.exception.message)
+
+
 class StagingTests(StagingTestCase):
+    def test_a_file_put_in_the_archives_path_after_r0_is_never_read(self) -> None:
+        self.create(self.put(b"%PDF pinned"))
+        result = self.backup()
+        archive = r0.open_archive(result.path, staging_dir=self.staging_dir)
+        self.addCleanup(archive.close)
+        works = source_text(result.path, "db/works.csv")
+        os.replace(rewrite(result.path, self.path("swap.zip"),
+                           change={"db/works.csv": works.replace("Created", "Swapped").encode()}), result.path)
+        run_id = self.run_row()
+        with maintenance_connection(self.conninfo) as conn:
+            r0.check_schema(conn, archive)
+            staged = staging.stage(conn, archive, run_id=run_id, target_library_id=self.actor.library_id,
+                                   owner_user_id=self.actor.user_id, storage=self.objects)
+        self.addCleanup(self.drop, staged)
+        self.assertNotIn("Swapped", json.dumps(self.staged(staged, "works"), default=str))
+
+    def test_member_bytes_changed_in_place_after_r0_are_refused(self) -> None:
+        self.create(self.put(b"%PDF in place"))
+        result = self.backup()
+        archive = r0.open_archive(result.path, staging_dir=self.staging_dir)
+        self.addCleanup(archive.close)
+        with open(result.path, "r+b") as handle:
+            raw = handle.read()
+            at = raw.index(b"Created")
+            handle.seek(at)
+            handle.write(b"Cr3ated")
+        run_id = self.run_row()
+        with maintenance_connection(self.conninfo) as conn, self.assertRaises(ArchiveRefused) as caught:
+            r0.check_schema(conn, archive)
+            try:
+                staging.stage(conn, archive, run_id=run_id, target_library_id=self.actor.library_id,
+                              owner_user_id=self.actor.user_id, storage=self.objects)
+            finally:
+                staging.drop_staging(conn, run_id)
+        # The ZIP's own CRC or the manifest hash catches it, whichever ends the read first.
+        self.assertIn(caught.exception.reason, {"hash_mismatch", "not_a_backup"})
+
+    def test_a_users_count_other_than_the_manifests_is_refused(self) -> None:
+        self.create(self.put())
+        result = self.backup()
+
+        def more_users(manifest: dict[str, Any]) -> None:
+            manifest["identities"]["users"]["rows"] += 1
+
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(rewrite(result.path, self.path("users.zip"), manifest_edit=more_users))
+        self.assertEqual(caught.exception.reason, "row_count")
+
+    def test_the_lease_is_renewed_while_a_member_streams(self) -> None:
+        from backend.domain.maintenance.format import IO_CHUNK_SIZE
+
+        self.create(self.put(b"%PDF " + os.urandom(4 * IO_CHUNK_SIZE)))
+        result = self.backup()
+        for key in list(self.objects.iter_keys("asset-objects")):
+            self.objects.delete(key)
+        hashing = mock.Mock()
+        archive = r0.open_archive(result.path, staging_dir=self.staging_dir, renew=hashing)
+        self.addCleanup(archive.close)
+        self.assertGreaterEqual(hashing.call_count, 4)
+        calls: list[str] = []
+        real_put = self.objects.put_new
+
+        def put_new(*args: Any, **kwargs: Any) -> Any:
+            calls.append("put")
+            return real_put(*args, **kwargs)
+
+        run_id = self.run_row()
+        with maintenance_connection(self.conninfo) as conn, \
+                mock.patch.object(self.objects, "put_new", side_effect=put_new):
+            r0.check_schema(conn, archive)
+            staged = staging.stage(conn, archive, run_id=run_id, target_library_id=self.actor.library_id,
+                                   owner_user_id=self.actor.user_id, storage=self.objects,
+                                   renew=lambda: calls.append("renew"))
+        self.addCleanup(self.drop, staged)
+        # Renewed per chunk inside the one object's write, not only after it.
+        after_put = calls[calls.index("put") + 1:]
+        self.assertGreaterEqual(after_put.count("renew"), 5)
+
     def test_staging_rebuilds_the_library_beside_the_live_tables(self) -> None:
         obj = self.put(b"%PDF staged")
         work_id = self.create(obj)
@@ -309,7 +425,7 @@ class StagingTests(StagingTestCase):
             staged = self.stage(result.path)
         self.addCleanup(self.drop, staged)
         self.assertEqual(staged.objects_written, 3)
-        self.assertEqual(opened.call_count, 2)  # R0's check, then one handle for every member
+        self.assertEqual(opened.call_count, 1)  # R0 validates it, and staging reads that same handle
 
     def test_a_partial_global_key_held_by_another_library_is_refused(self) -> None:
         obj = self.put(b"%PDF upload")

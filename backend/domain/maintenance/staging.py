@@ -105,7 +105,7 @@ SELECT a.attname
 
 
 def _copy_member(conn: psycopg.Connection[Any], archive: Archive, member: Member,
-                 target: sql.Composable, columns: list[str]) -> None:
+                 target: sql.Composable, columns: list[str], renew: Callable[[], None]) -> None:
     statement = sql.SQL("COPY {} ({}) FROM STDIN WITH (FORMAT csv, HEADER MATCH, ENCODING 'UTF8')").format(
         target, sql.SQL(", ").join(sql.Identifier(c) for c in columns))
     with archive.open_member(member) as handle, conn.cursor().copy(statement) as copy:
@@ -114,6 +114,7 @@ def _copy_member(conn: psycopg.Connection[Any], archive: Archive, member: Member
             if not chunk:
                 break
             copy.write(chunk)
+            renew()
 
 
 def _count(conn: psycopg.Connection[Any], query: sql.Composable) -> int:
@@ -135,16 +136,16 @@ def _create_tables(conn: psycopg.Connection[Any], schema: str) -> None:
 
 
 def _load_table(conn: psycopg.Connection[Any], archive: Archive, schema: str, table: str,
-                target_library_id: str) -> None:
+                target_library_id: str, renew: Callable[[], None]) -> None:
     _, name = tables.split_name(table)
     columns = [(row[0], row[1]) for row in conn.execute(_LIVE_COLUMNS_SQL, (table,)).fetchall()]
     load = sql.Identifier(schema, _LOAD_PREFIX + name)
     conn.execute(sql.SQL("CREATE TABLE {} ({})").format(
         load, sql.SQL(", ").join(sql.SQL("{} text").format(sql.Identifier(c)) for c, _ in columns)))
-    _copy_member(conn, archive, archive.tables[table], load, [c for c, _ in columns])
+    _copy_member(conn, archive, archive.tables[table], load, [c for c, _ in columns], renew)
     loaded = _count(conn, sql.SQL("SELECT 1 FROM {}").format(load))
     if loaded != archive.tables[table].rows:
-        raise StagingRefused("row_count", f"The backup's {table} rows do not match its manifest.")
+        raise StagingRefused("row_count", f"The backup's {table} rows do not match its manifest.")  # our name
     selects = []
     for column, pg_type in columns:
         if column == "library_id":
@@ -193,32 +194,38 @@ def _check_object_references(conn: psycopg.Connection[Any], archive: Archive, sc
             obj_key = StorageKey(namespace, name)
         except InvalidStorageKey:
             raise StagingRefused("object_missing", "The backup's rows name an object by an invalid key.") from None
+    # Messages count objects and never name one: keys come from the archive.
         named.setdefault(obj_key, []).append((sha256, size))
-    missing = sorted(str(k) for k in named.keys() - archive.objects.keys())
+    missing = len(named.keys() - archive.objects.keys())
     if missing:
-        raise StagingRefused("object_missing", f"The backup's rows name objects it does not carry: {missing[0]}.")
-    extra = sorted(str(k) for k in archive.objects.keys() - named.keys())
+        raise StagingRefused("object_missing", f"The backup's rows name {missing} object(s) it does not carry.")
+    extra = len(archive.objects.keys() - named.keys())
     if extra:
-        raise StagingRefused("object_unreferenced", f"The backup carries an object no row names: {extra[0]}.")
-    for obj_key, recorded in named.items():
-        member = archive.objects[obj_key]
-        for sha256, size in recorded:
-            if (sha256 is not None and sha256 != member.sha256) or (size is not None and size != member.size):
-                raise StagingRefused("object_mismatch",
-                                     f"The backup's rows record other contents for {obj_key} than it carries.")
+        raise StagingRefused("object_unreferenced", f"The backup carries {extra} object(s) no row names.")
+    mismatched = sum(
+        1 for obj_key, recorded in named.items()
+        if any((sha256 is not None and sha256 != archive.objects[obj_key].sha256)
+               or (size is not None and size != archive.objects[obj_key].size) for sha256, size in recorded))
+    if mismatched:
+        raise StagingRefused("object_mismatch",
+                             f"The backup's rows record other contents for {mismatched} object(s) than it carries.")
 
 
 # -- 2. identities ----------------------------------------------------------------------------
 
 
-def _load_identities(conn: psycopg.Connection[Any], archive: Archive, schema: str, owner_user_id: str) -> int:
+def _load_identities(conn: psycopg.Connection[Any], archive: Archive, schema: str, owner_user_id: str,
+                     renew: Callable[[], None]) -> int:
     users = sql.Identifier(schema, "_archive_users")
     devices = sql.Identifier(schema, "_archive_devices")
     conn.execute(sql.SQL("CREATE TABLE {} (archive_user_id text PRIMARY KEY, display_name text)").format(users))
     conn.execute(sql.SQL("CREATE TABLE {} (device_id uuid PRIMARY KEY, archive_user_id text NOT NULL, "
                          "label text, first_seen timestamptz NOT NULL)").format(devices))
-    _copy_member(conn, archive, archive.users, users, ["archive_user_id", "display_name"])
-    _copy_member(conn, archive, archive.devices, devices, ["device_id", "archive_user_id", "label", "first_seen"])
+    _copy_member(conn, archive, archive.users, users, ["archive_user_id", "display_name"], renew)
+    if _count(conn, sql.SQL("SELECT 1 FROM {}").format(users)) != archive.users.rows:
+        raise StagingRefused("row_count", "The backup's users do not match its manifest.")
+    _copy_member(conn, archive, archive.devices, devices, ["device_id", "archive_user_id", "label", "first_seen"],
+                 renew)
     map_users = sql.Identifier(schema, "_map_users")
     map_devices = sql.Identifier(schema, "_map_devices")
     conn.execute(sql.SQL(
@@ -354,7 +361,14 @@ def _stage_objects(conn: psycopg.Connection[Any], archive: Archive, run_id: uuid
         with conn.transaction():
             conn.execute(OBJECT_LOCK_SQL, (str(obj_key),))
             conn.execute(_STAGE_OBJECT_SQL, (run_id, obj_key.namespace, obj_key.name))
-        if _place_object(archive, storage, obj_key, member):
+        # The committed row is a reference cleanup's settle reads under the same
+        # lock (lifecycle._STAGED_REFERENCES) while the run is running, so no
+        # settle can delete this key from here on; a settle that won the lock
+        # first has already deleted it, and it is written fresh below. The
+        # row goes only when the run commits (R4's rows then name the key) or
+        # fails (recovery claims it), and the lease renewed per chunk stops a
+        # run whose recovery has begun.
+        if _place_object(archive, storage, obj_key, member, renew):
             written += 1
         else:
             reused += 1
@@ -362,7 +376,8 @@ def _stage_objects(conn: psycopg.Connection[Any], archive: Archive, run_id: uuid
     return written, reused
 
 
-def _place_object(archive: Archive, storage: StorageBackend, obj_key: StorageKey, member: Member) -> bool:
+def _place_object(archive: Archive, storage: StorageBackend, obj_key: StorageKey, member: Member,
+                  renew: Callable[[], None]) -> bool:
     """Write a missing object from the archive (True) or reuse a matching one (False)."""
     if storage.stat(obj_key) is not None:
         _reuse(storage, obj_key, member)
@@ -375,6 +390,7 @@ def _place_object(archive: Archive, storage: StorageBackend, obj_key: StorageKey
                 if not chunk:
                     break
                 stream.write(chunk)
+                renew()
 
     try:
         info = storage.put_new(obj_key, write, hash=True)
@@ -382,14 +398,14 @@ def _place_object(archive: Archive, storage: StorageBackend, obj_key: StorageKey
         _reuse(storage, obj_key, member)
         return False
     if info.sha256 != member.sha256 or info.size != member.size:
-        raise StagingRefused("object_conflict", f"The backup's copy of {obj_key} did not write back intact.")
+        raise StagingRefused("object_conflict", "A backup object did not write back intact.")
     return True
 
 
 def _reuse(storage: StorageBackend, obj_key: StorageKey, member: Member) -> None:
     if storage.verify(obj_key, member.sha256) is not True:
         raise StagingRefused("object_conflict",
-                             f"The stored object {obj_key} differs from the backup's copy; it is never overwritten.")
+                             "A stored object differs from the backup's copy; it is never overwritten.")
 
 
 # -- the phase --------------------------------------------------------------------------------
@@ -410,11 +426,11 @@ def stage(conn: psycopg.Connection[Any], archive: Archive, *, run_id: uuid.UUID,
         pin_interchange_settings(conn)
         _create_tables(conn, schema)
         for table in tables.BACKUP_CONTENT_TABLES:
-            _load_table(conn, archive, schema, table, target_library_id)
+            _load_table(conn, archive, schema, table, target_library_id, renew)
             renew()
         _renumber_identities(conn, schema)
         _check_object_references(conn, archive, schema, target_library_id)
-        new_devices = _load_identities(conn, archive, schema, owner_user_id)
+        new_devices = _load_identities(conn, archive, schema, owner_user_id, renew)
         _check_foreign_library_ids(conn, schema, target_library_id)
         _check_foreign_keys(conn, schema)
     written = reused = 0

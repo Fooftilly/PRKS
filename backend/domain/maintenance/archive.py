@@ -25,7 +25,10 @@ anything:
 
 The archive is never extracted: staging (R1) streams each member straight
 from the archive into ``COPY`` or the storage backend, so no archive path is
-ever resolved on the filesystem. :func:`check_schema` is the database half of
+ever resolved on the filesystem. The :class:`Archive` keeps the one ZipFile
+R0 validated open, so a file put in its path later is never read, and every
+read hashes the member again and refuses it at its end unless it still
+matches the manifest, so bytes changed in place are never staged. :func:`check_schema` is the database half of
 R0: the archive's schema fingerprint and interchange columns must match the
 live database (before 1.0, §11.4 "Staging schema").
 """
@@ -38,6 +41,7 @@ import os
 import re
 import stat as stat_module
 import zipfile
+import zlib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -107,8 +111,8 @@ class Archive:
     users: Member
     devices: Member
     objects: dict[StorageKey, Member]
-    # The one open ZipFile, parsed once: reopening it per member would read the
-    # whole central directory again for every object (quadratic in objects).
+    # The ZipFile R0 validated, kept open: reading through it never reads a
+    # file put in ``path`` since, and parses the central directory once.
     _zip: list[zipfile.ZipFile] = field(default_factory=list, compare=False, repr=False)
 
     @property
@@ -117,14 +121,16 @@ class Archive:
 
     @contextmanager
     def open_member(self, member: Member) -> Iterator[BoundedReader]:
-        """A stream of one member that never yields more than its declared size."""
+        """A stream of one member that yields exactly its declared, hashed bytes, or refuses."""
         if not self._zip:
-            self._zip.append(zipfile.ZipFile(self.path))
-        with self._zip[0].open(member.name) as handle:
-            yield BoundedReader(handle, member.size)
+            raise ValueError("The archive is closed.")
+        with _read_errors():
+            handle = self._zip[0].open(member.name)
+        with handle:
+            yield BoundedReader(handle, member.size, member.sha256)
 
     def close(self) -> None:
-        """Close the archive file; a later read opens it again."""
+        """Close the archive file; it cannot be read after."""
         while self._zip:
             self._zip.pop().close()
 
@@ -135,22 +141,61 @@ class Archive:
         self.close()
 
 
-class BoundedReader:
-    """Reads a member, refusing one that holds more than its declared size."""
+def _not_readable() -> ArchiveRefused:
+    return ArchiveRefused("not_a_backup", "This file is not a readable PRKS backup.")
 
-    def __init__(self, inner: IO[bytes], limit: int) -> None:
+
+@contextmanager
+def _read_errors() -> Iterator[None]:
+    """Turn what a ZIP read raises on a damaged or unsupported archive into a refusal.
+
+    An encrypted member raises ``RuntimeError`` and corrupt deflate data
+    ``zlib.error``; a bad CRC is ``BadZipFile``.
+    """
+    try:
+        yield
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, EOFError, RuntimeError,
+            zlib.error):
+        raise _not_readable() from None
+
+
+class BoundedReader:
+    """Reads a member: never more than its declared size, and, at its end, its declared hash.
+
+    The end is where the declared size has been read and the member holds
+    nothing more; a member that ends short, runs over, or hashes otherwise is
+    refused there, so a reader read to its end has read exactly the
+    manifest's bytes.
+    """
+
+    def __init__(self, inner: IO[bytes], limit: int, sha256: str) -> None:
         self._inner = inner
         self._left = limit
+        self._sha256 = sha256
+        self._digest = hashlib.sha256()
+        self._done = False
 
     def read(self, size: int = -1) -> bytes:
-        if self._left <= 0:
-            if self._inner.read(1):
-                raise ArchiveRefused("member_size", "An archive member is larger than its manifest says.")
-            return b""
-        want = self._left if size < 0 else min(size, self._left)
-        data = self._inner.read(want)
+        with _read_errors():
+            if self._left <= 0:
+                if not self._done:
+                    if self._inner.read(1):
+                        raise ArchiveRefused("member_size", "An archive member is larger than its manifest says.")
+                    if self._digest.hexdigest() != self._sha256:
+                        raise _mismatch()
+                    self._done = True
+                return b""
+            want = self._left if size < 0 else min(size, self._left)
+            data = self._inner.read(want)
+        if not data:
+            raise _mismatch()  # ends before its declared size
         self._left -= len(data)
+        self._digest.update(data)
         return data
+
+
+def _mismatch() -> ArchiveRefused:
+    return ArchiveRefused("hash_mismatch", "A backup archive member does not match its manifest.")
 
 
 def _unsafe() -> ArchiveRefused:
@@ -218,10 +263,12 @@ def _check_format(manifest: dict[str, Any]) -> None:
             "This backup was made by a PRKS version that stored its library in SQLite (backup format 1). "
             "This PRKS version restores only format 2 backups.")
     if version != FORMAT_VERSION:
-        raise ArchiveRefused("format_newer" if isinstance(version, int) and version > FORMAT_VERSION
-                             else "manifest",
-                             f"This backup uses format {version!r}; this PRKS version restores format "
-                             f"{FORMAT_VERSION}.")
+        newer = isinstance(version, int) and not isinstance(version, bool) and version > FORMAT_VERSION
+        # The archive's own value is never echoed: it is untrusted text.
+        raise ArchiveRefused("format_newer" if newer else "manifest",
+                             ("This backup uses a newer backup format" if newer
+                              else "This backup's format is not recognised")
+                             + f"; this PRKS version restores format {FORMAT_VERSION}.")
     if not isinstance(manifest.get("library_id"), str) or not _LIBRARY_ID_RE.fullmatch(manifest["library_id"]):
         raise ArchiveRefused("manifest", "The backup manifest is malformed.")
 
@@ -257,15 +304,25 @@ def _free_bytes(path: str) -> int:
 
 
 def open_archive(path: str, *, staging_dir: Optional[str], limits: Limits = Limits(),
-                 free_bytes: Callable[[str], int] = _free_bytes) -> Archive:
+                 free_bytes: Callable[[str], int] = _free_bytes,
+                 renew: Callable[[], None] = lambda: None) -> Archive:
     """R0's archive checks (see the module docstring); raises :class:`ArchiveRefused`.
 
     ``staging_dir`` is where a restore will write the archive's objects; its
     free space must hold them. ``None`` skips that preflight, for a backup's
     own verification, which stages tables only and writes no object.
+    ``renew`` is called while members are hashed (the run's lease).
+
+    The returned archive holds the validated file open: close it (it is a
+    context manager) once staging is done.
     """
     try:
-        with zipfile.ZipFile(path) as archive:
+        archive = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, EOFError, RuntimeError,
+            zlib.error):
+        raise _not_readable() from None
+    try:
+        with _read_errors():
             infos = archive.infolist()
             if len(infos) > limits.max_entries:
                 raise ArchiveRefused("too_many_entries", "The backup archive has too many entries.")
@@ -301,22 +358,16 @@ def open_archive(path: str, *, staging_dir: Optional[str], limits: Limits = Limi
                 raise ArchiveRefused("layout", "The backup archive's members do not match its manifest.")
             for name, member in expected.items():
                 if by_name[name].file_size != member.size:
-                    raise ArchiveRefused("hash_mismatch", "A backup archive member does not match its manifest.")
-                digest = hashlib.sha256()
+                    raise _mismatch()
                 with archive.open(by_name[name]) as handle:
-                    bounded = BoundedReader(handle, member.size)
-                    while True:
-                        chunk = bounded.read(IO_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        digest.update(chunk)
-                if digest.hexdigest() != member.sha256:
-                    raise ArchiveRefused("hash_mismatch", "A backup archive member does not match its manifest.")
-    except zipfile.BadZipFile:
-        raise ArchiveRefused("not_a_backup", "This file is not a readable PRKS backup.") from None
-    except (zipfile.LargeZipFile, NotImplementedError, EOFError):
-        raise ArchiveRefused("not_a_backup", "This file is not a readable PRKS backup.") from None
-    return Archive(path=path, manifest=manifest, tables=content, users=users, devices=devices, objects=objects)
+                    bounded = BoundedReader(handle, member.size, member.sha256)
+                    while bounded.read(IO_CHUNK_SIZE):
+                        renew()
+    except BaseException:
+        archive.close()
+        raise
+    return Archive(path=path, manifest=manifest, tables=content, users=users, devices=devices, objects=objects,
+                   _zip=[archive])
 
 
 def check_schema(conn: psycopg.Connection[Any], archive: Archive) -> None:
@@ -325,16 +376,18 @@ def check_schema(conn: psycopg.Connection[Any], archive: Archive) -> None:
     theirs = archive.manifest.get("interchange")
     if not isinstance(theirs, dict):
         raise ArchiveRefused("manifest", "The backup manifest is malformed.")
-    for table in tables.BACKUP_CONTENT_TABLES:
+    version = archive.manifest.get("schema_version")
+    # Only a whole number is shown: the manifest is untrusted text.
+    made_with = (f"database schema version {version}"
+                 if isinstance(version, int) and not isinstance(version, bool) else "another database schema")
+    for table in tables.BACKUP_CONTENT_TABLES:  # this PRKS version's own table names
         if theirs.get(table) != live_contract[table]:
             raise ArchiveRefused(
                 "schema_mismatch",
-                f"The backup was made with database schema version {archive.manifest.get('schema_version')!r}, "
-                f"and its {table} columns differ from this database's. Restore it with the PRKS version "
-                "that made it.")
+                f"The backup was made with {made_with}, and its {table} columns differ from this database's. "
+                "Restore it with the PRKS version that made it.")
     if archive.manifest.get("schema_fingerprint") != schema_fingerprint(conn):
         raise ArchiveRefused(
             "schema_mismatch",
-            f"The backup was made with a different database schema (version "
-            f"{archive.manifest.get('schema_version')!r}) than this database's. Restore it with the PRKS "
+            f"The backup was made with {made_with}, not this database's. Restore it with the PRKS "
             "version that made it.")
