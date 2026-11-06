@@ -193,9 +193,11 @@ class IdleTickTests(WorkerTestCase):
         self.registry.add_idle_task(lambda db: ticks.append(time.monotonic()))
         self.enqueue_instance(kind="test.busy")
         worker = self.start_worker()
-        wait_until(lambda: len(ticks) >= 3, "idle tasks between jobs")
+        # The first tick is the startup pass before the first claim; the rest are between jobs.
+        wait_until(lambda: len(ticks) >= 4, "idle tasks between jobs")
         self.assertFalse(worker.idle.is_set(), "the worker never went idle")
-        self.assertGreater(worker.stats.snapshot()["claimed"], len(ticks), "at most one tick per poll interval")
+        between = len(ticks) - 1
+        self.assertGreater(worker.stats.snapshot()["claimed"], between, "at most one tick per poll interval")
 
     def test_a_worker_without_the_prune_handler_enqueues_no_prune(self) -> None:
         worker = self.start_worker()
