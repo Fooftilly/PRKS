@@ -1,5 +1,5 @@
 import type { InjectionKey } from 'vue'
-import type { ConceptDefinitionEdit, ConceptDetail } from './types'
+import type { ConceptAliasesEdit, ConceptDefinitionEdit, ConceptDetail } from './types'
 
 /** Owning TabContext fields Concept intents need. Not a second route model. */
 export interface ConceptIntentOwner {
@@ -92,6 +92,23 @@ export function changedElsewhereNotice(current: string): string {
     'Not saved: this definition changed in another tab or on another device after you ' +
     `started editing. It now reads: ${preview ? `“${preview}”` : '(empty)'}. ` +
     'Your text is below. Save replaces the current definition with it; Cancel keeps the current definition.'
+  )
+}
+
+/** A stale alias prompt shows both the newer set and a possible rename. */
+export function changedAliasesNotice(name: string, aliases: readonly string[]): string {
+  const raw = aliases.join(', ') || '(none)'
+  const shown = raw.length > NOTICE_PREVIEW_CHARS
+    ? raw.slice(0, NOTICE_PREVIEW_CHARS) + '…'
+    : raw
+  const label = name.length > NOTICE_PREVIEW_CHARS
+    ? name.slice(0, NOTICE_PREVIEW_CHARS) + '…'
+    : name
+  return (
+    'Not saved: this concept name or its aliases changed in another tab or on another device ' +
+    'after you started editing. The current name is “' + label + '”; current aliases: ' + shown +
+    '. Your aliases are below. Save again deliberately replaces the current alias list; ' +
+    'Cancel keeps the latest aliases, including any old-name alias added by Rename.'
   )
 }
 
@@ -269,25 +286,63 @@ export function browserConceptIntents(
     },
 
     async editAliases(concept) {
-      const next = await promptText({
-        title: 'Search keys / aliases',
-        message: 'One alias per line',
-        defaultValue: (concept.aliases || []).join('\n'),
-        multiline: true,
-        okLabel: 'Save',
-      })
-      if (next == null) return
-      if (!ownsDetail(owner, generation, concept.id)) return
-      const aliases = next
-        .split(/\n/)
-        .map((s) => s.trim())
-        .filter(Boolean)
+      /* Pin the identity revision when this editor opens. A newer alias list
+       * (or Rename's old-name alias) is not silently replaced at Save (#784). */
+      let session: ConceptAliasesEdit | null
       try {
-        const put = requireDurableApi(window.putConceptAliases, 'putConceptAliases')
-        await put(concept.id, aliases)
+        const begin = requireDurableApi(
+          window.prksBeginConceptAliasesEdit,
+          'prksBeginConceptAliasesEdit',
+        )
+        session = await begin(concept.id)
       } catch (err) {
-        await reportFailure(owner, generation, concept.id, err, 'Could not save these aliases')
+        await reportFailure(owner, generation, concept.id, err, 'Could not edit these aliases')
         return
+      }
+      if (!session) {
+        await reportFailure(owner, generation, concept.id,
+          new Error(BASE_UNAVAILABLE), 'Could not edit these aliases')
+        return
+      }
+      if (!ownsDetail(owner, generation, concept.id)) return
+      let draft = session.value.join('\n')
+      let notice = ''
+      for (;;) {
+        const next = await promptText({
+          title: 'Search keys / aliases',
+          message: notice || 'One alias per line',
+          defaultValue: draft,
+          multiline: true,
+          okLabel: 'Save',
+        })
+        if (!ownsDetail(owner, generation, concept.id)) return
+        if (next == null) {
+          if (notice || session.value.join('\n') !== (concept.aliases || []).join('\n')) {
+            refreshDetail(owner, generation, concept.id)
+          }
+          return
+        }
+        const aliases = next.split(/\n/).map((s) => s.trim()).filter(Boolean)
+        try {
+          const put = requireDurableApi(window.putConceptAliases, 'putConceptAliases')
+          await put(concept.id, aliases, { aliasesEdit: session })
+          break
+        } catch (err) {
+          if (errorCode(err) !== 'changed_elsewhere') {
+            await reportFailure(owner, generation, concept.id, err, 'Could not save these aliases')
+            return
+          }
+        }
+        const fresh = await window.prksBeginConceptAliasesEdit?.(concept.id)
+        if (!ownsDetail(owner, generation, concept.id)) return
+        if (!fresh) {
+          await reportFailure(owner, generation, concept.id,
+            new Error(BASE_UNAVAILABLE), 'Could not save these aliases')
+          return
+        }
+        session = fresh
+        draft = next
+        notice = changedAliasesNotice(fresh.name, fresh.value)
       }
       refreshDetail(owner, generation, concept.id)
     },

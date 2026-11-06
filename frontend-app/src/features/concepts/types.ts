@@ -55,6 +55,21 @@ export type ConceptDetailAvailability = 'ready' | 'unavailable' | 'not-found'
  * opens (#568): the text it shows and the base that text was typed on. Opaque
  * to Vue apart from `value`; `updateConcept` measures the Save against it.
  */
+/** Pinned name/alias aggregate as seen when the Search keys editor opens. */
+export interface ConceptAliasesEdit {
+  readonly concept_id: string
+  readonly name: string
+  readonly value: readonly string[]
+  readonly base: {
+    readonly identity: {
+      readonly name: string
+      readonly aliases: readonly string[]
+      readonly revision: number
+    }
+  }
+  readonly expected: { readonly identity: string | null }
+}
+
 export interface ConceptDefinitionEdit {
   readonly concept_id: string
   readonly value: string

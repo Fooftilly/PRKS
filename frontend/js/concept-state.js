@@ -499,6 +499,58 @@
     }
 
     /** Carries `code: 'changed_elsewhere'`; the caller keeps the user's text. */
+    /* The alias prompt owns a snapshot of the entire name/aliases aggregate,
+     * including a possibly pending identity row and its original revision.
+     * Rename adds the old name as an alias: a stale prompt must not drop it. */
+    async function beginConceptAliasesEdit(conceptId, operations) {
+        let ops = operations;
+        if (!Array.isArray(ops)) {
+            try { ops = await sync().store.listOperations(); }
+            catch (_e) { return null; }
+        }
+        const observed = await acknowledgedConceptIdentity(conceptId, ops);
+        if (!observed) return null;
+        const row = unsettled(ops, 'SET_CONCEPT_IDENTITY', conceptId)
+            .sort((a, b) => (b.sequence || 0) - (a.sequence || 0))[0] || null;
+        const revision = row && Number.isSafeInteger(row.base_revision) &&
+            row.base_revision >= 0 ? row.base_revision : observed.revision;
+        const identity = row && row.payload ? row.payload : observed;
+        return {
+            concept_id: conceptId, name: identity.name,
+            value: identity.aliases.slice(),
+            base: { identity: { name: observed.name, aliases: observed.aliases.slice(),
+                revision: revision } },
+            expected: { identity: row ? row.op_id : null },
+        };
+    }
+
+    function sameConceptAliases(a, b) {
+        return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+            a.every((value, i) => value === b[i]);
+    }
+
+    /** Fail closed when someone else changed the identity after this editor
+     * opened, or queued a foreign edit that was not in the shown draft. */
+    async function conceptAliasesSaveBase(conceptId, session, operations) {
+        const pinned = session && session.base && session.base.identity;
+        if (!pinned || session.concept_id !== conceptId) return null;
+        const current = await acknowledgedConceptIdentity(conceptId, operations);
+        const ownId = session.expected && session.expected.identity;
+        const pending = unsettled(operations, 'SET_CONCEPT_IDENTITY', conceptId)
+            .sort((a, b) => (b.sequence || 0) - (a.sequence || 0))[0] || null;
+        if (pending && pending.op_id !== ownId) throw changedElsewhere();
+        if (current && current.revision === pinned.revision &&
+            (current.name !== pinned.name ||
+                !sameConceptAliases(current.aliases, pinned.aliases))) {
+            throw changedElsewhere();
+        }
+        if (!current || current.revision <= pinned.revision) return pinned;
+        if (current.name === session.name &&
+            sameConceptAliases(current.aliases, session.value)) return current;
+        if (ownId && pending && pending.op_id === ownId) return pinned;
+        throw changedElsewhere();
+    }
+
     function changedElsewhere() {
         const err = new Error('The definition changed in another tab or on another '
             + 'device after you started editing.');
@@ -529,9 +581,10 @@
         return written;
     }
 
-    async function setConceptIdentityDurably(conceptId, name, aliases, observed) {
+    async function setConceptIdentityDurably(conceptId, name, aliases, observed, expectedOpId) {
         const runtime = sync();
-        const op = await runtime.store.setConceptIdentity(conceptId, name, aliases, observed);
+        const op = await runtime.store.setConceptIdentity(
+            conceptId, name, aliases, observed, expectedOpId);
         /* Refresh the synchronous map HERE: a renamed Concept has to read
          * correctly on every surface that names one, the moment the user
          * reaches it. */
@@ -698,6 +751,8 @@
         prksDirtyConceptFields: dirtyConceptFields,
         prksBeginConceptDefinitionEdit: beginConceptDefinitionEdit,
         prksConceptDefinitionSaveBase: conceptDefinitionSaveBase,
+        prksBeginConceptAliasesEdit: beginConceptAliasesEdit,
+        prksConceptAliasesSaveBase: conceptAliasesSaveBase,
         prksConceptChangedElsewhere: changedElsewhere,
         prksCreateConceptDurably: createConceptDurably,
         prksSaveConceptFieldsDurably: saveConceptFieldsDurably,

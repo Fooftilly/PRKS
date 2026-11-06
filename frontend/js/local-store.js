@@ -2963,7 +2963,12 @@
          *
          * `observed` is `{name, aliases, revision}`.
          */
-        function setConceptIdentity(conceptId, name, aliases, observed) {
+        function setConceptIdentity(conceptId, name, aliases, observed, expectedOpId) {
+            if (expectedOpId !== undefined && expectedOpId !== null &&
+                !isNonBlankString(expectedOpId)) {
+                return Promise.reject(localStoreError('invalid_envelope',
+                    'Invalid identity editor session.'));
+            }
             if (!isNonBlankString(conceptId) || !Array.isArray(aliases) ||
                 !isPlainObject(observed) || typeof observed.name !== 'string' ||
                 !Array.isArray(observed.aliases) ||
@@ -3004,9 +3009,14 @@
                         r.entity_type === 'concept' && r.entity_id === conceptId &&
                         r.status !== STATUS_ACKNOWLEDGED);
                     if (existing) {
-                        if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                            throw localStoreError('scope_busy',
-                                'This concept’s name is syncing or needs resolution.');
+                        const foreign = expectedOpId !== undefined &&
+                            expectedOpId !== existing.op_id;
+                        if (foreign || existing.status !== STATUS_PENDING ||
+                            existing.attempt_count > 0) {
+                            throw Object.assign(localStoreError('scope_busy',
+                                'This concept’s identity is syncing or needs resolution.'), {
+                                prksBusyForeign: foreign,
+                            });
                         }
                         if (sameAs(existing.payload.name, existing.payload.aliases || [])) {
                             setResult(existing);

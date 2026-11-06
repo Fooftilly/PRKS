@@ -1281,14 +1281,24 @@ async function putConceptParents(id, parentIds) {
  * The name travels unchanged, so an alias edit and a rename are the same
  * operation seen from two ends and cannot overwrite each other's half.
  */
-async function putConceptAliases(id, aliases) {
+async function putConceptAliases(id, aliases, options) {
+    const session = options && options.aliasesEdit;
+    const desired = aliases || [];
+    if (session && desired.length === session.value.length &&
+        desired.every((value, index) => value === session.value[index])) {
+        return { id: id }; // Unchanged prompt is not permission to overwrite.
+    }
     const ops = typeof prksDurableOperationsOrNone === 'function'
         ? await prksDurableOperationsOrNone() : [];
-    const observed = await prksAcknowledgedConceptIdentity(id, ops);
+    const observed = session
+        ? await prksConceptAliasesSaveBase(id, session, ops)
+        : await prksAcknowledgedConceptIdentity(id, ops);
     if (!observed) throw prksConceptBaseUnavailable();
     try {
-        await prksSetConceptIdentityDurably(id, observed.name, aliases || [], observed);
+        await prksSetConceptIdentityDurably(id, observed.name, desired, observed,
+            session ? session.expected.identity : undefined);
     } catch (error) {
+        if (session && error && error.prksBusyForeign) throw prksConceptChangedElsewhere();
         throw new Error(prksConceptSaveMessage(error, 'save these aliases'));
     }
     return { id: id };
