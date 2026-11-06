@@ -38,7 +38,10 @@ from collections.abc import Iterator
 from datetime import timedelta
 from typing import LiteralString, Optional
 
+import psycopg
+
 from backend.db.database import Database
+from backend.db.errors import map_database_error
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
@@ -207,7 +210,15 @@ class BackupMaintenance:
             if self._last_recover is not None and now - self._last_recover < self._recover_every:
                 return
             self._last_recover = now
-        recovered = recover_now(db.config.conninfo, self.root)
+        try:
+            recovered = recover_now(db.config.conninfo, self.root)
+        except psycopg.Error as exc:
+            # The worker reports a DatabaseError and keeps running; the next
+            # interval retries. A raw driver error would end its loop.
+            raise map_database_error(exc) from exc
+        except OSError as exc:
+            LOGGER.warning("maintenance_recover_files_failed error=%s", type(exc).__name__)
+            return
         if recovered != restore.Recovered(0, 0, 0, 0):
             LOGGER.info("maintenance_recovered restores_failed=%d flags_cleared=%d backups_failed=%d "
                         "schemas_dropped=%d", recovered.restores_failed, recovered.flags_cleared,

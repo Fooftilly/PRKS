@@ -17,11 +17,13 @@ import stat
 import uuid
 from datetime import timedelta
 from typing import Any
+from unittest import mock
 
 import psycopg
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
+from backend.db.errors import DatabaseError
 from backend.domain.identity import admin
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.maintenance import jobs as backup_jobs
@@ -79,6 +81,16 @@ class BackupJobTests(BackupTestCase):
         backup_jobs.attach(registry, self.objects, self.storage.root)
         self.assertIn(backup_jobs.BACKUP_KIND, registry.kinds())
         self.assertEqual(len(registry.idle_tasks()), 1)
+
+    def test_a_database_outage_in_recovery_is_a_database_error_the_worker_survives(self) -> None:
+        down = psycopg.OperationalError("connection refused")
+        with mock.patch.object(backup_jobs, "recover_now", side_effect=down):
+            with self.assertRaises(DatabaseError) as caught:
+                self.lane.tick(self.db)
+        self.assertIs(caught.exception.__cause__, down)
+        with mock.patch.object(backup_jobs, "recover_now", side_effect=PermissionError("denied")):
+            self.lane.tick(self.db)  # logged; the next interval retries
+        self.lane.tick(self.db)
 
     def test_the_idle_task_recovers_runs_and_removes_unpublished_archives(self) -> None:
         directory = backup_jobs.archive_dir(self.storage.root)
