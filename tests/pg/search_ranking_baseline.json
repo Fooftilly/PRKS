@@ -2,17 +2,17 @@
   "about": "Keyword search order on tests/pg/search_corpus.py, as corpus keys (L-S-2 #638). Regenerate with: python -m tests.pg.search_ranking --write-baseline",
   "orders": {
     "justice": [
-      "justice-lectures",
       "theory-of-justice",
       "justice-review",
+      "justice-lectures",
       "newest-justice-note"
     ],
     "theory of justice": [
       "theory-of-justice"
     ],
     "republic": [
-      "republic-companion",
       "the-republic",
+      "republic-companion",
       "republic-notes",
       "newest-justice-note"
     ],
@@ -20,8 +20,8 @@
       "the-republic"
     ],
     "state": [
-      "statecraft",
       "state-of-nature",
+      "statecraft",
       "leviathan",
       "newest-justice-note"
     ],
@@ -38,23 +38,23 @@
       "ethics-notes"
     ],
     "theorie": [
-      "newest-theorie",
-      "theorie-gerechtigkeit",
+      "erkenntnistheorie",
       "wissenschaftstheorie",
-      "erkenntnistheorie"
+      "newest-theorie",
+      "theorie-gerechtigkeit"
     ],
     "gerechtigkeit": [
       "gerechtigkeit",
       "theorie-gerechtigkeit"
     ],
     "liberte": [
-      "liberte-notes",
       "liberte-anciens",
+      "liberte-notes",
       "newest-justice-note"
     ],
     "logie": [
-      "anthropologie-mention",
-      "phenomenologie"
+      "phenomenologie",
+      "anthropologie-mention"
     ],
     "πολιτεια": [
       "politeia",
