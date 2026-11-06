@@ -296,6 +296,16 @@ class StagingTests(StagingTestCase):
             self.stage(result.path, library_id=other.library_id, owner=other.user_id)
         self.assertEqual(caught.exception.reason, "ids_in_other_library")
 
+    def test_library_scoped_keys_shared_with_another_library_are_no_collision(self) -> None:
+        other = self.other_actor()
+        for library_id in (self.actor.library_id, other.library_id):
+            self.sql("INSERT INTO prks.library_settings (library_id, key, value) VALUES (%s, 'theme', 'dark')",
+                     (library_id,))
+        result = self.backup()  # verified by staging, so this alone fails on a false collision
+        staged = self.stage(result.path)
+        self.addCleanup(self.drop, staged)
+        self.assertEqual([r["key"] for r in self.staged(staged, "library_settings")], ["theme"])
+
     def test_a_device_of_another_account_is_refused_with_its_operation_count(self) -> None:
         self.ledger_row(self.actor)
         self.ledger_row(self.actor, "W-2")
