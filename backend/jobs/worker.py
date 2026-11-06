@@ -247,6 +247,9 @@ class Worker:
             if not self._wait_until_started():
                 return
             self.started.set()
+            # One idle pass before the first claim, so startup recovery (an
+            # expired restore's flag, stale staging) never waits behind a job.
+            self._idle_tick()
             # The listener sets wake once it listens (a NOTIFY after that is not
             # missed); a stop sets it too, so an unreachable listener can't hold it.
             self._wake.wait(poll)

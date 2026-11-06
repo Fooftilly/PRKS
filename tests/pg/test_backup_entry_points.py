@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
+import tempfile
 import stat
 import uuid
 from datetime import timedelta
@@ -59,6 +61,15 @@ class BackupJobTests(BackupTestCase):
         progress = self.sql("SELECT progress FROM prks.jobs WHERE id = %s", (first,))[0]["progress"]
         self.assertEqual(progress["backup_run"], str(published["id"]))
 
+    def test_a_backup_requested_while_one_runs_is_not_queued_again(self) -> None:
+        first = backup_jobs.request_backup(self.db, self.actor.context)
+        run = self.claim()
+        self.assertEqual(run.job.id, first)
+        self.assertIsNone(backup_jobs.request_backup(self.db, self.actor.context))
+        self.lane.backup(run)
+        self.assertTrue(queue.complete(self.db, run.job))
+        self.assertIsNotNone(backup_jobs.request_backup(self.db, self.actor.context))
+
     def test_readers_cannot_queue_a_backup(self) -> None:
         with self.assertRaises(AccessRefused):
             backup_jobs.request_backup(self.db, self.reader_context())
@@ -86,6 +97,35 @@ class BackupJobTests(BackupTestCase):
                          sorted([os.path.basename(published.path), "notes.txt"]))
         states = {row["id"]: row["state"] for row in self.runs()}
         self.assertEqual(states[crashed], "failed")
+
+
+class RestoreCopyTests(BackupTestCase):
+    def test_a_live_copy_is_kept_and_a_dead_ones_copy_is_removed(self) -> None:
+        source = os.path.join(self.staging_root(), "archive.prks-backup")
+        with open(source, "wb") as handle:
+            handle.write(b"archive bytes")
+        directory = backup_jobs.restore_dir(self.storage.root)
+        with backup_jobs.private_copy(source, self.storage.root) as private:
+            self.assertEqual(os.path.dirname(private), directory)
+            self.assertEqual(stat.S_IMODE(os.stat(private).st_mode), 0o600)
+            with open(private, "rb") as handle:
+                self.assertEqual(handle.read(), b"archive bytes")
+            self.assertEqual(backup_jobs.prune_restore_copies(self.storage.root), 0)
+            self.assertTrue(os.path.exists(private))
+        self.assertEqual(os.listdir(directory), [])
+        # A copy whose process died before its cleanup holds no lock.
+        stranded = os.path.join(directory, f"{uuid.uuid4()}.upload")
+        with open(stranded, "wb") as handle:
+            handle.write(b"left behind")
+        with open(os.path.join(directory, "notes.txt"), "wb") as handle:
+            handle.write(b"not ours")
+        backup_jobs.recover_now(self.conninfo, self.storage.root)
+        self.assertEqual(os.listdir(directory), ["notes.txt"])
+
+    def staging_root(self) -> str:
+        path = tempfile.mkdtemp(prefix="prks-pg-copy-")
+        self.addCleanup(shutil.rmtree, path, True)
+        return path
 
 
 class AdminBackupRestoreTests(RootPairingTestCase):

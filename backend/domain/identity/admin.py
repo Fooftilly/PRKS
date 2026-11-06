@@ -67,9 +67,7 @@ import dataclasses
 import getpass
 import math
 import os
-import shutil
 import sys
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from typing import Optional, TextIO
@@ -628,6 +626,7 @@ _OWNER_ID_SQL = "SELECT id FROM prks.users WHERE login_key = prks.identity_key(%
 
 def _restore(args: argparse.Namespace, db: Database, io: _Io) -> int:
     """Restore ``--archive`` over ``--library`` as ``--owner`` (§11.4), from a private copy."""
+    from backend.domain.maintenance import jobs as backup_jobs
     from backend.domain.maintenance import restore
 
     if not os.path.isfile(args.archive):
@@ -645,35 +644,19 @@ def _restore(args: argparse.Namespace, db: Database, io: _Io) -> int:
         if not rows:
             io.refuse("No account has that login.")
             return EXIT_REFUSED
-        staging_dir = os.path.join(root, ".prks-maintenance", "restore")
-        os.makedirs(staging_dir, mode=0o700, exist_ok=True)
-        private = _private_copy(args.archive, staging_dir)
         try:
-            result = restore.restore_library(db.config.conninfo, storage, private, args.library,
-                                             owner_user_id=rows[0]["id"], staging_dir=staging_dir)
+            with backup_jobs.private_copy(args.archive, root) as private:
+                result = restore.restore_library(db.config.conninfo, storage, private, args.library,
+                                                 owner_user_id=rows[0]["id"],
+                                                 staging_dir=backup_jobs.restore_dir(root))
         except restore.RestoreFailed as exc:
             io.refuse(f"The restore failed ({exc.reason}): {exc.message}")
             return EXIT_REFUSED
-        finally:
-            os.unlink(private)
         io.say(f"Restored the Library (epoch {result.epoch}); {result.objects_held} replaced file(s) are held. "
                "The worker rebuilds search.")
         return EXIT_OK
 
     return _started_root(args, db, run)
-
-
-def _private_copy(path: str, directory: str) -> str:
-    """Copy ``path`` to a new ``0600`` file in ``directory`` (exclusive create), so it cannot change underneath."""
-    target = os.path.join(directory, f"{uuid.uuid4()}.upload")
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    try:
-        with os.fdopen(fd, "wb") as out, open(path, "rb") as source:
-            shutil.copyfileobj(source, out, 1024 * 1024)
-    except BaseException:
-        os.unlink(target)
-        raise
-    return target
 
 
 def main(
