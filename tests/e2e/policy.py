@@ -913,8 +913,9 @@ AFFECTED_RULES = (
     # The schema files and the snapshot tooling aren't imported by the served
     # app. The opt-in PRKS_AUTH start loads backend/db/__init__.py and the pool
     # lazily (L-ID-1 PR 5/5), and its embedded job worker runs the schema check
-    # of backend/db/migrate.py (L-J-1 PR 3/3), so neither of those is exempt
-    # any more. Do not exempt shared backend/domain/__init__.py
+    # of backend/db/migrate.py (L-J-1 PR 3/3), and its backup lane computes
+    # the archive fingerprint with backend/db/schema_snapshot.py (L-B-1), so
+    # none of those is exempt any more. Do not exempt shared backend/domain/__init__.py
     # either: it can gain runtime imports or side effects unrelated to isolated
     # migration plumbing. These files are tested by the PostgreSQL Test Gate,
     # not by Chromium. Keep this allowlist narrow: unknown backend/db files
@@ -925,7 +926,6 @@ AFFECTED_RULES = (
         "paths": (
             "backend/db/schema/*.sql",
             "backend/db/schema/snapshot.json",
-            "backend/db/schema_snapshot.py",
         ),
         "features": (),
         "skip": True,

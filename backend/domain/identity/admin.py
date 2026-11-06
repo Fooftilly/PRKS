@@ -80,7 +80,7 @@ from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.domain.text_identity import UnsupportedTextError, identity_key
 from backend.storage.errors import StorageRootError
-from backend.storage.objects import LocalFilesystemStorage
+from backend.storage.objects import StorageBackend
 from backend.storage.root_binding import acquire_shared_root_lease
 from backend.storage.root_marker import MARKER_FILENAME, binding_refusal, read_marker
 
@@ -586,13 +586,14 @@ def _rebuild_derived(args: argparse.Namespace, db: Database, io: _Io) -> int:
     return _started_root(args, db, enqueue)
 
 
-def _maintenance_storage(root: str) -> LocalFilesystemStorage:
-    from backend.domain.objects.jobs import root_refusal
+def _maintenance_storage(root: str) -> StorageBackend:
+    from backend.domain.objects.jobs import root_storage
 
-    if root_refusal(root) is not None:
+    storage = root_storage(root)
+    if storage is None:
         raise RootPairingRefused("sqlite_catalogue", "This data root still holds a SQLite catalogue; "
                                                      "its Library is not in PostgreSQL.")
-    return LocalFilesystemStorage(root)
+    return storage
 
 
 def _backup(args: argparse.Namespace, db: Database, io: _Io) -> int:
@@ -639,8 +640,11 @@ def _restore(args: argparse.Namespace, db: Database, io: _Io) -> int:
         try:
             identity_key(args.owner)
             rows = db.query(lambda tx: tx.execute(_OWNER_ID_SQL, (args.owner,)).fetchall())
-        except (UnsupportedTextError, DatabaseError):
+        except UnsupportedTextError:
             rows = []
+        except DatabaseError:
+            io.refuse("The database could not be reached; nothing was changed.")
+            return EXIT_REFUSED
         if not rows:
             io.refuse("No account has that login.")
             return EXIT_REFUSED

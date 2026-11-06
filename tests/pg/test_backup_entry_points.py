@@ -187,6 +187,12 @@ class AdminBackupRestoreTests(RootPairingTestCase):
                                        "--owner", "nobody")
         self.assertEqual(code, admin.EXIT_REFUSED)
         self.assertIn("No account has that login.", err)
+        # A database failure in the owner lookup is not a missing login.
+        with mock.patch.object(admin, "_OWNER_ID_SQL", "SELECT missing_column FROM prks.users WHERE %s IS NULL"):
+            code, _out, err = self.run_cli("restore", "--library", self.boot.library_id, "--archive", path,
+                                           "--owner", OWNER.login_name)
+        self.assertEqual(code, admin.EXIT_REFUSED)
+        self.assertIn("The database could not be reached", err)
         self.sql("UPDATE prks.libraries SET maintenance = 'rebuild', maintenance_run = gen_random_uuid()")
         code, _out, err = self.run_cli("restore", "--library", self.boot.library_id, "--archive", path,
                                        "--owner", OWNER.login_name)
