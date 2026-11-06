@@ -498,7 +498,6 @@
         throw changedElsewhere();
     }
 
-    /** Carries `code: 'changed_elsewhere'`; the caller keeps the user's text. */
     /* The alias prompt owns a snapshot of the entire name/aliases aggregate,
      * including a possibly pending identity row and its original revision.
      * Rename adds the old name as an alias: a stale prompt must not drop it. */
@@ -539,6 +538,12 @@
         const pending = unsettled(operations, 'SET_CONCEPT_IDENTITY', conceptId)
             .sort((a, b) => (b.sequence || 0) - (a.sequence || 0))[0] || null;
         if (pending && pending.op_id !== ownId) throw changedElsewhere();
+        if (pending && (pending.status !== 'pending' || pending.attempt_count > 0)) {
+            /* A failed or in-flight row is not committed just because the
+             * user clicked Save without altering its displayed aliases. */
+            throw new Error('This concept identity is syncing or needs a conflict decision. '
+                + 'Resolve the existing identity change before saving aliases.');
+        }
         if (current && current.revision === pinned.revision &&
             (current.name !== pinned.name ||
                 !sameConceptAliases(current.aliases, pinned.aliases))) {
@@ -551,6 +556,7 @@
         throw changedElsewhere();
     }
 
+    /** Carries code: changed_elsewhere; the caller retains the user's draft. */
     function changedElsewhere() {
         const err = new Error('The definition changed in another tab or on another '
             + 'device after you started editing.');

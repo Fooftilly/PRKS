@@ -296,6 +296,58 @@ async function staleAliasesKeepOtherTabAndRenameData() {
         'unchanged prompt must not overwrite newer identity');
 }
 
+/* A pending Rename owns the name half of an identity op. Updating aliases
+ * from that session must never reintroduce the acknowledged old name. */
+async function aliasesRespectPendingRenameAndConflictedIdentity() {
+    const id = 'C-' + 'e'.repeat(32);
+    const store = newStore();
+    globalThis.prksSync = { store: store };
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => ({
+        value: kind === 'concept-state' && entityId === id ? {
+            concept_id: id, fields: { description: { value: '', revision: 0 } },
+            identity: { name: 'Original', aliases: [] },
+            identity_revision: 0, parent_ids: [], parents_revision: 0,
+        } : null,
+        source: 'server',
+    });
+
+    const rename = await store.setConceptIdentity(id, 'Renamed', ['Original'],
+        identityBase('Original', [], 0));
+    const edit = await globalThis.prksBeginConceptAliasesEdit(id);
+    assert.equal(edit.name, 'Renamed', 'the editor shows the pending name');
+    assert.deepEqual(edit.value, ['Original']);
+    assert.equal(edit.expected.identity, rename.op_id);
+    assert.equal(edit.base.identity.name, 'Original', 'base remains acknowledged');
+
+    await globalThis.putConceptAliases(id, ['Original', 'Additional'],
+        { aliasesEdit: edit });
+    const [queued] = await rowsFor(store, 'SET_CONCEPT_IDENTITY');
+    assert.equal(queued.payload.name, 'Renamed',
+        'editing aliases does not reset a pending rename');
+    assert.deepEqual(queued.payload.aliases, ['Original', 'Additional']);
+    assert.equal(queued.base_revision, 0);
+
+    await store.updateOperationSyncState(queued.op_id, {
+        status: 'conflict', server_result: { code: 'REVISION_CONFLICT' },
+    });
+    const conflicted = await globalThis.prksBeginConceptAliasesEdit(id);
+    assert.deepEqual(conflicted.value, ['Original', 'Additional']);
+    await assert.rejects(
+        () => globalThis.putConceptAliases(id, [...conflicted.value],
+            { aliasesEdit: conflicted }),
+        /needs a conflict decision/,
+        'clicking Save without changes cannot acknowledge a conflicted identity');
+    await assert.rejects(
+        () => globalThis.putConceptAliases(id, ['Different'],
+            { aliasesEdit: conflicted }),
+        /needs a conflict decision/,
+        'attempted conflicted identity cannot be overwritten');
+    const [after] = await rowsFor(store, 'SET_CONCEPT_IDENTITY');
+    assert.equal(after.op_id, queued.op_id);
+    assert.equal(after.status, 'conflict');
+    assert.deepEqual(after.payload.aliases, ['Original', 'Additional']);
+}
+
 /* ---- #568: the Definition editor's base is the one it opened on ---- */
 
 /** A Concept whose acknowledged definition another tab can move. Setting
@@ -878,6 +930,7 @@ async function main() {
     await theDefinitionCoalescesAndCancels();
     await theDefinitionCancelGoesThroughApiWrapper();
     await staleAliasesKeepOtherTabAndRenameData();
+    await aliasesRespectPendingRenameAndConflictedIdentity();
     await anOlderDraftDoesNotReplaceAnotherTabsSave();
     await aSaveTheServerAlreadyMatchesKeepsGoing();
     await anotherTabsQueuedRowIsNeverCoalescedOver();

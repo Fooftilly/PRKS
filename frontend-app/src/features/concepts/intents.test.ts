@@ -208,6 +208,27 @@ describe('browserConceptIntents', () => {
       expect(put).toHaveBeenCalledTimes(1)
     })
 
+    it('keeps the aliases editor on a conflicted identity instead of claiming Save worked', async () => {
+      const pending = aliasSession('Renamed', ['Original'], 0)
+      window.prksBeginConceptAliasesEdit = vi.fn(async () => pending)
+      window.prksPromptTextDialog = vi.fn(async () => 'Original')
+      window.prksTabContextOwnsEntityRoute = () => true
+      const alerts = vi.fn()
+      const navigate = vi.fn()
+      window.prksAlertDialog = alerts
+      window.prksNavigate = navigate
+      window.putConceptAliases = vi.fn(async () => {
+        throw new Error('This concept identity needs a conflict decision.')
+      })
+      await browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 8)
+        .editAliases(concept({ aliases: ['Original'] }))
+      expect(alerts).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Could not save these aliases',
+        message: expect.stringContaining('conflict decision'),
+      }))
+      expect(navigate).not.toHaveBeenCalled()
+    })
+
     it('does not open without a knowable identity base', async () => {
       window.prksBeginConceptAliasesEdit = vi.fn(async () => null)
       window.prksPromptTextDialog = vi.fn()

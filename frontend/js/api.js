@@ -1284,19 +1284,33 @@ async function putConceptParents(id, parentIds) {
 async function putConceptAliases(id, aliases, options) {
     const session = options && options.aliasesEdit;
     const desired = aliases || [];
-    if (session && desired.length === session.value.length &&
-        desired.every((value, index) => value === session.value[index])) {
-        return { id: id }; // Unchanged prompt is not permission to overwrite.
-    }
     const ops = typeof prksDurableOperationsOrNone === 'function'
         ? await prksDurableOperationsOrNone() : [];
+    /* An unchanged draft does not need a new base or a mutation. But never
+     * report a conflicted or in-flight identity as saved merely because its
+     * aliases are unchanged: the user must resolve that operation first. */
+    if (session && desired.length === session.value.length &&
+        desired.every((value, index) => value === session.value[index])) {
+        const ownId = session.expected && session.expected.identity;
+        const own = ownId && ops.find(op =>
+            op.entity_type === 'concept' && op.entity_id === id &&
+            op.operation === 'SET_CONCEPT_IDENTITY' && op.op_id === ownId &&
+            op.status !== 'acknowledged');
+        if (own && (own.status !== 'pending' || own.attempt_count > 0)) {
+            throw new Error('This concept identity is syncing or needs a conflict decision. '
+                + 'Resolve the existing identity change before saving aliases.');
+        }
+        return { id: id };
+    }
     const observed = session
         ? await prksConceptAliasesSaveBase(id, session, ops)
         : await prksAcknowledgedConceptIdentity(id, ops);
     if (!observed) throw prksConceptBaseUnavailable();
     try {
-        await prksSetConceptIdentityDurably(id, observed.name, desired, observed,
-            session ? session.expected.identity : undefined);
+        /* A session opened on a pending offline rename must keep the name it
+         * showed, not the acknowledged name held in its original base. */
+        await prksSetConceptIdentityDurably(id, session ? session.name : observed.name,
+            desired, observed, session ? session.expected.identity : undefined);
     } catch (error) {
         if (session && error && error.prksBusyForeign) throw prksConceptChangedElsewhere();
         throw new Error(prksConceptSaveMessage(error, 'save these aliases'));
