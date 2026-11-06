@@ -81,6 +81,7 @@ class BackupJobTests(BackupTestCase):
         checked, resume = threading.Event(), threading.Event()
         enqueue = queue.enqueue_library_job
         results: dict[str, Any] = {}
+        errors: dict[str, BaseException] = {}
 
         def paused_enqueue(*args: Any, **kwargs: Any) -> Any:
             if threading.current_thread().name == "A":
@@ -89,7 +90,10 @@ class BackupJobTests(BackupTestCase):
             return enqueue(*args, **kwargs)
 
         def request(name: str) -> None:
-            results[name] = backup_jobs.request_backup(self.db, self.actor.context)
+            try:
+                results[name] = backup_jobs.request_backup(self.db, self.actor.context)
+            except BaseException as error:  # surfaced below; a thread would swallow it
+                errors[name] = error
 
         with mock.patch.object(backup_jobs.queue, "enqueue_library_job", side_effect=paused_enqueue):
             a = threading.Thread(target=request, args=("A",), name="A")
@@ -105,6 +109,9 @@ class BackupJobTests(BackupTestCase):
             resume.set()
             a.join(30)
             b.join(30)
+        self.assertFalse(a.is_alive() or b.is_alive(), "both requests must finish")
+        self.assertEqual(errors, {})
+        self.assertEqual(set(results), {"A", "B"})
         jobs = self.sql("SELECT state FROM prks.jobs WHERE kind = %s", (backup_jobs.BACKUP_KIND,))
         self.assertEqual(len(jobs), 1, f"one backup, not one per request: {results}")
         self.assertEqual(sum(value is not None for value in results.values()), 1)
