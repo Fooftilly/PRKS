@@ -391,11 +391,21 @@ def _validate_listen_port(port: int) -> None:
         )
 
 
-def bind_storage(config: StorageConfig) -> StorageConfig:
+def bind_storage(config: StorageConfig, *, library_database=None) -> StorageConfig:
+    """Bind ``config``'s root and the Library store the routes use.
+
+    ``library_database`` (a ``backend.db.database.Database``) binds the
+    PostgreSQL Library instead of the SQLite store under the root
+    (``PRKS_LIBRARY_BACKEND=postgres``, ``backend.library_backend``): the
+    facade and its research and text index adapters, and no SQLite file or
+    legacy processing inbox is opened or created.
+    """
     # Publishing a binding for a root this process does not hold the
     # single-process lease on would defeat that lease (storage-architecture
     # §12). Only enforced once the process entry opened a root.
     assert_config_matches_bound_root(config.root)
+    if library_database is not None:
+        return _publish_binding(config, *_postgres_library(config, library_database))
     processing_local = config.processing_dir
     try:
         os.makedirs(processing_local, exist_ok=True)
@@ -419,7 +429,32 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     db_local = PRKSDatabase(storage=config, schema_path="backend/db_schema.sql")
     candidate = PRKSTextIndex(storage=config)
     research_candidate = PRKSResearchIndex(storage=config)
+    return _publish_binding(config, db_local, candidate, research_candidate)
 
+
+def _postgres_library(config: StorageConfig, database):
+    """The PostgreSQL facade and its index adapters for ``database`` (PG-C1 #640)."""
+    # Imported only here, so the SQLite runtime never loads psycopg.
+    from backend.pg_facade import PostgresLibrary
+    from backend.pg_facade.research_index import PostgresResearchIndex
+    from backend.pg_facade.text_index import PostgresTextIndex
+
+    os.makedirs(config.thumbs_dir, exist_ok=True)
+    return (
+        PostgresLibrary(database, storage=config),
+        PostgresTextIndex(database),
+        PostgresResearchIndex(database),
+    )
+
+
+def serves_postgres_library() -> bool:
+    """Whether the bound Library is the PostgreSQL facade (``PRKS_LIBRARY_BACKEND=postgres``)."""
+    from backend.pg_facade import PostgresLibrary
+
+    return isinstance(db, PostgresLibrary)
+
+
+def _publish_binding(config: StorageConfig, db_local, candidate, research_candidate) -> StorageConfig:
     global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index, research_index
     previous_published = (
         _bound_storage,
@@ -3899,14 +3934,8 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
-    if _bound_storage is None:
-        raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
-    host = normalize_listen_host(host)
-    trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
-    _validate_listen_port(port)
-    # Setup for allowing reusing address
-    socketserver.TCPServer.allow_reuse_address = True
+def _sqlite_startup_maintenance():
+    """The SQLite store's start-up reconcilers; the PostgreSQL Library has its own jobs."""
     with startup_phase("startup_thumbnail_cleanup"):
         try:
             n = prune_orphan_pdf_thumbnails(db)
@@ -3936,6 +3965,18 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
             cleanup_expired_backup_jobs(_bound_storage)
         except Exception as e:
             LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
+
+
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
+    if _bound_storage is None:
+        raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
+    host = normalize_listen_host(host)
+    trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
+    _validate_listen_port(port)
+    # Setup for allowing reusing address
+    socketserver.TCPServer.allow_reuse_address = True
+    if not serves_postgres_library():
+        _sqlite_startup_maintenance()
     with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
