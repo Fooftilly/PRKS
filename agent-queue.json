@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "count": 14,
-  "generated_at": "2026-11-06T15:54:37Z",
+  "count": 15,
+  "generated_at": "2026-11-06T19:10:37Z",
   "issues": [
     {
       "agent": "Claude Code",
@@ -10,32 +10,38 @@
       "status": "Ready"
     },
     {
-      "agent": "Claude Code",
+      "agent": "ChatGPT/Codex",
       "execution": "Agent",
-      "number": 630,
+      "number": 571,
+      "status": "Ready"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 610,
       "status": "Ready"
     },
     {
       "agent": "Claude Code",
-      "execution": null,
+      "execution": "Agent",
       "number": 638,
       "status": "Inbox"
     },
     {
       "agent": "Claude Code",
-      "execution": null,
+      "execution": "Agent",
       "number": 640,
       "status": "Inbox"
     },
     {
       "agent": "Claude Code",
-      "execution": null,
+      "execution": "Agent",
       "number": 641,
       "status": "Inbox"
     },
     {
       "agent": "Claude Code",
-      "execution": null,
+      "execution": "Agent",
       "number": 642,
       "status": "Inbox"
     },
@@ -49,6 +55,18 @@
       "agent": "Claude Code",
       "execution": "Agent",
       "number": 745,
+      "status": "Ready"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 784,
+      "status": "Ready"
+    },
+    {
+      "agent": "ChatGPT/Codex",
+      "execution": "Agent",
+      "number": 809,
       "status": "Ready"
     },
     {
@@ -74,18 +92,6 @@
       "execution": "Agent",
       "number": 1037,
       "status": "Ready"
-    },
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 1111,
-      "status": "Inbox"
-    },
-    {
-      "agent": "ChatGPT/Codex",
-      "execution": "Agent",
-      "number": 1113,
-      "status": "Inbox"
     }
   ],
   "project": {
@@ -96,6 +102,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 42247389907,
-  "stale_after": "2026-11-07T03:54:37Z"
+  "source_run_id": 42277281316,
+  "stale_after": "2026-11-07T07:10:37Z"
 }
