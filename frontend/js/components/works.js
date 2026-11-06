@@ -742,12 +742,17 @@ function prksFilterConceptsForHint(query, cm) {
     return pref.concat(sub.slice(0, PRKS_WIKI_HINT_MAX - pref.length));
 }
 
+/** Encode syntax-delimiter characters in a Concept's canonical name. */
+function prksEncodeConceptMarkupName(name) {
+    return String(name == null ? '' : name).replace(/[\\\[\]]/g, '\\$&');
+}
+
 function prksConceptLinkCompletionPick(cm, data, completion) {
     if (!prksWorkNotesMutationAllowed(prksHintOwnerCtx(cm), cm)) return;
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const name = typeof completion.text === 'string' ? completion.text : '';
-    cm.replaceRange(name + ']]', from, to, 'complete');
+    cm.replaceRange(prksEncodeConceptMarkupName(name) + ']]', from, to, 'complete');
 }
 
 function prksConceptLinkHint(cm) {
@@ -979,10 +984,12 @@ function prksOpenConceptPicker(cm) {
                     break;
                 }
             }
-            if (name) prksInsertNotesMarkup(cm, '[[concept:' + name + ']]');
+            if (name) prksInsertNotesMarkup(cm,
+                '[[concept:' + prksEncodeConceptMarkupName(name) + ']]');
         },
         onCreate: function (name) {
-            prksInsertNotesMarkup(cm, '[[concept:' + name + ']]');
+            prksInsertNotesMarkup(cm,
+                '[[concept:' + prksEncodeConceptMarkupName(name) + ']]');
         },
     });
 }

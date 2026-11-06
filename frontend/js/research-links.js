@@ -164,12 +164,21 @@
 
     function tryConcept(text, live, start) {
         const innerStart = start + '[[concept:'.length;
-        const close = text.indexOf(']]', innerStart);
+        let close = -1;
+        for (let i = innerStart; i < text.length - 1; i++) {
+            const next = text.charAt(i + 1);
+            if (text.charAt(i) === '\\' && '\\[]'.indexOf(next) !== -1) {
+                i++;
+                continue;
+            }
+            if (text.indexOf(']]', i) === i) { close = i; break; }
+        }
         if (close < 0) return null;
         const end = close + 2;
         if (!spanLive(live, start, end)) return null;
         if (text.slice(start, end).indexOf('\n') >= 0) return null;
-        const name = canonicalConceptName(text.slice(innerStart, close));
+        const name = canonicalConceptName(
+            text.slice(innerStart, close).replace(/\\([\\\[\]])/g, '$1'));
         if (!name || name.length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end), name: name };
     }

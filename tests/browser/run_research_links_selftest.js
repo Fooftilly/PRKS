@@ -64,6 +64,23 @@ record(
 );
 record('valid argument remains linked', missingArg.indexOf('#/arguments/A-REAL') >= 0);
 
+// Toolbar and autocomplete use this production encoder. Round-trip
+// delimiter-heavy names without creating truncated / junk Concepts.
+const workSrc = fs.readFileSync(
+    path.join(rootDir, 'frontend/js/components/works.js'), 'utf8');
+const start = workSrc.indexOf('function prksEncodeConceptMarkupName(');
+const end = workSrc.indexOf('\n}\n', start);
+if (start < 0 || end <= start) throw new Error('Concept insertion encoder missing');
+vm.runInContext(workSrc.slice(start, end + 2), sandbox);
+for (const name of ['Category]] Theory',
+    'Math [A] ' + String.fromCharCode(92) + ' Slash ]] name']) {
+    const encoded = sandbox.prksEncodeConceptMarkupName(name);
+    const source = '[[concept:' + encoded + ']]';
+    const parsed = api.prksParseResearchMarkup(source).conceptRefs;
+    record('picker encodes Concept delimiters: ' + name,
+        parsed.length === 1 && parsed[0].name === name && parsed[0].raw === source);
+}
+
 rows.forEach(function (r) {
     console.log((r.ok ? 'PASS  ' : 'FAIL  ') + r.name + (r.detail ? ' ' + r.detail : ''));
 });

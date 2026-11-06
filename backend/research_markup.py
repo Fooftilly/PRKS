@@ -189,7 +189,16 @@ def _span_live(live: str, start: int, end: int) -> bool:
 
 def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
     inner_start = start + len("[[concept:")
-    close = text.find("]]", inner_start)
+    close = -1
+    pos = inner_start
+    while pos < len(text) - 1:
+        if text[pos] == "\\" and pos + 1 < len(text) and text[pos + 1] in "\\[]":
+            pos += 2
+            continue
+        if text.startswith("]]", pos):
+            close = pos
+            break
+        pos += 1
     if close < 0:
         return None
     end = close + 2
@@ -198,7 +207,7 @@ def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
     if "\n" in text[start:end]:
         return None
     inner = text[inner_start:close]
-    name = canonical_concept_name(inner)
+    name = canonical_concept_name(re.sub(r"\\([\\\[\]])", r"\1", inner))
     if not name or len(name) > CONCEPT_REF_MAX:
         return None
     return ConceptRef(start=start, end=end, raw=text[start:end], name=name)
