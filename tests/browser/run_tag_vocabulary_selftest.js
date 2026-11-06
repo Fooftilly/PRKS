@@ -9,6 +9,9 @@
  * destroys.
  */
 const strict = require("assert/strict");
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
 let checks = 0;
 const assert = new Proxy(function (...args) { checks += 1; return strict(...args); },
     { get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); } });
@@ -231,7 +234,164 @@ async function aRefusedCreationTakesItsAttachmentsDownVisibly() {
         "and the tag is gone from what the user sees");
 }
 
+async function rapidTagCreateUsesOneDurableIdentity() {
+    const ui = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    const at = ui.indexOf('async function prksSubmitNewTag(');
+    assert.ok(at >= 0, 'the real UI quick-create function is present');
+    const end = ui.indexOf('\n}\n', at);
+    assert.ok(end > at);
+    const fn = ui.slice(at, end + 2);
+    let release;
+    const reading = new Promise(resolve => { release = resolve; });
+    let creations = 0;
+    let attachments = 0;
+    const input = { dataset: {}, disabled: false,
+        setAttribute: () => {}, removeAttribute: () => {} };
+    const ctx = {
+        JSON,
+        fetchTags: async () => reading,
+        prksCreateTagDurably: async () => {
+            creations++;
+            return { entity_id: 'T-NEW-' + creations };
+        },
+        prksAttachExistingTag: async () => { attachments++; },
+        prksAlertMessage: async () => {},
+        prksTagVocabularyMessage: () => 'create failed',
+    };
+    vm.createContext(ctx);
+    vm.runInContext(fn, ctx);
+    const first = ctx.prksSubmitNewTag('folder', 'F-1', 'New Topic', {}, input);
+    const second = ctx.prksSubmitNewTag('folder', 'F-1', 'New Topic', {}, input);
+    assert.equal(input.disabled, true, 'claim acquired before catalogue fetch');
+    assert.ok(input.dataset.prksTagCreatePending);
+    release([]);
+    await Promise.all([first, second]);
+    assert.equal(creations, 1, 'two rapid clicks mint only one Tag');
+    assert.equal(attachments, 1, 'only one Folder relationship is queued');
+    await ctx.prksSubmitNewTag('folder', 'F-1', 'New Topic', {}, input);
+    assert.equal(creations, 1, 'a stale create option cannot submit again after success');
+    await ctx.prksSubmitNewTag('folder', 'F-1', 'Another Topic', {}, input);
+    assert.equal(creations, 2, 'a different name can still be created');
+
+    const retryInput = { dataset: {}, disabled: false,
+        setAttribute: () => {}, removeAttribute: () => {} };
+    let tries = 0;
+    ctx.prksCreateTagDurably = async () => {
+        tries++;
+        if (tries === 1) throw new Error('Failed local write');
+        return { entity_id: 'T-RETRY' };
+    };
+    await ctx.prksSubmitNewTag('folder', 'F-2', 'Recover', {}, retryInput);
+    assert.equal(retryInput.dataset.prksTagCreateDone, undefined,
+        'a rejected local create does not permanently disable retry');
+    await ctx.prksSubmitNewTag('folder', 'F-2', 'Recover', {}, retryInput);
+    assert.equal(tries, 2, 'retry is permitted once the first local write failed');
+
+    const attachInput = { dataset: {}, disabled: false,
+        setAttribute: () => {}, removeAttribute: () => {} };
+    const alerts = [];
+    let createdTags = 0;
+    ctx.prksCreateTagDurably = async () => {
+        createdTags++;
+        return { entity_id: 'T-ATTACH-FAILED' };
+    };
+    /* Load the actual wrapper: the Folder editor historically swallowed
+     * local-store errors, so mocking the wrapper to throw missed the bug. */
+    const attachAt = ui.indexOf('async function prksAttachExistingTag(');
+    const attachEnd = ui.indexOf('\n}\n', attachAt);
+    assert.ok(attachAt >= 0 && attachEnd > attachAt);
+    vm.runInContext(ui.slice(attachAt, attachEnd + 2), ctx);
+    ctx.prksFolderTagEdit = async () => false;
+    ctx.prksAlertMessage = async (message, title) => alerts.push({ message, title });
+    await ctx.prksSubmitNewTag('folder', 'F-3', 'Already Created', {}, attachInput);
+    assert.equal(createdTags, 1, 'the Tag was durably created');
+    assert.equal(alerts[0].title, 'Could not attach Tag');
+    assert.match(alerts[0].message, /was created locally/);
+    assert.match(alerts[0].message, /Select the existing Tag/);
+    await ctx.prksSubmitNewTag('folder', 'F-3', 'Already Created', {}, attachInput);
+    assert.equal(createdTags, 1,
+        'the recovery message does not encourage creating a duplicate identity');
+}
+
+async function actualFolderTagEditorReportsQueueFailure() {
+    /* Run the actual folder-tag editor, not a failure-throwing substitute.
+     * The editor catches queue failures to paint its inline status. Its
+     * return value must also let Create Tag report that the Tag exists but
+     * its attachment failed, rather than silently acknowledging success. */
+    const source = fs.readFileSync(path.join(__dirname, '../../frontend/js/folder-tag-editor.js'),
+        'utf8');
+    const state = {
+        folderId: 'F-1', generation: 1, operations: [],
+        options: { assigned: [], known_absent: {} }, catalog: [],
+        error: null,
+    };
+    const folder = { id: 'F-1', tags: [] };
+    let queueAttempts = 0;
+    const runtime = {
+        store: {
+            listOperations: async () => [],
+            coalesceFolderTag: async () => {
+                queueAttempts++;
+                throw new Error('Durable write refused');
+            },
+        },
+        changed: () => {},
+    };
+    const env = {
+        window: null,
+        prksSync: runtime,
+        prksFolderTagBase: () => ({ present: false, revision: 0 }),
+        prksRightPanelOwnedBy: () => false,
+        prksOwnerTabIsFocused: () => false,
+    };
+    env.window = env;
+    vm.createContext(env);
+    vm.runInContext(source, env);
+    const owner = {
+        destroyed: false,
+        generation: 1,
+        getResource: kind => kind === 'folderTagEditor' ? state : null,
+        getEntity: kind => kind === 'folder' ? folder : null,
+    };
+    const result = await env.prksFolderTagEdit(owner, 'T-NEW', true,
+        { id: 'T-NEW', name: 'New Tag' });
+    assert.equal(result, false, 'caught editor queue error propagates failure to caller');
+    assert.equal(queueAttempts, 1);
+    assert.match(state.error, /Could not save this Tag change locally/);
+}
+
+async function usedTagCloudHidesMergingSourcesOnly() {
+    const app = fs.readFileSync(path.join(__dirname, '../../frontend/js/app.js'), 'utf8');
+    const at = app.indexOf('async function prksEffectiveUsedTags(');
+    assert.ok(at >= 0);
+    const end = app.indexOf('\n}\n', at);
+    assert.ok(end > at);
+    const source = app.slice(at, end + 2);
+    const ops = [
+        { operation: 'MERGE_TAG', entity_type: 'tag', entity_id: 'T-OLD', status: 'pending' },
+        { operation: 'CREATE_TAG', entity_type: 'tag', entity_id: 'T-NEW', status: 'pending' },
+    ];
+    const ctx = {
+        Set, Array,
+        prksDurableOperationsOrNone: async () => ops,
+        prksPendingTagMerges: globalThis.prksPendingTagMerges,
+        prksPendingTagDeletions: globalThis.prksPendingTagDeletions,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(source, ctx);
+    const used = [
+        { id: 'T-OLD', name: 'Old' },
+        { id: 'T-STAYS', name: 'Used' },
+    ];
+    const shown = await ctx.prksEffectiveUsedTags(used);
+    assert.deepEqual(shown.map(x => x.id), ['T-STAYS'],
+        'the source disappears but an unassigned new Tag is not added');
+}
+
 async function main() {
+    await rapidTagCreateUsesOneDurableIdentity();
+    await actualFolderTagEditorReportsQueueFailure();
+    await usedTagCloudHidesMergingSourcesOnly();
     await aTagIsAttachableTheMomentItIsCreated();
     await anObviousLocalCollisionIsRefusedEarly();
     await aTagNeedsAName();
