@@ -3005,6 +3005,18 @@ function prksPresentVueRoute(ctx, contentDiv, feature, fields) {
     return prksDeliverVueRoute(host, request);
 }
 
+/** A used-tag cloud may hide locally merged/deleted sources, but must
+ * not include unassigned pending Tag creations from the full catalogue. */
+async function prksEffectiveUsedTags(rows) {
+    if (!Array.isArray(rows)) return rows;
+    const ops = await prksDurableOperationsOrNone();
+    const hidden = new Set([
+        ...prksPendingTagMerges(ops).map(op => op.entity_id),
+        ...prksPendingTagDeletions(ops),
+    ]);
+    return rows.filter(row => row && !hidden.has(row.id));
+}
+
 /**
  * Refetch used tags and repaint this owner only. Alias add/remove passes
  * `resume` for the alias or merge dialog that is still open. A closed dialog
@@ -3018,7 +3030,9 @@ async function prksReloadTagsVocabulary(ctx, generation, resume) {
     const route = ctx.lastResolvedRoute || ctx.route;
     if (!route || route.name !== 'tags') return false;
     const errorOwner = {};
-    const tags = await fetchTags({ used: true, errorOwner: errorOwner });
+    const rawTags = await fetchTags({ used: true, errorOwner: errorOwner });
+    if (!ctx.isCurrent(generation)) return false;
+    const tags = await prksEffectiveUsedTags(rawTags);
     if (!ctx.isCurrent(generation)) return false;
     const live = ctx.lastResolvedRoute || ctx.route;
     if (!live || live.name !== 'tags' || !ctx.root || !ctx.root.isConnected) return false;
@@ -4351,7 +4365,9 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
             case 'tags': {
                 // The coordinator loads used tags. Vue paints the cloud and the
                 // alias, merge, and delete controls. It does not fetch.
-                const tags = await fetchTags({ used: true, signal: routeSignal });
+                const rawTags = await fetchTags({ used: true, signal: routeSignal });
+                if (stale()) return;
+                const tags = await prksEffectiveUsedTags(rawTags);
                 if (stale()) return;
                 prksPresentVueRoute(ctx, contentDiv, 'tags', {
                     tags: tags,

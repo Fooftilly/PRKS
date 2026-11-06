@@ -4,7 +4,12 @@ Each library is built the same way on this leg's library object and on a
 reference SQLite library, and ``search_works``, ``search_works_any``,
 ``work_ids_matching_author``, ``work_ids_matching_publisher`` and
 ``get_works_by_tag_name`` must return
-the same rows in the same order. The inputs are ASCII, where SQLite's
+the same rows in the same order, except the order of a multi-hit keyword
+search: L-S-2 (#638) ranks those by one score on PostgreSQL while SQLite
+keeps its union order until PG-C2, so they are compared as sets of rows
+(``found``) and the PostgreSQL order is pinned in
+``tests/pg/test_search_queries.py`` and ``tests/pg/search_ranking_baseline.json``.
+The inputs are ASCII, where SQLite's
 ``LOWER`` and FTS5 fold as PostgreSQL does; the Unicode cases where
 PostgreSQL finds more are pinned in ``tests/pg/test_search_queries.py``.
 Every Work gets its own last-edit time, so the recency order inside a tier
@@ -102,6 +107,17 @@ class SearchParityTests(PeopleParityTestCase):
         rows = self.same(call, *args, **kwargs)
         return [self.leg.labels[row["id"]] for row in rows]
 
+    def found(self, call: str, *args: Any, **kwargs: Any) -> list[str]:
+        """Both sides' rows, equal in content but not in order; returns the labels, sorted."""
+        mine, theirs = self.both(call, *args, **kwargs)
+
+        def keyed(side: PeopleSide, rows: list[dict[str, Any]]) -> list[Any]:
+            return sorted((side.labels[row["id"]], side.normal(row)) for row in rows)
+
+        ours = keyed(self.leg, mine)
+        self.assertEqual(ours, keyed(self.ref, theirs), call)
+        return [label for label, _ in ours]
+
     def same_ids(self, call: str, *args: Any) -> list[str]:
         """Both sides' id lists, equal as sets (SQLite gives them no order)."""
         mine, theirs = self.both(call, *args)
@@ -111,7 +127,9 @@ class SearchParityTests(PeopleParityTestCase):
 
     # -- keyword search
 
-    def test_the_tiers_keep_sqlites_union_order(self) -> None:
+    def test_both_find_the_same_works(self) -> None:
+        # Every Phase 1 path: a prefix, an override, a note and an abstract
+        # infix, and a linked person. Only the order differs (L-S-2).
         person = self.person_both("Quill", first_name="Malphan")
         self.credit(self.work_both("Fourth"), person)
         self.override_abstract(self.work_both("Second"), "xalphax")
@@ -119,8 +137,8 @@ class SearchParityTests(PeopleParityTestCase):
         self.work_both("Third again", abstract="yalphay")
         self.work_both("Alphabet")
         self.work_both("Unrelated")
-        self.assertEqual(self.listed("search_works", "alpha"),
-                         ["<W Alphabet>", "<W Second>", "<W Third again>", "<W Third>", "<W Fourth>"])
+        self.assertEqual(self.found("search_works", "alpha"),
+                         ["<W Alphabet>", "<W Fourth>", "<W Second>", "<W Third again>", "<W Third>"])
 
     def test_tokens_split_on_hyphens_and_must_all_match(self) -> None:
         self.work_both("Multi-Author survey")

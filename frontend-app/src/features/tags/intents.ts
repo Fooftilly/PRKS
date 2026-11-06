@@ -178,7 +178,11 @@ export function browserTagsIntents(
         return failure(actionMessage(err, MERGE_FAILURE))
       }
       if (!ownsTags(owner, generation)) return quiet()
-      return reloadIfCurrent(owner, generation, dialogResume(options, null))
+      /* A committed merge has superseded its own confirmation dialog.
+       * Preserve only a NEWER dialog the user switched to in the meantime. */
+      const resume = dialogResume(options, null)
+      const nextResume = resume?.mergeSourceId === sourceId ? null : resume
+      return reloadIfCurrent(owner, generation, nextResume)
     },
   }
 }
