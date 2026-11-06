@@ -144,8 +144,14 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.sql("DELETE FROM prks.library_settings")
         self.sql("DELETE FROM prks.sync_operations")
         self.assertNotEqual(self.snapshot(), before)
+        # Lose every archived object, so the restore must write each one back from the archive.
+        for key in result.manifest["objects"]:
+            namespace, name = key.split("/", 1)
+            self.objects.delete(StorageKey(namespace, name))
+            self.assertIsNone(self.objects.stat(StorageKey(namespace, name)))
 
-        self.restore(result.path)
+        restored = self.restore(result.path)
+        self.assertEqual((restored.objects_written, restored.objects_reused), (len(result.manifest["objects"]), 0))
         after = self.snapshot()
         for table in tables.BACKUP_CONTENT_TABLES:
             with self.subTest(table=table):

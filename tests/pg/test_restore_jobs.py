@@ -111,6 +111,9 @@ class LongJobTests(RestoreTestCase, RebuildTestCase):
         # The job holds no Library lock while it works: the restore does not wait for it.
         result = self.restore(archive)
         self.assertEqual(result.epoch, 2)
+        # Still paused: the restore finished while the job was mid-extraction, not after a timeout.
+        self.assertTrue(worker.is_alive())
+        self.assertFalse(self.finish.is_set())
         self.finish.set()
         worker.join(30)
         self.assertFalse(worker.is_alive())
