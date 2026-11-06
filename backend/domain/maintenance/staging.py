@@ -48,6 +48,7 @@ abort, and the startup and maintenance cleanup, call.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -61,7 +62,13 @@ from backend.domain.maintenance.archive import Archive, ArchiveRefused, Member
 from backend.domain.maintenance.format import IO_CHUNK_SIZE, object_references
 from backend.domain.maintenance.connection import pin_interchange_settings
 from backend.domain.objects.lifecycle import OBJECT_LOCK_SQL, held_by_another_library
-from backend.storage.objects import InvalidStorageKey, ObjectExists, StorageBackend, StorageKey
+from backend.storage.objects import (
+    InvalidStorageKey,
+    ObjectExists,
+    StorageBackend,
+    StorageKey,
+    StorageObjectError,
+)
 
 STAGING_PREFIX = "restore_"
 _LOAD_PREFIX = "_load_"
@@ -388,7 +395,7 @@ def _place_object(archive: Archive, storage: StorageBackend, obj_key: StorageKey
                   renew: Callable[[], None]) -> bool:
     """Write a missing object from the archive (True) or reuse a matching one (False)."""
     if storage.stat(obj_key) is not None:
-        _reuse(storage, obj_key, member)
+        _reuse(storage, obj_key, member, renew)
         return False
 
     def write(stream: Any) -> None:
@@ -403,15 +410,26 @@ def _place_object(archive: Archive, storage: StorageBackend, obj_key: StorageKey
     try:
         info = storage.put_new(obj_key, write, hash=True)
     except ObjectExists:
-        _reuse(storage, obj_key, member)
+        _reuse(storage, obj_key, member, renew)
         return False
     if info.sha256 != member.sha256 or info.size != member.size:
         raise StagingRefused("object_conflict", "A backup object did not write back intact.")
     return True
 
 
-def _reuse(storage: StorageBackend, obj_key: StorageKey, member: Member) -> None:
-    if storage.verify(obj_key, member.sha256) is not True:
+def _reuse(storage: StorageBackend, obj_key: StorageKey, member: Member, renew: Callable[[], None]) -> None:
+    """Accept a present key only if it holds exactly the archive's bytes; hashed in chunks, renewing."""
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with storage.open_read(obj_key) as handle:
+            while chunk := handle.read(IO_CHUNK_SIZE):
+                digest.update(chunk)
+                size += len(chunk)
+                renew()
+    except (OSError, StorageObjectError):
+        size = -1  # unreadable or gone: not provably the archive's copy
+    if size != member.size or digest.hexdigest() != member.sha256:
         raise StagingRefused("object_conflict",
                              "A stored object differs from the backup's copy; it is never overwritten.")
 

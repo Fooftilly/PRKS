@@ -438,6 +438,31 @@ class StagingTests(StagingTestCase):
         self.assertEqual(staged.objects_written, 3)
         self.assertEqual(opened.call_count, 1)  # R0 validates it, and staging reads that same handle
 
+    def test_the_lease_is_renewed_while_a_present_object_is_verified(self) -> None:
+        from backend.domain.maintenance.format import IO_CHUNK_SIZE
+
+        self.create(self.put(b"%PDF " + os.urandom(4 * IO_CHUNK_SIZE)))
+        result = self.backup()  # the object stays present, so staging verifies and reuses it
+        archive = r0.open_archive(result.path, staging_dir=self.staging_dir)
+        self.addCleanup(archive.close)
+        calls: list[str] = []
+        real_open = self.objects.open_read
+
+        def open_read(*args: Any, **kwargs: Any) -> Any:
+            calls.append("open")
+            return real_open(*args, **kwargs)
+
+        run_id = self.run_row()
+        with maintenance_connection(self.conninfo) as conn, \
+                mock.patch.object(self.objects, "open_read", side_effect=open_read):
+            r0.check_schema(conn, archive)
+            staged = staging.stage(conn, archive, run_id=run_id, target_library_id=self.actor.library_id,
+                                   owner_user_id=self.actor.user_id, storage=self.objects,
+                                   renew=lambda: calls.append("renew"))
+        self.addCleanup(self.drop, staged)
+        self.assertEqual(staged.objects_reused, 1)
+        self.assertGreaterEqual(calls[calls.index("open") + 1:].count("renew"), 5)
+
     def held_elsewhere(self, path: str) -> None:
         """Staging refuses before it records or touches the key."""
         with self.assertRaises(ArchiveRefused) as caught:
