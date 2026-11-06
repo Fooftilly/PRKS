@@ -71,6 +71,7 @@ from backend.db.errors import DatabaseConfigError, DatabaseError
 from backend.db.migrate import SCHEMA_DIR, MigrationError, verify_schema
 from backend.domain.identity import root_pairing
 from backend.domain.identity.errors import RootPairingRefused
+from backend.domain.maintenance import jobs as backup_jobs
 from backend.domain.objects import jobs as object_jobs
 from backend.domain.research import reindex as _research_reindex  # noqa: F401  registers research.reindex_work
 from backend.domain.search import rebuild as search_rebuild
@@ -246,6 +247,9 @@ class Worker:
             if not self._wait_until_started():
                 return
             self.started.set()
+            # One idle pass before the first claim, so startup recovery (an
+            # expired restore's flag, stale staging) never waits behind a job.
+            self._idle_tick()
             # The listener sets wake once it listens (a NOTIFY after that is not
             # missed); a stop sets it too, so an unreachable listener can't hold it.
             self._wake.wait(poll)
@@ -480,6 +484,7 @@ def _attaching_objects(check: StartCheck, registry: HandlerRegistry, root: Joine
             if maintenance is not None:
                 search_text.attach(registry, maintenance.storage)
                 search_rebuild.attach(registry, maintenance.storage)
+                backup_jobs.attach(registry, maintenance.storage, root.path)
             attached = True
         return True
 

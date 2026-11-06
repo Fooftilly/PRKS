@@ -681,9 +681,17 @@ root.prksWorkSelectionSubmitPayload({
     }
     const catalog = {
         PRKS_FOLDERS_LIST_KEY: 'folders:index',
+        PRKS_FOLDERS_DOMAIN: 'folders',
         prksEffectiveFolderRows: async rows => rows,
         prksOfflineReadList: async () => { throw new Error('HTTP 500'); },
     };
+    // Evaluate actual production validators, not a permissive test stub:
+    // malformed HTTP and older malformed cache must both fail closed.
+    for (const helper of ['prksHasUsableRowId', 'prksIsOptionalString',
+        'prksIsFolderCount', 'prksIsFolderParentId',
+        'prksIsFolderSummaryShape', 'prksIsFoldersIndexShape']) {
+        evaluateReader(appSource, 'function ' + helper + '(', catalog);
+    }
     evaluateReader(appSource, 'async function prksEffectiveFolderCatalogue(', catalog);
     const strict = { requireAvailable: true, withSource: true };
     let rejected = false;
@@ -698,20 +706,44 @@ root.prksWorkSelectionSubmitPayload({
     try { await catalog.prksEffectiveFolderCatalogue(undefined, strict); }
     catch (_e) { rejected = true; }
     assert('null unavailable Folder result fails strict read', rejected);
-    catalog.prksOfflineReadList = async () => ({value:[],source:'network'});
+    let folderReadOptions;
+    catalog.prksOfflineReadList = async (_key, _path, opts) => {
+        folderReadOptions = opts;
+        return {value:[],source:'network'};
+    };
     received = await catalog.prksEffectiveFolderCatalogue(undefined, strict);
+    assert('Folder reader enforces the same domain and schema as the Library',
+        folderReadOptions.domain === 'folders' &&
+        folderReadOptions.validate === catalog.prksIsFoldersIndexShape);
+    assert('Folder validator rejects an array with missing IDs',
+        !folderReadOptions.validate([{ title: 'Broken' }]));
     assert('valid empty Folder result succeeds strict read',
         Array.isArray(received.rows) && received.rows.length === 0 &&
         received.source === 'network');
+    const validFolder = {id:'F-CACHED',title:'Cached',parent_id:null,
+        work_count:0,child_count:0};
     catalog.prksOfflineReadList = async () => ({
-        value:[{id:'F-CACHED',title:'Cached'}],source:'cache',
+        value:[validFolder],source:'cache',
     });
     received = await catalog.prksEffectiveFolderCatalogue(undefined, strict);
     assert('Folder cache result retains provenance',
         received.source === 'cache' && received.rows.length === 1);
+    const malformed = [{title:'Missing ID and parent/count fields'}];
+    for (const origin of ['server', 'cache']) {
+        catalog.prksOfflineReadList = async () => ({value:malformed,source:origin});
+        rejected = false;
+        try { await catalog.prksEffectiveFolderCatalogue(undefined, strict); }
+        catch (_e) { rejected = true; }
+        assert('malformed ' + origin + ' Folder catalogue rejects strict bulk reads',
+            rejected);
+        received = await catalog.prksEffectiveFolderCatalogue();
+        assert('malformed ' + origin + ' Folder catalogue is not presented as data',
+            Array.isArray(received) && received.length === 0);
+    }
+    catalog.prksOfflineReadList = async () => ({value:[validFolder],source:'cache'});
 
     const apiContext = {
-        prksApiErrorOwner: () => null, prksAbortFallback: () => false,
+        URLSearchParams, prksApiErrorOwner: () => null, prksAbortFallback: () => false,
         prksSetApiError: () => {}, prksReportApiClientError: () => {},
         prksEffectiveFolderCatalogue: (...args) =>
             catalog.prksEffectiveFolderCatalogue(...args),
@@ -751,6 +783,27 @@ root.prksWorkSelectionSubmitPayload({
     rejected = false;
     try { await apiContext.fetchTags(strict); } catch (_e) { rejected = true; }
     assert('invalid HTTP Tag JSON is not a valid empty catalogue', rejected);
+
+    // Direct HTTP is used for used:true and when the index reader is absent.
+    // withSource must never silently revert to an array-only result.
+    const tagRows = [{id:'T-1',name:'Topic'}];
+    apiContext.prksParseJsonResponse = async () => tagRows;
+    apiContext.prksRequest = async () => ({ok:true,json:async()=>tagRows});
+    received = await apiContext.fetchTags({used:true,withSource:true});
+    assert('used Tags with source returns provenance alongside rows',
+        received.source === 'network' && received.rows.length === 1);
+    received = await apiContext.fetchTags({used:true});
+    assert('used Tags without source retain the legacy array shape',
+        Array.isArray(received) && received.length === 1);
+    apiContext.prksRequest = async () => ({ok:false,json:async()=>({})});
+    apiContext.prksParseJsonResponse = async () => [];
+    received = await apiContext.fetchTags({used:true,withSource:true});
+    assert('non-strict HTTP failure has explicitly unavailable provenance',
+        received.source === 'unavailable' && received.rows.length === 0);
+    apiContext.prksRequest = async () => { throw new Error('Network offline'); };
+    received = await apiContext.fetchTags({used:true,withSource:true});
+    assert('non-strict Tags transport failure keeps the source envelope',
+        received.source === 'unavailable' && received.rows.length === 0);
 
     const storeKeys = Object.keys(sandbox.localStorage.store);
     assert('no localStorage selection', storeKeys.every(function (k) { return k.indexOf('select') < 0; }));

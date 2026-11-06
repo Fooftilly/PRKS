@@ -386,13 +386,18 @@ async function fetchTags(options = {}) {
             return options.withSource ? { rows: result, source: 'network' } : result;
         }
         const data = await prksParseJsonResponse(res, [], 'tags', errorOwner);
-        return Array.isArray(data) ? data : [];
+        const valid = Array.isArray(data);
+        const rows = valid ? data : [];
+        return options.withSource
+            ? { rows, source: res.ok && valid ? 'network' : 'unavailable' }
+            : rows;
     } catch (e) {
         if (options.requireAvailable) throw e;
-        if (prksAbortFallback(e)) return [];
+        const fallback = options.withSource ? { rows: [], source: 'unavailable' } : [];
+        if (prksAbortFallback(e)) return fallback;
         prksSetApiError('tags', 'Could not load tags.', '', errorOwner);
         prksReportApiClientError('tags');
-        return [];
+        return fallback;
     }
 }
 

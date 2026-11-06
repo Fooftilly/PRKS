@@ -1,7 +1,7 @@
 """``prks admin`` (``docs/postgresql-architecture.md`` §9.2, §9.3, §12; L-ID-1 #626).
 
 Run as ``python -m backend.domain.identity.admin …`` until the ``prks``
-entry point exists (L-D-1). Three commands:
+entry point exists (L-D-1). Five commands:
 
 ``unlock-login LOGIN --root ROOT`` deletes the account-wide (``acct:``) row
 of the login attempt limiter for the account named ``LOGIN`` (matched by its
@@ -16,6 +16,13 @@ queues one ``derived.rebuild`` job per Library (every Library, or the one
 named), after the same start check; a worker runs it with progress while
 ordinary commands keep running (§8.6, :mod:`backend.domain.search.rebuild`).
 The same rebuild already queued is reported, not queued twice.
+
+``backup --root ROOT --library ID --out DIR`` writes a verified format-2
+archive of one Library into ``DIR`` and ``restore --root ROOT --library ID
+--archive FILE --owner LOGIN`` restores one in place of the Library's
+contents, as that owner, from a private copy in the root's maintenance area
+(§11.4, :mod:`backend.domain.maintenance`). Both run after the same start
+check and refuse a root that still holds a SQLite catalogue.
 
 ``bootstrap`` is first-time setup, in two separate steps, so the operator
 never holds a token that is already spent:
@@ -73,6 +80,7 @@ from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.domain.text_identity import UnsupportedTextError, identity_key
 from backend.storage.errors import StorageRootError
+from backend.storage.objects import StorageBackend
 from backend.storage.root_binding import acquire_shared_root_lease
 from backend.storage.root_marker import MARKER_FILENAME, binding_refusal, read_marker
 
@@ -140,6 +148,19 @@ def _parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--library", help="the id of one Library (default: every Library)")
     rebuild.add_argument("--only", choices=("search", "text", "research"), help="rebuild one scope only")
     rebuild.add_argument("--testing", action="store_true", help="a disposable testing instance")
+
+    backup = commands.add_parser("backup", help="write a verified format-2 backup of one Library")
+    backup.add_argument("--root", required=True, help="the bound PRKS data root")
+    backup.add_argument("--library", required=True, help="the id of the Library")
+    backup.add_argument("--out", required=True, help="an existing directory to write the archive into")
+    backup.add_argument("--testing", action="store_true", help="a disposable testing instance")
+
+    restore = commands.add_parser("restore", help="restore a format-2 backup in place of a Library's contents")
+    restore.add_argument("--root", required=True, help="the bound PRKS data root")
+    restore.add_argument("--library", required=True, help="the id of the Library to replace")
+    restore.add_argument("--archive", required=True, help="the .prks-backup file")
+    restore.add_argument("--owner", required=True, help="the login of an owner of the Library")
+    restore.add_argument("--testing", action="store_true", help="a disposable testing instance")
     return parser
 
 
@@ -565,6 +586,86 @@ def _rebuild_derived(args: argparse.Namespace, db: Database, io: _Io) -> int:
     return _started_root(args, db, enqueue)
 
 
+def _maintenance_storage(root: str) -> StorageBackend:
+    from backend.domain.objects.jobs import root_storage
+
+    storage = root_storage(root)
+    if storage is None:
+        raise RootPairingRefused("sqlite_catalogue", "This data root still holds a SQLite catalogue; "
+                                                     "its Library is not in PostgreSQL.")
+    return storage
+
+
+def _backup(args: argparse.Namespace, db: Database, io: _Io) -> int:
+    """Write a verified backup of ``--library`` into ``--out`` (§11.4)."""
+    from backend.domain.maintenance import backup
+    from backend.domain.maintenance.format import PRKS_VERSION
+
+    out = os.path.realpath(args.out)
+    if not os.path.isdir(out):
+        io.refuse("The --out directory does not exist.")
+        return EXIT_USAGE
+
+    def run() -> int:
+        storage = _maintenance_storage(_real_root(args.root))
+        try:
+            result = backup.write_backup(db.config.conninfo, storage, args.library, out, prks_version=PRKS_VERSION)
+        except ValueError:
+            io.refuse("That is not a Library id.")
+            return EXIT_REFUSED
+        except backup.BackupFailed as exc:
+            io.refuse(exc.message)
+            return EXIT_REFUSED
+        io.say(f"Wrote {os.path.basename(result.path)} ({result.size} bytes, sha256 {result.sha256}).")
+        return EXIT_OK
+
+    return _started_root(args, db, run)
+
+
+_OWNER_ID_SQL = "SELECT id FROM prks.users WHERE login_key = prks.identity_key(%s)"
+
+
+def _restore(args: argparse.Namespace, db: Database, io: _Io) -> int:
+    """Restore ``--archive`` over ``--library`` as ``--owner`` (§11.4), from a private copy."""
+    from backend.domain.maintenance import jobs as backup_jobs
+    from backend.domain.maintenance import restore
+
+    if not os.path.isfile(args.archive):
+        io.refuse("The --archive file does not exist.")
+        return EXIT_USAGE
+
+    def run() -> int:
+        root = _real_root(args.root)
+        storage = _maintenance_storage(root)
+        try:
+            identity_key(args.owner)
+            rows = db.query(lambda tx: tx.execute(_OWNER_ID_SQL, (args.owner,)).fetchall())
+        except UnsupportedTextError:
+            rows = []
+        except DatabaseError:
+            io.refuse("The database could not be reached; nothing was changed.")
+            return EXIT_REFUSED
+        if not rows:
+            io.refuse("No account has that login.")
+            return EXIT_REFUSED
+        try:
+            with backup_jobs.private_copy(args.archive, root) as private:
+                result = restore.restore_library(db.config.conninfo, storage, private, args.library,
+                                                 owner_user_id=rows[0]["id"],
+                                                 staging_dir=backup_jobs.restore_dir(root))
+        except restore.RestoreFailed as exc:
+            io.refuse(f"The restore failed ({exc.reason}): {exc.message}")
+            return EXIT_REFUSED
+        except backup_jobs.CopyFailed as exc:
+            io.refuse(f"The archive could not be copied into the data root ({exc.reason}); nothing was changed.")
+            return EXIT_REFUSED
+        io.say(f"Restored the Library (epoch {result.epoch}); {result.objects_held} replaced file(s) are held. "
+               "The worker rebuilds search.")
+        return EXIT_OK
+
+    return _started_root(args, db, run)
+
+
 def main(
     argv: Optional[Sequence[str]] = None,
     *,
@@ -588,8 +689,9 @@ def main(
     except DatabaseConfigError as exc:
         io.refuse(exc.message)
         return EXIT_USAGE
-    if args.command in ("unlock-login", "rebuild-derived"):
-        run = _unlock_login if args.command == "unlock-login" else _rebuild_derived
+    if args.command in ("unlock-login", "rebuild-derived", "backup", "restore"):
+        run = {"unlock-login": _unlock_login, "rebuild-derived": _rebuild_derived, "backup": _backup,
+               "restore": _restore}[args.command]
         try:
             with db:
                 return run(args, db, io)

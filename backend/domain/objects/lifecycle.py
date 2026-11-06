@@ -54,7 +54,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
@@ -141,10 +141,12 @@ VALUES (%(namespace)s, %(name)s, %(library_id)s, %(hold)s)
 ON CONFLICT (namespace, name) DO UPDATE
   SET library_id = coalesce(c.library_id, EXCLUDED.library_id), hold = c.hold OR EXCLUDED.hold
 """
-_NAMED_ELSEWHERE: dict[str, LiteralString] = {
-    NAMESPACE_ASSET_OBJECTS: _NAMED_BY_ANOTHER_LIBRARY,
-    NAMESPACE_PORTRAITS: _PORTRAIT_NAMED_BY_ANOTHER_LIBRARY,
-}
+# A key a running restore of another Library is staging (L-B-1's R1).
+_STAGED_BY_ANOTHER_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.restore_run_objects o JOIN prks.restore_runs r ON r.id = o.run_id
+WHERE o.namespace = %(namespace)s AND o.name = %(name)s AND r.state = 'running' AND r.library_id <> %(library_id)s
+LIMIT 1
+"""
 _NAMED_HERE: dict[str, LiteralString] = {
     NAMESPACE_ASSET_OBJECTS: _NAMED_IN_LIBRARY,
     NAMESPACE_PORTRAITS: _PORTRAIT_NAMED_IN_LIBRARY,
@@ -247,6 +249,35 @@ def references(tx: Transaction, key: StorageKey) -> Optional[bool]:
     return None
 
 
+def _held_elsewhere_sql(namespace: str) -> LiteralString:
+    # One statement, so one snapshot: a restore's R4 turns a staged key into
+    # a named one, a release turns a named key into a claimed one, and
+    # neither takes the per-object lock, so separate statements could each
+    # miss the key on either side of such a commit.
+    held: LiteralString = (
+        "SELECT (EXISTS (" + _STAGED_BY_ANOTHER_LIBRARY + ") OR EXISTS (" + _CLAIMED_BY_ANOTHER_LIBRARY + ")"
+    )
+    if namespace == NAMESPACE_ASSET_OBJECTS:
+        held += " OR EXISTS (" + _NAMED_BY_ANOTHER_LIBRARY + ")"
+    elif namespace == NAMESPACE_PORTRAITS:
+        held += " OR EXISTS (" + _PORTRAIT_NAMED_BY_ANOTHER_LIBRARY + ")"
+    return held + ") AS held"
+
+
+def held_by_another_library(execute: Callable[[LiteralString, dict[str, Any]], Any], key: StorageKey,
+                            library_id: str) -> bool:
+    """Whether a Library other than ``library_id`` names ``key``, released it, or is restoring it.
+
+    :func:`adopt`'s ownership rule for a writer that does not go through
+    it: restore's R1 calls this, under the per-object lock, before it
+    reuses or writes a key, so no key is ever attributed to two Libraries.
+    ``execute`` runs one statement with named parameters (a psycopg
+    connection's or a transaction's ``execute``).
+    """
+    row = execute(_held_elsewhere_sql(key.namespace), {**_key_params(key), "library_id": library_id}).fetchone()
+    return bool(row[0] if isinstance(row, tuple) else row["held"])
+
+
 # -- in a Library command ------------------------------------------------------------
 
 
@@ -258,16 +289,14 @@ def adopt(scope: LibraryScope, storage: StorageBackend, obj: StoredObject) -> No
     transaction ends. Raises :class:`ObjectMissing` when the bytes are gone,
     have another size (a settle unlinked them first) or another version than
     the write reported (they were replaced since), or when another
-    Library names the key or released it. So no key is ever named by two
+    Library names the key, released it or is restoring it (a running
+    restore's staged key, :func:`held_by_another_library`). So no key is ever named by two
     Libraries, and the claim's Library is the only one whose backups can
     hold it in a snapshot.
     """
     scope.execute_unscoped(OBJECT_LOCK_SQL, (str(obj.key),))
-    named_elsewhere = _NAMED_ELSEWHERE.get(obj.key.namespace)
-    if named_elsewhere is not None and scope.execute(
-            named_elsewhere, {"name": obj.key.name}).fetchone() is not None:
-        raise ObjectMissing()
-    if scope.execute(_CLAIMED_BY_ANOTHER_LIBRARY, _key_params(obj.key)).fetchone() is not None:
+    row = scope.execute(_held_elsewhere_sql(obj.key.namespace), _key_params(obj.key)).fetchone()
+    if row is not None and row["held"]:
         raise ObjectMissing()
     try:
         info = storage.stat(obj.key)

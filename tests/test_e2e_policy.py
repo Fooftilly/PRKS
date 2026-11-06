@@ -1051,21 +1051,22 @@ class AffectedMappingTests(unittest.TestCase):
             "backend/db/schema/030_jobs.sql",
             "backend/db/schema/040_sync.sql",
             "backend/db/schema/snapshot.json",
-            "backend/db/schema_snapshot.py",
             "tests/pg/test_migrate.py",
             "tests/pg/test_schema_snapshot.py",
             "backend/AGENTS.md",
         ]
-        for path in paths[:7]:
+        for path in paths[:6]:
             with self.subTest(path=path):
                 classified = policy.classify_affected_path(path)
                 self.assertEqual(classified["rules"], ["postgres-migration-infrastructure"])
                 self.assertTrue(classified["skip"])
         # A newly added executable under schema/, a shared domain package
-        # initializer, or the schema runner (the embedded worker's schema
+        # initializer, the schema snapshot reader (the backup fingerprint is
+        # served), or the schema runner (the embedded worker's schema
         # check is served) must not get the SQL/migration exemption.
         for runtime in (
             "backend/db/schema/new_helper.py", "backend/domain/__init__.py", "backend/db/migrate.py",
+            "backend/db/schema_snapshot.py",
         ):
             with self.subTest(runtime=runtime):
                 self.assertEqual(policy.plan_ci_e2e([runtime])["mode"], "full")
@@ -1091,7 +1092,7 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertFalse(plan["pointer_capture"])
 
     def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
-        pg_paths = ["backend/db/schema_snapshot.py", "backend/db/schema/040_sync.sql"]
+        pg_paths = ["backend/db/schema/snapshot.json", "backend/db/schema/040_sync.sql"]
         for runtime in (
             "prks_app.py", "backend/server.py", "backend/db_manager.py",
             "backend/db/__init__.py", "backend/db/database.py",
@@ -1122,7 +1123,7 @@ class AffectedMappingTests(unittest.TestCase):
             for rule in policy.AFFECTED_RULES if rule.get("skip")
             for pattern in rule["paths"] if pattern.startswith("backend/")
         ]
-        self.assertIn("backend/db/schema_snapshot.py", skipped)
+        self.assertIn("backend/db/schema/*.sql", skipped)
         for path in sorted(root.glob("backend/**/*.py")):
             rel = path.relative_to(root).as_posix()
             if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in skipped):

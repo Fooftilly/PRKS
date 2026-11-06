@@ -2040,9 +2040,32 @@ paths must not live indefinitely in sync history (logging/privacy rules).
 Replay without a path skips PDF removal (index/thumbnail cleanup still runs);
 that prefers a possible orphan over deleting live shared bytes.
 
-The client cancels never-sent ops that name the Work (including Argument
-creates/source replacements that cite it) and waits for possibly-sent ones; a
-never-sent `CREATE_WORK` for the same id folds away entirely.
+The client cancels never-sent *Work-owned* operations. Independently authored
+Argument/Stance constructions and source replacements are not disposable merely
+because they cite the Work: a never-attempted envelope retains its original op
+id, name/body, other citations, targets and dependent edits, while only that
+Work citation is removed. A never-sent `CREATE_WORK` still folds away entirely
+without discarding those independent Argument operations.
+
+For a server-existing Work, a possibly-sent Argument construction and a source
+replacement affecting its source revision must settle before the Work delete.
+That is a **family-owned ordering barrier**, checked on the live durable queue
+by the Work delete handler's `readyToSend(op, byId)` callback, not a mandatory
+successful `depends_on` prerequisite. A never-attempted source replacement
+that has already removed the deleted Work from its payload carries the
+`local_context.pending_work_deletions` marker until it settles; its original
+op id is retained across coalescing while the Argument remains. If the user
+also deletes the Argument, an unsent source replacement is superseded and
+cancelled, releasing the Work's ordering barrier. Potentially sent edits to
+that Argument (field, source, and target changes) remain immutable: the
+Argument delete handler waits for their **terminal outcomes** using its own
+`readyToSend` predicate, not success-only `depends_on` links. This includes
+revision conflicts: deleting an Argument does not require an earlier edit to
+succeed, and the refused edit remains visible in Diagnostics. The marker is
+local only, never part of the sync wire protocol. Terminally refused
+Argument/source edits do not block independent Work or Argument deletion; an
+unrelated Argument change does not delay Work deletion.
+
 Acknowledgement fences Concepts, Arguments, People, Person Groups, Folders,
 Playlists, browse catalogs and Research Graph core the same way the previous
 online-only `deleteWork` published coherence.
@@ -2417,6 +2440,13 @@ Position P → Argument A targeting P → Argument B targeting A. Terminal failu
 propagates as `DEPENDENCY_FAILED`; descendants do not wait forever. There is no
 invented Work-construction dependency while offline Work creation does not
 exist.
+
+When a canonical `CREATE_ARGUMENT` is refused, its dependent field/source/
+target operations are marked with a terminal `DEPENDENCY_FAILED` conflict
+(including after a reload). This is essential for independent Work deletion:
+a never-runnable source replacement cannot keep the Work-delete ordering
+barrier pending forever. The rejected creation and its edits remain available
+for Diagnostics, not silently discarded.
 
 The UI keeps acknowledged base, effective overlay, and editor draft separate.
 It enqueues only scalar fields or aggregates changed relative to what the editor

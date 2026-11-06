@@ -1896,8 +1896,15 @@ async function prksEffectiveFolderCatalogue(ops, options) {
     let rows = [];
     let source = 'unavailable';
     try {
-        const result = await prksOfflineReadList(PRKS_FOLDERS_LIST_KEY, '/api/folders', {});
-        if (!result || !Array.isArray(result.value)) {
+        const result = await prksOfflineReadList(PRKS_FOLDERS_LIST_KEY, '/api/folders', {
+            domain: PRKS_FOLDERS_DOMAIN, validate: prksIsFoldersIndexShape,
+        });
+        /* The offline reader validates network publication, but an older
+         * cached snapshot may predate that rule. A malformed catalogue must
+         * never be mistaken for an empty one: bulk 'No folder' would unfile
+         * selected Works without showing the real choices. */
+        if (!result || result.source === 'unavailable' ||
+            !prksIsFoldersIndexShape(result.value)) {
             if (opts.requireAvailable) throw new Error('Folder catalogue is unavailable.');
         } else {
             rows = result.value;

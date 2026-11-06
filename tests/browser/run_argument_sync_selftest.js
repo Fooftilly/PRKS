@@ -8,6 +8,7 @@ const { createPrksLocalStore } = require("../../frontend/js/local-store.js");
 require("../../frontend/js/sync-runtime.js");
 require("../../frontend/js/position-state.js");
 require("../../frontend/js/argument-state.js");
+require("../../frontend/js/work-lifecycle-state.js");
 
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
@@ -317,12 +318,513 @@ function argumentDetailUsesGuardedOfflineRead() {
         "Argument index must continue refreshing online and warming its offline cache");
 }
 
+async function deletingWorkPreservesIndependentArgumentIntent() {
+    const workId = "W-EXISTING";
+    const otherWork = "W-OTHER";
+    const source = { work_id: workId, pages: "12" };
+    const otherSource = { work_id: otherWork, pages: "3-5" };
+
+    // A separately authored, unsent Stance must remain even if its cited Work
+    // is deleted before sync. Field edits retain their creation dependency.
+    const store = newStore();
+    const created = await store.createArgument({
+        name: "Independently authored", kind: "stance",
+        main_text: "Keep this research",
+        sources: [source, otherSource],
+    });
+    const edit = await store.saveArgumentFields(created.entity_id,
+        { main_text: "Keep this revised research" },
+        fieldBase({ main_text: "Keep this research" }));
+    const deleted = await store.deleteWork(workId);
+    assert.equal(deleted.operation, "DELETE_WORK");
+    const rows = await operations(store);
+    const preserved = rows.find(r => r.op_id === created.op_id);
+    assert.ok(preserved, "unsent Argument create survives deleting its source Work");
+    assert.deepEqual(preserved.payload, {
+        name: "Independently authored", kind: "stance",
+        main_text: "Keep this research", sources: [otherSource], targets: [],
+    }, "only the deleted Work citation disappears");
+    assert.deepEqual(rows.find(r => r.op_id === edit[0].op_id).depends_on, [created.op_id],
+        "dependent field edit still has a live creation");
+    assert.equal(rows.some(r => r.op_id === deleted.op_id), true);
+    assert.equal(deleted.depends_on.includes(created.op_id), false,
+        "unsent independent Argument does not block Work deletion");
+    assert.deepEqual(globalThis.prksEffectiveArguments([], rows).map(r => r.id),
+        [created.entity_id], "pending Argument remains visible after Work deletion");
+
+    // Existing Argument source aggregate is independently authored too, but
+    // must ACK before Work deletion, which otherwise changes source revision.
+    const existing = newStore();
+    const sourcesWrite = await existing.setArgumentSources("A-SERVER",
+        [source, otherSource], sourcesBase([source], 7));
+    const deleteExisting = await existing.deleteWork(workId);
+    const persistedSource = (await operations(existing))
+        .find(r => r.op_id === sourcesWrite.op_id);
+    assert.deepEqual(persistedSource.payload.sources, [otherSource],
+        "unsent source replacement retains other citations");
+    assert.deepEqual(persistedSource.depends_on, sourcesWrite.depends_on,
+        "preserving the original source op does not break dependencies");
+    assert.equal(deleteExisting.depends_on.includes(sourcesWrite.op_id), false,
+        "the source revision is an ordering barrier, not a success prerequisite");
+    assert.deepEqual(persistedSource.local_context.pending_work_deletions, [workId],
+        "the rewritten source row records which Work deletion must follow it");
+
+    // A replacement after DELETE_WORK must preserve the Work deletion's
+    // prerequisite; new citations of the deleted Work must be refused.
+    const nextSources = [otherSource, { work_id: "W-THIRD", pages: "9" }];
+    const updated = await existing.setArgumentSources("A-SERVER", nextSources,
+        sourcesBase([source], 7));
+    assert.equal(updated.op_id, sourcesWrite.op_id,
+        "coalesced source replacement preserves Work delete's dependency id");
+    assert.deepEqual((await operations(existing)).find(r => r.op_id === updated.op_id)
+        .payload.sources, nextSources, "new independent source selection is preserved");
+    await assert.rejects(() => existing.setArgumentSources("A-SERVER",
+        [source], sourcesBase([source], 7)),
+        error => error.prksLocalStoreCode === "entity_deleted",
+        "new citations cannot re-add a Work being deleted");
+    await assert.rejects(() => existing.createArgument({
+        name: "Invalid new citation", sources: [source],
+    }), error => error.prksLocalStoreCode === "entity_deleted",
+    "a new Argument cannot cite a Work being deleted");
+    const argumentDeleted = await existing.deleteArgument("A-SERVER");
+    assert.equal(argumentDeleted.depends_on.includes(updated.op_id), false,
+        "deleting an Argument cancels its superseded never-sent source edit");
+    const retained = await operations(existing);
+    assert.equal(retained.some(r => r.op_id === updated.op_id), false,
+        "cancelling the unsent edit releases Work deletion's ordering barrier");
+    assert.ok(retained.some(r => r.operation === 'DELETE_WORK'),
+        "Work deletion remains an independent operation");
+    assert.ok(retained.every(r => r.depends_on.every(dep =>
+        retained.some(other => other.op_id === dep))),
+        "cross-entity cancellation leaves no missing dependency");
+
+    // Once attempted, neither construction nor sources may be rewritten.
+    const attempted = newStore();
+    const onWire = await attempted.createArgument({ name: "Already sent", sources: [source] });
+    await attempted.updateOperationSyncState(onWire.op_id,
+        { status: "syncing", bump_attempt: true });
+    const waitingDelete = await attempted.deleteWork(workId);
+    assert.deepEqual((await operations(attempted)).find(r => r.op_id === onWire.op_id)
+        .payload.sources, [source], "possibly sent CREATE_ARGUMENT remains immutable");
+    assert.equal(waitingDelete.depends_on.includes(onWire.op_id), false,
+        "an attempted Argument construction is a barrier, not a hard dependency");
+
+    // Folding an unsent locally created Work must not take independent
+    // Argument authorship or its dependent field edit with it.
+    globalThis.prksIsValidYoutubeUrl = url => url.includes("youtube.com/watch");
+    const local = newStore();
+    const createdWork = (await local.createWork({
+        title: "Never sent", source: {
+            kind: "video", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        },
+    })).create;
+    const localArg = await local.createArgument({
+        name: "Keep after fold", sources: [{ work_id: createdWork.entity_id }],
+    });
+    const localEdit = await local.saveArgumentFields(localArg.entity_id,
+        { main_text: "Owned draft" }, fieldBase({ main_text: "" }));
+    assert.equal(await local.deleteWork(createdWork.entity_id), null,
+        "unsent Work create folds away without a DELETE_WORK");
+    const localRows = await operations(local);
+    assert.equal(localRows.some(r => r.op_id === createdWork.op_id), false);
+    assert.deepEqual(localRows.find(r => r.op_id === localArg.op_id).payload.sources, [],
+        "fold removes only the Work citation from still-pending Argument");
+    assert.ok(localRows.some(r => r.op_id === localEdit[0].op_id &&
+        r.depends_on.includes(localArg.op_id)), "dependent author edit is not stranded");
+    assert.ok(localRows.every(r => r.depends_on.every(dep =>
+        localRows.some(other => other.op_id === dep))),
+        "no pending operation has a deleted prerequisite");
+
+    // A locally created Argument and its unsent source aggregate can fold
+    // away on deletion, releasing the Work deletion's soft ordering barrier.
+    const cross = newStore();
+    const crossArg = await cross.createArgument({ name: "Pending", sources: [source] });
+    const crossSources = await cross.setArgumentSources(crossArg.entity_id,
+        [source, otherSource], sourcesBase([source], 0));
+    const crossDeleteWork = await cross.deleteWork(workId);
+    assert.equal(crossDeleteWork.depends_on.includes(crossSources.op_id), false,
+        'the edited source is a live ordering barrier, never a hard dependency');
+    assert.deepEqual((await operations(cross)).find(r => r.op_id === crossSources.op_id)
+        .local_context.pending_work_deletions, [workId]);
+    assert.equal(await cross.deleteArgument(crossArg.entity_id), null,
+        "unsent Argument and its cancelled source selection fold away together");
+    const crossRows = await operations(cross);
+    assert.equal(crossRows.some(r => r.op_id === crossArg.op_id), false);
+    assert.equal(crossRows.some(r => r.op_id === crossSources.op_id), false);
+    assert.deepEqual(crossRows.map(r => r.operation), ['DELETE_WORK'],
+        "only independent Work deletion remains after Argument cancellation");
+}
+
+
+async function workDeletionWaitsForArgumentOutcomeEvenWhenTheArgumentFails() {
+    const work = 'W-SOURCE-DELETE';
+    const source = { work_id: work, pages: '2' };
+    const other = { work_id: 'W-KEPT', pages: '' };
+    const silent = handler => Object.assign({}, handler, { reconcile: async () => true });
+    const handlers = {
+        CREATE_ARGUMENT: silent(globalThis.prksArgumentCreateSyncHandler),
+        SET_ARGUMENT_SOURCES: silent(globalThis.prksArgumentSourcesSyncHandler),
+        DELETE_WORK: silent(globalThis.prksWorkDeleteSyncHandler),
+    };
+    // A refused CREATE_ARGUMENT must not strand DELETE_WORK behind a hard
+    // depends_on prerequisite. The source operation remains in Diagnostics.
+    {
+        // The prior attempt is old enough for the normal replay backoff:
+        // this regression tests dependency ordering, not timer policy.
+        const store = createPrksLocalStore({
+            dbName: 'prks-local-v2:old-attempt',
+            indexedDB: createFakeIndexedDBFactory(), uuid,
+            now: () => Date.now() - 60000,
+        });
+        const created = await store.createArgument({
+            name: 'May be refused', sources: [source],
+        });
+        await store.updateOperationSyncState(created.op_id,
+            { status: 'syncing', bump_attempt: true });
+        const deletion = await store.deleteWork(work);
+        assert.deepEqual(deletion.depends_on, [],
+            'the Work delete has no hard dependency on its Argument source');
+        // Reverse enumeration ensures the family handler, not just sequence,
+        // protects the server-side order.
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = globalThis.createPrksSyncRuntime({
+            store, online: () => true, handlers,
+            request: async (_url, options) => {
+                const op = JSON.parse(options.body);
+                sent.push(op.operation);
+                if (op.operation === 'CREATE_ARGUMENT') return {
+                    ok: false, status: 404, json: async () => ({
+                        code: 'WORK_NOT_FOUND', argument_id: op.entity_id,
+                    }),
+                };
+                return { ok: true, status: 200, json: async () => ({
+                    code: 'ACKNOWLEDGED', work_id: work, changed: true,
+                }) };
+            },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['CREATE_ARGUMENT', 'DELETE_WORK'],
+            'delete follows refused Argument construction despite queue order');
+        const rows = await operations(store);
+        assert.equal(rows.some(r => r.op_id === deletion.op_id), false,
+            'Work delete retires after rejection');
+        assert.equal(rows.find(r => r.op_id === created.op_id).server_result.code,
+            'WORK_NOT_FOUND', 'rejected Argument remains in Diagnostics');
+    }
+    // A rewritten source aggregate no longer cites the Work, but its local
+    // ordering marker still requires it to settle before DELETE_WORK.
+    {
+        const store = newStore();
+        const changed = await store.setArgumentSources('A-EXISTING',
+            [source, other], sourcesBase([source], 7));
+        const deletion = await store.deleteWork(work);
+        const rewritten = (await operations(store)).find(r => r.op_id === changed.op_id);
+        assert.deepEqual(rewritten.payload.sources, [other]);
+        assert.deepEqual(rewritten.local_context.pending_work_deletions, [work]);
+        assert.deepEqual(deletion.depends_on, []);
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = globalThis.createPrksSyncRuntime({
+            store, online: () => true, handlers,
+            request: async (_url, options) => {
+                const op = JSON.parse(options.body);
+                sent.push(op.operation);
+                if (op.operation === 'SET_ARGUMENT_SOURCES') return {
+                    ok: false, status: 409, json: async () => ({
+                        code: 'REVISION_CONFLICT',
+                        argument_id: op.entity_id, current_revision: 9,
+                    }),
+                };
+                return { ok: true, status: 200, json: async () => ({
+                    code: 'ACKNOWLEDGED', work_id: work, changed: true,
+                }) };
+            },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['SET_ARGUMENT_SOURCES', 'DELETE_WORK'],
+            'a failed source replacement still orders before Work deletion');
+        const remaining = await operations(store);
+        assert.equal(remaining.some(r => r.op_id === deletion.op_id), false);
+        assert.equal(remaining.find(r => r.op_id === changed.op_id).server_result.code,
+            'REVISION_CONFLICT', 'authored source conflict remains diagnosable');
+    }
+}
+
+
+async function deletionBarriersSurviveArgumentSourceRefusals() {
+    const work = 'W-AWAIT-SOURCES';
+    const argumentId = 'A-SERVER';
+    const source = { work_id: work, pages: '2' };
+    const other = { work_id: 'W-SURVIVES', pages: '4' };
+    const silent = handler => Object.assign({}, handler, { reconcile: async () => true });
+    const handlers = {
+        CREATE_ARGUMENT: silent(globalThis.prksArgumentCreateSyncHandler),
+        SET_ARGUMENT_SOURCES: silent(globalThis.prksArgumentSourcesSyncHandler),
+        DELETE_ARGUMENT: silent(globalThis.prksArgumentDeleteSyncHandler),
+        DELETE_WORK: silent(globalThis.prksWorkDeleteSyncHandler),
+    };
+    const ack = op => ({ code: 'ACKNOWLEDGED',
+        ...(op.operation === 'DELETE_WORK' ? { work_id: op.entity_id } :
+            { argument_id: op.entity_id }), changed: true });
+    const runtimeFor = (store, sent, reject) => globalThis.createPrksSyncRuntime({
+        store, online: () => true, handlers,
+        request: async (_url, options) => {
+            const op = JSON.parse(options.body);
+            sent.push(op.operation);
+            if (reject && reject.operation === op.operation) return {
+                ok: false, status: reject.status,
+                json: async () => Object.assign({ argument_id: op.entity_id }, reject.result),
+            };
+            return { ok: true, status: 200, json: async () => ack(op) };
+        },
+    });
+
+    // The source edit is never attempted, so an explicit Argument deletion
+    // supersedes it. Work deletion can proceed without any false hard link.
+    {
+        const store = newStore();
+        const edit = await store.setArgumentSources(argumentId,
+            [source, other], sourcesBase([source], 7));
+        const workDelete = await store.deleteWork(work);
+        const argumentDelete = await store.deleteArgument(argumentId);
+        assert.equal(argumentDelete.depends_on.includes(edit.op_id), false,
+            'unsent source revision is not a success prerequisite for deletion');
+        const before = await operations(store);
+        assert.equal(before.some(op => op.op_id === edit.op_id), false,
+            'unsent edit superseded by Argument deletion is cancelled');
+        assert.deepEqual(before.map(op => op.operation),
+            ['DELETE_WORK', 'DELETE_ARGUMENT']);
+        const sent = [];
+        const runtime = runtimeFor(store, sent);
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['DELETE_WORK', 'DELETE_ARGUMENT'],
+            'both independent user deletions synchronize');
+        assert.deepEqual(await operations(store), [],
+            'no hidden tombstones or orphaned prerequisites remain');
+        assert.ok(workDelete.op_id && argumentDelete.op_id);
+    }
+
+    // An already-attempted source operation cannot be rewritten/cancelled.
+    // A semantic revision conflict is terminal for ordering, NOT a reason to
+    // indefinitely prevent deleting its Argument or its old Work.
+    {
+        const store = createPrksLocalStore({
+            dbName: 'prks-local-v2:attempted-source-refusal',
+            indexedDB: createFakeIndexedDBFactory(), uuid,
+            now: () => Date.now() - 60000,
+        });
+        const edit = await store.setArgumentSources(argumentId,
+            [source, other], sourcesBase([source], 7));
+        await store.updateOperationSyncState(edit.op_id,
+            { status: 'syncing', bump_attempt: true });
+        const workDelete = await store.deleteWork(work);
+        const argumentDelete = await store.deleteArgument(argumentId);
+        assert.equal(argumentDelete.depends_on.includes(edit.op_id), false,
+            'attempted source is an ordering-only barrier to Argument deletion');
+        assert.equal(workDelete.depends_on.includes(edit.op_id), false,
+            'attempted source is an ordering-only barrier to Work deletion');
+        assert.ok((await operations(store)).some(op => op.op_id === edit.op_id &&
+            op.attempt_count === 1 && op.payload.sources.some(s => s.work_id === work)),
+            'possibly-sent source envelope remains unchanged');
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = runtimeFor(store, sent, {
+            operation: 'SET_ARGUMENT_SOURCES', status: 409,
+            result: { code: 'REVISION_CONFLICT', current_revision: 9 },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.equal(sent[0], 'SET_ARGUMENT_SOURCES',
+            'live barriers prevent either deletion overtaking an attempted source');
+        assert.deepEqual(sent.slice(1).sort(), ['DELETE_ARGUMENT', 'DELETE_WORK'],
+            'both deletions follow the refused source without needing its success');
+        const remaining = await operations(store);
+        assert.equal(remaining.length, 1);
+        assert.equal(remaining[0].op_id, edit.op_id);
+        assert.equal(remaining[0].status, 'conflict');
+        assert.equal(remaining[0].server_result.code, 'REVISION_CONFLICT',
+            'source decision survives in Diagnostics for review');
+    }
+
+    // A refused Argument construction must terminally fail its pending
+    // source edits. Without failDependentsOnConflict these rows would remain
+    // pending and Work deletion would be blocked forever by readyToSend.
+    {
+        const store = createPrksLocalStore({
+            dbName: 'prks-local-v2:refused-argument-source',
+            indexedDB: createFakeIndexedDBFactory(), uuid,
+            now: () => Date.now() - 60000,
+        });
+        const created = await store.createArgument({
+            name: 'Refused by server', sources: [source],
+        });
+        await store.updateOperationSyncState(created.op_id,
+            { status: 'syncing', bump_attempt: true });
+        const edit = await store.setArgumentSources(created.entity_id,
+            [source, other], sourcesBase([source], 0));
+        assert.deepEqual(edit.depends_on, [created.op_id],
+            'source replacement requires successful Argument construction');
+        const workDelete = await store.deleteWork(work);
+        const modifiedSource = (await operations(store)).find(op => op.op_id === edit.op_id);
+        assert.deepEqual(modifiedSource.payload.sources, [other]);
+        assert.deepEqual(modifiedSource.local_context.pending_work_deletions, [work]);
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = runtimeFor(store, sent, {
+            operation: 'CREATE_ARGUMENT', status: 404,
+            result: { code: 'WORK_NOT_FOUND' },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['CREATE_ARGUMENT', 'DELETE_WORK'],
+            'failed construction never sends its dependent source but releases Work delete');
+        const remaining = await operations(store);
+        assert.equal(remaining.some(op => op.op_id === workDelete.op_id), false);
+        assert.equal(remaining.find(op => op.op_id === created.op_id).status, 'conflict');
+        assert.equal(remaining.find(op => op.op_id === edit.op_id).status, 'conflict');
+        assert.equal(remaining.find(op => op.op_id === edit.op_id).server_result.code,
+            'DEPENDENCY_FAILED',
+            'refused construction marks dependent source terminal for Diagnostics');
+    }
+}
+
+
+async function argumentDeletionMustNotRequireSuccessOfDiscardedEdits() {
+    const id = 'A-SERVER';
+    const sourceTargets = [{ type: 'position', id: 'P-SERVER', verdict_id: 'supports' }];
+    const silent = handler => Object.assign({}, handler, { reconcile: async () => true });
+    const handlers = {
+        SET_ARGUMENT_FIELD: silent(globalThis.prksArgumentFieldSyncHandler),
+        SET_ARGUMENT_TARGETS: silent(globalThis.prksArgumentTargetsSyncHandler),
+        DELETE_ARGUMENT: silent(globalThis.prksArgumentDeleteSyncHandler),
+    };
+    // Existing terminal field and target conflicts must not become hard
+    // prerequisites to a new independent Argument deletion.
+    {
+        const store = newStore();
+        const fields = await store.saveArgumentFields(id, { name: 'Revised' },
+            fieldBase({ name: 'Original' }));
+        const targets = await store.setArgumentTargets(id,
+            sourceTargets, targetsBase([], 7));
+        for (const op of [fields[0], targets]) {
+            await store.updateOperationSyncState(op.op_id, {
+                status: 'conflict',
+                server_result: { code: 'REVISION_CONFLICT', current_revision: 5 },
+            });
+        }
+        const deleted = await store.deleteArgument(id);
+        for (const op of [fields[0], targets]) {
+            assert.ok(!deleted.depends_on.includes(op.op_id),
+                'terminal Argument edit conflicts cannot block its deletion');
+        }
+        const sent = [];
+        const runtime = globalThis.createPrksSyncRuntime({
+            store, online: () => true, handlers,
+            request: async (_url, options) => {
+                const op = JSON.parse(options.body);
+                sent.push(op.operation);
+                assert.equal(op.operation, 'DELETE_ARGUMENT',
+                    'do not retry a terminally conflicted edit');
+                return { ok: true, status: 200, json: async () => ({
+                    code: 'ACKNOWLEDGED', argument_id: id, changed: true,
+                }) };
+            },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent, ['DELETE_ARGUMENT']);
+        const remaining = await operations(store);
+        assert.equal(remaining.length, 2, 'conflicts are retained for Diagnostics');
+        assert.ok(remaining.every(op => op.status === 'conflict'));
+    }
+
+    // A possibly-sent field/target edit must settle before deletion. If
+    // those edits are refused, their failures remain visible, but the
+    // independent deletion still dispatches. Reverse enumeration ensures
+    // the family-owned barrier, not ordinary list order, protects sending.
+    {
+        const store = createPrksLocalStore({
+            dbName: 'prks-local-v2:attempted-field-target',
+            indexedDB: createFakeIndexedDBFactory(), uuid,
+            now: () => Date.now() - 60000,
+        });
+        const fields = await store.saveArgumentFields(id, { name: 'New' },
+            fieldBase({ name: 'Old' }));
+        const targets = await store.setArgumentTargets(id,
+            sourceTargets, targetsBase([], 7));
+        for (const op of [fields[0], targets]) {
+            await store.updateOperationSyncState(op.op_id,
+                { status: 'syncing', bump_attempt: true });
+        }
+        const deleted = await store.deleteArgument(id);
+        for (const op of [fields[0], targets]) {
+            assert.equal(deleted.depends_on.includes(op.op_id), false,
+                'attempted Argument edits are ordering-only barriers');
+            assert.equal((await operations(store)).find(r => r.op_id === op.op_id)
+                .attempt_count, 1, 'possibly-sent envelope was not rewritten');
+        }
+        const list = store.listOperations.bind(store);
+        store.listOperations = async () => (await list()).slice().reverse();
+        const sent = [];
+        const runtime = globalThis.createPrksSyncRuntime({
+            store, online: () => true, handlers,
+            request: async (_url, options) => {
+                const op = JSON.parse(options.body);
+                sent.push(op.operation);
+                if (op.operation === 'DELETE_ARGUMENT') return {
+                    ok: true, status: 200, json: async () => ({
+                        code: 'ACKNOWLEDGED', argument_id: id, changed: true,
+                    }),
+                };
+                const result = {
+                    code: 'REVISION_CONFLICT', argument_id: id, current_revision: 9,
+                };
+                if (op.operation === 'SET_ARGUMENT_FIELD') {
+                    result.field = op.payload.field;
+                    result.current_value = 'Canonical value';
+                }
+                return { ok: false, status: 409, json: async () => result };
+            },
+        });
+        await runtime.wake();
+        await settle();
+        runtime.stop();
+        assert.deepEqual(sent.slice(0, 2).sort(),
+            ['SET_ARGUMENT_FIELD', 'SET_ARGUMENT_TARGETS'],
+            'both potentially-sent edits settle before Argument deletion');
+        assert.equal(sent.at(-1), 'DELETE_ARGUMENT',
+            'deletion proceeds despite both revision conflicts');
+        const remaining = await operations(store);
+        assert.equal(remaining.length, 2);
+        assert.ok(remaining.every(op => op.status === 'conflict' &&
+            op.server_result.code === 'REVISION_CONFLICT'),
+            'both refused source-independent edits remain visible in Diagnostics');
+    }
+}
 async function main() {
     argumentDetailUsesGuardedOfflineRead();
     await constructionAndDependencies();
     await scalarCoalescingAndIndependence();
     await orderedAggregatesCoalesceAndCancel();
     await deletionAndImmutability();
+    await deletingWorkPreservesIndependentArgumentIntent();
+    await workDeletionWaitsForArgumentOutcomeEvenWhenTheArgumentFails();
+    await deletionBarriersSurviveArgumentSourceRefusals();
+    await argumentDeletionMustNotRequireSuccessOfDiscardedEdits();
     await validation();
     await failedRootBlocksDescendants();
     await commitWritesOnlyDirtyUnits();
