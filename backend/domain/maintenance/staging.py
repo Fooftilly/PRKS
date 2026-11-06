@@ -12,6 +12,12 @@ data root does not have yet), so nothing it does is visible to the Library:
    not the archive's server, decides how a value is read. Generated columns
    (the ``*_key`` identity keys) are recomputed by the insert under this
    instance's rules. Every ``library_id`` becomes the target Library's.
+   Identity columns (the ``seq`` tiebreaks of ``roles`` and
+   ``processing_item_roles``) are globally unique, so their archived values
+   are replaced by fresh values from the live sequences, keeping each
+   table's order; another Library's values are never hit, and R4 needs no
+   ``setval``. The archive's rows must name exactly the archive's objects,
+   with the hashes and sizes the archive carries for them.
 2. **Identities.** ``_map_users``: an archive user that exists here maps to
    itself; any other maps to the restoring owner. ``_map_devices``: a device
    that exists here and belongs to the mapped user is reused; one that does
@@ -50,10 +56,10 @@ from psycopg import sql
 
 from backend.domain.maintenance import tables
 from backend.domain.maintenance.archive import Archive, ArchiveRefused, Member
-from backend.domain.maintenance.format import IO_CHUNK_SIZE
+from backend.domain.maintenance.format import IO_CHUNK_SIZE, object_references
 from backend.domain.maintenance.connection import pin_interchange_settings
 from backend.domain.objects.lifecycle import OBJECT_LOCK_SQL
-from backend.storage.objects import ObjectExists, StorageBackend, StorageKey
+from backend.storage.objects import InvalidStorageKey, ObjectExists, StorageBackend, StorageKey
 
 STAGING_PREFIX = "restore_"
 _LOAD_PREFIX = "_load_"
@@ -149,6 +155,57 @@ def _load_table(conn: psycopg.Connection[Any], archive: Archive, schema: str, ta
         sql.Identifier(schema, name), sql.SQL(", ").join(sql.Identifier(c) for c, _ in columns),
         sql.SQL(", ").join(selects), load))
     conn.execute(sql.SQL("DROP TABLE {}").format(load))
+
+
+_IDENTITY_COLUMNS_SQL: LiteralString = """
+SELECT a.attname
+  FROM pg_attribute a
+ WHERE a.attrelid = to_regclass(%s) AND a.attnum > 0 AND NOT a.attisdropped AND a.attidentity <> ''
+ ORDER BY a.attnum
+"""
+
+
+def _renumber_identities(conn: psycopg.Connection[Any], schema: str) -> None:
+    """Give staged identity values fresh live-sequence values in their archived order."""
+    for table in tables.BACKUP_CONTENT_TABLES:
+        live_schema, name = tables.split_name(table)
+        staged = sql.Identifier(schema, name)
+        for (column,) in conn.execute(_IDENTITY_COLUMNS_SQL, (table,)).fetchall():
+            col = sql.Identifier(column)
+            # Negate first: the staged copy keeps the unique index, and a fresh
+            # value may equal another row's archived one.
+            conn.execute(sql.SQL("UPDATE {t} SET {c} = -{c}").format(t=staged, c=col))
+            conn.execute(sql.SQL(
+                "WITH fresh AS (SELECT v, row_number() OVER (ORDER BY v) AS n FROM ("
+                "  SELECT nextval(pg_get_serial_sequence({live}, {name})) AS v"
+                "    FROM generate_series(1, (SELECT count(*) FROM {t}))) s), "
+                "old AS (SELECT {c} AS was, row_number() OVER (ORDER BY {c} DESC) AS n FROM {t}) "
+                "UPDATE {t} SET {c} = fresh.v FROM old JOIN fresh USING (n) WHERE {t}.{c} = old.was"
+            ).format(t=staged, c=col, live=sql.Literal(f"{live_schema}.{name}"), name=sql.Literal(column)))
+
+
+def _check_object_references(conn: psycopg.Connection[Any], archive: Archive, schema: str,
+                             target_library_id: str) -> None:
+    named: dict[StorageKey, list[tuple[Optional[str], Optional[int]]]] = {}
+    for namespace, name, sha256, size in conn.execute(
+            object_references(schema), {"library_id": target_library_id}).fetchall():
+        try:
+            obj_key = StorageKey(namespace, name)
+        except InvalidStorageKey:
+            raise StagingRefused("object_missing", "The backup's rows name an object by an invalid key.") from None
+        named.setdefault(obj_key, []).append((sha256, size))
+    missing = sorted(str(k) for k in named.keys() - archive.objects.keys())
+    if missing:
+        raise StagingRefused("object_missing", f"The backup's rows name objects it does not carry: {missing[0]}.")
+    extra = sorted(str(k) for k in archive.objects.keys() - named.keys())
+    if extra:
+        raise StagingRefused("object_unreferenced", f"The backup carries an object no row names: {extra[0]}.")
+    for obj_key, recorded in named.items():
+        member = archive.objects[obj_key]
+        for sha256, size in recorded:
+            if (sha256 is not None and sha256 != member.sha256) or (size is not None and size != member.size):
+                raise StagingRefused("object_mismatch",
+                                     f"The backup's rows record other contents for {obj_key} than it carries.")
 
 
 # -- 2. identities ----------------------------------------------------------------------------
@@ -333,6 +390,8 @@ def stage(conn: psycopg.Connection[Any], archive: Archive, *, run_id: uuid.UUID,
         for table in tables.BACKUP_CONTENT_TABLES:
             _load_table(conn, archive, schema, table, target_library_id)
             renew()
+        _renumber_identities(conn, schema)
+        _check_object_references(conn, archive, schema, target_library_id)
         new_devices = _load_identities(conn, archive, schema, owner_user_id)
         _check_foreign_library_ids(conn, schema, target_library_id)
         _check_foreign_keys(conn, schema)

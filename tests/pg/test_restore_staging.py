@@ -38,6 +38,7 @@ from backend.db.database import Database
 from backend.domain.maintenance import archive as r0
 from backend.domain.maintenance import staging
 from backend.domain.maintenance.archive import ArchiveRefused, Limits
+from backend.entity_ids import generate
 from backend.domain.maintenance.connection import maintenance_connection
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor
@@ -307,6 +308,58 @@ class StagingTests(StagingTestCase):
         self.assertEqual(caught.exception.reason, "device_collision")
         self.assertIn("2 recorded operation", caught.exception.message)
 
+
+    def test_rows_must_name_exactly_the_archives_objects(self) -> None:
+        obj = self.put(b"%PDF referenced")
+        self.create(obj)
+        result = self.backup()
+        member = f"objects/asset-objects/{obj.key.name}"
+
+        def drop_entry(manifest: dict[str, Any]) -> None:
+            manifest["objects"].pop(f"asset-objects/{obj.key.name}")
+
+        missing = rewrite(result.path, self.path("missing.zip"), change={member: None}, manifest_edit=drop_entry)
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(missing)
+        self.assertEqual(caught.exception.reason, "object_missing")
+
+        stray = b"%PDF stray"
+
+        def add_entry(manifest: dict[str, Any]) -> None:
+            manifest["objects"]["asset-objects/stray.pdf"] = {
+                "size": len(stray), "sha256": hashlib.sha256(stray).hexdigest()}
+
+        extra = rewrite(result.path, self.path("extra.zip"), manifest_edit=add_entry,
+                        extra={"objects/asset-objects/stray.pdf": stray})
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(extra)
+        self.assertEqual(caught.exception.reason, "object_unreferenced")
+
+        assets = source_text(result.path, "db/assets.csv").replace(obj.sha256, hashlib.sha256(b"other").hexdigest())
+        mismatch = rewrite(result.path, self.path("mismatch.zip"), change={"db/assets.csv": assets.encode()})
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(mismatch)
+        self.assertEqual(caught.exception.reason, "object_mismatch")
+
+    def test_role_tiebreaks_are_renumbered_from_the_live_sequence_in_order(self) -> None:
+        work_id = self.create(self.put())
+        people = [generate("P") for _ in range(3)]
+        for person_id in people:
+            self.sql("INSERT INTO prks.persons (library_id, id, last_name) VALUES (%s, %s, 'X')",
+                     (self.actor.library_id, person_id))
+        for person_id in reversed(people):  # all tie on order_index; seq alone orders them
+            self.sql("INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index) "
+                     "VALUES (%s, %s, %s, 'Author', 0)", (self.actor.library_id, work_id, person_id))
+        archived = [r["person_id"] for r in self.sql("SELECT person_id FROM prks.roles ORDER BY seq")]
+        live_seqs = {r["seq"] for r in self.sql("SELECT seq FROM prks.roles")}
+        result = self.backup()
+        staged = self.stage(result.path)
+        self.addCleanup(self.drop, staged)
+        rows = sorted(self.staged(staged, "roles"), key=lambda r: r["seq"])
+        self.assertEqual([r["person_id"] for r in rows], archived)
+        self.assertFalse({r["seq"] for r in rows} & live_seqs)  # no other Library's value can be hit
+        later = self.sql("SELECT nextval(pg_get_serial_sequence('prks.roles', 'seq')) AS v")[0]["v"]
+        self.assertGreater(later, max(r["seq"] for r in rows))  # R4 needs no setval
 
 class NewInstanceTests(StagingTestCase):
     def test_a_restore_into_a_new_instance_maps_library_users_and_devices(self) -> None:

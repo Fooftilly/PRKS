@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 import psycopg
+from psycopg import sql
 
 from backend.db.schema_snapshot import catalog_snapshot
 from backend.domain.maintenance import tables
@@ -41,3 +42,26 @@ def schema_fingerprint(conn: psycopg.Connection[Any]) -> str:
         snapshot = catalog_snapshot(conn)
     canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def object_references(schema: str = "prks") -> sql.Composed:
+    """Every object a Library's rows name, with what the catalogue recorded about it.
+
+    Export reads it from ``prks`` to choose the archive's objects; staging reads
+    it from ``restore_<run>`` to require that the archive carries exactly those.
+    Bound parameter: ``library_id``.
+    """
+    return sql.SQL(
+        "SELECT 'asset-objects' AS namespace, storage_locator AS name, content_sha256 AS sha256, "
+        "byte_size AS size FROM {assets} WHERE library_id = %(library_id)s AND storage_locator IS NOT NULL "
+        "UNION ALL "
+        "SELECT 'asset-objects', source_locator, ingest_sha256, NULL "
+        "FROM {assets} WHERE library_id = %(library_id)s AND source_locator IS NOT NULL "
+        "UNION ALL "
+        "SELECT 'asset-objects', object_locator, sha256, byte_size "
+        "FROM {items} WHERE library_id = %(library_id)s AND object_locator IS NOT NULL "
+        "UNION ALL "
+        "SELECT 'portraits', portrait_locator, portrait_sha256, portrait_byte_size "
+        "FROM {persons} WHERE library_id = %(library_id)s AND portrait_locator IS NOT NULL"
+    ).format(assets=sql.Identifier(schema, "assets"), items=sql.Identifier(schema, "processing_items"),
+             persons=sql.Identifier(schema, "persons"))

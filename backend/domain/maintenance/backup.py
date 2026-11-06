@@ -64,6 +64,7 @@ from backend.domain.maintenance.format import (
     IO_CHUNK_SIZE,
     MANIFEST_NAME,
     USERS_MEMBER,
+    object_references,
     schema_fingerprint,
     table_member,
 )
@@ -198,19 +199,6 @@ SELECT a.attname
  ORDER BY u.pos
 """
 
-_OBJECTS_SQL: LiteralString = """
-SELECT 'asset-objects' AS namespace, storage_locator AS name, content_sha256 AS sha256, byte_size AS size
-  FROM prks.assets WHERE library_id = %(library_id)s AND storage_locator IS NOT NULL
-UNION ALL
-SELECT 'asset-objects', source_locator, ingest_sha256, NULL
-  FROM prks.assets WHERE library_id = %(library_id)s AND source_locator IS NOT NULL
-UNION ALL
-SELECT 'asset-objects', object_locator, sha256, byte_size
-  FROM prks.processing_items WHERE library_id = %(library_id)s AND object_locator IS NOT NULL
-UNION ALL
-SELECT 'portraits', portrait_locator, portrait_sha256, portrait_byte_size
-  FROM prks.persons WHERE library_id = %(library_id)s AND portrait_locator IS NOT NULL
-"""
 
 
 def _export_order(conn: psycopg.Connection[Any], table: str, columns: list[str]) -> list[str]:
@@ -273,7 +261,7 @@ def _object_refs(conn: psycopg.Connection[Any], library_id: str) -> list[ObjectR
     hashes: dict[StorageKey, set[str]] = {}
     sizes: dict[StorageKey, set[int]] = {}
     with conn.cursor(row_factory=dict_row) as cur:
-        for row in cur.execute(_OBJECTS_SQL, {"library_id": library_id}).fetchall():
+        for row in cur.execute(object_references(), {"library_id": library_id}).fetchall():
             obj_key = StorageKey(row["namespace"], row["name"])
             key_hashes = hashes.setdefault(obj_key, set())
             key_sizes = sizes.setdefault(obj_key, set())
