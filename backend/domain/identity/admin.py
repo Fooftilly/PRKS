@@ -656,6 +656,9 @@ def _restore(args: argparse.Namespace, db: Database, io: _Io) -> int:
         except restore.RestoreFailed as exc:
             io.refuse(f"The restore failed ({exc.reason}): {exc.message}")
             return EXIT_REFUSED
+        except backup_jobs.CopyFailed as exc:
+            io.refuse(f"The archive could not be copied into the data root ({exc.reason}); nothing was changed.")
+            return EXIT_REFUSED
         io.say(f"Restored the Library (epoch {result.epoch}); {result.objects_held} replaced file(s) are held. "
                "The worker rebuilds search.")
         return EXIT_OK

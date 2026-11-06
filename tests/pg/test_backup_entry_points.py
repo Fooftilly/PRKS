@@ -9,6 +9,7 @@ start check, and a restore through the CLI round-trips a Library.
 
 from __future__ import annotations
 
+import errno
 import io
 import os
 import shutil
@@ -201,6 +202,23 @@ class AdminBackupRestoreTests(RootPairingTestCase):
         code, _out, err = self.run_cli("restore", "--library", self.boot.library_id,
                                        "--archive", os.path.join(self.out, "missing"), "--owner", OWNER.login_name)
         self.assertEqual(code, admin.EXIT_USAGE)
+
+    def test_a_full_disk_while_copying_the_archive_is_a_clean_refusal(self) -> None:
+        code, _out, err = self.run_cli("backup", "--library", self.boot.library_id, "--out", self.out)
+        self.assertEqual(code, admin.EXIT_OK, err)
+        (archive,) = os.listdir(self.out)
+
+        def disk_full(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device", "/secret/path")
+
+        with mock.patch.object(backup_jobs.shutil, "copyfileobj", side_effect=disk_full):
+            code, _out, err = self.run_cli("restore", "--library", self.boot.library_id,
+                                           "--archive", os.path.join(self.out, archive), "--owner", OWNER.login_name)
+        self.assertEqual(code, admin.EXIT_REFUSED)
+        self.assertIn("could not be copied into the data root (ENOSPC)", err)
+        self.assertNotIn("/secret/path", err)
+        self.assertEqual(os.listdir(backup_jobs.restore_dir(self.root)), [])
+        self.assertEqual(self.sql("SELECT count(*) FROM prks.restore_runs")[0][0], 0)
 
     def test_backup_refuses_a_missing_out_directory_and_an_unknown_library(self) -> None:
         code, _out, _err = self.run_cli("backup", "--library", self.boot.library_id,

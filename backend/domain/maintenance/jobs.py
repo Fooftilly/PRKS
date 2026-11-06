@@ -27,6 +27,7 @@ a live one never is.
 from __future__ import annotations
 
 import contextlib
+import errno
 import logging
 import os
 import re
@@ -86,21 +87,45 @@ def restore_dir(root: str) -> str:
     return path
 
 
+class CopyFailed(Exception):
+    """The private restore copy could not be made; ``reason`` is an errno or lock code, never a path."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _copy_reason(exc: BaseException) -> str:
+    if isinstance(exc, LockUnavailable):
+        return exc.reason
+    if isinstance(exc, OSError) and exc.errno is not None:
+        return errno.errorcode.get(exc.errno, "EIO")
+    return "copy_failed"
+
+
 @contextlib.contextmanager
 def private_copy(path: str, root: str) -> Iterator[str]:
     """A ``0600`` copy of ``path`` in :func:`restore_dir`, so it cannot change underneath a restore.
 
     The copy is locked from the moment it exists until it is removed on exit,
     so :func:`prune_restore_copies` removes only the copies of a process that
-    died before its own cleanup.
+    died before its own cleanup. Raises :class:`CopyFailed` when the copy
+    cannot be made (a full disk, a permission, a lock refusal), with any
+    partial copy removed; errors from the body pass through unchanged.
     """
-    target = os.path.join(restore_dir(root), f"{uuid.uuid4()}{_COPY_SUFFIX}")
-    lock = ExclusiveFileLock.acquire(target)  # creates the file 0600, locked
+    try:
+        target = os.path.join(restore_dir(root), f"{uuid.uuid4()}{_COPY_SUFFIX}")
+        lock = ExclusiveFileLock.acquire(target)  # creates the file 0600, locked
+    except (OSError, LockBusy, LockUnavailable) as exc:
+        raise CopyFailed(_copy_reason(exc)) from exc
     try:
         try:
-            fd = os.open(target, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
-            with os.fdopen(fd, "wb") as out, open(path, "rb") as source:
-                shutil.copyfileobj(source, out, _COPY_CHUNK)
+            try:
+                fd = os.open(target, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
+                with os.fdopen(fd, "wb") as out, open(path, "rb") as source:
+                    shutil.copyfileobj(source, out, _COPY_CHUNK)
+            except OSError as exc:
+                raise CopyFailed(_copy_reason(exc)) from exc
             yield target
         finally:
             with contextlib.suppress(FileNotFoundError):
