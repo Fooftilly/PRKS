@@ -385,7 +385,10 @@ async function fetchTags(options = {}) {
             if (!Array.isArray(result)) throw new Error('Invalid tag catalogue.');
             return options.withSource ? { rows: result, source: 'network' } : result;
         }
-        const data = await prksParseJsonResponse(res, [], 'tags', errorOwner);
+        /* A source-aware caller must distinguish valid [] from the parse
+         * helper's failure fallback. Keep [] for legacy array callers but
+         * use null as the provenance-aware sentinel on malformed HTTP 200. */
+        const data = await prksParseJsonResponse(res, options.withSource ? null : [], 'tags', errorOwner);
         const valid = Array.isArray(data);
         const rows = valid ? data : [];
         return options.withSource

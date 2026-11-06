@@ -787,7 +787,9 @@ root.prksWorkSelectionSubmitPayload({
     // Direct HTTP is used for used:true and when the index reader is absent.
     // withSource must never silently revert to an array-only result.
     const tagRows = [{id:'T-1',name:'Topic'}];
-    apiContext.prksParseJsonResponse = async () => tagRows;
+    apiContext.prksReportClientError = () => {};
+    apiContext.prksApiErrorSource = () => 'tags';
+    evaluateReader(apiSource, 'async function prksParseJsonResponse(', apiContext);
     apiContext.prksRequest = async () => ({ok:true,json:async()=>tagRows});
     received = await apiContext.fetchTags({used:true,withSource:true});
     assert('used Tags with source returns provenance alongside rows',
@@ -795,11 +797,18 @@ root.prksWorkSelectionSubmitPayload({
     received = await apiContext.fetchTags({used:true});
     assert('used Tags without source retain the legacy array shape',
         Array.isArray(received) && received.length === 1);
-    apiContext.prksRequest = async () => ({ok:false,json:async()=>({})});
-    apiContext.prksParseJsonResponse = async () => [];
+    apiContext.prksRequest = async () => ({ok:false,status:503,json:async()=>({})});
     received = await apiContext.fetchTags({used:true,withSource:true});
     assert('non-strict HTTP failure has explicitly unavailable provenance',
         received.source === 'unavailable' && received.rows.length === 0);
+    apiContext.prksRequest = async () => ({ok:true,status:200,
+        json:async()=>{ throw new SyntaxError('Truncated Tag JSON'); }});
+    received = await apiContext.fetchTags({used:true,withSource:true});
+    assert('malformed HTTP 200 Tag JSON is unavailable rather than empty network data',
+        received.source === 'unavailable' && received.rows.length === 0);
+    received = await apiContext.fetchTags({used:true});
+    assert('malformed HTTP 200 keeps legacy array fallback',
+        Array.isArray(received) && received.length === 0);
     apiContext.prksRequest = async () => { throw new Error('Network offline'); };
     received = await apiContext.fetchTags({used:true,withSource:true});
     assert('non-strict Tags transport failure keeps the source envelope',
