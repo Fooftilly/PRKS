@@ -410,6 +410,26 @@ class IsolationTests(ObjectsTestCase):
         self.assertEqual(self.claims()[obj.key.name]["library_id"], self.actor.library_id)
         self.create(obj)  # the Library that released it may name it again
 
+    def test_a_key_another_librarys_running_restore_stages_cannot_be_adopted(self) -> None:
+        obj = self.put()
+        run_id = self.restore_run(obj.key)
+        other = self.other_actor()
+        with self.assertRaises(ObjectMissing):
+            self.create(obj, ctx=other.context)
+        self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.assets")[0]["n"], 0)
+        self.create(obj)  # the restoring Library itself may name it
+        self.finish_run(run_id, "failed")
+
+    def test_a_portrait_another_librarys_running_restore_stages_is_held_elsewhere(self) -> None:
+        portrait = key("P-2_def.jpg", NAMESPACE_PORTRAITS)
+        self.restore_run(portrait)
+        other = self.other_actor()
+        def held(library_id: str) -> bool:
+            return self.db.query(lambda tx: lifecycle.held_by_another_library(tx.execute, portrait, library_id))
+
+        self.assertTrue(held(other.library_id))
+        self.assertFalse(held(self.actor.library_id))
+
     def test_a_reader_cannot_release_a_key(self) -> None:
         obj = self.put()
         from backend.domain.identity.authorization import AccessRefused

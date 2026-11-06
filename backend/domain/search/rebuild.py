@@ -436,7 +436,13 @@ def current_folding(scope: LibraryScope) -> str:
     return str(row["folding"])
 
 
-def _host_enqueue(tx: Transaction, library_id: str, epoch: int, scopes: Iterable[str]) -> Optional[uuid.UUID]:
+def enqueue_for_host(tx: Transaction, library_id: str, epoch: int,
+                     scopes: Iterable[str] = SCOPES) -> Optional[uuid.UUID]:
+    """Enqueue the rebuild at ``epoch`` in the caller's transaction (host maintenance, restore's R4).
+
+    The caller holds the Library row lock and read or set ``epoch`` in the
+    same transaction. None when the same rebuild is already queued.
+    """
     chosen = scope_key(scopes)
     return queue.enqueue_library_job_for_host(
         tx, library_id, epoch, KIND, {"scopes": chosen},
@@ -473,7 +479,7 @@ class Requested(enum.Enum):
 def request_rebuild(db: Database, library_id: str, scopes: Iterable[str] = SCOPES) -> Requested:
     """``prks admin rebuild-derived``: queue the Library's rebuild under its row lock."""
     def enqueue(tx: Transaction, epoch: int, _due: bool) -> Requested:
-        queued = _host_enqueue(tx, library_id, epoch, scopes) is not None
+        queued = enqueue_for_host(tx, library_id, epoch, scopes) is not None
         return Requested.QUEUED if queued else Requested.ALREADY_QUEUED
 
     return _for_library(db, library_id, enqueue) or Requested.UNAVAILABLE
@@ -495,7 +501,7 @@ def check_folding(db: Database) -> list[str]:
                                                     "scopes": list(FOLDING_SCOPES)}).fetchone()
             if covered is not None and covered["covered"]:
                 return None
-            return _host_enqueue(tx, library_id, epoch, FOLDING_SCOPES)
+            return enqueue_for_host(tx, library_id, epoch, FOLDING_SCOPES)
 
         return decide
 

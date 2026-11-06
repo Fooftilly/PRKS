@@ -123,6 +123,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/maintenance/backup.py",
     "backend/domain/maintenance/connection.py",
     "backend/domain/maintenance/format.py",
+    "backend/domain/maintenance/restore.py",
     "backend/domain/maintenance/staging.py",
     "backend/domain/maintenance/tables.py",
     "backend/domain/saved_views/__init__.py",
