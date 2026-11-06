@@ -184,3 +184,65 @@ describe('prksApiRequest', () => {
     expect(note.mock.calls[0][0]).not.toBe(note.mock.calls[1][0])
   })
 })
+
+describe('prksApiRequest upload progress', () => {
+  class FakeXhr {
+    static last: FakeXhr | null = null
+    upload: { onprogress: ((event: { loaded: number; total: number; lengthComputable: boolean }) => void) | null } = { onprogress: null }
+    headers: Record<string, string> = {}
+    method = ''
+    url = ''
+    withCredentials = false
+    status = 0
+    responseText = ''
+    sent: unknown = null
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    onabort: (() => void) | null = null
+    constructor() { FakeXhr.last = this }
+    open(method: string, url: string) { this.method = method; this.url = url }
+    setRequestHeader(name: string, value: string) { this.headers[name] = value }
+    getAllResponseHeaders() { return 'content-type: application/json\r\nprks-library-epoch: 3\r\n' }
+    send(body: unknown) { this.sent = body }
+    abort() { this.onabort?.() }
+  }
+
+  it('reports bytes sent and answers like fetch, epoch included', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+    vi.stubGlobal('prksLibraryEpochHeaders', async () => ({ 'PRKS-Library-Epoch': '3' }))
+    const noted: (string | null)[] = []
+    vi.stubGlobal('prksNoteLibraryEpoch', (response: Response) => noted.push(response.headers.get('PRKS-Library-Epoch')))
+    const progress: number[][] = []
+    const body = new Blob(['%PDF'], { type: 'application/pdf' })
+    const pending = prksApiRequest('/api/processing-items', {
+      method: 'POST', body, headers: { 'Idempotency-Key': 'k' }, onUploadProgress: (sent, total) => progress.push([sent, total]),
+    })
+    await vi.waitFor(() => expect(FakeXhr.last?.sent).toBe(body))
+    const xhr = FakeXhr.last!
+    expect(xhr.headers).toMatchObject({ 'Idempotency-Key': 'k', 'Content-Type': 'application/pdf', 'PRKS-Library-Epoch': '3' })
+    xhr.upload.onprogress!({ loaded: 2, total: 4, lengthComputable: true })
+    xhr.status = 201
+    xhr.responseText = '{"ok":true}'
+    xhr.onload!()
+    await expect(pending).resolves.toEqual({ ok: true })
+    expect(progress).toEqual([[2, 4]])
+    expect(noted).toEqual(['3'])
+  })
+
+  it('keeps a refused upload an API error, and a network failure a transport error', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+    const body = new Blob(['x'], { type: 'application/pdf' })
+    const refused = prksApiRequest('/api/processing-items', { method: 'POST', body, onUploadProgress: () => {} })
+    await vi.waitFor(() => expect(FakeXhr.last?.sent).toBe(body))
+    FakeXhr.last!.status = 415
+    FakeXhr.last!.responseText = '{"error":"PROCESSING_NOT_A_PDF","code":"PROCESSING_NOT_A_PDF"}'
+    FakeXhr.last!.onload!()
+    await expect(refused).rejects.toMatchObject({ status: 415, code: 'PROCESSING_NOT_A_PDF' })
+    FakeXhr.last = null
+    const dropped = prksApiRequest('/api/processing-items', { method: 'POST', body, onUploadProgress: () => {} })
+    await vi.waitFor(() => expect(FakeXhr.last?.sent).toBe(body))
+    const last = FakeXhr.last!
+    last.onerror!()
+    await expect(dropped).rejects.toBeInstanceOf(TypeError)
+  })
+})

@@ -38,6 +38,11 @@
  * A retired scope's stores close and refuse to open, sync stops for good, and
  * nothing is deleted. A reload binds whoever is signed in then.
  *
+ * Library content. A confirmed session answer also names which runtime
+ * holds the Library's content (`libraryContent()`: 'sqlite' or 'postgres').
+ * A scope bound from the offline record names none (null), so a caller that
+ * needs it treats an offline page as not knowing.
+ *
  * Library epoch (§10.4, §11.4). A session answer names the Library's epoch,
  * and an answer without a valid one binds no scope. The page acts under the
  * epoch it bound with (`pageEpoch()`, recorded with the scope for an offline
@@ -121,6 +126,11 @@
     function epochOf(value) {
         if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) value = String(value);
         return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
+    }
+
+    /** Which runtime holds the Library's content ('sqlite' or 'postgres'), or null. */
+    function contentOf(value) {
+        return value === 'sqlite' || value === 'postgres' ? value : null;
     }
 
     /** Orders two canonical epochs (they may exceed a double's integers). */
@@ -359,6 +369,7 @@
         let bound = null;
         // The epoch this page bound with, and the highest seen since.
         let pageEpoch = null;
+        let libraryContent = null;
         let latestEpoch = null;
         let retired = false;
         let retiredReason = null;
@@ -433,7 +444,10 @@
                     return response.json().then(function (body) {
                         const scope = scopeFromSession(body);
                         const epoch = epochOf(body && body.library && body.library.epoch);
-                        return scope && epoch ? { kind: 'session', scope: scope, epoch: epoch } : { kind: 'none', scope: null };
+                        const content = contentOf(body && body.library && body.library.content);
+                        return scope && epoch
+                            ? { kind: 'session', scope: scope, epoch: epoch, content: content }
+                            : { kind: 'none', scope: null };
                     }, function () {
                         return { kind: 'none', scope: null };
                     });
@@ -464,6 +478,8 @@
             }).then(function (found) {
                 bound = found ? found.scope : null;
                 pageEpoch = bound ? found.epoch : null;
+                // Only a confirmed answer names the content; a recorded scope does not.
+                libraryContent = bound && found.content ? found.content : null;
                 if (pageEpoch && (!latestEpoch || compareEpochs(pageEpoch, latestEpoch) > 0)) latestEpoch = pageEpoch;
                 announce();
                 return bound;
@@ -611,6 +627,7 @@
             dbName: dbName,
             current: function () { return retired ? null : bound; },
             pageEpoch: function () { return retired ? null : pageEpoch; },
+            libraryContent: function () { return retired ? null : libraryContent; },
             latestEpoch: function () { return retired ? null : latestEpoch; },
             noteEpoch: noteEpoch,
             isRetired: function () { return retired; },

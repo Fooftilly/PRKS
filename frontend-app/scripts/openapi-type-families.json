@@ -17,6 +17,11 @@
       "output": "frontend-app/src/api/generated/processing-files.ts"
     },
     {
+      "name": "processing-items",
+      "artifact": "docs/api/openapi-processing-items.json",
+      "output": "frontend-app/src/api/generated/processing-items.ts"
+    },
+    {
       "name": "performance-diagnostics",
       "artifact": "docs/api/openapi-performance-diagnostics.json",
       "output": "frontend-app/src/api/generated/performance-diagnostics.ts"

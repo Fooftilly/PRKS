@@ -45,7 +45,8 @@ class SessionFlowTests(HttpAuthTestCase):
         body = res.body
         self.assertTrue(body["signed_in"])
         self.assertEqual(body["session"]["user"]["id"], self.owner)
-        self.assertEqual(body["session"]["library"], {"id": self.lib, "name": "Library", "role": "owner", "epoch": 1})
+        self.assertEqual(body["session"]["library"], {"id": self.lib, "name": "Library", "role": "owner", "epoch": 1,
+                                                         "content": "sqlite"})
         self.assertEqual(body["session"]["instance_id"], self.instance_id)
         self.assertEqual(res.header("PRKS-Library-Epoch"), ["1"])
 

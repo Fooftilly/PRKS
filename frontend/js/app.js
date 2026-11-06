@@ -162,6 +162,22 @@ function prksPaintProcessingNavBadge() {
     }
 }
 
+/**
+ * True when the session names PostgreSQL content: the Library's Processing
+ * page is then the upload queue (`/api/processing-items`), not the
+ * path-based inbox. An unresolved or offline-bound scope names none.
+ */
+async function prksLibraryHoldsPostgresContent() {
+    const scope = window.prksBrowserScope;
+    if (!scope || typeof scope.resolve !== 'function' || typeof scope.libraryContent !== 'function') return false;
+    try {
+        await scope.resolve();
+    } catch (_e) {
+        return false;
+    }
+    return scope.libraryContent() === 'postgres';
+}
+
 async function prksRefreshProcessingNavBadge(options) {
     const opts = options || {};
     const online =
@@ -169,6 +185,15 @@ async function prksRefreshProcessingNavBadge(options) {
     if (!online) {
         // Offline / unreachable: never present a stale count as live.
         prksSetProcessingAttentionCount(null);
+        return;
+    }
+    if (await prksLibraryHoldsPostgresContent()) {
+        if (typeof window.prksProcessingQueueCount !== 'function') return;
+        try {
+            prksSetProcessingAttentionCount(await window.prksProcessingQueueCount({ signal: opts.signal }));
+        } catch (_e) {
+            prksSetProcessingAttentionCount(null);
+        }
         return;
     }
     const records = window.prksProcessingRecords;
@@ -4309,6 +4334,20 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 break;
             }
             case 'processing-files': {
+                if (await prksLibraryHoldsPostgresContent()) {
+                    if (stale()) return;
+                    // The queue page reads its items and moves the badge itself.
+                    const folders = typeof fetchFolders === 'function'
+                        ? await fetchFolders({ signal: routeSignal })
+                        : [];
+                    if (stale()) return;
+                    prksPresentVueRoute(ctx, contentDiv, 'processing-queue', {
+                        folders: Array.isArray(folders) ? folders : [],
+                        docTypes: Array.isArray(window.PRKS_DOC_TYPES) ? window.PRKS_DOC_TYPES : [],
+                        generation: generation,
+                    });
+                    break;
+                }
                 const loaded = await prksLoadProcessingInbox(routeSignal);
                 if (stale()) return;
                 publishSidebar({ pendingCount: loaded.items.length });

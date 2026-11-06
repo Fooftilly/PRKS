@@ -888,6 +888,16 @@ async function testEpoch() {
     const offlineReload = scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([offline()]) });
     await offlineReload.resolve();
     record('an offline reload binds the recorded epoch', offlineReload.pageEpoch() === '1');
+    record('a session without content names none, nor does an offline reload',
+        a.libraryContent() === null && offlineReload.libraryContent() === null);
+    const pg = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { content: 'postgres' }) });
+    const pgPage = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(pg)]) });
+    await pgPage.resolve();
+    record('a confirmed session names the Library content', pgPage.libraryContent() === 'postgres');
+    const oddContent = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { content: 'mysql' }) });
+    const oddPage = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(oddContent)]) });
+    await oddPage.resolve();
+    record('an unknown content is not named', oddPage.libraryContent() === null && oddPage.current() !== null);
     const noEpoch = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: undefined }) });
     const odd = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(noEpoch)]) });
     record('a session without an epoch binds no scope', (await odd.resolve()) === null && odd.pageEpoch() === null);
