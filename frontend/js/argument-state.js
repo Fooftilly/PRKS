@@ -599,6 +599,10 @@
         },
         terminal: data => ({ conflict: { code: data.code } }),
         reconcile: data => root.prksOfflineReconcileCreatedArgument(data),
+        /* Refused construction cannot satisfy its field/source/target edits.
+         * Mark those dependents terminally failed so unrelated Work deletion
+         * cannot remain blocked behind an impossible pending source. */
+        failDependentsOnConflict: true,
     };
 
     const fieldHandler = {
@@ -668,7 +672,24 @@
     const targetsHandler = aggregateHandler(TARGETS_REFUSALS,
         (data, op) => root.prksOfflineReconcileArgumentTargets(data, op));
 
+    /* Potentially sent edits must settle before deleting their Argument.
+     * Their success is not a prerequisite for deletion: a field, source, or
+     * target revision conflict must not strand an independent delete. The
+     * queue read is a family-owned ordering barrier, never a mutation. */
+    function argumentDeleteReadyToSend(deletion, byId) {
+        for (const other of byId.values()) {
+            if (other.entity_type !== 'argument' ||
+                other.entity_id !== deletion.entity_id) continue;
+            if (other.operation !== 'SET_ARGUMENT_FIELD' &&
+                other.operation !== 'SET_ARGUMENT_SOURCES' &&
+                other.operation !== 'SET_ARGUMENT_TARGETS') continue;
+            if (other.status === 'pending' || other.status === 'syncing') return false;
+        }
+        return true;
+    }
+
     const deleteHandler = {
+        readyToSend: argumentDeleteReadyToSend,
         isResult: function (data, op) {
             if (!data || data.argument_id !== op.entity_id) return false;
             if (DELETE_REFUSALS.indexOf(data.code) !== -1) return true;

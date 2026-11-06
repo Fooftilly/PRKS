@@ -302,6 +302,60 @@ class DurableArgumentTests(unittest.TestCase):
         self.assertEqual(get_argument(self.db_for(server), from_work["id"])["sources"][0]["work_id"],
                          server.ids["work_a"])
 
+    def test_deleting_work_offline_keeps_unsent_stance_and_edited_body(self):
+        """A Work deletion must remove its citation, not another entity's draft."""
+        server, page, context = self.start()
+        deleted_work = server.ids["work_b"]
+        remaining_work = server.ids["work_a"]
+        self.offline(page, context)
+
+        draft = page.evaluate("""async ([deleted, remaining]) => {
+            const stance = await createArgument({
+                name: 'Independent offline stance',
+                kind: 'stance',
+                main_text: 'Initial authored analysis',
+                sources: [{work_id: deleted, pages: '44'},
+                          {work_id: remaining, pages: '5-6'}],
+            });
+            await updateArgument(stance.id, {
+                main_text: 'Revised authored analysis',
+            });
+            const workDelete = await prksDeleteWorkDurably(deleted);
+            const queue = await prksSync.store.listOperations();
+            return {id: stance.id, deleteId: workDelete.op_id,
+                    creation: queue.find(op => op.operation === 'CREATE_ARGUMENT'
+                        && op.entity_id === stance.id),
+                    edit: queue.find(op => op.operation === 'SET_ARGUMENT_FIELD'
+                        && op.entity_id === stance.id)};
+        }""", [deleted_work, remaining_work])
+        self.assertIsNotNone(draft["creation"])
+        self.assertEqual(draft["creation"]["payload"]["sources"],
+                         [{"work_id": remaining_work, "pages": "5-6"}])
+        self.assertIsNotNone(draft["edit"])
+        self.assertIn(draft["creation"]["op_id"], draft["edit"]["depends_on"])
+        self.index(page, "stance")
+        o._wait_content_contains(page, "Independent offline stance")
+
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("#sidebar")
+        self.offline(page, context)
+        self.index(page, "stance")
+        o._wait_content_contains(page, "Independent offline stance")
+
+        self.reconnect(page, context)
+        self.drained(page)
+        saved = get_argument(self.db_for(server), draft["id"])
+        self.assertIsNotNone(saved, "independently authored Stance reached PostgreSQL")
+        self.assertEqual(saved["kind"], "stance")
+        self.assertEqual(saved["name"], "Independent offline stance")
+        self.assertEqual(saved["main_text"], "Revised authored analysis")
+        self.assertEqual([(source["work_id"], source["pages"])
+                          for source in saved["sources"]],
+                         [(remaining_work, "5-6")])
+        works = self.db_for(server).execute_query(
+            "SELECT id FROM works WHERE id = ?", (deleted_work,))
+        self.assertEqual(works, [], "the selected Work was still deleted")
+
     def test_position_argument_argument_dependency_chain_and_failure(self):
         _server, page, context = self.start()
         self.offline(page, context)

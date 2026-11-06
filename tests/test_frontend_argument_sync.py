@@ -39,6 +39,29 @@ class ArgumentSyncFrontendTests(unittest.TestCase):
                 self.assertIn("%s:" % family, runtime)
                 self.assertIn(family, diagnostics)
 
+    def test_argument_deletion_uses_family_ordering_and_refused_create_settles_dependents(self):
+        """Failed source revisions do not permanently block independent deletion."""
+        src = self.state
+        create = src[src.index("const createHandler = {"):src.index("const fieldHandler = {")]
+        self.assertIn("failDependentsOnConflict: true", create)
+        deletion = src[src.index("function argumentDeleteReadyToSend("):
+                       src.index("Object.assign(root, {", src.index("const deleteHandler = {"))]
+        for operation in ("SET_ARGUMENT_FIELD", "SET_ARGUMENT_SOURCES",
+                          "SET_ARGUMENT_TARGETS"):
+            self.assertIn("other.operation !== '%s'" % operation, deletion)
+            self.assertIn("row.operation === '%s'" % operation, self.store)
+        self.assertIn("other.status === 'pending'", deletion)
+        self.assertIn("other.status === 'syncing'", deletion)
+        self.assertIn("readyToSend: argumentDeleteReadyToSend", deletion)
+        store = self.store[self.store.index("function deleteArgument("):
+                           self.store.index("/* ---- Playlists", self.store.index("function deleteArgument("))]
+        self.assertIn("row.entity_id === argumentId", store)
+        self.assertIn("Array.isArray(r.depends_on)", store)
+        coordinator = (JS / "sync-runtime.js").read_text()
+        coordinator = coordinator[:coordinator.index("root.createPrksSyncRuntime = createRuntime;")]
+        self.assertNotIn("SET_ARGUMENT_SOURCES", coordinator)
+        self.assertIn("handler.readyToSend(op, byId)", coordinator)
+
     def test_script_and_service_worker_order(self):
         html = (FRONTEND / "index.html").read_text()
         self.assertLess(html.index('/js/argument-state.js'),
