@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { browserConceptIntents, changedElsewhereNotice } from './intents'
-import type { ConceptDefinitionEdit, ConceptDetail } from './types'
+import { browserConceptIntents, changedAliasesNotice, changedElsewhereNotice } from './intents'
+import type { ConceptAliasesEdit, ConceptDefinitionEdit, ConceptDetail } from './types'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -13,6 +13,7 @@ afterEach(() => {
   delete window.prksCreateConceptFlow
   delete window.updateConcept
   delete window.prksBeginConceptDefinitionEdit
+  delete window.prksBeginConceptAliasesEdit
   delete window.putConceptAliases
   delete window.putConceptParents
 })
@@ -23,6 +24,14 @@ function editSession(value: string, revision: number, opId: string | null = null
     value,
     base: { description: { value, revision } },
     expected: { description: opId },
+  }
+}
+
+function aliasSession(name: string, aliases: string[], revision: number): ConceptAliasesEdit {
+  return {
+    concept_id: 'C1', name, value: aliases,
+    base: { identity: { name, aliases: [...aliases], revision } },
+    expected: { identity: null },
   }
 }
 
@@ -136,6 +145,87 @@ describe('browserConceptIntents', () => {
     expect(alerts).toHaveLength(1)
     expect(alerts[0]?.title).toBe('Cannot delete Concept')
     expect(alerts[0]?.message).toContain('deleteConcept is unavailable')
+  })
+
+  describe('editAliases (#784)', () => {
+    it('opens on the pinned server value, not stale painted route data', async () => {
+      const session = aliasSession('Current', ['alias-A'], 2)
+      window.prksBeginConceptAliasesEdit = vi.fn(async () => session)
+      const prompts: Array<{ defaultValue?: string }> = []
+      window.prksPromptTextDialog = vi.fn(async opts => {
+        prompts.push(opts)
+        return 'alias-A\nalias-B'
+      })
+      window.prksTabContextOwnsEntityRoute = () => true
+      window.prksNavigate = vi.fn()
+      const put = vi.fn(async () => ({ id: 'C1' }))
+      window.putConceptAliases = put
+      await browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 6)
+        .editAliases(concept({ aliases: ['stale-painted'] }))
+      expect(prompts[0]?.defaultValue).toBe('alias-A')
+      expect(put).toHaveBeenCalledWith('C1', ['alias-A', 'alias-B'],
+        { aliasesEdit: session })
+    })
+
+    it('retains the draft and asks before removing another tab rename alias', async () => {
+      const old = aliasSession('Original', [], 0)
+      const renamed = aliasSession('Renamed', ['Original'], 1)
+      window.prksBeginConceptAliasesEdit = vi.fn()
+        .mockResolvedValueOnce(old).mockResolvedValueOnce(renamed)
+      const prompts: Array<{ defaultValue?: string; message?: string }> = []
+      window.prksPromptTextDialog = vi.fn(async opts => {
+        prompts.push(opts)
+        return 'from-stale-tab'
+      })
+      window.prksTabContextOwnsEntityRoute = () => true
+      window.prksNavigate = vi.fn()
+      const put = vi.fn().mockRejectedValueOnce(changedElsewhereError())
+        .mockResolvedValueOnce({ id: 'C1' })
+      window.putConceptAliases = put
+      await browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 7)
+        .editAliases(concept())
+      expect(prompts).toHaveLength(2)
+      expect(prompts[1]?.defaultValue).toBe('from-stale-tab')
+      expect(prompts[1]?.message).toContain('Original')
+      expect(put).toHaveBeenNthCalledWith(1, 'C1', ['from-stale-tab'],
+        { aliasesEdit: old })
+      expect(put).toHaveBeenNthCalledWith(2, 'C1', ['from-stale-tab'],
+        { aliasesEdit: renamed })
+    })
+
+    it('Cancel after a conflict retains the other tab data', async () => {
+      window.prksBeginConceptAliasesEdit = vi.fn()
+        .mockResolvedValueOnce(aliasSession('Original', [], 0))
+        .mockResolvedValueOnce(aliasSession('Renamed', ['Original'], 1))
+      window.prksPromptTextDialog = vi.fn()
+        .mockResolvedValueOnce('mine').mockResolvedValueOnce(null)
+      window.prksTabContextOwnsEntityRoute = () => true
+      window.prksNavigate = vi.fn()
+      const put = vi.fn().mockRejectedValueOnce(changedElsewhereError())
+      window.putConceptAliases = put
+      await browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 8)
+        .editAliases(concept())
+      expect(put).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not open without a knowable identity base', async () => {
+      window.prksBeginConceptAliasesEdit = vi.fn(async () => null)
+      window.prksPromptTextDialog = vi.fn()
+      window.prksTabContextOwnsEntityRoute = () => true
+      const alerts = vi.fn()
+      window.prksAlertDialog = alerts
+      await browserConceptIntents({ tabId: 't1', isCurrent: () => true }, 9)
+        .editAliases(concept())
+      expect(window.prksPromptTextDialog).not.toHaveBeenCalled()
+      expect(alerts).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Could not edit these aliases',
+      }))
+    })
+
+    it('bounds previews of newer alias values', () => {
+      expect(changedAliasesNotice('Renamed', ['x'.repeat(500)])).toContain(
+        'x'.repeat(280) + '…')
+    })
   })
 
   describe('editDefinition (#568)', () => {

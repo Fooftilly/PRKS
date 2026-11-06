@@ -57,6 +57,7 @@ function loadTopLevelFunction(source, name) {
         "prksConceptSaveMessage",
         "prksConceptBaseUnavailable",
         "updateConcept",
+        "putConceptAliases",
         "putConceptParents",
     ]) {
         loadTopLevelFunction(apiSrc, name);
@@ -231,6 +232,68 @@ async function theDefinitionCancelGoesThroughApiWrapper() {
     await globalThis.updateConcept(id, { description: "First" });
     assert.equal((await rowsFor(store, "SET_CONCEPT_FIELD")).length, 0,
         "production updateConcept A→B→A cancel leaves no intent");
+}
+
+/* ---- #784: stale alias prompts cannot silently overwrite newer identity ---- */
+
+async function staleAliasesKeepOtherTabAndRenameData() {
+    const id = 'C-' + 'f'.repeat(32);
+    const server = { name: 'Original', aliases: [], revision: 0 };
+    globalThis.prksOfflineReadEntity = async (kind, entityId) => ({
+        value: kind === 'concept-state' && entityId === id ? {
+            concept_id: id,
+            fields: { description: { value: '', revision: 0 } },
+            identity: { name: server.name, aliases: server.aliases.slice() },
+            identity_revision: server.revision,
+            parent_ids: [], parents_revision: 0,
+        } : null,
+        source: 'server',
+    });
+    const shared = newStore();
+    globalThis.prksSync = { store: shared };
+    const tabA = await globalThis.prksBeginConceptAliasesEdit(id);
+    const tabB = await globalThis.prksBeginConceptAliasesEdit(id);
+    assert.deepEqual(tabB.base.identity, identityBase('Original', [], 0));
+    await globalThis.putConceptAliases(id, ['alias-A'], { aliasesEdit: tabA });
+    await assert.rejects(
+        () => globalThis.putConceptAliases(id, ['alias-B'], { aliasesEdit: tabB }),
+        changedElsewhere, 'foreign queued edit must not be coalesced away');
+    let [queued] = await rowsFor(shared, 'SET_CONCEPT_IDENTITY');
+    assert.deepEqual(queued.payload.aliases, ['alias-A']);
+
+    const own = await globalThis.prksBeginConceptAliasesEdit(id);
+    assert.equal(own.expected.identity, queued.op_id);
+    await globalThis.putConceptAliases(id, ['alias-A', 'alias-A2'],
+        { aliasesEdit: own });
+    [queued] = await rowsFor(shared, 'SET_CONCEPT_IDENTITY');
+    assert.deepEqual(queued.payload.aliases, ['alias-A', 'alias-A2']);
+
+    server.aliases = ['alias-A', 'alias-A2'];
+    server.revision = 1;
+    globalThis.prksSync = { store: newStore() };
+    await assert.rejects(
+        () => globalThis.putConceptAliases(id, ['alias-B'], { aliasesEdit: tabB }),
+        changedElsewhere, 'acknowledged other-tab aliases are protected');
+    assert.equal((await rowsFor(globalThis.prksSync.store, 'SET_CONCEPT_IDENTITY')).length, 0);
+
+    server.name = 'Renamed';
+    server.aliases = ['Original'];
+    server.revision = 2;
+    await assert.rejects(
+        () => globalThis.putConceptAliases(id, ['alias-B'], { aliasesEdit: tabB }),
+        changedElsewhere, 'Rename old-name alias is protected');
+    const current = await globalThis.prksBeginConceptAliasesEdit(id);
+    assert.equal(current.name, 'Renamed');
+    assert.deepEqual(current.value, ['Original']);
+    await globalThis.putConceptAliases(id, ['Original', 'alias-B'], { aliasesEdit: current });
+    const [intent] = await rowsFor(globalThis.prksSync.store, 'SET_CONCEPT_IDENTITY');
+    assert.equal(intent.payload.name, 'Renamed');
+    assert.deepEqual(intent.payload.aliases, ['Original', 'alias-B']);
+    assert.equal(intent.base_revision, 2);
+    globalThis.prksSync = { store: newStore() };
+    await globalThis.putConceptAliases(id, [], { aliasesEdit: tabB });
+    assert.equal((await rowsFor(globalThis.prksSync.store, 'SET_CONCEPT_IDENTITY')).length, 0,
+        'unchanged prompt must not overwrite newer identity');
 }
 
 /* ---- #568: the Definition editor's base is the one it opened on ---- */
@@ -814,6 +877,7 @@ async function main() {
     await aConceptNeedsAName();
     await theDefinitionCoalescesAndCancels();
     await theDefinitionCancelGoesThroughApiWrapper();
+    await staleAliasesKeepOtherTabAndRenameData();
     await anOlderDraftDoesNotReplaceAnotherTabsSave();
     await aSaveTheServerAlreadyMatchesKeepsGoing();
     await anotherTabsQueuedRowIsNeverCoalescedOver();
