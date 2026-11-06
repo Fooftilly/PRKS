@@ -17,11 +17,15 @@ whole query. L-S-2 (#638) orders them by one score (§8.3, Ranking):
   0.15; the Work's base score is the mean over the tokens;
 * plus 0.3 times the trigram similarity of the displayed title to the
   whole query, so a short exact title comes before a longer one;
-* plus 0.05 times ``ts_rank_cd`` normalized to below 1 (flag 32), a small
-  density term that only separates otherwise equal Works.
+* equal scores are then ordered by ``ts_rank_cd`` (normalization 32), a
+  density tie-break that never outweighs a difference in score.
 
-Equal scores, and the filter-only lists, put the most recently updated Work
-first, then the most recently created, then the id. The weights are
+Only the first 50000 characters of each field are in ``doc`` (the schema's
+tsvector bound); a token found only further on matches through
+``text_norm`` and weighs 0.15, the substring weight.
+
+Equal scores and density, and the filter-only lists, put the most recently
+updated Work first, then the most recently created, then the id. The weights are
 measured on ``tests/pg/search_corpus.py`` by ``tests/pg/search_ranking.py``.
 """
 
@@ -115,8 +119,8 @@ base AS (
 scored AS (
   SELECT b.work_id,
          b.w
-         + 0.3 * ext.similarity(s.title_norm, prks.search_norm(%(phrase)s))
-         + 0.05 * ts_rank_cd(s.doc, q.query, 32) AS score
+         + 0.3 * ext.similarity(s.title_norm, prks.search_norm(%(phrase)s)) AS score,
+         ts_rank_cd(s.doc, q.query, 32) AS density
   FROM base b
   JOIN derived.work_search s ON s.library_id = %(library_id)s AND s.work_id = b.work_id
   CROSS JOIN q
@@ -124,7 +128,7 @@ scored AS (
 SELECT scored.work_id
 FROM scored
 JOIN prks.works w ON w.library_id = %(library_id)s AND w.id = scored.work_id
-ORDER BY scored.score DESC, w.updated_at DESC, w.created_at DESC, scored.work_id COLLATE "C"
+ORDER BY scored.score DESC, scored.density DESC, w.updated_at DESC, w.created_at DESC, scored.work_id COLLATE "C"
 """
 
 

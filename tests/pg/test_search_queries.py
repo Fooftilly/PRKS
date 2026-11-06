@@ -147,6 +147,13 @@ class OrderTests(SearchQueryTestCase):
         by_note = self.library.add_work("Log", text_content=" ".join(["quillon again"] * 10))
         self.assertEqual(self.found("quillon"), [by_abstract, by_note])
 
+    def test_density_breaks_a_tie_before_recency(self) -> None:
+        # Same title, same field: the scores are equal, so the denser note
+        # comes first although the other Work is newer.
+        dense = self.library.add_work("Log", text_content="quillon and quillon and quillon")
+        sparse = self.library.add_work("Log", text_content="quillon once")
+        self.assertEqual(self.found("quillon"), [dense, sparse])
+
     def test_a_linked_person_outranks_an_abstract_mention(self) -> None:
         mention = self.library.add_work("Essays", abstract="Quillon is cited once")
         credited = self.library.add_work("Collected papers")

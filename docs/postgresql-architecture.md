@@ -1243,8 +1243,8 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   counted once however often it repeats there, from a title prefix (1.0)
   down to a substring in the infix text (0.15). The score is the mean over
   the tokens, plus a trigram similarity boost of the displayed title
-  against the whole query, plus a small `ts_rank_cd` density term
-  (normalization 32) that only separates otherwise equal Works. Counting a
+  against the whole query. A `ts_rank_cd` density term (normalization 32)
+  only breaks ties between equal scores. Counting a
   field once is what stops a note that repeats a word from outranking a
   title. Plain `ts_rank_cd` sums repetitions, and the before/after results
   showed that. The weights are listed in `backend/domain/search/queries.py`.
