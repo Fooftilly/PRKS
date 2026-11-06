@@ -13,6 +13,7 @@ are no longer live.
 
 from __future__ import annotations
 
+import io
 import shutil
 import tempfile
 import time
@@ -26,12 +27,14 @@ from psycopg import errors
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
+from backend.domain.identity.authorization import AccessRefused
 from backend.domain.maintenance import restore
 from backend.domain.maintenance.connection import maintenance_connection
 from backend.domain.maintenance.restore import RestoreFailed, RestoreResult
 from backend.domain.maintenance.staging import staging_schema
 from backend.domain.objects import lifecycle
 from backend.domain.objects.lifecycle import Settled
+from backend.domain.processing import commands as processing
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_backup_export import BackupTestCase
@@ -220,6 +223,47 @@ class CommitTests(RestoreTestCase):
         self.assertIsNotNone(target_objects.stat(StorageKey("asset-objects", obj.key.name)))
 
 
+    def upload(self, label: str) -> dict[str, Any]:
+        data = b"%PDF-1.4\n% " + label.encode() + b"\n%%EOF\n"
+        return processing.upload(self.db, self.actor.context, self.objects, upload_key=uuid.uuid4().hex,
+                                 filename=f"{label}.pdf", body=io.BytesIO(data), content_length=len(data),
+                                 max_bytes=1024 * 1024).item
+
+    def test_queued_imported_and_deleted_processing_items_round_trip(self) -> None:
+        queued = self.upload("queued")
+        imported = self.upload("imported")
+        processing.import_one(self.db, self.actor.context, self.objects, imported["id"])
+        deleted = self.upload("deleted")
+        processing.delete(self.db, self.actor.context, deleted["id"])
+        snapshot = "SELECT id, status, upload_key, object_locator, imported_work_id FROM prks.processing_items ORDER BY id"
+        then = self.sql(snapshot)
+        queued_key = self.sql("SELECT object_locator FROM prks.processing_items WHERE id = %s",
+                              (queued["id"],))[0]["object_locator"]
+        archive = self.backup().path
+        processing.delete(self.db, self.actor.context, queued["id"])
+        later = self.upload("later")
+        later_key = self.sql("SELECT object_locator FROM prks.processing_items WHERE id = %s",
+                             (later["id"],))[0]["object_locator"]
+        self.restore(archive)
+        self.assertEqual(self.sql(snapshot), then)
+        # The queued item's object is named again; the later upload's is held, never deleted.
+        self.assertTrue(self.stored(queued_key))
+        # The delete's claim on it was replaced with the archive's claims, which have none.
+        self.assertNotIn(queued_key, self.claims())
+        self.assertTrue(self.claims()[later_key]["hold"])
+        self.sweep()
+        self.assertNotIn(queued_key, self.claims())
+
+    def test_a_command_at_the_pre_restore_epoch_is_refused(self) -> None:
+        self.create(self.put())
+        archive = self.backup().path
+        self.restore(archive)
+        with self.assertRaises(AccessRefused) as caught:
+            self.library.add_tag("Stale")  # the actor's context still carries epoch 1
+        self.assertEqual(caught.exception.refusal.code, "LIBRARY_EPOCH_CHANGED")
+        self.assertEqual(self.sql("SELECT 1 FROM prks.tags WHERE name = 'Stale'"), [])
+
+
 class RefusalTests(RestoreTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -344,6 +388,7 @@ class AbortTests(RestoreTestCase):
 
         self.refused(self.archive, "internal", hooks={restore.HOOK_COMMITTING: fail})
         self.assert_unchanged_after_abort(self.before, 1, "internal")
+        self.library.add_tag("Right after")
         # The Library's jobs stay queued, and nothing R4 enqueued survived.
         self.assertEqual({(row["kind"], row["state"], row["library_epoch"]) for row in self.jobs()},
                          {("text.extract", "queued", 1)})
@@ -384,6 +429,8 @@ class AbortTests(RestoreTestCase):
             self.refused(self.archive, "drain_timeout", drain_timeout_seconds=0.2)
             holder.execute("SELECT pg_advisory_unlock_all()")
         self.assert_unchanged_after_abort(self.before, 1, "drain_timeout")
+        # Abort finalization cleared the flag: an ordinary command goes through at once.
+        self.library.add_tag("Right after")
 
     def test_commands_are_refused_while_the_flag_is_set(self) -> None:
         seen: dict[str, Any] = {}

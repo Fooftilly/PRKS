@@ -1413,6 +1413,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/maintenance/backup.py",
                 "backend/domain/maintenance/connection.py",
                 "backend/domain/maintenance/format.py",
+                "backend/domain/maintenance/jobs.py",
                 "backend/domain/maintenance/restore.py",
                 "backend/domain/maintenance/staging.py",
                 "backend/domain/maintenance/tables.py",

@@ -288,6 +288,13 @@ class ObjectMaintenance:
             LOGGER.info("object_maintenance_scheduled kinds=%s", ",".join(enqueued))
 
 
+def root_storage(root: str) -> Optional[StorageBackend]:
+    """The object store of the paired ``root`` (the one this lane uses); None when :func:`root_refusal` refuses it."""
+    if root_refusal(root) is not None:
+        return None
+    return LocalFilesystemStorage(root)
+
+
 def attach(registry: HandlerRegistry, root: str) -> Optional[ObjectMaintenance]:
     """Register the objects lane on ``registry`` for the paired, leased ``root``; None when refused.
 

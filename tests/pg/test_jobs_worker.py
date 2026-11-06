@@ -154,6 +154,17 @@ class IdleTickTests(WorkerTestCase):
         self.assertEqual(self.row(crashed)["last_error"], "lease_expired")
         self.assertEqual(worker.stats.snapshot()["reaped"], 1)
 
+    def test_the_idle_tasks_run_once_before_the_first_claim(self) -> None:
+        order: list[str] = []
+        inside, go = self.blocking_handler()
+        self.registry.add_idle_task(lambda _db: order.append("idle"))
+        self.enqueue_instance()
+        self.start_worker(poll=timedelta(hours=1))
+        self.assertTrue(inside.wait(WAIT))
+        order.append("job")
+        go.set()
+        self.assertEqual(order[:2], ["idle", "job"], "startup recovery waited behind the first job")
+
     def test_prune_is_enqueued_once_per_interval_by_any_number_of_idle_ticks(self) -> None:
         self.registry.register(prune.PRUNE_KIND, prune.prune_jobs)
         worker = self.start_worker()
@@ -181,10 +192,13 @@ class IdleTickTests(WorkerTestCase):
         self.registry.register("test.busy", busy)
         self.registry.add_idle_task(lambda db: ticks.append(time.monotonic()))
         self.enqueue_instance(kind="test.busy")
-        worker = self.start_worker()
-        wait_until(lambda: len(ticks) >= 3, "idle tasks between jobs")
+        # A poll much longer than one job, so ticking after every job would show.
+        worker = self.start_worker(poll=timedelta(milliseconds=300))
+        # The first tick is the startup pass before the first claim; the rest are between jobs.
+        wait_until(lambda: len(ticks) >= 4, "idle tasks between jobs")
         self.assertFalse(worker.idle.is_set(), "the worker never went idle")
-        self.assertGreater(worker.stats.snapshot()["claimed"], len(ticks), "at most one tick per poll interval")
+        between = len(ticks) - 1
+        self.assertGreater(worker.stats.snapshot()["claimed"], between, "at most one tick per poll interval")
 
     def test_a_worker_without_the_prune_handler_enqueues_no_prune(self) -> None:
         worker = self.start_worker()
