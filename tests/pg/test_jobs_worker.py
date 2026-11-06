@@ -192,7 +192,8 @@ class IdleTickTests(WorkerTestCase):
         self.registry.register("test.busy", busy)
         self.registry.add_idle_task(lambda db: ticks.append(time.monotonic()))
         self.enqueue_instance(kind="test.busy")
-        worker = self.start_worker()
+        # A poll much longer than one job, so ticking after every job would show.
+        worker = self.start_worker(poll=timedelta(milliseconds=300))
         # The first tick is the startup pass before the first claim; the rest are between jobs.
         wait_until(lambda: len(ticks) >= 4, "idle tasks between jobs")
         self.assertFalse(worker.idle.is_set(), "the worker never went idle")
