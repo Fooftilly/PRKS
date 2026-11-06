@@ -56,10 +56,12 @@ class RankingTests(WorksFacadeTestCase):
         # and review the diff with ``--compare`` before committing it.
         self.assertEqual(self.orders, search_ranking.read_baseline())
 
-    def test_every_graded_work_is_found(self) -> None:
+    def test_each_query_finds_exactly_its_graded_works(self) -> None:
+        # Pinned apart from the regenerable baseline: a ranking change may
+        # reorder these Works but never add or drop one.
         for query in search_corpus.QUERIES:
             with self.subTest(query=query.text):
-                self.assertEqual(search_ranking.score(query, self.orders[query.text]).missing, ())
+                self.assertEqual(set(self.orders[query.text]), set(query.grades))
 
     def test_the_report_lists_every_query(self) -> None:
         text = search_ranking.report(self.orders, search_ranking.read_baseline())

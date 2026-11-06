@@ -20,9 +20,10 @@ Each :class:`JudgedQuery` grades the Works it should find:
 * 2: clearly relevant;
 * 1: a marginal match, acceptable low in the list.
 
-A Work the query finds but the judgment leaves out counts as grade 0. The
-corpus also pins recall: every graded Work must be found, because L-S-2
-changes the order of the Works a search finds, never which Works it finds.
+The graded Works are exactly the Works the query finds, so the corpus also
+pins the found set: L-S-2 changes the order of the Works a search finds,
+never which Works it finds (``tests/pg/test_search_ranking.py``). The
+report still scores an ungraded Work as grade 0.
 """
 
 from __future__ import annotations
