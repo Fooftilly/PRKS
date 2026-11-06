@@ -195,6 +195,35 @@ class ObjectSafetyTests(BackupTestCase):
         with mock.patch.object(self.objects, "open_read", return_value=changed):
             self.assert_failed("object_changed")
 
+    def test_assets_sharing_an_object_must_record_the_same_contents(self) -> None:
+        for column, value in (("content_sha256", hashlib.sha256(b"%PDF stale").hexdigest()), ("byte_size", 1)):
+            for pick in ("min", "max"):  # whichever row the catalogue lists first
+                with self.subTest(column=column, stale=pick):
+                    self.sql("DELETE FROM prks.backup_runs")
+                    obj = self.put(b"%PDF shared")
+                    first, second = self.create(obj), self.create(obj)
+                    stale = min(first, second) if pick == "min" else max(first, second)
+                    self.sql(f"UPDATE prks.assets SET {column} = %s WHERE work_id = %s", (value, stale))
+                    self.assert_failed("object_changed")
+                    self.sql(f"UPDATE prks.assets SET {column} = %s WHERE work_id = %s",
+                             (obj.sha256 if column == "content_sha256" else obj.size, stale))
+
+    def test_assets_sharing_an_object_with_agreeing_entries_back_up_once(self) -> None:
+        obj = self.put(b"%PDF shared")
+        self.create(obj)
+        self.create(obj)
+        result = self.backup()
+        self.assertEqual(list(result.manifest["objects"]), [f"asset-objects/{obj.key.name}"])
+
+    def test_a_stored_object_replaced_by_a_directory_is_unreadable(self) -> None:
+        obj = self.put()
+        self.create(obj)
+        found = self.objects._existing(obj.key)
+        assert found is not None
+        os.unlink(found[0])
+        os.mkdir(found[0])
+        self.assert_failed("object_unreadable")
+
     def test_a_changed_pristine_source_fails_the_backup(self) -> None:
         self.create(self.put(b"%PDF working"))
         source = self.put(b"%PDF damaged")  # the source key now holds other bytes than the upload's

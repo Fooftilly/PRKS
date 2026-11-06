@@ -64,6 +64,7 @@ from backend.storage.objects import (
     NAMESPACE_PORTRAITS,
     StorageBackend,
     StorageKey,
+    StorageObjectError,
 )
 
 FORMAT_ID = "prks-backup"
@@ -279,18 +280,25 @@ def _identity_ids(conn: psycopg.Connection[Any], library_id: str) -> tuple[sql.C
 
 
 def _object_refs(conn: psycopg.Connection[Any], library_id: str) -> list[ObjectRef]:
-    seen: dict[StorageKey, ObjectRef] = {}
+    """One ref per key. A key may be named by several rows (Assets sharing bytes, or a
+    processed upload's key becoming its Asset's); every recorded digest and size must agree,
+    since the copied bytes can match only one of each."""
+    hashes: dict[StorageKey, set[str]] = {}
+    sizes: dict[StorageKey, set[int]] = {}
     with conn.cursor(row_factory=dict_row) as cur:
         for row in cur.execute(_OBJECTS_SQL, {"library_id": library_id}).fetchall():
             obj_key = StorageKey(row["namespace"], row["name"])
-            ref = ObjectRef(obj_key, row["sha256"], None if row["size"] is None else int(row["size"]))
-            prior = seen.get(obj_key)
-            # A key named twice (an Asset's working and source copy are distinct
-            # keys, but a processed upload's key becomes its Asset's) keeps what
-            # the catalogue recorded.
-            if prior is None or (prior.sha256 is None and ref.sha256 is not None):
-                seen[obj_key] = ref
-    return sorted(seen.values(), key=lambda ref: (ref.key.namespace, ref.key.name))
+            key_hashes = hashes.setdefault(obj_key, set())
+            key_sizes = sizes.setdefault(obj_key, set())
+            if row["sha256"] is not None:
+                key_hashes.add(row["sha256"])
+            if row["size"] is not None:
+                key_sizes.add(int(row["size"]))
+            if len(key_hashes) > 1 or len(key_sizes) > 1:
+                raise BackupFailed("object_changed",
+                                   f"The catalogue records conflicting contents for the stored object {obj_key}.")
+    refs = [ObjectRef(key, next(iter(hashes[key]), None), next(iter(sizes[key]), None)) for key in hashes]
+    return sorted(refs, key=lambda ref: (ref.key.namespace, ref.key.name))
 
 
 # -- archive ----------------------------------------------------------------------------------
@@ -331,7 +339,7 @@ def _write_member(archive: zipfile.ZipFile, name: str, fill: Callable[[Sink], ob
 def _copy_object(storage: StorageBackend, ref: ObjectRef, out: Sink) -> None:
     try:
         stat = storage.stat(ref.key)
-    except OSError:
+    except (OSError, StorageObjectError):  # StorageObjectError: e.g. the path is a link or not a file
         raise BackupFailed("object_unreadable", f"The stored object {ref.key} cannot be read.") from None
     if stat is None:
         raise BackupFailed("object_missing", f"The stored object {ref.key} is missing.")
