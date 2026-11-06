@@ -9,6 +9,7 @@ with an unknown value, and on a root that still holds a SQLite catalogue.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import http.client
 import json
@@ -231,6 +232,43 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                                        {"work_id": work_id}, headers)[0], 404)
             self.assertEqual(self.call(port, "POST", f"/api/folders/{folder['id']}/works",
                                        {"work_id": "W-" + "0" * 32}, headers)[0], 404)
+
+    def test_pdf_works_upload_replace_and_delete_through_postgresql(self) -> None:
+        with self.serving() as (name, port, headers):
+            first = b"%PDF-1.7\n% first upload\n%%EOF\n"
+            status, created, _headers = self.call(port, "POST", "/api/works", {
+                "title": "Uploaded", "file_name": "paper.pdf",
+                "file_b64": base64.b64encode(first).decode("ascii")}, headers)
+            self.assertIn(status, (200, 201), created)
+            work_id = created["id"]
+            status, work, _headers = self.call(port, "GET", f"/api/works/{work_id}")
+            self.assertEqual(status, 200, work)
+            self.assertTrue(work["file_path"].startswith("/api/pdfs/"), work["file_path"])
+            self.assertEqual(self.pdf(port, work["file_path"]), first)
+            second = b"%PDF-1.7\n% replaced\n%%EOF\n"
+            status, replaced, _headers = self.call(port, "POST", f"/api/works/{work_id}/pdf", {
+                "file_b64": base64.b64encode(second).decode("ascii")}, headers)
+            self.assertEqual((status, replaced["status"]), (200, "success"), replaced)
+            self.assertEqual(self.pdf(port, replaced["file_path"]), second)
+            status, missing, _headers = self.call(port, "POST", f"/api/works/W-{'0' * 32}/pdf", {
+                "file_b64": base64.b64encode(second).decode("ascii")}, headers)
+            self.assertEqual((status, missing), (404, {"error": "Work not found"}))
+            status, _body, _headers = self.call(port, "DELETE", f"/api/works/{work_id}", None, headers)
+            self.assertEqual(status, 200)
+            db = self.db(name)
+            self.assertEqual(db.query(lambda tx: tx.execute("SELECT count(*) AS n FROM prks.works").fetchone())["n"],
+                             0)
+
+    def pdf(self, port: int, path: str) -> bytes:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        try:
+            conn.request("GET", path)
+            res = conn.getresponse()
+            body = res.read()
+            self.assertEqual(res.status, 200, path)
+            return body
+        finally:
+            conn.close()
 
     def test_the_selection_needs_prks_auth(self) -> None:
         err = self.refused(self.environment(None, PRKS_LIBRARY_BACKEND="postgres"), self.new_root())
