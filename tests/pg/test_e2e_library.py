@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -48,14 +49,15 @@ class E2ELibraryTests(unittest.TestCase):
         )
         instance = self.rows(library.conninfo, "SELECT id FROM prks.instance")
         self.assertEqual([row["id"] for row in instance], [library.instance_id])
-        self.assertEqual(
-            library.server_env(),
-            {
-                "PRKS_AUTH": "loopback-owner",
-                "PRKS_DATABASE_URL": library.conninfo,
-                "PRKS_EMBEDDED_WORKER": "0",
-            },
-        )
+        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: ""}):
+            self.assertEqual(
+                library.server_env(),
+                {
+                    "PRKS_AUTH": "loopback-owner",
+                    "PRKS_DATABASE_URL": library.conninfo,
+                    "PRKS_EMBEDDED_WORKER": "0",
+                },
+            )
 
     def test_session_mode_adds_editors_who_sign_in_with_the_e2e_password(self) -> None:
         library = postgres_identity.provision_library(self.root, auth="session", members=("reader",))
@@ -104,3 +106,44 @@ class E2ELibraryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PostgresLibraryLegTests(unittest.TestCase):
+    """``PRKS_E2E_LIBRARY_BACKEND=postgres``: the seed and the server on PostgreSQL (PG-C1 #640)."""
+
+    setUp = E2ELibraryTests.setUp
+    rows = E2ELibraryTests.rows
+
+    def test_the_selection_is_read_from_the_environment(self) -> None:
+        self.assertFalse(postgres_identity.postgres_library({}))
+        self.assertTrue(postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}))
+        with self.assertRaises(ValueError):
+            postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "sqlite"})
+
+    def test_the_server_serves_postgresql_and_runs_its_worker(self) -> None:
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}):
+            env = library.server_env()
+        self.assertEqual(env, {
+            "PRKS_AUTH": "loopback-owner",
+            "PRKS_DATABASE_URL": library.conninfo,
+            "PRKS_LIBRARY_BACKEND": "postgres",
+        })
+
+    def test_the_seed_writes_the_library_through_the_facade(self) -> None:
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        ids = postgres_identity.seed_postgres_library(fixtures.seed_arguments_library, self.root, library)
+        works = self.rows(library.conninfo, "SELECT id, title FROM prks.works ORDER BY title")
+        self.assertEqual({w["title"] for w in works}, {fixtures.WORK_A_TITLE, fixtures.WORK_B_TITLE})
+        self.assertIn(ids["work_a"], {w["id"] for w in works})
+        arguments = self.rows(library.conninfo, "SELECT id FROM prks.arguments")
+        self.assertIn(ids["argument_unvisited"], {a["id"] for a in arguments})
+        # Both managed PDFs were adopted; their text jobs wait for the server's worker.
+        assets = self.rows(library.conninfo, "SELECT storage_locator FROM prks.assets ORDER BY 1")
+        self.assertEqual([a["storage_locator"] for a in assets], ["e2e-related.pdf", fixtures.PDF_NAME])
+        for name in ("prks_data.db", "prks_data_testing.db"):
+            self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
