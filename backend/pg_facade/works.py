@@ -96,6 +96,24 @@ class WorksMixin(FacadeMixin):
         finish_work_summary_rows(rows, self._pdfs_dir())
         return rows
 
+    def _holds_managed_pdf(self, name: str) -> bool:
+        """Whether the acting Library has an Asset whose bytes are the managed PDF ``name``.
+
+        One data root serves every Library, so ``/api/pdfs/<name>`` serves a
+        file only to a member of a Library that references it: a name from
+        another Library reads as missing.
+        """
+
+        def read(scope: LibraryScope) -> bool:
+            row = scope.execute(
+                "SELECT 1 FROM prks.assets WHERE library_id = %(library_id)s"
+                " AND (storage_locator = %(name)s OR source_locator = %(name)s) LIMIT 1",
+                {"name": name},
+            ).fetchone()
+            return row is not None
+
+        return self._read(read)
+
     # -- ids and ETags ----------------------------------------------------------
 
     @ported

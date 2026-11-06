@@ -525,6 +525,23 @@ def _safe_pdf_path_for_route(path: str) -> str | None:
     return _safe_pdf_path_in_pdfs_dir(path[len(_PDF_ROUTE_PREFIX):])
 
 
+def _served_pdf_path(path: str) -> str | None:
+    """The managed PDF a ``/api/pdfs/<filename>`` request may read, or ``None``.
+
+    On the PostgreSQL Library the file must also be one of the acting
+    Library's Assets: the data root is shared by every Library.
+    """
+    pdf_path = _safe_pdf_path_for_route(path)
+    if pdf_path is None or not os.path.exists(pdf_path):
+        return None
+    if serves_postgres_library() and not db._holds_managed_pdf(os.path.basename(pdf_path)):
+        return None
+    return pdf_path
+
+
+_BACKUP_ROUTE_PREFIX = '/api/backups/'
+
+
 def _prks_pixmap_to_pil(pix):
     """PyMuPDF pixmap → Pillow Image (RGB/RGBA). None if Pillow missing or conversion fails."""
     try:
@@ -1217,6 +1234,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # before that (admission included) closes the connection.
             self._prks_unread_body = upload
             if not self._prks_admit(parsed_path):
+                return
+            if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+                self._prks_unread_body = True
+                self._refuse_sqlite_maintenance()
                 return
             if parsed_path.path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
@@ -1958,8 +1979,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         try:
             if path.startswith('/api/pdfs/'):
-                pdf_path = _safe_pdf_path_for_route(path)
-                if pdf_path and os.path.exists(pdf_path):
+                pdf_path = _served_pdf_path(path)
+                if pdf_path:
                     self._send_pdf_bytes(pdf_path, head_only=True)
                 else:
                     self.send_error(404, "PDF not found")
@@ -2822,8 +2843,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_json(200, [])
             elif path.startswith('/api/pdfs/'):
-                pdf_path = _safe_pdf_path_for_route(path)
-                if pdf_path and os.path.exists(pdf_path):
+                pdf_path = _served_pdf_path(path)
+                if pdf_path:
                     self._send_pdf_bytes(pdf_path)
                 else:
                     self.send_error(404, "PDF not found")
@@ -2836,6 +2857,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(bibtex.encode())
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
+            elif path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+                self._refuse_sqlite_maintenance()
             elif path == '/api/backups/download':
                 token = (query.get('token') or [''])[0]
                 self._handle_backup_download(token=token)
@@ -3814,6 +3837,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(413, {"error": "request_too_large"})
             return None
         return content_length
+
+    def _refuse_sqlite_maintenance(self) -> None:
+        """Answer a SQLite backup route on the PostgreSQL Library: it is not ported yet.
+
+        These routes read and replace the SQLite catalogue and the root's
+        files; on PostgreSQL they would rebind the process to SQLite. The
+        PostgreSQL backup and restore routes replace them (PG-C1 #640).
+        """
+        self.send_json(501, {
+            "error": "Backup and restore are not ported to the PostgreSQL Library yet.",
+            "code": "not_ported",
+            "request_id": self._prks_request_id,
+        })
 
     def _handle_backup_stage(self, parsed_path=None) -> None:
         content_length = self._validate_backup_stage_headers()

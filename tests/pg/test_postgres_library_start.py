@@ -18,6 +18,7 @@ import sys
 from typing import Any, Optional
 
 from backend.storage import root_binding
+from backend.storage.config import StorageConfig
 from tests.pg.test_readiness import _free_port, _wait_for
 from tests.pg.test_root_pairing import RootPairingTestCase
 
@@ -105,6 +106,26 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             db = self.db(name)
             rows = db.query(lambda tx: tx.execute("SELECT title FROM prks.works").fetchall())
             self.assertEqual([r["title"] for r in rows], ["Served from PostgreSQL"])
+            origin = {"Origin": f"http://127.0.0.1:{port}", "PRKS-Library-Epoch": epoch}
+            # The SQLite backup routes would replace the root and rebind to SQLite.
+            for method, path in (("POST", "/api/backups/restore"), ("POST", "/api/backups/progress"),
+                                 ("GET", "/api/backups/download")):
+                status, refused, _headers = self.call(port, method, path, {} if method == "POST" else None,
+                                                      origin if method == "POST" else None)
+                self.assertEqual((status, refused["code"]), (501, "not_ported"), path)
+            # A file on the shared root that no Asset of this Library names is not served.
+            pdfs = StorageConfig.for_testing(root).pdfs_dir
+            os.makedirs(pdfs, exist_ok=True)
+            with open(os.path.join(pdfs, "loose.pdf"), "wb") as handle:
+                handle.write(b"%PDF-1.4\nloose\n%%EOF\n")
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            try:
+                conn.request("GET", "/api/pdfs/loose.pdf")
+                res = conn.getresponse()
+                res.read()
+                self.assertEqual(res.status, 404)
+            finally:
+                conn.close()
         finally:
             self.stop(proc)
         for catalogue in _CATALOGUES:
