@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any, Optional
@@ -249,13 +250,30 @@ class RefusalTests(RestoreTestCase):
         starting = psycopg.connect(self.conninfo)
         self.addCleanup(starting.close)
 
+        waited: list[bool] = []
+
+        def commit_once_r2_waits() -> None:
+            # Commit only after R2 is queued on the row lock, so the test always exercises the wait.
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if self.sql("SELECT count(*) AS n FROM pg_locks WHERE NOT granted "
+                            "AND locktype IN ('transactionid', 'tuple')")[0]["n"]:
+                    waited.append(True)
+                    break
+                time.sleep(0.01)
+            starting.commit()
+
+        committer = threading.Thread(target=commit_once_r2_waits)
+
         def backup_starts() -> None:
             # A backup's _start_run, held open: the Library row is locked and its run inserted.
             starting.execute(backup_module._START_SQL, (self.actor.library_id,))
             starting.execute(backup_module._INSERT_RUN_SQL, (self.actor.library_id, 300))
-            threading.Timer(1.0, starting.commit).start()  # commits while R2 waits on the row
+            committer.start()
 
         self.refused(self.archive, "backup_running", hooks={restore.HOOK_STAGED: backup_starts})
+        committer.join()
+        self.assertEqual(waited, [True], "R2 never waited on the Library row")
         self.assertIsNone(self.library_row()["maintenance"])
 
     def test_a_backup_whose_lease_expired_does_not_block(self) -> None:
