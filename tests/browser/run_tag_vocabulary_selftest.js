@@ -295,9 +295,13 @@ async function rapidTagCreateUsesOneDurableIdentity() {
         createdTags++;
         return { entity_id: 'T-ATTACH-FAILED' };
     };
-    ctx.prksAttachExistingTag = async () => {
-        throw new Error('Attachment write rejected');
-    };
+    /* Load the actual wrapper: the Folder editor historically swallowed
+     * local-store errors, so mocking the wrapper to throw missed the bug. */
+    const attachAt = ui.indexOf('async function prksAttachExistingTag(');
+    const attachEnd = ui.indexOf('\n}\n', attachAt);
+    assert.ok(attachAt >= 0 && attachEnd > attachAt);
+    vm.runInContext(ui.slice(attachAt, attachEnd + 2), ctx);
+    ctx.prksFolderTagEdit = async () => false;
     ctx.prksAlertMessage = async (message, title) => alerts.push({ message, title });
     await ctx.prksSubmitNewTag('folder', 'F-3', 'Already Created', {}, attachInput);
     assert.equal(createdTags, 1, 'the Tag was durably created');
@@ -307,6 +311,53 @@ async function rapidTagCreateUsesOneDurableIdentity() {
     await ctx.prksSubmitNewTag('folder', 'F-3', 'Already Created', {}, attachInput);
     assert.equal(createdTags, 1,
         'the recovery message does not encourage creating a duplicate identity');
+}
+
+async function actualFolderTagEditorReportsQueueFailure() {
+    /* Run the actual folder-tag editor, not a failure-throwing substitute.
+     * The editor catches queue failures to paint its inline status. Its
+     * return value must also let Create Tag report that the Tag exists but
+     * its attachment failed, rather than silently acknowledging success. */
+    const source = fs.readFileSync(path.join(__dirname, '../../frontend/js/folder-tag-editor.js'),
+        'utf8');
+    const state = {
+        folderId: 'F-1', generation: 1, operations: [],
+        options: { assigned: [], known_absent: {} }, catalog: [],
+        error: null,
+    };
+    const folder = { id: 'F-1', tags: [] };
+    let queueAttempts = 0;
+    const runtime = {
+        store: {
+            listOperations: async () => [],
+            coalesceFolderTag: async () => {
+                queueAttempts++;
+                throw new Error('Durable write refused');
+            },
+        },
+        changed: () => {},
+    };
+    const env = {
+        window: null,
+        prksSync: runtime,
+        prksFolderTagBase: () => ({ present: false, revision: 0 }),
+        prksRightPanelOwnedBy: () => false,
+        prksOwnerTabIsFocused: () => false,
+    };
+    env.window = env;
+    vm.createContext(env);
+    vm.runInContext(source, env);
+    const owner = {
+        destroyed: false,
+        generation: 1,
+        getResource: kind => kind === 'folderTagEditor' ? state : null,
+        getEntity: kind => kind === 'folder' ? folder : null,
+    };
+    const result = await env.prksFolderTagEdit(owner, 'T-NEW', true,
+        { id: 'T-NEW', name: 'New Tag' });
+    assert.equal(result, false, 'caught editor queue error propagates failure to caller');
+    assert.equal(queueAttempts, 1);
+    assert.match(state.error, /Could not save this Tag change locally/);
 }
 
 async function usedTagCloudHidesMergingSourcesOnly() {
@@ -339,6 +390,7 @@ async function usedTagCloudHidesMergingSourcesOnly() {
 
 async function main() {
     await rapidTagCreateUsesOneDurableIdentity();
+    await actualFolderTagEditorReportsQueueFailure();
     await usedTagCloudHidesMergingSourcesOnly();
     await aTagIsAttachableTheMomentItIsCreated();
     await anObviousLocalCollisionIsRefusedEarly();

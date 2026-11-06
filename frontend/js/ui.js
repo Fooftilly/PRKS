@@ -5602,13 +5602,21 @@ function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
 
 async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput, knownTag) {
     if (entityType === 'work') {
-        await prksWorkTagEdit(ownerCtx, tagId, true, knownTag);
-        if (triggerInput) { triggerInput.disabled = false; triggerInput.removeAttribute('aria-busy'); }
+        try {
+            const attached = await prksWorkTagEdit(ownerCtx, tagId, true, knownTag);
+            if (attached === false) throw new Error('Could not queue the Work Tag attachment.');
+        } finally {
+            if (triggerInput) {
+                triggerInput.disabled = false;
+                triggerInput.removeAttribute('aria-busy');
+            }
+        }
         return;
     }
     if (entityType === 'folder') {
         try {
-            await prksFolderTagEdit(ownerCtx, tagId, true, knownTag);
+            const attached = await prksFolderTagEdit(ownerCtx, tagId, true, knownTag);
+            if (attached === false) throw new Error('Could not queue the Folder Tag attachment.');
         } finally {
             if (triggerInput) {
                 triggerInput.disabled = false;
