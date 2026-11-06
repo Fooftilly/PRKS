@@ -144,7 +144,7 @@ from backend.person_image import (
     normalize_person_image_url,
     read_legacy_portrait_bytes,
 )
-from backend.concurrency import LibraryAccessGate, request_access_mode
+from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -932,6 +932,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         )
         if mode is None:
             return nullcontext()
+        if mode == MODE_BACKUP and serves_postgres_library():
+            # The worker writes a PostgreSQL backup from one snapshot; nothing
+            # here needs writes held off while the browser follows it.
+            return nullcontext()
         gate = getattr(self.server, "prks_access_gate", None)
         if gate is None:
             return nullcontext()
@@ -1303,8 +1307,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
-                self._prks_unread_body = True
-                self._refuse_sqlite_maintenance()
+                with self._library_access(parsed_path), self._acting_for_request():
+                    try:
+                        self._handle_postgres_backup_post(parsed_path.path)
+                    except Exception as exc:
+                        self._send_internal_error(exc)
                 return
             if parsed_path.path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
@@ -2923,8 +2930,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(bibtex.encode())
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
+            elif path == '/api/backups/download' and serves_postgres_library():
+                self._handle_postgres_backup_download((query.get('token') or [''])[0])
             elif path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
-                self._refuse_sqlite_maintenance()
+                self.send_error(404, "API endpoint not found")
             elif path == '/api/backups/download':
                 token = (query.get('token') or [''])[0]
                 self._handle_backup_download(token=token)
@@ -4001,14 +4010,103 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             result = {"code": result["code"], "work_id": result["work_id"], "changed": result["changed"]}
         self.send_json(status, result)
 
-    def _refuse_sqlite_maintenance(self) -> None:
-        """Answer a SQLite backup route on the PostgreSQL Library: it is not ported yet.
+    def _handle_postgres_backup_post(self, path: str) -> None:
+        """``POST /api/backups/{progress,stage,restore}`` on the PostgreSQL Library (§11.4).
 
-        These routes read and replace the SQLite catalogue and the root's
-        files; on PostgreSQL they would rebind the process to SQLite. The
-        PostgreSQL backup and restore routes replace them (PG-C1 #640).
+        Dispatched before any body is read: ``stage`` streams the archive
+        itself, and every earlier answer closes the connection. The SQLite
+        backup service is never reached here, so a restore can only ever
+        replace the PostgreSQL Library (``backend.api.maintenance``).
         """
-        self._send_not_ported("Backup and restore are not ported to the PostgreSQL Library yet.")
+        from backend.api import maintenance as maintenance_api
+
+        ctx = self._prks_request_context
+        root = _bound_storage.root if _bound_storage is not None else None
+        if root is None:
+            self._send_internal_error()
+            return
+        if path == '/api/backups/stage':
+            self._prks_unread_body = True
+            content_length = self._validate_backup_stage_headers()
+            if content_length is None:
+                return
+
+            def receive(dest: str) -> None:
+                stream_upload_to_file(self.rfile, dest, expected_length=content_length,
+                                      max_bytes=backup_max_upload_bytes())
+                self._prks_unread_body = False
+
+            try:
+                body = maintenance_api.stage_upload(db, ctx, root, receive)
+            except maintenance_api.StageRefused as exc:
+                self.send_json(exc.status, {"error": exc.message, "reason": exc.reason,
+                                            "request_id": self._prks_request_id})
+                return
+            except RestoreError as exc:
+                self.send_json(exc.http_status, {"error": exc.message, "reason": exc.reason,
+                                                 "request_id": self._prks_request_id})
+                return
+            self.send_json(200, body)
+            return
+        data = self._read_json_body()
+        if data is _JSON_BODY_REJECTED:
+            return
+        if data is _JSON_BODY_ABSENT:
+            data = {}
+        if path == '/api/backups/progress':
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+            def write_line(payload: dict) -> None:
+                self.wfile.write(maintenance_api.ndjson(payload))
+                self.wfile.flush()
+
+            try:
+                maintenance_api.stream_backup(db, ctx, write_line)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception as exc:
+                LOGGER.error("backup_progress_failed error_type=%s request_id=%s",
+                             safe_error_type(exc), safe_log_id(self._prks_request_id))
+                write_line({"phase": "failed", "percent": 0, "error": "Backup could not be created."})
+            return
+        if path == '/api/backups/restore':
+            status, body, epoch = maintenance_api.restore_staged(db, ctx, root, data)
+            if epoch is not None:
+                # The Library the browser knew is gone: it reads the new epoch.
+                self._prks_library_epoch = epoch
+            if status != 200:
+                body = {**body, "request_id": self._prks_request_id}
+            self.send_json(status, body)
+            return
+        self.send_error(404, "API endpoint not found")
+
+    def _handle_postgres_backup_download(self, token: str) -> None:
+        """``GET /api/backups/download?token=<run>``: a published archive of the actor's Library."""
+        from backend.api import maintenance as maintenance_api
+
+        root = _bound_storage.root if _bound_storage is not None else None
+        path = maintenance_api.archive_for_download(db, self._prks_request_context, root or "", token) \
+            if root else None
+        if path is None:
+            self.send_json(404, {"error": "Backup is not available.", "reason": "unknown_token",
+                                 "request_id": self._prks_request_id})
+            return
+        with open(path, "rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"')
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            while True:
+                chunk = handle.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
 
     def _send_not_ported(self, message: str) -> None:
         """501 ``not_ported``: a route the PostgreSQL Library does not serve yet."""
