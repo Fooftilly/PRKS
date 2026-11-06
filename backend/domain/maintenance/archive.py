@@ -240,9 +240,14 @@ def _free_bytes(path: str) -> int:
     return st.f_bavail * st.f_frsize
 
 
-def open_archive(path: str, *, staging_dir: str, limits: Limits = Limits(),
+def open_archive(path: str, *, staging_dir: Optional[str], limits: Limits = Limits(),
                  free_bytes: Callable[[str], int] = _free_bytes) -> Archive:
-    """R0's archive checks (see the module docstring); raises :class:`ArchiveRefused`."""
+    """R0's archive checks (see the module docstring); raises :class:`ArchiveRefused`.
+
+    ``staging_dir`` is where a restore will write the archive's objects; its
+    free space must hold them. ``None`` skips that preflight, for a backup's
+    own verification, which stages tables only and writes no object.
+    """
     try:
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
@@ -267,7 +272,7 @@ def open_archive(path: str, *, staging_dir: str, limits: Limits = Limits(),
                                                               "the allowed ratio.")
             if declared > limits.max_uncompressed_bytes:
                 raise ArchiveRefused("too_large", "The backup archive is too large to restore.")
-            if declared + limits.disk_margin_bytes > free_bytes(staging_dir):
+            if staging_dir is not None and declared + limits.disk_margin_bytes > free_bytes(staging_dir):
                 raise ArchiveRefused("disk_space", "There is not enough free space to restore this backup.")
             manifest_info = by_name.get(MANIFEST_NAME)
             if manifest_info is None:

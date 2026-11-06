@@ -392,7 +392,7 @@ def _verify_by_staging(conn: psycopg.Connection[Any], path: str, run_id: uuid.UU
                        renew: Callable[[], None]) -> None:
     """Load the archive into a scratch schema exactly as restore stages it, then drop it (§11.4)."""
     try:
-        archive = open_archive(path, staging_dir=os.path.dirname(path))
+        archive = open_archive(path, staging_dir=None)  # stages tables only: no object space needed
         check_schema(conn, archive)
         owner = conn.execute(_OWNER_SQL, (library_id,)).fetchone()
         if owner is None:

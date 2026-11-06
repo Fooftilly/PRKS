@@ -236,6 +236,19 @@ class ObjectSafetyTests(BackupTestCase):
         with mock.patch.object(backup, "fsync_open_file", side_effect=OSError(28, "No space left on device")):
             self.assert_failed("io")
 
+    def test_verification_needs_no_free_space_for_the_archives_objects(self) -> None:
+        self.create(self.put(b"x" * 4096))
+        full = os.statvfs_result((4096, 4096, 1, 1, 0, 1, 1, 1, 0, 255))  # no block free
+        real = os.statvfs
+
+        def statvfs(path: Any) -> os.statvfs_result:
+            return full if os.path.realpath(path) == os.path.realpath(self.out) else real(path)
+
+        with mock.patch.object(os, "statvfs", statvfs):
+            result = self.backup()
+        self.assertEqual(self.runs()[0]["state"], "published")
+        self.assertTrue(os.path.exists(result.path))
+
     def test_an_unsynced_archive_directory_is_a_backup_failure(self) -> None:
         self.create(self.put())
         with mock.patch.object(backup, "fsync_directory", return_value=False):
