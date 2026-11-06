@@ -242,13 +242,14 @@ def _recheck_objects(conn: psycopg.Connection[Any], archive: Archive, storage: S
             raise RestoreFailed("internal", "A staged object is not in the backup.")
         info = storage.stat(obj_key)
         if info is None:
-            _rewrite(archive, storage, obj_key, member)
+            _rewrite(archive, storage, obj_key, member, renew)
         elif info.size != member.size:
-            raise RestoreFailed("object_conflict", f"The stored object {obj_key} changed during the restore.")
+            raise RestoreFailed("object_conflict", "A stored object of the backup changed during the restore.")
         renew()
 
 
-def _rewrite(archive: Archive, storage: StorageBackend, obj_key: StorageKey, member: Member) -> None:
+def _rewrite(archive: Archive, storage: StorageBackend, obj_key: StorageKey, member: Member,
+             renew: Callable[[], None]) -> None:
     def write(stream: Any) -> None:
         with archive.open_member(member) as handle:
             while True:
@@ -256,6 +257,7 @@ def _rewrite(archive: Archive, storage: StorageBackend, obj_key: StorageKey, mem
                 if not chunk:
                     break
                 stream.write(chunk)
+                renew()
 
     try:
         info = storage.put_new(obj_key, write, hash=True)
@@ -263,10 +265,10 @@ def _rewrite(archive: Archive, storage: StorageBackend, obj_key: StorageKey, mem
         found = storage.stat(obj_key)
         if found is None or found.size != member.size:
             raise RestoreFailed("object_conflict",
-                                f"The stored object {obj_key} changed during the restore.") from None
+                                "A stored object of the backup changed during the restore.") from None
         return
     if info.sha256 != member.sha256 or info.size != member.size:
-        raise RestoreFailed("object_conflict", f"The backup's copy of {obj_key} did not write back intact.")
+        raise RestoreFailed("object_conflict", "A backup object did not write back intact.")
 
 
 # -- R4 ---------------------------------------------------------------------------------------
@@ -460,8 +462,9 @@ def restore_library(
         run_id = _start_run(conn, library_id, owner_user_id, lease_seconds)
         lease = _Lease(side, run_id, lease_seconds)
         entered = False
+        archive: Optional[Archive] = None
         try:
-            archive = open_archive(archive_path, staging_dir=staging_dir, limits=limits)
+            archive = open_archive(archive_path, staging_dir=staging_dir, limits=limits, renew=lease.tick)
             check_schema(conn, archive)
             lease.enter(PHASE_STAGE)
             staged = stage(conn, archive, run_id=run_id, target_library_id=library_id,
@@ -488,6 +491,9 @@ def restore_library(
             if isinstance(exc, (RestoreFailed, KeyboardInterrupt, SystemExit)):
                 raise
             raise RestoreFailed(reason, message) from exc
+        finally:
+            if archive is not None:
+                archive.close()  # the validated ZipFile R0 kept open
         _release(conn, run_id)
         return RestoreResult(run_id=run_id, library_id=library_id, epoch=epoch,
                              new_devices=staged.new_devices, objects_written=staged.objects_written,
