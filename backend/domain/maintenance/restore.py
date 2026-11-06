@@ -191,9 +191,17 @@ SELECT l.maintenance IS NOT NULL AS in_maintenance,
 """
 
 
+_LOCK_LIBRARY_ROW_SQL: LiteralString = "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR NO KEY UPDATE"
+
+
 def _enter(conn: psycopg.Connection[Any], library_id: str, run_id: uuid.UUID) -> None:
     params = {"run": run_id, "library_id": library_id}
     with conn.transaction():
+        # Wait for the Library row first: a backup's start holds it while it
+        # inserts its run, and a statement that waited on the lock still
+        # reads its subqueries from the snapshot it began with. The UPDATE
+        # below starts after the wait, so it sees a run committed meanwhile.
+        conn.execute(_LOCK_LIBRARY_ROW_SQL, params)
         if conn.execute(_ENTER_SQL, params).rowcount == 1:
             return
         row = conn.execute(_ENTER_REFUSAL_SQL, params).fetchone()

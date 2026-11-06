@@ -241,6 +241,23 @@ class RefusalTests(RestoreTestCase):
         self.refused(self.archive, "backup_running")
         self.assert_unchanged_after_abort([self.work], 1, "backup_running")
 
+    def test_a_backup_that_starts_while_r2_waits_for_the_library_refuses_it(self) -> None:
+        import threading
+
+        from backend.domain.maintenance import backup as backup_module
+
+        starting = psycopg.connect(self.conninfo)
+        self.addCleanup(starting.close)
+
+        def backup_starts() -> None:
+            # A backup's _start_run, held open: the Library row is locked and its run inserted.
+            starting.execute(backup_module._START_SQL, (self.actor.library_id,))
+            starting.execute(backup_module._INSERT_RUN_SQL, (self.actor.library_id, 300))
+            threading.Timer(1.0, starting.commit).start()  # commits while R2 waits on the row
+
+        self.refused(self.archive, "backup_running", hooks={restore.HOOK_STAGED: backup_starts})
+        self.assertIsNone(self.library_row()["maintenance"])
+
     def test_a_backup_whose_lease_expired_does_not_block(self) -> None:
         self.sql("INSERT INTO prks.backup_runs (library_id, locked_until) VALUES (%s, now() - interval '1 s')",
                  (self.actor.library_id,))
