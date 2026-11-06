@@ -1,0 +1,79 @@
+{
+  "about": "Keyword search order on tests/pg/search_corpus.py, as corpus keys (L-S-2 #638). Regenerate with: python -m tests.pg.search_ranking --write-baseline",
+  "orders": {
+    "justice": [
+      "justice-lectures",
+      "theory-of-justice",
+      "justice-review",
+      "newest-justice-note"
+    ],
+    "theory of justice": [
+      "theory-of-justice"
+    ],
+    "republic": [
+      "republic-companion",
+      "the-republic",
+      "republic-notes",
+      "newest-justice-note"
+    ],
+    "republic platonides": [
+      "the-republic"
+    ],
+    "state": [
+      "statecraft",
+      "state-of-nature",
+      "leviathan",
+      "newest-justice-note"
+    ],
+    "kantor": [
+      "about-kantor",
+      "kant-groundwork",
+      "kant-critique",
+      "ethics-notes",
+      "kantor-mention"
+    ],
+    "nicomachean ethics": [
+      "nicomachean",
+      "ethics-intro",
+      "ethics-notes"
+    ],
+    "theorie": [
+      "newest-theorie",
+      "theorie-gerechtigkeit",
+      "wissenschaftstheorie",
+      "erkenntnistheorie"
+    ],
+    "gerechtigkeit": [
+      "gerechtigkeit",
+      "theorie-gerechtigkeit"
+    ],
+    "liberte": [
+      "liberte-notes",
+      "liberte-anciens",
+      "newest-justice-note"
+    ],
+    "logie": [
+      "anthropologie-mention",
+      "phenomenologie"
+    ],
+    "πολιτεια": [
+      "politeia",
+      "politika"
+    ],
+    "σωκρατης": [
+      "sokratis",
+      "sokratis-notes"
+    ],
+    "држава": [
+      "drzava-cyr",
+      "drzava-cyr-notes"
+    ],
+    "drzava": [
+      "drzava-lat",
+      "drzava-lat-notes"
+    ],
+    "pravd": [
+      "pravda"
+    ]
+  }
+}
