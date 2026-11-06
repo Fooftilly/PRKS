@@ -208,7 +208,7 @@ describe('browserConceptIntents', () => {
       expect(put).toHaveBeenCalledTimes(1)
     })
 
-    it('keeps the aliases editor on a conflicted identity instead of claiming Save worked', async () => {
+    it('reports an unsuccessful conflicted alias Save without navigating to a saved state', async () => {
       const pending = aliasSession('Renamed', ['Original'], 0)
       window.prksBeginConceptAliasesEdit = vi.fn(async () => pending)
       window.prksPromptTextDialog = vi.fn(async () => 'Original')
@@ -227,6 +227,8 @@ describe('browserConceptIntents', () => {
         message: expect.stringContaining('conflict decision'),
       }))
       expect(navigate).not.toHaveBeenCalled()
+      expect(window.prksPromptTextDialog).toHaveBeenCalledTimes(1)
+      expect(alerts).toHaveBeenCalledTimes(1)
     })
 
     it('does not open without a knowable identity base', async () => {
