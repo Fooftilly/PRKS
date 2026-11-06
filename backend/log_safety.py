@@ -308,11 +308,11 @@ def safe_client_source(value) -> str:
     return "external"
 
 
-def client_error_log_fields(data) -> dict:
+def client_error_log_fields(data) -> dict[str, str | int]:
     """Normalize a client-error POST body. Legacy raw fields are ignored."""
     if not isinstance(data, dict):
         raise ValueError("JSON object body required")
-    fields = {
+    fields: dict[str, str | int] = {
         "kind": safe_client_error_kind(data.get("kind")),
         "error_name": safe_error_name(data.get("error_name")),
         "source": safe_client_source(data.get("source")),

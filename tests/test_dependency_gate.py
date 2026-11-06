@@ -1312,7 +1312,8 @@ class RepoGateLiveTests(unittest.TestCase):
         )[1].split("- name: Run Pyright data-flow checks", 1)[0]
         self.assertIn("psycopg(-binary|-pool)?==", static_install)
         self.assertIn("argon2-cffi==", static_install)
-        self.assertEqual(static_install.count("requirements.txt"), 3)
+        self.assertIn("Pillow==", static_install)
+        self.assertEqual(static_install.count("requirements.txt"), 4)
         self.assertNotIn("requirements-dev.txt", static_install)
         expected_unit = dict(runtime, **{
             name: dev[name]

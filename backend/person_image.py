@@ -207,8 +207,7 @@ def decode_and_transcode(
             scale = max_edge / float(m)
             nw = max(1, int(w * scale))
             nh = max(1, int(h * scale))
-            resample = getattr(Image, "Resampling", Image).LANCZOS
-            img = img.resize((nw, nh), resample)
+            img = img.resize((nw, nh), Image.Resampling.LANCZOS)
         webp = _encode_webp(img)
         if webp:
             return webp, "webp"
