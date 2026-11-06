@@ -3005,14 +3005,6 @@ function prksPresentVueRoute(ctx, contentDiv, feature, fields) {
     return prksDeliverVueRoute(host, request);
 }
 
-/**
- * Refetch used tags and repaint this owner only. Alias add/remove passes
- * `resume` for the alias or merge dialog that is still open. A closed dialog
- * is not resumed, and a newer dialog is not cleared. A generation that is no
- * longer current does not paint.
- * A failed read keeps the list already on screen and reports the refresh
- * failure. An empty successful read still paints the empty state.
- */
 /** A used-tag cloud may hide locally merged/deleted sources, but must
  * not include unassigned pending Tag creations from the full catalogue. */
 async function prksEffectiveUsedTags(rows) {
@@ -3025,6 +3017,14 @@ async function prksEffectiveUsedTags(rows) {
     return rows.filter(row => row && !hidden.has(row.id));
 }
 
+/**
+ * Refetch used tags and repaint this owner only. Alias add/remove passes
+ * `resume` for the alias or merge dialog that is still open. A closed dialog
+ * is not resumed, and a newer dialog is not cleared. A generation that is no
+ * longer current does not paint.
+ * A failed read keeps the list already on screen and reports the refresh
+ * failure. An empty successful read still paints the empty state.
+ */
 async function prksReloadTagsVocabulary(ctx, generation, resume) {
     if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
     const route = ctx.lastResolvedRoute || ctx.route;

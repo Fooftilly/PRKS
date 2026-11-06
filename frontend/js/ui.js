@@ -5715,9 +5715,10 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInp
         triggerInput.disabled = true;
         triggerInput.setAttribute('aria-busy', 'true');
     }
+    let created = null;
     try {
         const known = typeof fetchTags === 'function' ? await fetchTags() : [];
-        const created = await prksCreateTagDurably({ name: trimmed, color: '#6d6cf7' }, known);
+        created = await prksCreateTagDurably({ name: trimmed, color: '#6d6cf7' }, known);
         /* Creation has already been committed locally. Even if attachment
          * fails, another Create would mint a duplicate instead of repairing
          * the existing Tag. Keep the accepted claim until the input unmounts. */
@@ -5729,7 +5730,17 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInp
             triggerInput.disabled = false;
             triggerInput.removeAttribute('aria-busy');
         }
-        await prksAlertMessage(prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
+        if (created) {
+            /* The Tag already has a durable identity. Retrying Create would
+             * mint a duplicate. Explain the recovery path accurately. */
+            const destination = entityType === 'folder' ? 'Folder' : 'Work';
+            await prksAlertMessage(
+                'Tag "' + trimmed + '" was created locally but could not be attached to this ' +
+                destination + '. Select the existing Tag in the Tag picker to attach it.',
+                'Could not attach Tag');
+        } else {
+            await prksAlertMessage(prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
+        }
     } finally {
         if (triggerInput && triggerInput.dataset.prksTagCreatePending === key) {
             delete triggerInput.dataset.prksTagCreatePending;

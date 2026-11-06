@@ -286,6 +286,27 @@ async function rapidTagCreateUsesOneDurableIdentity() {
         'a rejected local create does not permanently disable retry');
     await ctx.prksSubmitNewTag('folder', 'F-2', 'Recover', {}, retryInput);
     assert.equal(tries, 2, 'retry is permitted once the first local write failed');
+
+    const attachInput = { dataset: {}, disabled: false,
+        setAttribute: () => {}, removeAttribute: () => {} };
+    const alerts = [];
+    let createdTags = 0;
+    ctx.prksCreateTagDurably = async () => {
+        createdTags++;
+        return { entity_id: 'T-ATTACH-FAILED' };
+    };
+    ctx.prksAttachExistingTag = async () => {
+        throw new Error('Attachment write rejected');
+    };
+    ctx.prksAlertMessage = async (message, title) => alerts.push({ message, title });
+    await ctx.prksSubmitNewTag('folder', 'F-3', 'Already Created', {}, attachInput);
+    assert.equal(createdTags, 1, 'the Tag was durably created');
+    assert.equal(alerts[0].title, 'Could not attach Tag');
+    assert.match(alerts[0].message, /was created locally/);
+    assert.match(alerts[0].message, /Select the existing Tag/);
+    await ctx.prksSubmitNewTag('folder', 'F-3', 'Already Created', {}, attachInput);
+    assert.equal(createdTags, 1,
+        'the recovery message does not encourage creating a duplicate identity');
 }
 
 async function usedTagCloudHidesMergingSourcesOnly() {
