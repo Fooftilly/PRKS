@@ -335,12 +335,15 @@ def _replace_rows(conn: psycopg.Connection[Any], schema: str, library_id: str) -
     for table in tables.BACKUP_CONTENT_TABLES:
         _, name = tables.split_name(table)
         columns = _columns(conn, table)
-        insert = sql.SQL("INSERT INTO {t} ({c}) SELECT {c} FROM {s}").format(
-            t=sql.Identifier(*tables.split_name(table)), c=columns, s=sql.Identifier(schema, name))
+        staged = sql.Identifier(schema, name)
         if table == _CLAIMS_TABLE:
-            insert = sql.SQL("{} ON CONFLICT (namespace, name) DO UPDATE SET "
-                             "hold = prks.object_cleanup_claims.hold OR EXCLUDED.hold").format(insert)
-        conn.execute(insert)
+            conn.execute(sql.SQL(
+                "INSERT INTO prks.object_cleanup_claims ({c}) SELECT {c} FROM {s} "
+                "ON CONFLICT (namespace, name) DO UPDATE SET "
+                "hold = prks.object_cleanup_claims.hold OR EXCLUDED.hold").format(c=columns, s=staged))
+        else:
+            conn.execute(sql.SQL("INSERT INTO {t} ({c}) SELECT {c} FROM {s}").format(
+                t=sql.Identifier(*tables.split_name(table)), c=columns, s=staged))
 
 
 def _hold_replaced(conn: psycopg.Connection[Any], library_id: str) -> int:
