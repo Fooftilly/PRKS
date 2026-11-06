@@ -30,6 +30,7 @@ import shutil
 import tempfile
 import uuid
 import zipfile
+from unittest import mock
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -122,6 +123,7 @@ class StagingTestCase(BackupTestCase):
               owner: Optional[str] = None, db: Optional[Database] = None,
               storage: Any = "default") -> staging.Staged:
         archive = r0.open_archive(path, staging_dir=self.staging_dir)
+        self.addCleanup(archive.close)
         run_id = self.run_row(db, library_id)
         with maintenance_connection(conninfo or self.conninfo) as conn:
             r0.check_schema(conn, archive)
@@ -294,6 +296,35 @@ class StagingTests(StagingTestCase):
         other = self.other_actor()
         with self.assertRaises(ArchiveRefused) as caught:
             self.stage(result.path, library_id=other.library_id, owner=other.user_id)
+        self.assertEqual(caught.exception.reason, "ids_in_other_library")
+
+    def test_staging_reads_every_member_through_one_open_archive(self) -> None:
+        for n in range(3):
+            self.create(self.put(b"%PDF " + bytes([65 + n])))
+        result = self.backup()
+        for key in list(self.objects.iter_keys("asset-objects")):
+            self.objects.delete(key)  # every object is written from the archive
+        real = zipfile.ZipFile
+        with mock.patch.object(r0.zipfile, "ZipFile", side_effect=real) as opened:
+            staged = self.stage(result.path)
+        self.addCleanup(self.drop, staged)
+        self.assertEqual(staged.objects_written, 3)
+        self.assertEqual(opened.call_count, 2)  # R0's check, then one handle for every member
+
+    def test_a_partial_global_key_held_by_another_library_is_refused(self) -> None:
+        obj = self.put(b"%PDF upload")
+        item_sql = ("INSERT INTO prks.processing_items (library_id, id, original_filename, object_locator, sha256, "
+                    "byte_size, upload_key) VALUES (%s, %s, 'a.pdf', %s, %s, %s, %s)")
+        mine = generate("PI")
+        self.sql(item_sql, (self.actor.library_id, mine, obj.key.name, obj.sha256, obj.size, "up-1"))
+        result = self.backup()
+        # The upload left this Library and another one now holds its key (ready items only are unique).
+        self.sql("UPDATE prks.processing_items SET status = 'deleted', object_locator = NULL, deleted_at = now() "
+                 "WHERE id = %s", (mine,))
+        other = self.other_actor()
+        self.sql(item_sql, (other.library_id, generate("PI"), obj.key.name, obj.sha256, obj.size, "up-2"))
+        with self.assertRaises(ArchiveRefused) as caught:
+            self.stage(result.path)
         self.assertEqual(caught.exception.reason, "ids_in_other_library")
 
     def test_library_scoped_keys_shared_with_another_library_are_no_collision(self) -> None:

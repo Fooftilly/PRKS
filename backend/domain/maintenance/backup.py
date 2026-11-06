@@ -392,12 +392,13 @@ def _verify_by_staging(conn: psycopg.Connection[Any], path: str, run_id: uuid.UU
                        renew: Callable[[], None]) -> None:
     """Load the archive into a scratch schema exactly as restore stages it, then drop it (§11.4)."""
     try:
-        archive = open_archive(path, staging_dir=None)  # stages tables only: no object space needed
-        check_schema(conn, archive)
-        owner = conn.execute(_OWNER_SQL, (library_id,)).fetchone()
-        if owner is None:
-            raise BackupFailed("verify", "The Library has no owner to map unknown identities to.")
-        stage(conn, archive, run_id=run_id, target_library_id=library_id, owner_user_id=owner[0], renew=renew)
+        with open_archive(path, staging_dir=None) as archive:  # stages tables only: no object space needed
+            check_schema(conn, archive)
+            owner = conn.execute(_OWNER_SQL, (library_id,)).fetchone()
+            if owner is None:
+                raise BackupFailed("verify", "The Library has no owner to map unknown identities to.")
+            stage(conn, archive, run_id=run_id, target_library_id=library_id, owner_user_id=owner[0],
+                  renew=renew)
     except ArchiveRefused as exc:
         raise BackupFailed("verify", f"The written archive does not stage: {exc.message}") from exc
     finally:

@@ -302,12 +302,12 @@ def _check_foreign_keys(conn: psycopg.Connection[Any], schema: str) -> None:
 
 
 _GLOBAL_KEYS_SQL: LiteralString = """
-SELECT array_agg(a.attname ORDER BY u.pos), i.indnullsnotdistinct
+SELECT array_agg(a.attname ORDER BY u.pos), i.indnullsnotdistinct, pg_get_expr(i.indpred, i.indrelid)
   FROM pg_index i
   JOIN LATERAL unnest(i.indkey) WITH ORDINALITY u(n, pos) ON true
   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = u.n
- WHERE i.indrelid = to_regclass(%s) AND i.indisunique AND i.indpred IS NULL AND NOT (0 = ANY (i.indkey))
- GROUP BY i.indexrelid, i.indnullsnotdistinct
+ WHERE i.indrelid = to_regclass(%s) AND i.indisunique AND NOT (0 = ANY (i.indkey))
+ GROUP BY i.indexrelid, i.indnullsnotdistinct, i.indpred, i.indrelid
 HAVING NOT bool_or(a.attname = 'library_id')
 """
 
@@ -315,20 +315,25 @@ HAVING NOT bool_or(a.attname = 'library_id')
 def _check_foreign_library_ids(conn: psycopg.Connection[Any], schema: str, target_library_id: str) -> None:
     """Refuse staged rows that another Library holds under a globally unique key.
 
-    Only a unique key without ``library_id`` is global (entity IDs, and keys
-    such as a role's Work and Person); a Library-scoped key such as a tag's
+    Only a unique key without ``library_id`` is global (entity IDs, keys such
+    as a role's Work and Person, and partial ones such as a Processing item's
+    object locator); a Library-scoped key such as a tag's
     ``(library_id, key)`` is shared by design and never a collision.
     """
     for table in tables.BACKUP_CONTENT_TABLES:
         live_schema, name = tables.split_name(table)
-        for columns, nulls_not_distinct in conn.execute(_GLOBAL_KEYS_SQL, (table,)).fetchall():
+        for columns, nulls_not_distinct, predicate in conn.execute(_GLOBAL_KEYS_SQL, (table,)).fetchall():
             same = sql.SQL(" IS NOT DISTINCT FROM ") if nulls_not_distinct else sql.SQL(" = ")
             match = sql.SQL(" AND ").join(
                 sql.SQL("l.{c}{op}s.{c}").format(c=sql.Identifier(c), op=same) for c in columns)
+            # A partial index is unique only among the rows its predicate (the
+            # catalogue's own text, over unqualified columns) admits.
+            where = sql.SQL(" WHERE ({})").format(sql.SQL(predicate)) if predicate else sql.SQL("")
             held = _count(conn, sql.SQL(
-                "SELECT 1 FROM {staged} s JOIN {live} l ON {match} WHERE l.library_id <> {lib}").format(
-                    staged=sql.Identifier(schema, name), live=sql.Identifier(live_schema, name), match=match,
-                    lib=sql.Literal(target_library_id)))
+                "SELECT 1 FROM (SELECT * FROM {staged}{where}) s JOIN (SELECT * FROM {live}{where}) l ON {match} "
+                "WHERE l.library_id <> {lib}").format(
+                    staged=sql.Identifier(schema, name), live=sql.Identifier(live_schema, name), where=where,
+                    match=match, lib=sql.Literal(target_library_id)))
             if held:
                 raise StagingRefused(
                     "ids_in_other_library",

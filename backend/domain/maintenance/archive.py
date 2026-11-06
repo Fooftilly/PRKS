@@ -40,7 +40,7 @@ import stat as stat_module
 import zipfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import IO, Any, Optional
 
@@ -107,6 +107,9 @@ class Archive:
     users: Member
     devices: Member
     objects: dict[StorageKey, Member]
+    # The one open ZipFile, parsed once: reopening it per member would read the
+    # whole central directory again for every object (quadratic in objects).
+    _zip: list[zipfile.ZipFile] = field(default_factory=list, compare=False, repr=False)
 
     @property
     def library_id(self) -> str:
@@ -115,8 +118,21 @@ class Archive:
     @contextmanager
     def open_member(self, member: Member) -> Iterator[BoundedReader]:
         """A stream of one member that never yields more than its declared size."""
-        with zipfile.ZipFile(self.path) as archive, archive.open(member.name) as handle:
+        if not self._zip:
+            self._zip.append(zipfile.ZipFile(self.path))
+        with self._zip[0].open(member.name) as handle:
             yield BoundedReader(handle, member.size)
+
+    def close(self) -> None:
+        """Close the archive file; a later read opens it again."""
+        while self._zip:
+            self._zip.pop().close()
+
+    def __enter__(self) -> Archive:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 class BoundedReader:
