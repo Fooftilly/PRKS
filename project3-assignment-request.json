@@ -1,20 +1,68 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 639,
+      "number": 784,
       "set": {
-        "Agent": "Claude Code",
+        "Agent": "ChatGPT/Codex",
         "Status": "Ready",
         "Execution": "Agent"
       },
       "expected_before": {
-        "Agent": "Claude Code",
+        "Agent": null,
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "P1 PostgreSQL format-2 backup/restore is the next release-critical implementation lane. On 2026-11-05 all seven live native predecessors #628/#632/#633/#634/#635/#636/#637 are closed (including newly completed #637), no open PR owns #639, and #640 remains blocked until #639 and #630 finish. Maintain existing Claude Code ownership; mark Ready and Execution Agent for implementation, no merge authorization.",
+      "reason": "P2 data-integrity defect: stale Concept alias save overwrites another tab's aliases. Verified current master frontend-app/src/features/concepts/intents.ts editAliases and frontend/js/api.js putConceptAliases still measure base at save; dedicated two-tab regression and scope; no native blockers or open overlapping PR. Route to ChatGPT/Codex for focused implementation review, no auto-merge.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 571,
+      "set": {
+        "Agent": "ChatGPT/Codex",
+        "Status": "Ready",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "P3 isolated Tags Vue merge-dialog correctness: current TagsRoute.vue confirmMerge still keeps modal active after successful intent; reproduce with one/double submit and 500 retry; no native blockers or open overlapping PR. ChatGPT/Codex can add bounded UI state and tests, no auto-merge.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 610,
+      "set": {
+        "Agent": "ChatGPT/Codex",
+        "Status": "Ready",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "P3 distinct Folder tag double-activation sync defect: current folder-tag-editor.js creates actionable onmousedown without second-click guard; fix durable command handling and regression on duplicate input/409 without redesign; no native blockers or active overlapping PR.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 809,
+      "set": {
+        "Agent": "ChatGPT/Codex",
+        "Status": "Ready",
+        "Execution": "Agent"
+      },
+      "expected_before": {
+        "Agent": null,
+        "Status": "Inbox",
+        "Execution": null
+      },
+      "reason": "P3 bounded Research Notes markup correctness: current components/works.js inserts raw [[concept: + name + ]] with no delimiter validation; reproduce with ]] names, choose consistent safe validation/escaping across create/rename/picker, retain unrelated link semantics; no native blockers or overlapping active PR.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
