@@ -109,13 +109,16 @@ token_weight AS (
   JOIN derived.work_search s ON s.library_id = %(library_id)s AND s.work_id = f.work_id
   CROSS JOIN token k
 ),
+base AS (
+  SELECT work_id, avg(w) AS w FROM token_weight GROUP BY work_id
+),
 scored AS (
-  SELECT f.work_id,
-         (SELECT avg(tw.w) FROM token_weight tw WHERE tw.work_id = f.work_id)
+  SELECT b.work_id,
+         b.w
          + 0.3 * ext.similarity(s.title_norm, prks.search_norm(%(phrase)s))
          + 0.05 * ts_rank_cd(s.doc, q.query, 32) AS score
-  FROM found f
-  JOIN derived.work_search s ON s.library_id = %(library_id)s AND s.work_id = f.work_id
+  FROM base b
+  JOIN derived.work_search s ON s.library_id = %(library_id)s AND s.work_id = b.work_id
   CROSS JOIN q
 )
 SELECT scored.work_id
