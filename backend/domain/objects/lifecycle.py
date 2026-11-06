@@ -54,7 +54,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
@@ -140,6 +140,12 @@ INSERT INTO prks.object_cleanup_claims AS c (namespace, name, library_id, hold)
 VALUES (%(namespace)s, %(name)s, %(library_id)s, %(hold)s)
 ON CONFLICT (namespace, name) DO UPDATE
   SET library_id = coalesce(c.library_id, EXCLUDED.library_id), hold = c.hold OR EXCLUDED.hold
+"""
+# A key a running restore of another Library is staging (L-B-1's R1).
+_STAGED_BY_ANOTHER_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.restore_run_objects o JOIN prks.restore_runs r ON r.id = o.run_id
+WHERE o.namespace = %(namespace)s AND o.name = %(name)s AND r.state = 'running' AND r.library_id <> %(library_id)s
+LIMIT 1
 """
 _NAMED_ELSEWHERE: dict[str, LiteralString] = {
     NAMESPACE_ASSET_OBJECTS: _NAMED_BY_ANOTHER_LIBRARY,
@@ -245,6 +251,24 @@ def references(tx: Transaction, key: StorageKey) -> Optional[bool]:
         row = tx.execute(_PORTRAIT_REFERENCES, params).fetchone()
         return bool(row is not None and row["referenced"])
     return None
+
+
+def held_by_another_library(execute: Callable[[LiteralString, dict[str, Any]], Any], key: StorageKey,
+                            library_id: str) -> bool:
+    """Whether a Library other than ``library_id`` names ``key``, released it, or is restoring it.
+
+    :func:`adopt`'s ownership rule for a writer that does not go through
+    it: restore's R1 calls this, under the per-object lock, before it
+    reuses or writes a key, so no key is ever attributed to two Libraries.
+    ``execute`` runs one statement with named parameters (a psycopg
+    connection's or a transaction's ``execute``).
+    """
+    params = {**_key_params(key), "library_id": library_id}
+    queries: list[LiteralString] = [_CLAIMED_BY_ANOTHER_LIBRARY, _STAGED_BY_ANOTHER_LIBRARY]
+    named_elsewhere = _NAMED_ELSEWHERE.get(key.namespace)
+    if named_elsewhere is not None:
+        queries.insert(0, named_elsewhere)
+    return any(execute(query, params).fetchone() is not None for query in queries)
 
 
 # -- in a Library command ------------------------------------------------------------
