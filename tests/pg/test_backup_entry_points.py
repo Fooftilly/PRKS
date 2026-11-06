@@ -30,6 +30,8 @@ from backend.db.errors import DatabaseError
 from backend.domain.identity import admin
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.maintenance import jobs as backup_jobs
+from backend.domain.maintenance import restore
+from backend.domain.objects import jobs as object_jobs
 from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import JobRun
@@ -224,6 +226,39 @@ class AdminBackupRestoreTests(RootPairingTestCase):
         self.assertEqual(self.sql("SELECT value FROM prks.library_settings"), [("Before",)])
         # The private copy is gone; nothing is left in the restore staging directory.
         self.assertEqual(os.listdir(os.path.join(self.root, ".prks-maintenance", "restore")), [])
+
+    def pairing(self, name: str, root: str) -> tuple[Any, bytes, list[Any]]:
+        tokens = self.sql_in(name, "SELECT id, consumed_at, revoked_at FROM prks.bootstrap_tokens ORDER BY id")
+        return self.instance(name), self.marker_bytes(root), tokens
+
+    def sql_in(self, name: str, statement: str) -> list[Any]:
+        with psycopg.connect(self.harness.conninfo(name), autocommit=True) as conn:
+            return conn.execute(statement.encode()).fetchall()
+
+    def restore_into(self, name: str, root: str, library_id: str, user_id: str, archive: str) -> None:
+        storage = object_jobs.root_storage(root)
+        assert storage is not None
+        result = restore.restore_library(self.harness.conninfo(name), storage, archive, library_id,
+                                         owner_user_id=user_id, staging_dir=backup_jobs.restore_dir(root))
+        self.assertEqual(result.epoch, 2)
+
+    def test_a_restore_never_touches_setup_the_root_claim_or_the_start_generation(self) -> None:
+        # §13.3 bootstrap tests (moved from #626): same instance and a new one.
+        code, _out, err = self.run_cli("backup", "--library", self.boot.library_id, "--out", self.out)
+        self.assertEqual(code, admin.EXIT_OK, err)
+        (archive,) = os.listdir(self.out)
+        path = os.path.join(self.out, archive)
+        before = self.pairing(self.name, self.root)
+        self.assertEqual(before[0]["setup_state"], "ready")
+        self.restore_into(self.name, self.root, self.boot.library_id, self.boot.user_id, path)
+        self.assertEqual(self.pairing(self.name, self.root), before)
+
+        other_name, other_root = self.database("other"), self.new_root("other")
+        other = self.bootstrap(other_name, other_root)
+        other_before = self.pairing(other_name, other_root)
+        self.restore_into(other_name, other_root, other.library_id, other.user_id, path)
+        self.assertEqual(self.pairing(other_name, other_root), other_before)
+        self.assertEqual(self.pairing(self.name, self.root), before)
 
     def test_restore_refusals_name_the_reason(self) -> None:
         code, _out, err = self.run_cli("backup", "--library", self.boot.library_id, "--out", self.out)
