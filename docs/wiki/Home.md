@@ -22,6 +22,7 @@ These screenshots are generated from the repository's synthetic/public-domain de
 - [Offline and Sync](Offline-and-Sync.md) — local-first behavior, durable operations, and reconciliation.
 - [Storage, Backup, and Restore](Storage-Backup-and-Restore.md) — canonical data, derived data, backups, and recovery.
 - [Research Network](Research-Network.md) — Concepts, Positions, Arguments/Stances, and graph views.
+- [Accessibility Statement](https://github.com/Fooftilly/PRKS/blob/master/ACCESSIBILITY.md) — accessibility goals, what is tested, known barriers, and how to report one.
 
 ## For contributors
 
