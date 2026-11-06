@@ -742,9 +742,14 @@ function prksFilterConceptsForHint(query, cm) {
     return pref.concat(sub.slice(0, PRKS_WIKI_HINT_MAX - pref.length));
 }
 
-/** Encode syntax-delimiter characters in a Concept's canonical name. */
-function prksEncodeConceptMarkupName(name) {
-    return String(name == null ? '' : name).replace(/[\\\[\]]/g, '\\$&');
+/** Use a distinct marker for names containing syntax delimiters. A legacy
+ * [[concept:Name]] keeps its exact backslash/bracket meaning. URL encoding
+ * only appears in the new marker, never in an existing Concept key. */
+function prksFormatConceptMarkup(name) {
+    const value = String(name == null ? '' : name);
+    return /(?:\[\[|\]\]|\\)/.test(value)
+        ? '[[concept-encoded:' + encodeURIComponent(value) + ']]'
+        : '[[concept:' + value + ']]';
 }
 
 function prksConceptLinkCompletionPick(cm, data, completion) {
@@ -752,7 +757,11 @@ function prksConceptLinkCompletionPick(cm, data, completion) {
     const from = completion.from != null ? completion.from : data.from;
     const to = completion.to != null ? completion.to : data.to;
     const name = typeof completion.text === 'string' ? completion.text : '';
-    cm.replaceRange(prksEncodeConceptMarkupName(name) + ']]', from, to, 'complete');
+    /* Replace the opening marker too: a delimiter-heavy Concept is encoded
+     * with a different prefix, not as raw text after [[concept:. */
+    const prefixLength = '[[concept:'.length;
+    const fromMarker = cm.constructor.Pos(from.line, from.ch - prefixLength);
+    cm.replaceRange(prksFormatConceptMarkup(name), fromMarker, to, 'complete');
 }
 
 function prksConceptLinkHint(cm) {
@@ -984,12 +993,10 @@ function prksOpenConceptPicker(cm) {
                     break;
                 }
             }
-            if (name) prksInsertNotesMarkup(cm,
-                '[[concept:' + prksEncodeConceptMarkupName(name) + ']]');
+            if (name) prksInsertNotesMarkup(cm, prksFormatConceptMarkup(name));
         },
         onCreate: function (name) {
-            prksInsertNotesMarkup(cm,
-                '[[concept:' + prksEncodeConceptMarkupName(name) + ']]');
+            prksInsertNotesMarkup(cm, prksFormatConceptMarkup(name));
         },
     });
 }

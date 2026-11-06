@@ -64,22 +64,83 @@ record(
 );
 record('valid argument remains linked', missingArg.indexOf('#/arguments/A-REAL') >= 0);
 
-// Toolbar and autocomplete use this production encoder. Round-trip
-// delimiter-heavy names without creating truncated / junk Concepts.
+// Both the picker and the autocomplete use one production marker formatter.
 const workSrc = fs.readFileSync(
     path.join(rootDir, 'frontend/js/components/works.js'), 'utf8');
-const start = workSrc.indexOf('function prksEncodeConceptMarkupName(');
+const start = workSrc.indexOf('function prksFormatConceptMarkup(');
 const end = workSrc.indexOf('\n}\n', start);
-if (start < 0 || end <= start) throw new Error('Concept insertion encoder missing');
+if (start < 0 || end <= start) throw new Error('Concept marker formatter missing');
 vm.runInContext(workSrc.slice(start, end + 2), sandbox);
 for (const name of ['Category]] Theory',
-    'Math [A] ' + String.fromCharCode(92) + ' Slash ]] name']) {
-    const encoded = sandbox.prksEncodeConceptMarkupName(name);
-    const source = '[[concept:' + encoded + ']]';
-    const parsed = api.prksParseResearchMarkup(source).conceptRefs;
-    record('picker encodes Concept delimiters: ' + name,
-        parsed.length === 1 && parsed[0].name === name && parsed[0].raw === source);
+    'Math [A] ' + String.fromCharCode(92) + ' Slash ]] name',
+    'Odd]] [[concept:Synthetic Memory Systems|pipe 1022',
+    'Ordinary Concept']) {
+    const marker = sandbox.prksFormatConceptMarkup(name);
+    const parsed = api.prksParseResearchMarkup(marker).conceptRefs;
+    record('picker round-trips name: ' + name,
+        parsed.length === 1 && parsed[0].name === name && parsed[0].raw === marker);
+    if (name.indexOf(']]') >= 0) {
+        record('picker avoids truncated Concept for ' + name,
+            marker.startsWith('[[concept-encoded:') && !marker.includes('[[concept:' ));
+    }
 }
+const unresolvedName = 'Category]] Theory';
+const encodedRef = sandbox.prksFormatConceptMarkup(unresolvedName);
+const unresolvedHtml = api.prksReplaceResearchRefs(encodedRef, { concepts: [], arguments: [] });
+record('unresolved encoded name renders without markup escapes',
+    unresolvedHtml.includes(unresolvedName) && !unresolvedHtml.includes('%5D') &&
+    unresolvedHtml.includes('wiki-link-unresolved'));
+
+// Execute the REAL autocomplete completion function, not a separately
+// written approximation; it must replace the opening prefix when the
+// selected Concept requires a distinct encoded marker.
+function loadWorkFunction(name) {
+    const at = workSrc.indexOf('function ' + name + '(');
+    if (at < 0) throw new Error('Missing Work function: ' + name);
+    const end = workSrc.indexOf('\n}\n', at);
+    if (end < 0) throw new Error('Unclosed Work function: ' + name);
+    vm.runInContext(workSrc.slice(at, end + 2), sandbox);
+}
+loadWorkFunction('prksConceptLinkCompletionPick');
+loadWorkFunction('prksGetConceptLinkAutocompleteContext');
+sandbox.prksWorkNotesMutationAllowed = () => true;
+sandbox.prksHintOwnerCtx = () => null;
+const partial = '[[concept:Pick';
+const cmCalls = [];
+const fakeCM = {
+    constructor: { Pos: (line, ch) => ({ line, ch }) },
+    getCursor: () => ({ line: 0, ch: partial.length }),
+    getLine: () => partial,
+    replaceRange: (value, from, to, origin) => cmCalls.push({ value, from, to, origin }),
+};
+const completionCtx = sandbox.prksGetConceptLinkAutocompleteContext(fakeCM);
+sandbox.prksConceptLinkCompletionPick(fakeCM, completionCtx, {
+    text: 'Pick]] Me',
+    from: completionCtx.from,
+    to: completionCtx.to,
+});
+record('autocomplete replaces entire marker for delimiter-heavy Concept',
+    cmCalls.length === 1 &&
+    cmCalls[0].from.ch === 0 &&
+    cmCalls[0].value === '[[concept-encoded:Pick%5D%5D%20Me]]' &&
+    cmCalls[0].origin === 'complete');
+
+// Picker selection and Create use the same formatting boundary.
+loadWorkFunction('prksOpenConceptPicker');
+let pickerOptions;
+const inserted = [];
+sandbox.prksHintResource = () => [{ id: 'C-1', name: 'Pick]] Me' }];
+sandbox.prksOpenResearchPicker = opts => { pickerOptions = opts; };
+sandbox.prksInsertNotesMarkup = (_cm, value) => { inserted.push(value); };
+sandbox.prksOpenConceptPicker(fakeCM);
+pickerOptions.onPick('C-1');
+pickerOptions.onCreate('Odd]] [[concept:Injected|pipe');
+record('existing Concept picker inserts encoded reference', inserted[0] ===
+    '[[concept-encoded:Pick%5D%5D%20Me]]');
+const chosen = api.prksParseResearchMarkup(inserted[1]);
+record('Create picker does not insert nested/bogus references',
+    chosen.conceptRefs.length === 1 &&
+    chosen.conceptRefs[0].name === 'Odd]] [[concept:Injected|pipe');
 
 rows.forEach(function (r) {
     console.log((r.ok ? 'PASS  ' : 'FAIL  ') + r.name + (r.detail ? ' ' + r.detail : ''));

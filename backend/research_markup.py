@@ -1,7 +1,9 @@
 """Authoritative research-note markup parser.
 
-Recognizes explicit [[concept:Name]] and [[argument:A-ID|Label]] references
-outside fenced/inline code and escaped \\[[ sequences.
+Recognizes explicit [[concept:Name]], [[concept-encoded:URIComponent(Name)]]
+and [[argument:A-ID|Label]] references outside fenced/inline code and escaped
+\\[[ sequences. The encoded spelling is unambiguous for embedded delimiters;
+legacy Concept names (including literal backslashes) are never reinterpreted.
 
 Python and the frontend preview parser must agree on which spans are references.
 """
@@ -12,10 +14,16 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+from urllib.parse import unquote
 
 CONCEPT_REF_MAX = 160
 ARGUMENT_LABEL_MAX = 240
 ARGUMENT_ID_RE = re.compile(r"^A-[A-Za-z0-9]{1,32}$")
+# Explicitly versioned marker: no legacy literal backslash or bracket sequence
+# in [[concept:Name]] can be confused with the encoded form.
+_ENCODED_CONCEPT_PREFIX = "[[concept-encoded:"
+_ENCODED_BODY_RE = re.compile(r"(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-Fa-f]{2})+")
+_ENCODED_BODY_MAX = CONCEPT_REF_MAX * 12
 
 _FENCE_CHARS = frozenset("`~")
 
@@ -67,6 +75,12 @@ def parse_research_markup(text: str) -> ResearchMarkup:
         if text[i] == "\\" and i + 2 < n and text[i + 1] == "[" and text[i + 2] == "[":
             i += 3
             continue
+        if text.startswith(_ENCODED_CONCEPT_PREFIX, i):
+            parsed = _try_encoded_concept_ref(text, live, i)
+            if parsed is not None:
+                concepts.append(parsed)
+                i = parsed.end
+                continue
         if i + 11 <= n and live[i:i + 11] == "Y" * 11 and text.startswith("[[concept:", i):
             parsed = _try_concept_ref(text, live, i)
             if parsed is not None:
@@ -188,17 +202,10 @@ def _span_live(live: str, start: int, end: int) -> bool:
 
 
 def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
+    # Legacy references remain completely literal. In particular a backslash
+    # immediately before a bracket is part of the name, not a new escape.
     inner_start = start + len("[[concept:")
-    close = -1
-    pos = inner_start
-    while pos < len(text) - 1:
-        if text[pos] == "\\" and pos + 1 < len(text) and text[pos + 1] in "\\[]":
-            pos += 2
-            continue
-        if text.startswith("]]", pos):
-            close = pos
-            break
-        pos += 1
+    close = text.find("]]", inner_start)
     if close < 0:
         return None
     end = close + 2
@@ -206,8 +213,30 @@ def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
         return None
     if "\n" in text[start:end]:
         return None
-    inner = text[inner_start:close]
-    name = canonical_concept_name(re.sub(r"\\([\\\[\]])", r"\1", inner))
+    name = canonical_concept_name(text[inner_start:close])
+    if not name or len(name) > CONCEPT_REF_MAX:
+        return None
+    return ConceptRef(start=start, end=end, raw=text[start:end], name=name)
+
+
+def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
+    inner_start = start + len(_ENCODED_CONCEPT_PREFIX)
+    close = text.find("]]", inner_start, inner_start + _ENCODED_BODY_MAX + 2)
+    if close < 0:
+        return None
+    end = close + 2
+    if not _span_live(live, start, end):
+        return None
+    body = text[inner_start:close]
+    if not _ENCODED_BODY_RE.fullmatch(body):
+        return None
+    try:
+        decoded = unquote(body, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if "\n" in decoded or "\r" in decoded or "\x00" in decoded:
+        return None
+    name = canonical_concept_name(decoded)
     if not name or len(name) > CONCEPT_REF_MAX:
         return None
     return ConceptRef(start=start, end=end, raw=text[start:end], name=name)

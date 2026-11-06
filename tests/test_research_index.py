@@ -52,13 +52,33 @@ class ResearchIndexTests(unittest.TestCase):
 
     def test_escaped_concept_delimiter_indexes_one_full_name(self):
         work = self.db.add_work(title="Escaped Concept")
-        note = r"See [[concept:Category\]\] Theory]] here."
+        note = "See [[concept-encoded:Category%5D%5D%20Theory]] here."
         save_work_notes(self.db, work, note)
         self.index.sync_work(work, note, self.db)
         concepts = list_concepts(self.db)
         self.assertEqual([c["name"] for c in concepts], ["Category]] Theory"])
         self.assertEqual(self.index.mention_count_for_concept(concepts[0]["id"]), 1)
         self.assertEqual(len(self.index.work_research_refs(work, self.db)["concepts"]), 1)
+
+    def test_parser_version_change_rebuilds_unchanged_note_mentions(self):
+        work = self.db.add_work(title="Parser version upgrade")
+        text = "See [[concept-encoded:Category%5D%5D%20Theory]] here."
+        save_work_notes(self.db, work, text)
+        self.index.sync_work(work, text, self.db)
+        concept_id = list_concepts(self.db)[0]["id"]
+        self.assertEqual(self.index.mention_count_for_concept(concept_id), 1)
+
+        # Simulate a derived index from before this parser grammar existed.
+        with sqlite3.connect(self.storage.research_index_db_path) as conn:
+            conn.execute(
+                "UPDATE research_index_meta SET value = '1' WHERE key = 'schema_version'"
+            )
+        reopened = PRKSResearchIndex(storage=self.storage)
+        self.assertEqual(reopened.mention_count_for_concept(concept_id), 0)
+        summary = reopened.reconcile_all(self.db)
+        self.assertEqual(summary["updated"], 1, "same note hash must not skip new parser")
+        self.assertEqual(summary["unchanged"], 0)
+        self.assertEqual(reopened.mention_count_for_concept(concept_id), 1)
 
     def test_deleted_work_removes_orphan(self):
         wid = self.db.add_work(title="W")

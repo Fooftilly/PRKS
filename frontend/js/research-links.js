@@ -1,6 +1,7 @@
 /**
- * Research-note semantic references: [[concept:Name]] and [[argument:A-ID|Label]].
- * Parser must agree with backend/research_markup.py.
+ * Research-note references: legacy literal [[concept:Name]], encoded
+ * [[concept-encoded:URIComponent(Name)]] for names with delimiters, and
+ * [[argument:A-ID|Label]]. Keep parity with backend/research_markup.py.
  */
 (function (root) {
     'use strict';
@@ -8,6 +9,9 @@
     const CONCEPT_REF_MAX = 160;
     const ARGUMENT_LABEL_MAX = 240;
     const ARGUMENT_ID_RE = /^A-[A-Za-z0-9]{1,32}$/;
+    const ENCODED_CONCEPT_PREFIX = '[[concept-encoded:';
+    const ENCODED_CONCEPT_BODY_MAX = CONCEPT_REF_MAX * 12;
+    const ENCODED_CONCEPT_BODY_RE = /^(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-Fa-f]{2})+$/;
 
     function canonicalConceptName(raw) {
         return String(raw == null ? '' : raw)
@@ -141,6 +145,14 @@
                 i += 3;
                 continue;
             }
+            if (text.indexOf(ENCODED_CONCEPT_PREFIX, i) === i) {
+                const parsedEncoded = tryEncodedConcept(text, live, i);
+                if (parsedEncoded) {
+                    out.conceptRefs.push(parsedEncoded);
+                    i = parsedEncoded.end;
+                    continue;
+                }
+            }
             if (text.indexOf('[[concept:', i) === i) {
                 const parsed = tryConcept(text, live, i);
                 if (parsed) {
@@ -163,24 +175,39 @@
     }
 
     function tryConcept(text, live, start) {
+        /* Legacy markers remain literal, including backslashes immediately
+         * before a bracket and doubled backslashes. */
         const innerStart = start + '[[concept:'.length;
-        let close = -1;
-        for (let i = innerStart; i < text.length - 1; i++) {
-            const next = text.charAt(i + 1);
-            if (text.charAt(i) === '\\' && '\\[]'.indexOf(next) !== -1) {
-                i++;
-                continue;
-            }
-            if (text.indexOf(']]', i) === i) { close = i; break; }
-        }
+        const close = text.indexOf(']]', innerStart);
         if (close < 0) return null;
         const end = close + 2;
         if (!spanLive(live, start, end)) return null;
         if (text.slice(start, end).indexOf('\n') >= 0) return null;
-        const name = canonicalConceptName(
-            text.slice(innerStart, close).replace(/\\([\\\[\]])/g, '$1'));
+        const name = canonicalConceptName(text.slice(innerStart, close));
         if (!name || name.length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end), name: name };
+    }
+
+    function tryEncodedConcept(text, live, start) {
+        const innerStart = start + ENCODED_CONCEPT_PREFIX.length;
+        /* Constant-bounded search: malformed markers cannot trigger a
+         * quadratic scan of a large note. */
+        const slice = text.slice(innerStart, innerStart + ENCODED_CONCEPT_BODY_MAX + 2);
+        const endOfBody = slice.indexOf(']]');
+        if (endOfBody < 0) return null;
+        const end = innerStart + endOfBody + 2;
+        if (!spanLive(live, start, end)) return null;
+        const body = slice.slice(0, endOfBody);
+        if (!ENCODED_CONCEPT_BODY_RE.test(body)) return null;
+        let decoded;
+        try {
+            decoded = decodeURIComponent(body);
+        } catch (_e) { return null; }
+        if (/[\r\n\u0000]/.test(decoded)) return null;
+        const name = canonicalConceptName(decoded);
+        if (!name || name.length > CONCEPT_REF_MAX) return null;
+        return { start: start, end: end, raw: text.slice(start, end),
+            name: name, encoded: true };
     }
 
     function tryArgument(text, live, start) {
@@ -265,7 +292,10 @@
                             '</a>'
                     );
                 } else {
-                    parts.push(plainText.slice(ev.start, ev.end));
+                    parts.push(ev.ref.encoded
+                        ? '<span class="wiki-link-unresolved" title="Unresolved concept">' +
+                            esc(ev.ref.name) + '</span>'
+                        : plainText.slice(ev.start, ev.end));
                 }
             } else {
                 const rec = argumentsMap[ev.ref.argumentId];

@@ -67,8 +67,8 @@
     "arguments": []
   },
   {
-    "id": "escaped-closing-brackets",
-    "text": "See [[concept:Category\\]\\] Theory]] and [[concept:Next]].",
+    "id": "encoded-closing-brackets",
+    "text": "See [[concept-encoded:Category%5D%5D%20Theory]] and [[concept:Next]].",
     "concepts": [
       "Category]] Theory",
       "Next"
@@ -76,8 +76,8 @@
     "arguments": []
   },
   {
-    "id": "escaped-brackets-backslash",
-    "text": "[[concept:Math \\[A\\] \\\\ Slash \\]\\] name]]",
+    "id": "encoded-brackets-backslash",
+    "text": "[[concept-encoded:Math%20%5BA%5D%20%5C%20Slash%20%5D%5D%20name]]",
     "concepts": [
       "Math [A] \\ Slash ]] name"
     ],
@@ -89,6 +89,80 @@
     "concepts": [
       "Slash\\q"
     ],
+    "arguments": []
+  },
+  {
+    "id": "literal-bracket-backslash-legacy",
+    "text": "[[concept:Name\\] One]]",
+    "concepts": [
+      "Name\\] One"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "legacy-ends-with-backslash",
+    "text": "[[concept:Name\\]]",
+    "concepts": [
+      "Name\\"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "legacy-double-backslash",
+    "text": "[[concept:Name\\\\ Backslash]]",
+    "concepts": [
+      "Name\\\\ Backslash"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-invalid-percent",
+    "text": "[[concept-encoded:Odd%ZZ]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-invalid-utf8",
+    "text": "[[concept-encoded:Odd%FF]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-empty",
+    "text": "[[concept-encoded:]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-escaped-literal",
+    "text": "\\[[concept-encoded:Test%20One]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-inline-code",
+    "text": "Not a ref: `[[concept-encoded:Test%20One]]`",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-unicode",
+    "text": "[[concept-encoded:Caf%C3%A9%20%5D%5D%20%CE%A9]]",
+    "concepts": [
+      "Café ]] Ω"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-control-rejected",
+    "text": "[[concept-encoded:Line%0ABreak]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-too-long",
+    "text": "[[concept-encoded:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]]",
+    "concepts": [],
     "arguments": []
   }
 ]
