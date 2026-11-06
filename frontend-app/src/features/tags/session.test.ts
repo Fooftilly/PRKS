@@ -234,7 +234,7 @@ describe('Tags route bridge', () => {
     expect(document.activeElement).toBe(el.querySelector('[data-tag-alias-edit="t1"]'))
   })
 
-  it('focuses a resumed merge dialog and returns to the row button after a delayed merge', async () => {
+  it('closes a merged source dialog after one accepted click, without allowing duplicate confirmation', async () => {
     let releaseMerge: (value: { ok: boolean }) => void = () => {}
     window.prksTagsMerge = () => new Promise((resolve) => {
       releaseMerge = resolve
@@ -271,12 +271,9 @@ describe('Tags route bridge', () => {
     releaseMerge({ ok: true })
     await flush()
 
-    expect(el.querySelector('#tags-page-merge-confirm')).not.toBeNull()
-    expect(document.activeElement).toBe(el.querySelector('#tags-page-merge-confirm-btn'))
-    el.querySelector<HTMLButtonElement>('#tags-page-merge-modal-close')?.click()
-    await nextTick()
     expect(el.querySelector('#tags-page-merge-modal')).toBeNull()
-    expect(document.activeElement).toBe(el.querySelector('[data-tag-merge="t1"]'))
+    expect(el.querySelector('#tags-page-merge-confirm-btn')).toBeNull()
+    expect(el.querySelector('[data-tag-merge="t1"]')).not.toBeNull()
   })
 
   it('keeps the tag list when a refresh fails and shows that failure', async () => {

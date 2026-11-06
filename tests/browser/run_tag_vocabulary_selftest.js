@@ -9,6 +9,9 @@
  * destroys.
  */
 const strict = require("assert/strict");
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
 let checks = 0;
 const assert = new Proxy(function (...args) { checks += 1; return strict(...args); },
     { get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); } });
@@ -231,7 +234,91 @@ async function aRefusedCreationTakesItsAttachmentsDownVisibly() {
         "and the tag is gone from what the user sees");
 }
 
+async function rapidTagCreateUsesOneDurableIdentity() {
+    const ui = fs.readFileSync(path.join(__dirname, '../../frontend/js/ui.js'), 'utf8');
+    const at = ui.indexOf('async function prksSubmitNewTag(');
+    assert.ok(at >= 0, 'the real UI quick-create function is present');
+    const end = ui.indexOf('\n}\n', at);
+    assert.ok(end > at);
+    const fn = ui.slice(at, end + 2);
+    let release;
+    const reading = new Promise(resolve => { release = resolve; });
+    let creations = 0;
+    let attachments = 0;
+    const input = { dataset: {}, disabled: false,
+        setAttribute: () => {}, removeAttribute: () => {} };
+    const ctx = {
+        JSON,
+        fetchTags: async () => reading,
+        prksCreateTagDurably: async () => {
+            creations++;
+            return { entity_id: 'T-NEW-' + creations };
+        },
+        prksAttachExistingTag: async () => { attachments++; },
+        prksAlertMessage: async () => {},
+        prksTagVocabularyMessage: () => 'create failed',
+    };
+    vm.createContext(ctx);
+    vm.runInContext(fn, ctx);
+    const first = ctx.prksSubmitNewTag('folder', 'F-1', 'New Topic', {}, input);
+    const second = ctx.prksSubmitNewTag('folder', 'F-1', 'New Topic', {}, input);
+    assert.equal(input.disabled, true, 'claim acquired before catalogue fetch');
+    assert.ok(input.dataset.prksTagCreatePending);
+    release([]);
+    await Promise.all([first, second]);
+    assert.equal(creations, 1, 'two rapid clicks mint only one Tag');
+    assert.equal(attachments, 1, 'only one Folder relationship is queued');
+    await ctx.prksSubmitNewTag('folder', 'F-1', 'New Topic', {}, input);
+    assert.equal(creations, 1, 'a stale create option cannot submit again after success');
+    await ctx.prksSubmitNewTag('folder', 'F-1', 'Another Topic', {}, input);
+    assert.equal(creations, 2, 'a different name can still be created');
+
+    const retryInput = { dataset: {}, disabled: false,
+        setAttribute: () => {}, removeAttribute: () => {} };
+    let tries = 0;
+    ctx.prksCreateTagDurably = async () => {
+        tries++;
+        if (tries === 1) throw new Error('Failed local write');
+        return { entity_id: 'T-RETRY' };
+    };
+    await ctx.prksSubmitNewTag('folder', 'F-2', 'Recover', {}, retryInput);
+    assert.equal(retryInput.dataset.prksTagCreateDone, undefined,
+        'a rejected local create does not permanently disable retry');
+    await ctx.prksSubmitNewTag('folder', 'F-2', 'Recover', {}, retryInput);
+    assert.equal(tries, 2, 'retry is permitted once the first local write failed');
+}
+
+async function usedTagCloudHidesMergingSourcesOnly() {
+    const app = fs.readFileSync(path.join(__dirname, '../../frontend/js/app.js'), 'utf8');
+    const at = app.indexOf('async function prksEffectiveUsedTags(');
+    assert.ok(at >= 0);
+    const end = app.indexOf('\n}\n', at);
+    assert.ok(end > at);
+    const source = app.slice(at, end + 2);
+    const ops = [
+        { operation: 'MERGE_TAG', entity_type: 'tag', entity_id: 'T-OLD', status: 'pending' },
+        { operation: 'CREATE_TAG', entity_type: 'tag', entity_id: 'T-NEW', status: 'pending' },
+    ];
+    const ctx = {
+        Set, Array,
+        prksDurableOperationsOrNone: async () => ops,
+        prksPendingTagMerges: globalThis.prksPendingTagMerges,
+        prksPendingTagDeletions: globalThis.prksPendingTagDeletions,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(source, ctx);
+    const used = [
+        { id: 'T-OLD', name: 'Old' },
+        { id: 'T-STAYS', name: 'Used' },
+    ];
+    const shown = await ctx.prksEffectiveUsedTags(used);
+    assert.deepEqual(shown.map(x => x.id), ['T-STAYS'],
+        'the source disappears but an unassigned new Tag is not added');
+}
+
 async function main() {
+    await rapidTagCreateUsesOneDurableIdentity();
+    await usedTagCloudHidesMergingSourcesOnly();
     await aTagIsAttachableTheMomentItIsCreated();
     await anObviousLocalCollisionIsRefusedEarly();
     await aTagNeedsAName();
