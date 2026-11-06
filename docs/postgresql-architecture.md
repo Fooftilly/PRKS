@@ -1944,7 +1944,11 @@ part of the Assets lane, against the new schema, not against SQLite.
   sees the row or has already finished before R1 decides to reuse (§11.4). When the run fails (or recovery marks
   it failed), its rows stop protecting anything and unreferenced staged
   objects become ordinary orphans; once it commits, the catalogue references
-  them and the rows are deleted.
+  them and the rows are deleted. A running run's staged key also belongs to
+  its Library: `adopt` and R1 refuse a key another Library names, released or
+  is restoring, in one statement so one snapshot sees either side of an R4 or
+  release commit, and R4 refuses to commit a staged key another Library came
+  to name or claim.
 - **Processing items** count as referenced, in every place an Asset locator
   does: the three-valued reference check, the `adopt` refusal of a key
   another Library names, the release check that keeps a key its own
