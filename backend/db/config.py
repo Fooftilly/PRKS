@@ -95,6 +95,7 @@ class DatabaseConfig:
         """Session GUCs every pooled connection sets once (§4.3, §6.1)."""
         return {
             "search_path": ", ".join(self.search_path),
+            "TimeZone": "UTC",
             "statement_timeout": str(self.statement_timeout_ms),
             "lock_timeout": str(self.lock_timeout_ms),
             "idle_in_transaction_session_timeout": str(self.idle_in_transaction_timeout_ms),

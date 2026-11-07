@@ -78,8 +78,8 @@ def create_session(
     token = SessionToken.new()
     row = tx.execute(
         "INSERT INTO prks.sessions (token_sha256, user_id, library_id, expires_at) "
-        "VALUES (%s, %s, %s, now() + %s) RETURNING id, expires_at",
-        (token.digest, user_id, library_id, idle),
+        "VALUES (%s, %s, %s, now() + make_interval(secs => %s)) RETURNING id, expires_at",
+        (token.digest, user_id, library_id, idle.total_seconds()),
     ).fetchone()
     if row is None:  # pragma: no cover - INSERT … RETURNING always returns the row
         raise RuntimeError("session insert returned no row")
@@ -113,7 +113,8 @@ SELECT expires_at
 
 _RENEW_SQL = """
 UPDATE prks.sessions
-   SET last_used_at = clock_timestamp(), expires_at = clock_timestamp() + %(idle)s
+   SET last_used_at = clock_timestamp(),
+       expires_at = clock_timestamp() + make_interval(secs => %(idle_seconds)s)
  WHERE id = %(id)s
 RETURNING expires_at
 """
@@ -152,7 +153,9 @@ def resolve_session(
             ).fetchone()
             if not live or not live["live"]:  # revoked or expired since the lookup
                 return None
-            renewed = tx.execute(_RENEW_SQL, {"idle": idle, "id": row["id"]}).fetchone()
+            renewed = tx.execute(
+                _RENEW_SQL, {"idle_seconds": idle.total_seconds(), "id": row["id"]}
+            ).fetchone()
             if renewed is None:  # pragma: no cover - the row is locked by this transaction
                 return None
             expires_at = renewed["expires_at"]
