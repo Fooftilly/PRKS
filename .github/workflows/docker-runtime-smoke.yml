@@ -119,18 +119,26 @@ jobs:
           grep -q 'prks-classic-head.bundle.js' "$html"
           grep -q 'prks-classic-body.bundle.js' "$html"
 
-          # Missing static JS paths fall back to index.html with HTTP 200.
-          # Fetch real bundle bytes through the running Docker HTTP server;
-          # validate JavaScript MIME and the production build marker so an
-          # HTML fallback cannot masquerade as a healthy browser shell.
+          # A missing static JS path can return index.html with HTTP 200.
+          # Compare *all* bytes served over HTTP against the corresponding
+          # generated file inside this very production image. MIME/markers alone
+          # would accept a prefix truncated after the first source comment.
           for bundle in prks-classic-head.bundle.js prks-classic-body.bundle.js; do
+            expected_sha="$(docker exec "$container" python -c \
+              'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
+              "/app/frontend/js/${bundle}")"
             mime="$(curl --fail --silent --show-error --max-time 5 \
               --write-out '%{content_type}' --output "$asset" \
               "http://127.0.0.1:18080/js/${bundle}")"
-            python scripts/ci/check_runtime_smoke.py --asset bundle "$mime" < "$asset"
+            python scripts/ci/check_runtime_smoke.py \
+              --asset bundle "$mime" "$expected_sha" < "$asset"
           done
+          expected_sha="$(docker exec "$container" python -c \
+            'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
+            /app/frontend/sw.js)"
           mime="$(curl --fail --silent --show-error --max-time 5 \
             --write-out '%{content_type}' --output "$asset" \
             http://127.0.0.1:18080/sw.js)"
-          python scripts/ci/check_runtime_smoke.py --asset worker "$mime" < "$asset"
-          echo "Production Docker startup, works API, served JS bundles and service worker: PASS"
+          python scripts/ci/check_runtime_smoke.py \
+            --asset worker "$mime" "$expected_sha" < "$asset"
+          echo "Production Docker startup, works API, byte-matched JS bundles and service worker: PASS"
