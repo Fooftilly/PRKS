@@ -184,7 +184,7 @@
         if (!spanLive(live, start, end)) return null;
         if (text.slice(start, end).indexOf('\n') >= 0) return null;
         const name = canonicalConceptName(text.slice(innerStart, close));
-        if (!name || name.length > CONCEPT_REF_MAX) return null;
+        if (!name || Array.from(name).length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end), name: name };
     }
 
@@ -205,7 +205,7 @@
         } catch (_e) { return null; }
         if (/[\u0000-\u001f\u007f-\u009f]/.test(decoded)) return null;
         const name = canonicalConceptName(decoded);
-        if (!name || name.length > CONCEPT_REF_MAX) return null;
+        if (!name || Array.from(name).length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end),
             name: name, encoded: true };
     }
