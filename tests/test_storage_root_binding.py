@@ -48,6 +48,21 @@ def _symlink_or_skip(testcase, target, link):
         testcase.skipTest(f"symlinks unavailable: {exc}")
 
 
+def _mock_filesystem_warning(fs_type):
+    """Exercise V9 classification without falsifying V7's host device model.
+
+    The physical test root can be on overlayfs: replacing filesystem detection
+    for the whole root open would accidentally reenable per-file device checks.
+    """
+    check = root_binding.check_filesystem_type
+
+    def with_simulated_type(path):
+        with patch.object(root_binding, "detect_filesystem_type", return_value=fs_type):
+            check(path)
+
+    return patch.object(root_binding, "check_filesystem_type", side_effect=with_simulated_type)
+
+
 class RootTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="prks-rootbind-")
@@ -770,7 +785,7 @@ class TestDeferredStartupLogs(RootTestCase):
     """The process entry opens the root before logging exists (§11.1 diagnostics)."""
 
     def _uncertain(self):
-        return patch.object(root_binding, "detect_filesystem_type", return_value="fuse.unknownfs")
+        return _mock_filesystem_warning("fuse.unknownfs")
 
     def test_open_warnings_wait_for_log_binding(self):
         root = self.path("lib")
@@ -837,7 +852,7 @@ class TestWarnings(RootTestCase):
         root = self.path("lib")
         usage = shutil.disk_usage(self.tmp)._replace(free=10)
         with (
-            patch.object(root_binding, "detect_filesystem_type", return_value="fuse.unknownfs"),
+            _mock_filesystem_warning("fuse.unknownfs"),
             patch.object(root_binding.shutil, "disk_usage", return_value=usage),
             self.assertLogs("prks.storage", level="INFO") as logs,
         ):
@@ -848,6 +863,33 @@ class TestWarnings(RootTestCase):
         self.assertIn("storage_root_bound", text)
         self.assertNotIn(self.tmp, text)
         self.assertNotIn(self.marker_doc(root)["storage_root_id"], text)
+
+
+    def test_warning_mock_preserves_overlay_file_device_relaxation(self):
+        root = self.path("lib")
+        lease_file = os.path.join(root, MAINT, "root.lock")
+        real_lstat = root_binding._lstat
+
+        def simulated_overlay_file(path):
+            stat_result = real_lstat(path)
+            if stat_result is not None and path == lease_file:
+                values = list(stat_result)
+                values[2] = stat_result.st_dev + 1
+                return os.stat_result(values)
+            return stat_result
+
+        # Simulate overlayfs even on ext4 CI: regular files can have a
+        # different st_dev from their directory, but nested directories may not.
+        with (
+            patch.object(root_binding, "detect_filesystem_type", return_value="overlay"),
+            _mock_filesystem_warning("fuse.unknownfs"),
+            patch.object(root_binding, "_lstat", side_effect=simulated_overlay_file),
+            self.assertLogs("prks.storage", level="WARNING") as logs,
+        ):
+            self.open(root)
+        messages = "\n".join(logs.output)
+        self.assertIn("storage_root_uncertain_filesystem fs_type=fuse.unknownfs", messages)
+        self.assertIn("storage_root_overlay_file_devices_unchecked", messages)
 
 
 class TestLeaseInProcess(RootTestCase):
@@ -1524,7 +1566,7 @@ class TestFilesystemDetectionAcrossPlatforms(RootTestCase):
 
     def test_unclassifiable_filesystem_is_warned_about_not_assumed_local(self):
         root = self.path("lib")
-        with patch.object(root_binding, "detect_filesystem_type", return_value=None):
+        with _mock_filesystem_warning(None):
             with self.assertLogs("prks.storage", level="WARNING") as logs:
                 self.open(root)
         self.assertIn("storage_root_filesystem_unclassified", "\n".join(logs.output))
