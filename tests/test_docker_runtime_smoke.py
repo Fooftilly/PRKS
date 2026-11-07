@@ -8,7 +8,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.ci.check_runtime_smoke import main, valid_initial_works_catalog
+from scripts.ci.check_runtime_smoke import (
+    main, valid_browser_asset, valid_initial_works_catalog,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/docker-runtime-smoke.yml"
@@ -77,6 +79,42 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
         # Caller-supplied file paths and other arguments are not supported.
         self.assertEqual(main(["/etc/passwd"]), 2)
 
+    def test_served_browser_assets_reject_html_fallback_and_wrong_payloads(self):
+        bundle = ";\n/* bundled source: /js/icons.js */\n" + "window.prksReady = true;\n" * 20
+        worker = "const CLASSIC_BUNDLE_REVISION = 'sample';\n" + "self.addEventListener('install', () => {});\n" * 12
+        for content_type in ("text/javascript", "application/javascript; charset=utf-8"):
+            with self.subTest(mime=content_type):
+                self.assertTrue(valid_browser_asset(bundle, content_type, "bundle"))
+                self.assertTrue(valid_browser_asset(worker, content_type, "worker"))
+        for kind, mime, raw in (
+            ("bundle", "text/html", bundle),  # fallback MIME, even when text looks like JS
+            ("bundle", "text/javascript", "<!doctype html>" + bundle),
+            ("bundle", "text/javascript", "<html><script>/* bundled source: /js/a.js */</script></html>"),
+            ("bundle", "text/javascript", "window.prksReady = true;" * 20),
+            ("bundle", "text/javascript", ""),
+            ("bundle", "text/javascript", bundle[:30]),  # truncated asset
+            ("worker", "text/html", worker),
+            ("worker", "text/javascript", "<html>" + worker),
+            ("worker", "text/javascript", "self.addEventListener('install', () => {});" * 12),
+            ("worker", "text/javascript", ""),
+            ("nonsupported", "text/javascript", bundle),
+        ):
+            with self.subTest(kind=kind, mime=mime, sample=raw[:30]):
+                self.assertFalse(valid_browser_asset(raw, mime, kind))
+
+    def test_browser_asset_cli_rejects_fallback_even_if_http_status_was_200(self):
+        bundle = ";\n/* bundled source: /js/icons.js */\n" + "window.prksReady = true;\n" * 20
+        for body, kind, mime, result in (
+            (bundle, "bundle", "text/javascript", 0),
+            (bundle, "bundle", "text/html", 1),
+            ("<html>" + bundle, "bundle", "text/javascript", 1),
+            ("empty", "worker", "text/javascript", 1),
+        ):
+            with self.subTest(kind=kind, mime=mime, result=result):
+                with mock.patch("sys.stdin", io.StringIO(body)):
+                    self.assertEqual(main(["--asset", kind, mime]), result)
+        self.assertEqual(main(["--asset", "unknown", "text/javascript"]), 2)
+
     def test_workflow_is_nonrequired_and_narrowly_triggered(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         for event in ("pull_request", "push"):
@@ -103,6 +141,12 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "prks-classic-body.bundle.js",
             'docker logs --tail 120 "$container"',
             'docker rm -f "$container"',
+            'rm -f "$response" "$html" "$asset"',
+            "for bundle in prks-classic-head.bundle.js prks-classic-body.bundle.js; do",
+            "http://127.0.0.1:18080/js/${bundle}",
+            "http://127.0.0.1:18080/sw.js",
+            'python scripts/ci/check_runtime_smoke.py --asset bundle "$mime" < "$asset"',
+            'python scripts/ci/check_runtime_smoke.py --asset worker "$mime" < "$asset"',
             "trap cleanup EXIT",
         ):
             with self.subTest(required=required):
