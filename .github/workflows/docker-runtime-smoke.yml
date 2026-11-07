@@ -68,6 +68,7 @@ jobs:
           container="prks-runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           response="$(mktemp)"
           html="$(mktemp)"
+          asset="$(mktemp)"
           cleanup() {
             rc=$?
             if [[ "$rc" -ne 0 ]]; then
@@ -76,7 +77,7 @@ jobs:
               docker inspect --format 'Container status: {{.State.Status}}; exit code: {{.State.ExitCode}}' "$container" 2>&1 || true
             fi
             docker rm -f "$container" >/dev/null 2>&1 || true
-            rm -f "$response" "$html"
+            rm -f "$response" "$html" "$asset"
           }
           trap cleanup EXIT
 
@@ -117,4 +118,27 @@ jobs:
             --output "$html" http://127.0.0.1:18080/index.html
           grep -q 'prks-classic-head.bundle.js' "$html"
           grep -q 'prks-classic-body.bundle.js' "$html"
-          echo "Production Docker startup, works API and packaged browser shell: PASS"
+
+          # A missing static JS path can return index.html with HTTP 200.
+          # Compare *all* bytes served over HTTP against the corresponding
+          # generated file inside this very production image. MIME/markers alone
+          # would accept a prefix truncated after the first source comment.
+          for bundle in prks-classic-head.bundle.js prks-classic-body.bundle.js; do
+            expected_sha="$(docker exec "$container" python -c \
+              'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
+              "/app/frontend/js/${bundle}")"
+            mime="$(curl --fail --silent --show-error --max-time 5 \
+              --write-out '%{content_type}' --output "$asset" \
+              "http://127.0.0.1:18080/js/${bundle}")"
+            python scripts/ci/check_runtime_smoke.py \
+              --asset bundle "$mime" "$expected_sha" < "$asset"
+          done
+          expected_sha="$(docker exec "$container" python -c \
+            'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
+            /app/frontend/sw.js)"
+          mime="$(curl --fail --silent --show-error --max-time 5 \
+            --write-out '%{content_type}' --output "$asset" \
+            http://127.0.0.1:18080/sw.js)"
+          python scripts/ci/check_runtime_smoke.py \
+            --asset worker "$mime" "$expected_sha" < "$asset"
+          echo "Production Docker startup, works API, byte-matched JS bundles and service worker: PASS"
