@@ -287,6 +287,62 @@ describe('Tags route bridge', () => {
     expect(el.querySelector('[data-tags-refresh-error]')?.textContent).toContain('Could not refresh tags.')
   })
 
+  it('adds a tag alias with Enter, clears the input and retains keyboard focus (#608)', async () => {
+    const add = vi.fn(async () => ({ ok: true }))
+    window.prksTagsAddAlias = add
+    window.prksReloadTagsVocabulary = vi.fn(async () => {})
+    const el = host()
+    presentTags({ owner: owner(), host: el, tags: [ALPHA, BETA], generation: 5 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#tags-page-alias-input')
+    expect(input).not.toBeNull()
+    input!.focus()
+    input!.value = 'Keyboard alias'
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    input!.dispatchEvent(enter)
+    await flush()
+    expect(enter.defaultPrevented).toBe(true)
+    expect(add).toHaveBeenCalledExactlyOnceWith('t1', 'Keyboard alias')
+    expect(input?.value).toBe('')
+    expect(document.activeElement).toBe(input)
+    expect(el.querySelector('#tags-page-alias-modal')).not.toBeNull()
+  })
+
+  it('ignores empty/composing Enter and prevents duplicate in-flight alias writes (#608)', async () => {
+    let finish: ((value: { ok: boolean }) => void) | undefined
+    const add = vi.fn(() => new Promise<{ ok: boolean }>((resolve) => { finish = resolve }))
+    window.prksTagsAddAlias = add
+    window.prksReloadTagsVocabulary = vi.fn(async () => {})
+    const el = host()
+    presentTags({ owner: owner(), host: el, tags: [ALPHA], generation: 5 })
+    el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#tags-page-alias-input')!
+    input.focus()
+    const empty = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    input.dispatchEvent(empty)
+    expect(empty.defaultPrevented).toBe(true)
+    expect(add).not.toHaveBeenCalled()
+
+    input.value = 'Composed'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown',
+      { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))
+    expect(add).not.toHaveBeenCalled()
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(add).toHaveBeenCalledTimes(1)
+    finish?.({ ok: true })
+    await flush()
+    expect(input.value).toBe('')
+    expect(document.activeElement).toBe(input)
+  })
+
   it('shows alias and merge failures in the open dialog and stays quiet for a no-op', async () => {
     const alert = vi.fn()
     window.prksAlertMessage = alert

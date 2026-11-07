@@ -179,6 +179,8 @@ function addAlias(): void {
   if (!tag) return
   const tagId = tag.id
   const draft = aliasDraft.value
+  const input = rootEl.value?.querySelector<HTMLInputElement>('#tags-page-alias-input')
+  const restoreInputFocus = document.activeElement === input
   void withBusy('alias-add', async () => {
     const outcome = await props.intents.addAlias(tagId, draft)
     if (aliasTagId.value !== tagId) return
@@ -186,8 +188,23 @@ function addAlias(): void {
     else if (outcome.status === 'success') {
       aliasAddError.value = ''
       aliasDraft.value = ''
+      // Refresh may replace the alias input. Keep keyboard entry ready for
+      // another alias, but do not steal focus from a different control.
+      if (restoreInputFocus) {
+        void nextTick(() => {
+          if (aliasTagId.value === tagId) focusAliasInput()
+        })
+      }
     }
   })
+}
+
+/** Enter is equivalent to Add alias, except during IME composition. */
+function onAliasInputEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  event.preventDefault()
+  if (!aliasDraft.value.trim()) return
+  addAlias()
 }
 
 function removeAlias(alias: string): void {
@@ -402,6 +419,7 @@ onUnmounted(() => {
               placeholder="New alias…"
               autocomplete="off"
               aria-label="New alias"
+              @keydown.enter="onAliasInputEnter"
               :aria-invalid="aliasAddError ? 'true' : undefined"
               :aria-describedby="aliasAddError ? 'tags-page-alias-add-error' : undefined"
             >
