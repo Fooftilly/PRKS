@@ -18,7 +18,9 @@ from backend.domain.identity import passwords, sessions
 from backend.domain.identity.login import LoginOutcome
 from backend.domain.identity.login_limiter import ClientAddress, LoginLimits, account_key, device_key
 from backend.domain.identity.secret_tokens import LoginDeviceToken
-from tests.pg.identity_fixtures import CLIENT, PASSWORD, CountingHasher, IdentityTestCase, params_of
+from tests.pg.identity_fixtures import (
+    CLIENT, PASSWORD, CountingHasher, IdentityTestCase, dst_crossing_idle, params_of,
+)
 
 OTHER_CLIENT = ClientAddress.resolve("198.51.100.7")
 
@@ -429,6 +431,31 @@ class LoginDeviceTests(IdentityTestCase):
                 result = self.login(password="wrong", device_cookie=cookie)
                 self.assertIs(result.outcome, LoginOutcome.INVALID_CREDENTIALS)
                 self.assertEqual(self.attempts(), {account_key("owner"): 1, CLIENT.key: 1})
+
+    def test_device_lifetime_is_exact_seconds_even_across_dst(self) -> None:
+        self.user("Owner")
+        older = self.first_device()
+        newer = self.first_device()
+        now = self.run_sql("SELECT clock_timestamp() AS t")[0]["t"]
+        lifetime = dst_crossing_idle(now, backwards=True)
+        # Straddle the cutoff by two minutes. Calendar-day arithmetic in
+        # Europe/Berlin shifts that boundary by one hour across DST.
+        for device, minutes in ((older, -2), (newer, 2)):
+            self.run_sql(
+                "UPDATE prks.login_device_tokens SET created_at = "
+                "clock_timestamp() - make_interval(secs => %s) + "
+                "make_interval(mins => %s) WHERE token_sha256 = %s",
+                (lifetime.total_seconds(), minutes, device.digest),
+            )
+        with mock.patch.object(login_module, "DEVICE_TOKEN_LIFETIME", lifetime):
+            with self.in_dst_timezone():
+                self.assertIsNone(login_module._known_device(self.db, older.reveal(), "owner"))
+                self.assertEqual(
+                    login_module._known_device(self.db, newer.reveal(), "owner"), newer
+                )
+                self.assertEqual(self.db.command(login_module.prune_device_tokens), 1)
+        left = self.run_sql("SELECT token_sha256 FROM prks.login_device_tokens")
+        self.assertEqual([bytes(row["token_sha256"]) for row in left], [newer.digest])
 
     def test_prune_removes_only_expired_device_tokens(self) -> None:
         self.user("Owner")

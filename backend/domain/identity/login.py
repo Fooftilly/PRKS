@@ -170,7 +170,7 @@ UPDATE prks.login_device_tokens d
  WHERE d.token_sha256 = %(digest)s
    AND u.id = d.user_id
    AND u.login_key = %(login_key)s
-   AND d.created_at > now() - %(lifetime)s
+   AND d.created_at > now() - make_interval(secs => %(lifetime_seconds)s)
 RETURNING d.user_id
 """
 
@@ -185,7 +185,11 @@ def _known_device(
     row = db.command(
         lambda tx: tx.execute(
             _TOUCH_DEVICE_SQL,
-            {"digest": token.digest, "login_key": login_key, "lifetime": DEVICE_TOKEN_LIFETIME},
+            {
+                "digest": token.digest,
+                "login_key": login_key,
+                "lifetime_seconds": DEVICE_TOKEN_LIFETIME.total_seconds(),
+            },
         ).fetchone()
     )
     return token if row is not None else None
@@ -225,8 +229,9 @@ def revoke_device_tokens(tx: Transaction, user_id: str) -> int:
 def prune_device_tokens(tx: Transaction) -> int:
     """Delete device tokens past their lifetime (the ``sessions.prune`` job)."""
     return tx.execute(
-        "DELETE FROM prks.login_device_tokens WHERE created_at <= now() - %s",
-        (DEVICE_TOKEN_LIFETIME,),
+        "DELETE FROM prks.login_device_tokens "
+        "WHERE created_at <= now() - make_interval(secs => %s)",
+        (DEVICE_TOKEN_LIFETIME.total_seconds(),),
     ).rowcount
 
 

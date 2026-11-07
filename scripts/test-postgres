@@ -146,7 +146,8 @@ start_local() {
   port="$(free_port)"
   echo "test-postgres: starting a throwaway PostgreSQL $major cluster" >&2
   "${as[@]}" "$bindir/initdb" -D "$base/data" -U postgres --auth=trust \
-    --locale-provider=builtin --builtin-locale=C.UTF-8 --encoding=UTF8 >/dev/null || {
+    --locale-provider=builtin --builtin-locale=C.UTF-8 --encoding=UTF8 \
+    --set timezone=UTC >/dev/null || {
     echo "test-postgres: initdb failed" >&2
     return 1
   }

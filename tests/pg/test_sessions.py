@@ -10,7 +10,7 @@ from datetime import timedelta
 from backend.domain.identity import sessions
 from backend.domain.identity.secret_tokens import LoginDeviceToken, SessionToken
 from backend.domain.identity.sessions import SessionConfigError
-from tests.pg.identity_fixtures import IdentityTestCase
+from tests.pg.identity_fixtures import IdentityTestCase, dst_crossing_idle
 
 
 class SecretTokenTests(unittest.TestCase):
@@ -63,6 +63,42 @@ class SessionTests(IdentityTestCase):
             "FROM prks.sessions WHERE id = %s",
             (session.session_id,),
         )[0]
+
+    def test_utc_session_setting_on_pooled_connections(self) -> None:
+        self.assertEqual(
+            self.run_sql("SELECT current_setting('TimeZone') AS zone"),
+            [{"zone": "UTC"}],
+        )
+
+    def test_create_expiry_is_exact_seconds_even_across_dst(self) -> None:
+        now = self.run_sql("SELECT clock_timestamp() AS t")[0]["t"]
+        idle = dst_crossing_idle(now)
+        with self.in_dst_timezone():
+            self.assertEqual(
+                self.run_sql("SELECT current_setting('TimeZone') AS zone"),
+                [{"zone": "Europe/Berlin"}],
+            )
+            created = self.new(idle=idle)
+        self.assertEqual(self.row(created)["idle"], idle)
+
+    def test_renewal_expiry_is_exact_seconds_even_across_dst(self) -> None:
+        created = self.new()
+        self.run_sql(
+            "UPDATE prks.sessions SET last_used_at = now() - interval '2 minutes', "
+            "expires_at = now() + interval '5 minutes' WHERE id = %s",
+            (created.session_id,),
+        )
+        now = self.run_sql("SELECT clock_timestamp() AS t")[0]["t"]
+        idle = dst_crossing_idle(now)
+        with self.in_dst_timezone():
+            renewed = sessions.resolve_session(self.db, created.token.reveal(), idle=idle)
+        self.assertIsNotNone(renewed)
+        row = self.row(created)
+        self.assertAlmostEqual(
+            (row["expires_at"] - row["last_used_at"]).total_seconds(),
+            idle.total_seconds(),
+            delta=1.0,  # separate clock_timestamp() calls in the UPDATE
+        )
 
     def test_create_and_resolve(self) -> None:
         created = self.new()

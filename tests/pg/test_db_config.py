@@ -107,6 +107,7 @@ class DatabaseConfigTests(unittest.TestCase):
             config.session_settings(),
             {
                 "search_path": "prks, ext",
+                "TimeZone": "UTC",
                 "statement_timeout": "30000",
                 "lock_timeout": "5000",
                 "idle_in_transaction_session_timeout": "60000",

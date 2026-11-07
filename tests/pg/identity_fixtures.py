@@ -7,7 +7,11 @@ import logging
 import threading
 import unittest
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from typing import Any, Optional
+from unittest import mock
+from zoneinfo import ZoneInfo
 
 from argon2 import PasswordHasher, extract_parameters
 
@@ -20,6 +24,23 @@ from tests.pg.harness import PostgresHarness, get_harness
 
 PASSWORD = "a long enough passphrase"
 CLIENT = ClientAddress.resolve("192.0.2.10")
+DST_ZONE = "Europe/Berlin"
+
+
+def dst_crossing_idle(now: datetime, *, backwards: bool = False) -> timedelta:
+    """An integer-day duration crossing a DST boundary in either direction.
+
+    Compute from an aware PostgreSQL clock reading, so the tests remain
+    independent of the CI date and the host/server timezone.
+    """
+    zone = ZoneInfo(DST_ZONE)
+    offset = now.astimezone(zone).utcoffset()
+    direction = -1 if backwards else 1
+    for days in range(1, 367):
+        candidate = now + timedelta(days=direction * days)
+        if candidate.astimezone(zone).utcoffset() != offset:
+            return timedelta(days=days)
+    raise AssertionError("Europe/Berlin has no DST change within one year")
 
 
 class CountingHasher(PasswordHasher):
@@ -77,6 +98,21 @@ class IdentityTestCase(unittest.TestCase):
         root_logger.setLevel(logging.DEBUG)
         self.addCleanup(root_logger.removeHandler, handler)
         self.addCleanup(root_logger.setLevel, previous)
+
+    @contextmanager
+    def in_dst_timezone(self):
+        """Override the pooled UTC setting within each test transaction only."""
+        original_command = self.db.command
+
+        def with_zone(fn: Any, **kwargs: Any) -> Any:
+            def run(tx: Any) -> Any:
+                tx.execute("SELECT set_config('TimeZone', %s, true)", (DST_ZONE,))
+                return fn(tx)
+
+            return original_command(run, **kwargs)
+
+        with mock.patch.object(self.db, "command", side_effect=with_zone):
+            yield
 
     def open_db(self, pool_max: int = 4) -> Database:
         db = Database(
