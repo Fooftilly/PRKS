@@ -164,5 +164,23 @@
     "text": "[[concept-encoded:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]]",
     "concepts": [],
     "arguments": []
+  },
+  {
+    "id": "encoded-tab-control-rejected",
+    "text": "[[concept-encoded:Name%09Tab]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-del-control-rejected",
+    "text": "[[concept-encoded:Name%7FDel]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-nel-control-rejected",
+    "text": "[[concept-encoded:Name%C2%85Next]]",
+    "concepts": [],
+    "arguments": []
   }
 ]
