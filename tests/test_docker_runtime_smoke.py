@@ -175,6 +175,21 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, source)
 
+        # The SHA arguments are meaningful only if passed to the validator.
+        # Match the complete shell invocation, not free-floating fragments.
+        for kind in ("bundle", "worker"):
+            command = (
+                'python scripts/ci/check_runtime_smoke.py \\'
+                + '\n'
+                + f'            --asset {kind} "$mime" "$expected_sha" < "$asset"'
+            )
+            with self.subTest(kind=kind):
+                self.assertIn(command, source)
+                self.assertNotIn(
+                    command,
+                    source.replace("python scripts/ci/check_runtime_smoke.py \\", "true \\"),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
