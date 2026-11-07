@@ -20,7 +20,7 @@ class WorkBibTeXClipboardTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + "\n" + result.stderr)
-        self.assertIn("7 passed, 0 failed", result.stdout)
+        self.assertIn("8 passed, 0 failed", result.stdout)
 
 
 if __name__ == "__main__":

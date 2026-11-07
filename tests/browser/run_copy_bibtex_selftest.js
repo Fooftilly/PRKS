@@ -76,7 +76,7 @@ async function main() {
     assert.equal(attempted, 0, 'empty helper calls never write to clipboard');
     delete global.prksCopyTextToClipboard;
     await assert.rejects(prksCopyBibTeXToClipboard('@book{W1}'), /Clipboard helper unavailable/);
-    console.log('BibTeX clipboard: 7 passed, 0 failed');
+    console.log('BibTeX clipboard: 8 passed, 0 failed');
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });
