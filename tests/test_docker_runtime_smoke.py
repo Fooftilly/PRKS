@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.ci.check_runtime_smoke import (
-    main, valid_browser_asset, valid_initial_works_catalog,
+    main, valid_browser_asset, valid_initial_works_catalog, valid_vue_entry_html,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -162,6 +162,54 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                     with mock.patch("sys.stdin", stdin):
                         self.assertEqual(main(["--asset", "vue", mime, sha]), code)
 
+    def test_served_html_requires_active_vue_module_not_comment_or_inert_markup(self):
+        tag = '<script type="module" src="/vue/prks-vue.js"></script>'
+        html = f"<!doctype html><html><body>{tag}</body></html>"
+        self.assertTrue(valid_vue_entry_html(html))
+        # The original reviewer finding: string search accepts the comment
+        # even though a browser would not load the Vue application.
+        for label, body in (
+            ("commented-out script", f"<!-- {tag} -->"),
+            ("commented script in actual page", None),
+            ("template", f"<template>{tag}</template>"),
+            ("noscript", f"<noscript>{tag}</noscript>"),
+            ("textarea", f"<textarea>{tag}</textarea>"),
+            ("style", f"<style>{tag}</style>"),
+            ("wrong type", '<script type="text/plain" src="/vue/prks-vue.js"></script>'),
+            ("wrong source", '<script type="module" src="/vue/other.js"></script>'),
+            ("duplicate script", tag + tag),
+            ("missing closing tag", tag.replace("</script>", "")),
+            ("duplicate type attributes", '<script type="text/plain" type="module" src="/vue/prks-vue.js"></script>'),
+        ):
+            if body is None:
+                # Exercise the exact reviewed HTML mutation against the real
+                # source page, including all its other scripts and markup.
+                original = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+                self.assertEqual(original.count(tag), 1)
+                body = original.replace(tag, f"<!-- {tag} -->")
+            with self.subTest(case=label):
+                self.assertFalse(valid_vue_entry_html(body))
+        self.assertTrue(valid_vue_entry_html((ROOT / "frontend/index.html").read_text(encoding="utf-8")))
+        # Attribute order and quoting are not executable semantics.
+        self.assertTrue(valid_vue_entry_html(
+            "<script src='/vue/prks-vue.js' type='MODULE'></script>"
+        ))
+        self.assertTrue(valid_vue_entry_html(f"<!-- {tag} -->" + html))
+        self.assertFalse(valid_vue_entry_html("x" * (256 * 1024 + 1)))
+
+    def test_html_cli_fails_closed_when_vue_script_is_commented_out(self):
+        tag = '<script type="module" src="/vue/prks-vue.js"></script>'
+        for body, expected in (
+            (f"<html><body>{tag}</body></html>", 0),
+            (f"<!-- {tag} -->", 1),
+            (f"<template>{tag}</template>", 1),
+            ("<html><body>no Vue module</body></html>", 1),
+            ("x" * (256 * 1024 + 1), 1),
+        ):
+            with self.subTest(body=body[:60]):
+                with mock.patch("sys.stdin", io.StringIO(body)):
+                    self.assertEqual(main(["--html"]), expected)
+
     def test_asset_validation_invocations_are_live_and_fail_closed(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         # Pin executable commands and their continuation arguments together:
@@ -183,6 +231,17 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                 )
                 self.assertNotEqual(without_validator, source)
                 self.assertNotIn(invocation, without_validator)
+
+    def test_html_validation_invocation_cannot_revert_to_text_grep(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        invocation = '          python scripts/ci/check_runtime_smoke.py --html < "$html"'
+        self.assertEqual(source.count(invocation), 1)
+        # Regression for Devin's finding: a grep substring check would pass
+        # when the module tag is inside an HTML comment.
+        self.assertNotIn('grep -Fq', source)
+        without_validator = source.replace(invocation, '          : < "$html"')
+        self.assertNotEqual(without_validator, source)
+        self.assertNotIn(invocation, without_validator)
 
     def test_workflow_is_nonrequired_and_narrowly_triggered(self):
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -220,7 +279,7 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "http://127.0.0.1:18080/sw.js",
             "http://127.0.0.1:18080/vue/prks-vue.js",
             "/app/frontend/vue/prks-vue.js",
-            "grep -Fq '<script type=\"module\" src=\"/vue/prks-vue.js\"></script>' \"$html\"",
+            'python scripts/ci/check_runtime_smoke.py --html < "$html"',
             '--asset vue "$mime" "$expected_sha" < "$asset"',
             '--asset bundle "$mime" "$expected_sha" < "$asset"',
             '--asset worker "$mime" "$expected_sha" < "$asset"',

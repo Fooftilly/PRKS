@@ -126,8 +126,9 @@ jobs:
             --output "$html" http://127.0.0.1:18080/index.html
           grep -q 'prks-classic-head.bundle.js' "$html"
           grep -q 'prks-classic-body.bundle.js' "$html"
-          # Vue owns the visible app shell: require its production module entry.
-          grep -Fq '<script type="module" src="/vue/prks-vue.js"></script>' "$html"
+          # Check a real executable script element, not a string in an HTML
+          # comment, template, or other inert markup.
+          python scripts/ci/check_runtime_smoke.py --html < "$html"
 
           # A missing static JS path can return index.html with HTTP 200.
           # Compare *all* bytes served over HTTP against the corresponding

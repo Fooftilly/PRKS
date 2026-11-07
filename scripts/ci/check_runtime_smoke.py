@@ -12,8 +12,10 @@ import hashlib
 import json
 import re
 import sys
+from html.parser import HTMLParser
 
 MAX_RESPONSE_CHARS = 65536
+MAX_HTML_CHARS = 256 * 1024
 MAX_ASSET_BYTES = 8 * 1024 * 1024
 MIN_ASSET_BYTES = 128
 JAVASCRIPT_TYPES = frozenset({"text/javascript", "application/javascript"})
@@ -51,6 +53,67 @@ def valid_browser_asset(
     return hashlib.sha256(raw).hexdigest() == expected_sha256
 
 
+# HTML comments and inert containers can contain script-shaped text that never
+# executes in the browser. Match complete script elements, not substrings.
+_INERT_HTML_ELEMENTS = frozenset({"template", "noscript", "textarea", "title", "style"})
+
+
+class _VueEntrypointParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._inert: list[str] = []
+        self._pending_vue = False
+        self._malformed_inert = False
+        self.vue_entries = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _INERT_HTML_ELEMENTS:
+            self._inert.append(tag)
+        if tag != "script":
+            return
+        # Duplicate attributes are ambiguous in a browser; fail closed rather
+        # than accepting the last value from dict(attrs).
+        names = [name for name, _ in attrs]
+        attributes = dict(attrs)
+        value = attributes.get("type")
+        self._pending_vue = (
+            not self._inert
+            and len(names) == len(set(names))
+            and isinstance(value, str)
+            and value.strip().lower() == "module"
+            and attributes.get("src") == "/vue/prks-vue.js"
+        )
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            if self._pending_vue:
+                self.vue_entries += 1
+            self._pending_vue = False
+        elif tag in _INERT_HTML_ELEMENTS:
+            if self._inert and self._inert[-1] == tag:
+                self._inert.pop()
+            else:
+                self._malformed_inert = True
+
+
+def valid_vue_entry_html(raw: str) -> bool:
+    """Require one executable Vue module tag in the served production HTML."""
+    if not isinstance(raw, str) or not raw or len(raw) > MAX_HTML_CHARS:
+        return False
+    parser = _VueEntrypointParser()
+    try:
+        parser.feed(raw)
+        parser.close()
+    except (ValueError, AssertionError):
+        return False
+    return (
+        parser.vue_entries == 1
+        and not parser._pending_vue
+        and not parser._inert
+        and not parser._malformed_inert
+    )
+
+
 def valid_initial_works_catalog(raw: str) -> bool:
     try:
         response = json.loads(raw)
@@ -64,10 +127,11 @@ def main(argv: list[str] | None = None) -> int:
     kind = None
     content_type = ""
     expected_sha256 = ""
-    if args:
+    check_html = args == ["--html"]
+    if args and not check_html:
         if len(args) != 4 or args[0] != "--asset" or args[1] not in ("bundle", "worker", "vue"):
             print(
-                "usage: check_runtime_smoke.py [--asset bundle|worker|vue MIME SHA256] < RESPONSE",
+                "usage: check_runtime_smoke.py [--html | --asset bundle|worker|vue MIME SHA256] < RESPONSE",
                 file=sys.stderr,
             )
             return 2
@@ -79,6 +143,12 @@ def main(argv: list[str] | None = None) -> int:
             raw_bytes = sys.stdin.buffer.read(MAX_ASSET_BYTES + 1)
             if not valid_browser_asset(raw_bytes, content_type, kind, expected_sha256):
                 print("runtime smoke served an invalid browser asset", file=sys.stderr)
+                return 1
+        elif check_html:
+            # index.html is much larger than the small API JSON response.
+            html = sys.stdin.read(MAX_HTML_CHARS + 1)
+            if not valid_vue_entry_html(html):
+                print("runtime smoke HTML lacks an active Vue module entry", file=sys.stderr)
                 return 1
         else:
             raw = sys.stdin.read(MAX_RESPONSE_CHARS + 1)
