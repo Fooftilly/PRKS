@@ -364,7 +364,7 @@ def update_concept(db: PRKSDatabase, concept_id: str, *, name=None, description=
 def _canonical_notes_reference_concept(conn: sqlite3.Connection, concept_id: str) -> bool:
     for r in _fetchall(conn, "SELECT text_content FROM works"):
         text = r["text_content"] or ""
-        if "[[concept:" not in text:
+        if "[[concept:" not in text and "[[concept-encoded:" not in text:
             continue
         markup = parse_research_markup(text)
         for ref in markup.concept_refs:

@@ -253,7 +253,10 @@ def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[Conce
         decoded = unquote(body, encoding="utf-8", errors="strict")
     except UnicodeDecodeError:
         return None
-    if any(unicodedata.category(ch) == "Cc" for ch in decoded):
+    # Concept creation rejects C0 controls and DEL, but permits C1 (except
+    # U+0085, which canonical_concept_name folds to a space). Keep both
+    # boundaries aligned so existing valid names remain referenceable.
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in decoded):
         return None
     name = canonical_concept_name(decoded)
     if not name or len(name) > CONCEPT_REF_MAX:

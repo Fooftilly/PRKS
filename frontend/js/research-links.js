@@ -16,8 +16,8 @@
     function canonicalConceptName(raw) {
         return String(raw == null ? '' : raw)
             .normalize('NFC')
-            .trim()
-            .replace(/\s+/g, ' ');
+            .replace(/[\s\u0085]+/g, ' ')
+            .trim();
     }
 
     function normalizeConceptKey(raw) {
@@ -203,7 +203,8 @@
         try {
             decoded = decodeURIComponent(body);
         } catch (_e) { return null; }
-        if (/[\u0000-\u001f\u007f-\u009f]/.test(decoded)) return null;
+        // Match the accepted Concept names: C1 characters are not forbidden.
+        if (/[\u0000-\u001f\u007f]/.test(decoded)) return null;
         const name = canonicalConceptName(decoded);
         if (!name || Array.from(name).length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end),
@@ -248,8 +249,12 @@
             .replace(/'/g, '&#39;');
     }
 
-    function replaceResearchRefs(plainText, refs) {
+    function replaceResearchRefs(plainText, refs, transformPlain) {
         if (plainText == null || plainText === '') return plainText;
+        // Apply later wiki/PDF passes only to raw note spans. Concept labels
+        // rendered below must not become input to another marker parser.
+        const renderPlain = typeof transformPlain === 'function'
+            ? transformPlain : function (text) { return text; };
         const map = refs || {};
         const concepts = {};
         const argumentsMap = {};
@@ -280,7 +285,7 @@
             return a.start - b.start;
         });
         events.forEach(function (ev) {
-            parts.push(plainText.slice(cursor, ev.start));
+            parts.push(renderPlain(plainText.slice(cursor, ev.start)));
             if (ev.kind === 'concept') {
                 const rec = concepts[normalizeConceptKey(ev.ref.name)];
                 if (rec && rec.id) {
@@ -318,7 +323,7 @@
             }
             cursor = ev.end;
         });
-        parts.push(plainText.slice(cursor));
+        parts.push(renderPlain(plainText.slice(cursor)));
         return parts.join('');
     }
 

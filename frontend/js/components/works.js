@@ -441,7 +441,7 @@ function prksGetWikiLinkAutocompleteContext(cm) {
     const startCh = openAt + 2;
     const query = before.slice(startCh);
     if (/[\]|]/.test(query)) return null;
-    if (/^(pdf:|concept:|argument:)/i.test(query)) return null;
+    if (/^(pdf:|concept:|concept-encoded:|argument:)/i.test(query)) return null;
     const CM = cm.constructor;
     const from = CM.Pos(cur.line, startCh);
     const to = cur;
@@ -553,7 +553,7 @@ function prksReplaceWikiMarkersWithLinks(plainText, titleLowerToId) {
     const map = titleLowerToId || {};
     return plainText.replace(/\[\[([^\]]+)\]\]/g, (full, inner) => {
         const trimmed = String(inner).trim();
-        if (/^(concept:|argument:|pdf:)/i.test(trimmed)) return full;
+        if (/^(concept:|concept-encoded:|argument:|pdf:)/i.test(trimmed)) return full;
         let target;
         let label;
         const pipe = trimmed.indexOf('|');
@@ -742,12 +742,26 @@ function prksFilterConceptsForHint(query, cm) {
     return pref.concat(sub.slice(0, PRKS_WIKI_HINT_MAX - pref.length));
 }
 
+/**
+ * Preview passes must run only on literal note segments, never on a generated
+ * Concept/Argument label. An encoded Concept name may itself contain [[Work]]
+ * or [[pdf:id]], which otherwise becomes a nested, incorrect link.
+ */
+function prksRenderResearchNotesLinks(plainText, refs, titleLowerToId) {
+    const replacePlain = (raw) => prksReplaceWikiMarkersWithLinks(
+        prksReplacePdfAnnotationWikiMarkers(raw), titleLowerToId
+    );
+    return typeof window.prksReplaceResearchRefs === 'function'
+        ? window.prksReplaceResearchRefs(plainText, refs, replacePlain)
+        : replacePlain(plainText);
+}
+
 /** Use a distinct marker for names containing syntax delimiters. A legacy
  * [[concept:Name]] keeps its exact backslash/bracket meaning. URL encoding
  * only appears in the new marker, never in an existing Concept key. */
 function prksFormatConceptMarkup(name) {
     const value = String(name == null ? '' : name);
-    return /(?:\[\[|\]\]|\\)/.test(value)
+    return /(?:\[\[|\]\]|\\|\]$)/.test(value)
         ? '[[concept-encoded:' + encodeURIComponent(value) + ']]'
         : '[[concept:' + value + ']]';
 }
@@ -1284,12 +1298,7 @@ function initEasyMDE(ctx, work, ticket) {
                 (_cwPrev && _cwPrev.id === work.id && _cwPrev.research_refs) ||
                 work.research_refs ||
                 {};
-            let t = plainText;
-            if (typeof window.prksReplaceResearchRefs === 'function') {
-                t = window.prksReplaceResearchRefs(t, refs);
-            }
-            t = prksReplacePdfAnnotationWikiMarkers(t);
-            t = prksReplaceWikiMarkersWithLinks(t, titleLowerToId);
+            const t = prksRenderResearchNotesLinks(plainText, refs, titleLowerToId);
             return prksSanitizeMarkdownPreviewHtml(easyMDE.markdown(t));
         },
     });
@@ -2415,6 +2424,7 @@ if (typeof module !== 'undefined' && module.exports) {
         prksGetWikiLinkAutocompleteContext,
         prksFilterWorksForWikiHint,
         prksFormatConceptMarkup,
+        prksRenderResearchNotesLinks,
         prksGetConceptLinkAutocompleteContext,
         prksConceptLinkCompletionPick,
         prksConceptPickerOptions,

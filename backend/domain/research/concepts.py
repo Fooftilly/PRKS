@@ -219,7 +219,8 @@ WHERE library_id = %(library_id)s AND (child_concept_id = %(concept_id)s OR pare
 """
 _RESEARCH_NOTES_SQL: LiteralString = """
 SELECT body FROM prks.work_notes
-WHERE library_id = %(library_id)s AND kind = 'research' AND strpos(body, '[[concept:') > 0
+WHERE library_id = %(library_id)s AND kind = 'research'
+  AND (strpos(body, '[[concept:') > 0 OR strpos(body, '[[concept-encoded:') > 0)
 """
 _SHARE_REFERENCED_SQL: LiteralString = """
 SELECT c.id FROM prks.concepts c

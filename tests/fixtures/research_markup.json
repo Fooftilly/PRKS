@@ -178,9 +178,9 @@
     "arguments": []
   },
   {
-    "id": "encoded-nel-control-rejected",
+    "id": "encoded-nel-normalized-to-space",
     "text": "[[concept-encoded:Name%C2%85Next]]",
-    "concepts": [],
+    "concepts": ["Name Next"],
     "arguments": []
   },
   {
@@ -196,6 +196,22 @@
     "text": "[[concept-encoded:%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80]]",
     "concepts": [
       "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-c1-valid",
+    "text": "[[concept-encoded:Foo%5CBar%C2%91]]",
+    "concepts": [
+      "Foo\\Bar"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-trailing-bracket",
+    "text": "[[concept-encoded:Foucault%20%5B1977%5D]]",
+    "concepts": [
+      "Foucault [1977]"
     ],
     "arguments": []
   }
