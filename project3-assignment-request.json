@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 784,
+      "number": 410,
       "set": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
@@ -14,12 +14,12 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "P2 data-integrity defect: stale Concept alias save overwrites another tab's aliases. Verified current master frontend-app/src/features/concepts/intents.ts editAliases and frontend/js/api.js putConceptAliases still measure base at save; dedicated two-tab regression and scope; no native blockers or open overlapping PR. Route to ChatGPT/Codex for focused implementation review, no auto-merge.",
+      "reason": "Accepted existing P3 bug: Concept/Position markdown helper still appends a hidden EasyMDE textarea to body, leaving a visible sibling editor that shrinks every page. Small frontend/js/components/concepts.js and DOM regression slice; independent of SQLite, PG-C1/C2, and open PR files; no native blockers.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 571,
+      "number": 532,
       "set": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
@@ -30,12 +30,12 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "P3 isolated Tags Vue merge-dialog correctness: current TagsRoute.vue confirmMerge still keeps modal active after successful intent; reproduce with one/double submit and 500 retry; no native blockers or open overlapping PR. ChatGPT/Codex can add bounded UI state and tests, no auto-merge.",
+      "reason": "Maintainer-selected accepted safety/UX issue: recovery Review copy calls window.prksCopyTextToClipboard, which is not exposed by the shipped runtime. Restore one canonical clipboard helper and real-browser Copy text/current/edited regression. Survives PostgreSQL cutover, no overlapping open PR or native blockers.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 610,
+      "number": 608,
       "set": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
@@ -46,12 +46,12 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "P3 distinct Folder tag double-activation sync defect: current folder-tag-editor.js creates actionable onmousedown without second-click guard; fix durable command handling and regression on duplicate input/409 without redesign; no native blockers or active overlapping PR.",
+      "reason": "Maintainer-selected accepted P3 UX issue: current Vue TagsRoute alias input has no Enter handler even though Add alias action exists. Add guarded Enter semantics, retain focus, tests. Independent of PostgreSQL backend and open PRs, no native blockers.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 809,
+      "number": 1076,
       "set": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
@@ -62,7 +62,7 @@
         "Status": "Inbox",
         "Execution": null
       },
-      "reason": "P3 bounded Research Notes markup correctness: current components/works.js inserts raw [[concept: + name + ]] with no delimiter validation; reproduce with ]] names, choose consistent safe validation/escaping across create/rename/picker, retain unrelated link semantics; no native blockers or overlapping active PR.",
+      "reason": "Maintainer-selected accepted P3 PostgreSQL-surviving frontend bug: current Work BibTeX copy reports success after HTTP 200 empty body without invoking clipboard. Add explicit empty-result failure and focused regression; no backend SQLite changes, native blockers, or active PR overlap.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
