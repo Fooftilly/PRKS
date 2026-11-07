@@ -1385,15 +1385,6 @@ write:
   recreate them, because a reindex whose Work is gone writes nothing
   (§8.4).
 
-Research-note parser upgrades can change the meaning of derived mention
-offsets without changing the note body or its content hash. After deploying
-a parser grammar update, run the supported
-prks admin rebuild-derived --only research command for each affected Library,
-so unchanged notes receive a full mention reindex. This is the existing
-rebuild transaction and job path, not a new index writer. The SQLite-derived
-research index uses its schema version to force recreation on a grammar change;
-PostgreSQL has no parser-version column in its work_note_state hash fence.
-
 Every batch recomputes from the canonical rows current when it runs, so a
 rebuild is idempotent and safe to retry: an interrupted run resumes from
 the stored `work_id`, or starts over, and either way leaves only rows that

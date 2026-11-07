@@ -23,9 +23,7 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger("prks.research_index")
 
-# Parsed mention offsets depend on the Research Notes grammar, not just the
-# canonical note content hash. Rebuild the disposable index on parser changes.
-RESEARCH_INDEX_SCHEMA_VERSION = 2
+RESEARCH_INDEX_SCHEMA_VERSION = 1
 _SNIPPET_RADIUS = 80
 
 _CURRENT_TABLES = frozenset(
