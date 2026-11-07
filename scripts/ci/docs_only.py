@@ -2,7 +2,7 @@
 
 Only A/M changes to an explicit audited subset of Wiki Markdown qualify. Missing/invalid baselines,
 renames, deletes, workflow or test changes, and unreadable diffs fail closed to
-ordinary full validation. The initial slice applies this to the required unit gate.
+ordinary full validation across the required CI workflows.
 """
 
 from __future__ import annotations
@@ -13,11 +13,15 @@ import re
 import subprocess
 from pathlib import Path
 
-# Only the published user-facing wiki has been audited as documentation-only.
+# Only these four wiki pages have been audited as documentation-only. The
+# Getting Started / Offline and Sync pages are not read as source or test
+# fixtures; their relative links are covered by the docs validator.
 # README, licensing/agent guidance and implementation architecture documents
 # are read as fixtures by tests and must continue to run full validation.
 AUDITED_DOC_FILES = frozenset({
+    "docs/wiki/Getting-Started.md",
     "docs/wiki/Glossary.md",
+    "docs/wiki/Offline-and-Sync.md",
     "docs/wiki/Troubleshooting.md",
 })
 _SHA = re.compile(r"[0-9a-fA-F]{40}\Z")

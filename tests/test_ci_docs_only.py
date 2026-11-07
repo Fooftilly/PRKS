@@ -35,6 +35,8 @@ def _repo(root: Path) -> str:
     _write(root, "README.md", "# Welcome\n")
     _write(root, "docs/guide.md", "# Guide\n")
     _write(root, "docs/wiki/Glossary.md", "# Glossary\n")
+    _write(root, "docs/wiki/Getting-Started.md", "# Getting Started\n")
+    _write(root, "docs/wiki/Offline-and-Sync.md", "# Offline and Sync\n")
     _write(root, "backend/app.py", "print('ok')\n")
     _write(root, "AGENTS.md", "Rules\n")
     _git(root, "add", ".")
@@ -44,7 +46,10 @@ def _repo(root: Path) -> str:
 
 class DocsOnlyCIClassifierTests(unittest.TestCase):
     def test_approved_paths_only(self):
-        approved = ("docs/wiki/Glossary.md", "docs/wiki/Troubleshooting.md")
+        approved = (
+            "docs/wiki/Getting-Started.md", "docs/wiki/Glossary.md",
+            "docs/wiki/Offline-and-Sync.md", "docs/wiki/Troubleshooting.md",
+        )
         rejected = (
             "AGENTS.md", "docs/AGENTS.md", "DESIGN.md", "README.md",
             "CONTRIBUTING.md", "SECURITY.md", "docs/agent-rules/offline-pwa.md",
@@ -65,6 +70,20 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             ("root docs test fixture", {"README.md": "# Changed\n"}, False),
             ("implementation docs", {"docs/guide.md": "# Updated\n"}, False),
             ("audited wiki docs", {"docs/wiki/Glossary.md": "# Updated\n"}, True),
+            ("getting started", {"docs/wiki/Getting-Started.md": "# Updated\n"}, True),
+            ("offline sync", {"docs/wiki/Offline-and-Sync.md": "# Updated\n"}, True),
+            ("two vetted wiki docs", {
+                "docs/wiki/Getting-Started.md": "# Updated\n",
+                "docs/wiki/Offline-and-Sync.md": "# Updated\n",
+            }, True),
+            ("vetted wiki with code", {
+                "docs/wiki/Getting-Started.md": "# Updated\n",
+                "backend/app.py": "print('changed')\n",
+            }, False),
+            ("vetted wiki with non-audited doc", {
+                "docs/wiki/Offline-and-Sync.md": "# Updated\n",
+                "docs/wiki/User-Guide.md": "# Updated\n",
+            }, False),
             ("new wiki docs", {"docs/wiki/New.md": "# New\n"}, False),
             ("agent rule fixture", {"docs/agent-rules/offline-pwa.md": "# New\n"}, False),
             ("feature docs fixture", {"docs/wiki/User-Guide.md": "# Edited\n"}, False),
@@ -88,16 +107,18 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertIsNone(changed_documentation(root, "not-a-valid-sha"))
 
     def test_deleted_or_renamed_markdown_is_not_safe_skip(self):
-        for kind in ("delete", "rename"):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as folder:
-                root = Path(folder)
-                base = _repo(root)
-                if kind == "delete":
-                    _git(root, "rm", "docs/wiki/Glossary.md")
-                else:
-                    _git(root, "mv", "docs/wiki/Glossary.md", "docs/wiki/Other.md")
-                _git(root, "commit", "-qm", "change")
-                self.assertIsNone(changed_documentation(root, base))
+        for page in ("Glossary", "Getting-Started", "Offline-and-Sync"):
+            for kind in ("delete", "rename"):
+                with self.subTest(page=page, kind=kind), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    base = _repo(root)
+                    original = f"docs/wiki/{page}.md"
+                    if kind == "delete":
+                        _git(root, "rm", original)
+                    else:
+                        _git(root, "mv", original, "docs/wiki/Other.md")
+                    _git(root, "commit", "-qm", "change")
+                    self.assertIsNone(changed_documentation(root, base))
 
 
 class DocsOnlyWorkflowTests(unittest.TestCase):
