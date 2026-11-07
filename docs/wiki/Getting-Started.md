@@ -27,7 +27,7 @@ A different loopback port can be selected with `--port`. To make PRKS reachable 
 ./.venv/bin/python prks_app.py --testing
 ```
 
-Testing mode uses port 8070 by default and, when `PRKS_STORAGE` is not set, isolates data under `data_testing/`. It contains safety checks intended to prevent tests from binding to the normal repository `data/` tree.
+Testing mode listens on `127.0.0.1:8070` by default. Open `http://127.0.0.1:8070` in a browser. When `PRKS_STORAGE` is not set, it isolates data under `data_testing/`. It contains safety checks intended to prevent tests from binding to the normal repository `data/` tree.
 
 Use testing mode for browser automation, demo data, screenshots, and destructive experiments.
 
