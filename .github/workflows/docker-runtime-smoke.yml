@@ -17,6 +17,10 @@ on:
       - prks_app.py
       - scripts/ci/check_runtime_smoke.py
       - tests/test_docker_runtime_smoke.py
+      - frontend/index.html
+      - frontend/sw.js
+      - frontend/vue/prks-vue.js
+      - scripts/build_classic_distribution.py
       - .github/workflows/docker-runtime-smoke.yml
   push:
     branches:
@@ -34,6 +38,10 @@ on:
       - prks_app.py
       - scripts/ci/check_runtime_smoke.py
       - tests/test_docker_runtime_smoke.py
+      - frontend/index.html
+      - frontend/sw.js
+      - frontend/vue/prks-vue.js
+      - scripts/build_classic_distribution.py
       - .github/workflows/docker-runtime-smoke.yml
   workflow_dispatch:
 
@@ -118,6 +126,8 @@ jobs:
             --output "$html" http://127.0.0.1:18080/index.html
           grep -q 'prks-classic-head.bundle.js' "$html"
           grep -q 'prks-classic-body.bundle.js' "$html"
+          # Vue owns the visible app shell: require its production module entry.
+          grep -Fq '<script type="module" src="/vue/prks-vue.js"></script>' "$html"
 
           # A missing static JS path can return index.html with HTTP 200.
           # Compare *all* bytes served over HTTP against the corresponding
@@ -133,6 +143,16 @@ jobs:
             python scripts/ci/check_runtime_smoke.py \
               --asset bundle "$mime" "$expected_sha" < "$asset"
           done
+          # Vue is shipped separately from the classic bundles. Confirm the
+          # HTTP asset matches the actual Vue build bytes inside this image.
+          expected_sha="$(docker exec "$container" python -c \
+            'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
+            /app/frontend/vue/prks-vue.js)"
+          mime="$(curl --fail --silent --show-error --max-time 5 \
+            --write-out '%{content_type}' --output "$asset" \
+            http://127.0.0.1:18080/vue/prks-vue.js)"
+          python scripts/ci/check_runtime_smoke.py \
+            --asset vue "$mime" "$expected_sha" < "$asset"
           expected_sha="$(docker exec "$container" python -c \
             'import hashlib,sys; from pathlib import Path; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
             /app/frontend/sw.js)"

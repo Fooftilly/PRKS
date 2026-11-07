@@ -26,8 +26,8 @@ def valid_browser_asset(
     """Validate the exact bytes served against the built container's artifact.
 
     Missing static assets may fall back to index.html with HTTP 200. Checking
-    the MIME type and build marker catches that substitution; comparing the
-    full SHA-256 to the file *inside the same Docker image* also catches
+    the MIME type and classic bundle/worker markers catches that substitution;
+    comparing the full SHA-256 to the file *inside the same Docker image* also catches
     otherwise plausible truncated or stale JavaScript responses.
     """
     if not isinstance(raw, bytes) or not isinstance(content_type, str):
@@ -45,7 +45,8 @@ def valid_browser_asset(
     elif kind == "worker":
         if b"CLASSIC_BUNDLE_REVISION" not in raw:
             return False
-    else:
+    elif kind != "vue":
+        # Vite has no classic bundle marker; exact bytes are authoritative.
         return False
     return hashlib.sha256(raw).hexdigest() == expected_sha256
 
@@ -64,9 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     content_type = ""
     expected_sha256 = ""
     if args:
-        if len(args) != 4 or args[0] != "--asset" or args[1] not in ("bundle", "worker"):
+        if len(args) != 4 or args[0] != "--asset" or args[1] not in ("bundle", "worker", "vue"):
             print(
-                "usage: check_runtime_smoke.py [--asset bundle|worker MIME SHA256] < RESPONSE",
+                "usage: check_runtime_smoke.py [--asset bundle|worker|vue MIME SHA256] < RESPONSE",
                 file=sys.stderr,
             )
             return 2

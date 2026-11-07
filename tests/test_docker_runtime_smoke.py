@@ -30,6 +30,10 @@ EXPECTED_TRIGGER_PATHS = (
     "prks_app.py",
     "scripts/ci/check_runtime_smoke.py",
     "tests/test_docker_runtime_smoke.py",
+    "frontend/index.html",
+    "frontend/sw.js",
+    "frontend/vue/prks-vue.js",
+    "scripts/build_classic_distribution.py",
     ".github/workflows/docker-runtime-smoke.yml",
 )
 
@@ -134,12 +138,36 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                             self.assertEqual(main(["--asset", kind, mime, digest]), result)
         self.assertEqual(main(["--asset", "unknown", "text/javascript", "0" * 64]), 2)
 
+    def test_vue_entry_requires_exact_served_bytes(self):
+        # Vite has no classic-bundle marker; byte equality against the image
+        # artifact proves the HTTP server returned the intended module.
+        vue = b"const vueApp = { mounted: true };\n" * 20
+        sha = hashlib.sha256(vue).hexdigest()
+        self.assertTrue(valid_browser_asset(vue, "text/javascript; charset=utf-8", "vue", sha))
+        for label, raw, mime in (
+            ("HTML fallback", b"<!doctype html><script>not Vue</script>", "text/javascript"),
+            ("HTML content type", vue, "text/html"),
+            ("truncated", vue[:180], "text/javascript"),
+            ("same-size corruption", vue[:-1] + b"X", "text/javascript"),
+        ):
+            with self.subTest(case=label):
+                self.assertFalse(valid_browser_asset(raw, mime, "vue", sha))
+        for body, mime, code in (
+            (vue, "application/javascript", 0),
+            (vue[:180], "application/javascript", 1),
+            (b"<html>" + vue, "text/html", 1),
+        ):
+            with self.subTest(cli_mime=mime, length=len(body)):
+                with io.TextIOWrapper(io.BytesIO(body), encoding="utf-8") as stdin:
+                    with mock.patch("sys.stdin", stdin):
+                        self.assertEqual(main(["--asset", "vue", mime, sha]), code)
+
     def test_asset_validation_invocations_are_live_and_fail_closed(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         # Pin executable commands and their continuation arguments together:
         # checking only "--asset ..." would also accept a no-op in place
         # of the validator. The loop's command is indented two spaces deeper.
-        for kind, indent in (("bundle", "            "), ("worker", "          ")):
+        for kind, indent in (("bundle", "            "), ("worker", "          "), ("vue", "          ")):
             prefix = indent + "python scripts/ci/check_runtime_smoke.py \\" + "\n"
             invocation = (
                 prefix
@@ -190,6 +218,10 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "/app/frontend/sw.js",
             "http://127.0.0.1:18080/js/${bundle}",
             "http://127.0.0.1:18080/sw.js",
+            "http://127.0.0.1:18080/vue/prks-vue.js",
+            "/app/frontend/vue/prks-vue.js",
+            "grep -Fq '<script type=\"module\" src=\"/vue/prks-vue.js\"></script>' \"$html\"",
+            '--asset vue "$mime" "$expected_sha" < "$asset"',
             '--asset bundle "$mime" "$expected_sha" < "$asset"',
             '--asset worker "$mime" "$expected_sha" < "$asset"',
             "trap cleanup EXIT",
