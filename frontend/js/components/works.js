@@ -967,7 +967,8 @@ function prksOpenResearchPicker(opts) {
     q.focus();
 }
 
-function prksOpenConceptPicker(cm) {
+function prksConceptPickerOptions(cm, insertMarkup) {
+    const insert = insertMarkup || prksInsertNotesMarkup;
     const items = function () {
         return (prksHintResource(cm, 'conceptHintList') || []).map(function (c) {
             const aliases = (c.aliases || []).join(' ');
@@ -978,7 +979,7 @@ function prksOpenConceptPicker(cm) {
             };
         });
     };
-    prksOpenResearchPicker({
+    return {
         title: 'Insert Concept',
         items: items,
         createLabel: function (name) {
@@ -993,12 +994,16 @@ function prksOpenConceptPicker(cm) {
                     break;
                 }
             }
-            if (name) prksInsertNotesMarkup(cm, prksFormatConceptMarkup(name));
+            if (name) insert(cm, prksFormatConceptMarkup(name));
         },
         onCreate: function (name) {
-            prksInsertNotesMarkup(cm, prksFormatConceptMarkup(name));
+            insert(cm, prksFormatConceptMarkup(name));
         },
-    });
+    };
+}
+
+function prksOpenConceptPicker(cm) {
+    prksOpenResearchPicker(prksConceptPickerOptions(cm));
 }
 
 function prksOpenArgumentPicker(cm, work) {
@@ -2409,5 +2414,9 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         prksGetWikiLinkAutocompleteContext,
         prksFilterWorksForWikiHint,
+        prksFormatConceptMarkup,
+        prksGetConceptLinkAutocompleteContext,
+        prksConceptLinkCompletionPick,
+        prksConceptPickerOptions,
     };
 }
