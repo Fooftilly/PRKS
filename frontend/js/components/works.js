@@ -2322,28 +2322,19 @@ const copyBibTeXResetTimers = new WeakMap();
 
 async function prksCopyBibTeXToClipboard(text) {
     const s = text == null ? '' : String(text);
-    if (!s) return;
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        await navigator.clipboard.writeText(s);
-        return 'navigator.clipboard';
+    // A deleted Work can currently return HTTP 200 with an empty export.
+    // Never report success without placing an actual citation on the clipboard.
+    if (!s.trim()) {
+        const error = new Error('No BibTeX export available');
+        error.code = 'bibtex_empty';
+        throw error;
     }
-    const ta = document.createElement('textarea');
-    ta.value = s;
-    ta.setAttribute('readonly', 'readonly');
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    ta.style.top = '-9999px';
-    document.body.appendChild(ta);
-    let ok = false;
-    try {
-        ta.focus();
-        ta.select();
-        ok = !!document.execCommand('copy');
-    } finally {
-        document.body.removeChild(ta);
+    // The shared helper handles Clipboard API failures and insecure-context
+    // textarea fallback. Do not maintain a second implementation here.
+    if (typeof window.prksCopyTextToClipboard !== 'function') {
+        throw new Error('Clipboard helper unavailable');
     }
-    if (!ok) throw new Error('document.execCommand copy failed');
-    return 'execCommand';
+    await window.prksCopyTextToClipboard(s);
 }
 
 async function copyBibTeX(workId, btn) {
@@ -2389,7 +2380,8 @@ async function copyBibTeX(workId, btn) {
     } catch (e) {
         snapshotIfNeeded();
         btn.innerHTML =
-            (typeof prksIcon === 'function' ? prksIcon('x', { size: 'sm' }) : '') + ' Copy failed';
+            (typeof prksIcon === 'function' ? prksIcon('x', { size: 'sm' }) : '') +
+            (e && e.code === 'bibtex_empty' ? ' No BibTeX available — refresh' : ' Copy failed');
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#ef4444';
         btn.style.borderColor = '#ef4444';
@@ -2428,5 +2420,7 @@ if (typeof module !== 'undefined' && module.exports) {
         prksGetConceptLinkAutocompleteContext,
         prksConceptLinkCompletionPick,
         prksConceptPickerOptions,
+        prksCopyBibTeXToClipboard,
+        copyBibTeX,
     };
 }
