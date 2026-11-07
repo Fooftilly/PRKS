@@ -1,68 +1,20 @@
 {
   "version": 1,
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
       "number": 410,
       "set": {
+        "Agent": "Unassigned",
+        "Status": "Inbox",
+        "Execution": "Agent"
+      },
+      "expected_before": {
         "Agent": "ChatGPT/Codex",
         "Status": "Ready",
         "Execution": "Agent"
       },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Accepted existing P3 bug: Concept/Position markdown helper still appends a hidden EasyMDE textarea to body, leaving a visible sibling editor that shrinks every page. Small frontend/js/components/concepts.js and DOM regression slice; independent of SQLite, PG-C1/C2, and open PR files; no native blockers.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 532,
-      "set": {
-        "Agent": "ChatGPT/Codex",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Maintainer-selected accepted safety/UX issue: recovery Review copy calls window.prksCopyTextToClipboard, which is not exposed by the shipped runtime. Restore one canonical clipboard helper and real-browser Copy text/current/edited regression. Survives PostgreSQL cutover, no overlapping open PR or native blockers.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 608,
-      "set": {
-        "Agent": "ChatGPT/Codex",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Maintainer-selected accepted P3 UX issue: current Vue TagsRoute alias input has no Enter handler even though Add alias action exists. Add guarded Enter semantics, retain focus, tests. Independent of PostgreSQL backend and open PRs, no native blockers.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1076,
-      "set": {
-        "Agent": "ChatGPT/Codex",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": null,
-        "Status": "Inbox",
-        "Execution": null
-      },
-      "reason": "Maintainer-selected accepted P3 PostgreSQL-surviving frontend bug: current Work BibTeX copy reports success after HTTP 200 empty body without invoking clipboard. Add explicit empty-result failure and focused regression; no backend SQLite changes, native blockers, or active PR overlap.",
+      "reason": "Remove visually dependent issue #410 from ChatGPT/Codex Ready queue per maintainer direction: the 30px EasyMDE layout defect requires visual acceptance across routes and light/dark themes, which this executor cannot personally verify. Return to Inbox with no named agent; keep agent execution category for later visual-capable assignment. No code or PostgreSQL cutover changes; reviewed current issue and open PR overlap.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
