@@ -391,11 +391,21 @@ def _validate_listen_port(port: int) -> None:
         )
 
 
-def bind_storage(config: StorageConfig) -> StorageConfig:
+def bind_storage(config: StorageConfig, *, library_database=None) -> StorageConfig:
+    """Bind ``config``'s root and the Library store the routes use.
+
+    ``library_database`` (a ``backend.db.database.Database``) binds the
+    PostgreSQL Library instead of the SQLite store under the root
+    (``PRKS_LIBRARY_BACKEND=postgres``, ``backend.library_backend``): the
+    facade and its research and text index adapters, and no SQLite file or
+    legacy processing inbox is opened or created.
+    """
     # Publishing a binding for a root this process does not hold the
     # single-process lease on would defeat that lease (storage-architecture
     # §12). Only enforced once the process entry opened a root.
     assert_config_matches_bound_root(config.root)
+    if library_database is not None:
+        return _publish_binding(config, *_postgres_library(config, library_database))
     processing_local = config.processing_dir
     try:
         os.makedirs(processing_local, exist_ok=True)
@@ -419,7 +429,32 @@ def bind_storage(config: StorageConfig) -> StorageConfig:
     db_local = PRKSDatabase(storage=config, schema_path="backend/db_schema.sql")
     candidate = PRKSTextIndex(storage=config)
     research_candidate = PRKSResearchIndex(storage=config)
+    return _publish_binding(config, db_local, candidate, research_candidate)
 
+
+def _postgres_library(config: StorageConfig, database):
+    """The PostgreSQL facade and its index adapters for ``database`` (PG-C1 #640)."""
+    # Imported only here, so the SQLite runtime never loads psycopg.
+    from backend.pg_facade import PostgresLibrary
+    from backend.pg_facade.research_index import PostgresResearchIndex
+    from backend.pg_facade.text_index import PostgresTextIndex
+
+    os.makedirs(config.thumbs_dir, exist_ok=True)
+    return (
+        PostgresLibrary(database, storage=config),
+        PostgresTextIndex(database),
+        PostgresResearchIndex(database),
+    )
+
+
+def serves_postgres_library() -> bool:
+    """Whether the bound Library is the PostgreSQL facade (``PRKS_LIBRARY_BACKEND=postgres``)."""
+    from backend.pg_facade import PostgresLibrary
+
+    return isinstance(db, PostgresLibrary)
+
+
+def _publish_binding(config: StorageConfig, db_local, candidate, research_candidate) -> StorageConfig:
     global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index, research_index
     previous_published = (
         _bound_storage,
@@ -488,6 +523,23 @@ def _safe_pdf_path_for_route(path: str) -> str | None:
     if not path.startswith(_PDF_ROUTE_PREFIX):
         return None
     return _safe_pdf_path_in_pdfs_dir(path[len(_PDF_ROUTE_PREFIX):])
+
+
+def _served_pdf_path(path: str) -> str | None:
+    """The managed PDF a ``/api/pdfs/<filename>`` request may read, or ``None``.
+
+    On the PostgreSQL Library the file must also be one of the acting
+    Library's Assets: the data root is shared by every Library.
+    """
+    pdf_path = _safe_pdf_path_for_route(path)
+    if pdf_path is None or not os.path.exists(pdf_path):
+        return None
+    if serves_postgres_library() and not db._holds_managed_pdf(os.path.basename(pdf_path)):
+        return None
+    return pdf_path
+
+
+_BACKUP_ROUTE_PREFIX = '/api/backups/'
 
 
 def _prks_pixmap_to_pil(pix):
@@ -1182,6 +1234,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # before that (admission included) closes the connection.
             self._prks_unread_body = upload
             if not self._prks_admit(parsed_path):
+                return
+            if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+                self._prks_unread_body = True
+                self._refuse_sqlite_maintenance()
                 return
             if parsed_path.path == '/api/backups/stage':
                 self._handle_backup_stage(parsed_path)
@@ -1923,8 +1979,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         try:
             if path.startswith('/api/pdfs/'):
-                pdf_path = _safe_pdf_path_for_route(path)
-                if pdf_path and os.path.exists(pdf_path):
+                pdf_path = _served_pdf_path(path)
+                if pdf_path:
                     self._send_pdf_bytes(pdf_path, head_only=True)
                 else:
                     self.send_error(404, "PDF not found")
@@ -2787,8 +2843,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     self.send_json(200, [])
             elif path.startswith('/api/pdfs/'):
-                pdf_path = _safe_pdf_path_for_route(path)
-                if pdf_path and os.path.exists(pdf_path):
+                pdf_path = _served_pdf_path(path)
+                if pdf_path:
                     self._send_pdf_bytes(pdf_path)
                 else:
                     self.send_error(404, "PDF not found")
@@ -2801,6 +2857,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(bibtex.encode())
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
+            elif path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+                self._refuse_sqlite_maintenance()
             elif path == '/api/backups/download':
                 token = (query.get('token') or [''])[0]
                 self._handle_backup_download(token=token)
@@ -3780,6 +3838,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return None
         return content_length
 
+    def _refuse_sqlite_maintenance(self) -> None:
+        """Answer a SQLite backup route on the PostgreSQL Library: it is not ported yet.
+
+        These routes read and replace the SQLite catalogue and the root's
+        files; on PostgreSQL they would rebind the process to SQLite. The
+        PostgreSQL backup and restore routes replace them (PG-C1 #640).
+        """
+        self.send_json(501, {
+            "error": "Backup and restore are not ported to the PostgreSQL Library yet.",
+            "code": "not_ported",
+            "request_id": self._prks_request_id,
+        })
+
     def _handle_backup_stage(self, parsed_path=None) -> None:
         content_length = self._validate_backup_stage_headers()
         if content_length is None:
@@ -3899,14 +3970,8 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
-    if _bound_storage is None:
-        raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
-    host = normalize_listen_host(host)
-    trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
-    _validate_listen_port(port)
-    # Setup for allowing reusing address
-    socketserver.TCPServer.allow_reuse_address = True
+def _sqlite_startup_maintenance():
+    """The SQLite store's start-up reconcilers; the PostgreSQL Library has its own jobs."""
     with startup_phase("startup_thumbnail_cleanup"):
         try:
             n = prune_orphan_pdf_thumbnails(db)
@@ -3936,6 +4001,18 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
             cleanup_expired_backup_jobs(_bound_storage)
         except Exception as e:
             LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
+
+
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
+    if _bound_storage is None:
+        raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
+    host = normalize_listen_host(host)
+    trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
+    _validate_listen_port(port)
+    # Setup for allowing reusing address
+    socketserver.TCPServer.allow_reuse_address = True
+    if not serves_postgres_library():
+        _sqlite_startup_maintenance()
     with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts

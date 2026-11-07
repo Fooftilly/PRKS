@@ -756,8 +756,11 @@ class TextIndexTestCase(unittest.TestCase):
         self.assertEqual(summary["updated"], 0)
 
     def test_run_server_reconciles_before_serving(self):
+        from backend.server import _sqlite_startup_maintenance
+
+        self.assertIn("reconcile_at_startup", inspect.getsource(_sqlite_startup_maintenance))
         src = inspect.getsource(run_server)
-        self.assertLess(src.index("reconcile_at_startup"), src.index("serve_forever"))
+        self.assertLess(src.index("_sqlite_startup_maintenance()"), src.index("serve_forever"))
 
     def test_upsert_text_is_not_treated_as_synchronized(self):
         w_id, file_path = self._add_pdf_work("canonical extract unique")

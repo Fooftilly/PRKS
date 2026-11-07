@@ -201,6 +201,16 @@ class LibraryIsolationTests(WorksFacadeTestCase):
         # Within one Library two Works may still share a file, as on SQLite.
         self.library.add_work("Mine again", file_path=path)
 
+    def test_a_managed_pdf_is_served_only_to_its_library(self) -> None:
+        # /api/pdfs/<name> on the shared root asks this before reading bytes.
+        path = self.store_pdf("served.pdf", b"%PDF-1.4\nserved\n%%EOF\n")
+        self.store_pdf("loose.pdf", b"%PDF-1.4\nloose\n%%EOF\n")
+        self.library.add_work("Mine", file_path=path)
+        self.assertTrue(self.library._holds_managed_pdf("served.pdf"))
+        self.assertFalse(self.library._holds_managed_pdf("loose.pdf"))
+        with facade_context.acting_as(self.other_actor().context):
+            self.assertFalse(self.library._holds_managed_pdf("served.pdf"))
+
     def test_two_libraries_racing_for_one_pdf_leave_it_with_one(self) -> None:
         # Whatever the interleaving (one after the other, or both checks before
         # either insert, where SERIALIZABLE retries the loser), one Library wins.
