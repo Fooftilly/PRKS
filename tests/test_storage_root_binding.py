@@ -791,21 +791,45 @@ class TestDeferredStartupLogs(RootTestCase):
         root = self.path("lib")
         with _RootCapture() as seen, self._uncertain():
             bound = self.open(root, defer_logs=True)
-            # V7 legitimately diagnoses overlay file-device relaxation
-            # during open; only the V9 startup warnings are deferred.
-            v9_messages = [m for m in seen.messages()
-                           if not m.startswith("storage_root_overlay_file_devices_unchecked")]
-            self.assertEqual(v9_messages, [])
+            # All startup warnings are deferred, including V7's overlay warning.
+            self.assertEqual(seen.messages(), [])
+            buffered = [record.getMessage() for record in bound.deferred_records]
             bound.log_binding()
-        messages = [m for m in seen.messages()
-                    if not m.startswith("storage_root_overlay_file_devices_unchecked")]
-        self.assertEqual(len(messages), 2, messages)
-        self.assertIn("storage_root_uncertain_filesystem", messages[0])
-        self.assertIn("storage_root_bound source=", messages[1])
+        messages = seen.messages()
+        expected = ["storage_root_uncertain_filesystem fs_type=fuse.unknownfs"]
+        fs_type = (root_binding.detect_filesystem_type(root) or "").lower()
+        if fs_type in root_binding.OVERLAY_FILESYSTEM_TYPES:
+            expected.append("storage_root_overlay_file_devices_unchecked")
+        self.assertEqual(buffered, expected)
+        self.assertEqual(messages[:-1], expected)
+        self.assertIn("storage_root_bound source=", messages[-1])
         self.assertEqual(seen.records[0].levelno, logging.WARNING)
         self.assertEqual(seen.records[0].name, "prks.storage")
         self.assertTrue(root_binding.LOGGER.propagate)
         self.assertNotIn(seen, root_binding.LOGGER.handlers)
+
+    def test_overlay_warning_is_deferred_alongside_filesystem_warning(self):
+        root = self.path("lib")
+        # Force the V7 overlay path even on ext4 CI; V9 remains simulated by
+        # the scoped warning mock and must not change V7's classification.
+        with (
+            _RootCapture() as seen,
+            self._uncertain(),
+            patch.object(root_binding, "detect_filesystem_type", return_value="overlay"),
+        ):
+            bound = self.open(root, defer_logs=True)
+            self.assertEqual(seen.messages(), [])
+            expected = [
+                "storage_root_uncertain_filesystem fs_type=fuse.unknownfs",
+                "storage_root_overlay_file_devices_unchecked",
+            ]
+            self.assertEqual(
+                [record.getMessage() for record in bound.deferred_records], expected
+            )
+            bound.log_binding()
+        messages = seen.messages()
+        self.assertEqual(messages[:-1], expected)
+        self.assertIn("storage_root_bound source=", messages[-1])
 
     def test_a_refusal_emits_the_deferred_warnings_at_once(self):
         root = self.path("foreign")
