@@ -178,6 +178,11 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             ("wrong type", '<script type="text/plain" src="/vue/prks-vue.js"></script>'),
             ("wrong source", '<script type="module" src="/vue/other.js"></script>'),
             ("duplicate script", tag + tag),
+            ("self-closing script", tag.replace("></script>", "/>")),
+            ("invalid integrity", tag.replace(
+                "></script>", ' integrity="sha384-invalid"></script>'
+            )),
+            ("self-closing template before script", "<template/>" + tag),
             ("missing closing tag", tag.replace("</script>", "")),
             ("duplicate type attributes", '<script type="text/plain" type="module" src="/vue/prks-vue.js"></script>'),
         ):
@@ -189,7 +194,16 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                 body = original.replace(tag, f"<!-- {tag} -->")
             with self.subTest(case=label):
                 self.assertFalse(valid_vue_entry_html(body))
-        self.assertTrue(valid_vue_entry_html((ROOT / "frontend/index.html").read_text(encoding="utf-8")))
+        source_html = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+        self.assertTrue(valid_vue_entry_html(source_html))
+        self.assertEqual(source_html.count(tag), 1)
+        for broken_entry in (
+            tag.replace("></script>", "/>"),
+            tag.replace("></script>", ' integrity="sha384-invalid"></script>'),
+        ):
+            # A real release asset with the mutated entry must fail, not
+            # merely a synthetic string containing one tag.
+            self.assertFalse(valid_vue_entry_html(source_html.replace(tag, broken_entry)))
         # Attribute order and quoting are not executable semantics.
         self.assertTrue(valid_vue_entry_html(
             "<script src='/vue/prks-vue.js' type='MODULE'></script>"
@@ -203,6 +217,8 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             (f"<html><body>{tag}</body></html>", 0),
             (f"<!-- {tag} -->", 1),
             (f"<template>{tag}</template>", 1),
+            (tag.replace("></script>", "/>"), 1),
+            (tag.replace("></script>", ' integrity="sha256-wrong"></script>'), 1),
             ("<html><body>no Vue module</body></html>", 1),
             ("x" * (256 * 1024 + 1), 1),
         ):

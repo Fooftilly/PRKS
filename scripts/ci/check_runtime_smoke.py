@@ -64,6 +64,7 @@ class _VueEntrypointParser(HTMLParser):
         self._inert: list[str] = []
         self._pending_vue = False
         self._malformed_inert = False
+        self._malformed_self_closing = False
         self.vue_entries = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -82,7 +83,20 @@ class _VueEntrypointParser(HTMLParser):
             and isinstance(value, str)
             and value.strip().lower() == "module"
             and attributes.get("src") == "/vue/prks-vue.js"
+            # Invalid SRI silently blocks module execution in the browser.
+            # The shipped entry currently has no SRI; future additions must
+            # explicitly verify the SRI digest against the served module.
+            and "integrity" not in attributes
         )
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # HTMLParser treats <script .../> as both start and end, but HTML
+        # browsers do not: the slash is ignored on non-void elements.
+        if tag == "script" or tag in _INERT_HTML_ELEMENTS:
+            self._malformed_self_closing = True
+            self._pending_vue = False
+            return
+        super().handle_startendtag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "script":
@@ -111,6 +125,7 @@ def valid_vue_entry_html(raw: str) -> bool:
         and not parser._pending_vue
         and not parser._inert
         and not parser._malformed_inert
+        and not parser._malformed_self_closing
     )
 
 
