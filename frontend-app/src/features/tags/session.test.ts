@@ -290,7 +290,7 @@ describe('Tags route bridge', () => {
   it('adds a tag alias with Enter, clears the input and retains keyboard focus (#608)', async () => {
     const add = vi.fn(async () => ({ ok: true }))
     window.prksTagsAddAlias = add
-    window.prksReloadTagsVocabulary = vi.fn(async () => {})
+    window.prksReloadTagsVocabulary = vi.fn(async () => true)
     const el = host()
     presentTags({ owner: owner(), host: el, tags: [ALPHA, BETA], generation: 5 })
     el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
@@ -316,7 +316,7 @@ describe('Tags route bridge', () => {
     let finish: ((value: { ok: boolean }) => void) | undefined
     const add = vi.fn(() => new Promise<{ ok: boolean }>((resolve) => { finish = resolve }))
     window.prksTagsAddAlias = add
-    window.prksReloadTagsVocabulary = vi.fn(async () => {})
+    window.prksReloadTagsVocabulary = vi.fn(async () => true)
     const el = host()
     presentTags({ owner: owner(), host: el, tags: [ALPHA], generation: 5 })
     el.querySelector<HTMLButtonElement>('[data-tag-alias-edit="t1"]')?.click()
