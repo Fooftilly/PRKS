@@ -253,7 +253,7 @@ def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[Conce
         decoded = unquote(body, encoding="utf-8", errors="strict")
     except UnicodeDecodeError:
         return None
-    if "\n" in decoded or "\r" in decoded or "\x00" in decoded:
+    if any(unicodedata.category(ch) == "Cc" for ch in decoded):
         return None
     name = canonical_concept_name(decoded)
     if not name or len(name) > CONCEPT_REF_MAX:
