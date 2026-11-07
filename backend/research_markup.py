@@ -22,8 +22,10 @@ ARGUMENT_ID_RE = re.compile(r"^A-[A-Za-z0-9]{1,32}$")
 # Explicitly versioned marker: no legacy literal backslash or bracket sequence
 # in [[concept:Name]] can be confused with the encoded form.
 _ENCODED_CONCEPT_PREFIX = "[[concept-encoded:"
-_ENCODED_BODY_RE = re.compile(r"(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-Fa-f]{2})+")
 _ENCODED_BODY_MAX = CONCEPT_REF_MAX * 12
+# A scanner is easier to audit than a backtracking regex for untrusted notes.
+_URL_COMPONENT_SAFE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.!~*'()-")
+_URL_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 _FENCE_CHARS = frozenset("`~")
 
@@ -219,6 +221,23 @@ def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
     return ConceptRef(start=start, end=end, raw=text[start:end], name=name)
 
 
+def _valid_encoded_concept_body(body: str) -> bool:
+    """Validate percent-encoded UTF-8 syntax in linear time."""
+    if not body:
+        return False
+    i = 0
+    while i < len(body):
+        if body[i] == "%":
+            if i + 2 >= len(body) or body[i + 1] not in _URL_HEX_DIGITS or body[i + 2] not in _URL_HEX_DIGITS:
+                return False
+            i += 3
+        elif body[i] in _URL_COMPONENT_SAFE:
+            i += 1
+        else:
+            return False
+    return True
+
+
 def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
     inner_start = start + len(_ENCODED_CONCEPT_PREFIX)
     close = text.find("]]", inner_start, inner_start + _ENCODED_BODY_MAX + 2)
@@ -228,7 +247,7 @@ def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[Conce
     if not _span_live(live, start, end):
         return None
     body = text[inner_start:close]
-    if not _ENCODED_BODY_RE.fullmatch(body):
+    if not _valid_encoded_concept_body(body):
         return None
     try:
         decoded = unquote(body, encoding="utf-8", errors="strict")
