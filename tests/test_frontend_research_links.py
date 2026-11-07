@@ -67,7 +67,7 @@ class FrontendResearchLinksTests(unittest.TestCase):
     def test_wiki_skips_research_prefixes(self):
         works = _read(_WORKS)
         self.assertIn("prksReplaceResearchRefs", works)
-        self.assertIn("^(concept:|argument:|pdf:)", works)
+        self.assertIn("^(concept:|concept-encoded:|argument:|pdf:)", works)
         self.assertIn("prksGetConceptLinkAutocompleteContext", works)
         self.assertIn("prksOpenConceptPicker", works)
         self.assertIn("prksOpenArgumentPicker", works)

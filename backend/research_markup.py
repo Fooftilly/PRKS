@@ -1,7 +1,9 @@
 """Authoritative research-note markup parser.
 
-Recognizes explicit [[concept:Name]] and [[argument:A-ID|Label]] references
-outside fenced/inline code and escaped \\[[ sequences.
+Recognizes explicit [[concept:Name]], [[concept-encoded:URIComponent(Name)]]
+and [[argument:A-ID|Label]] references outside fenced/inline code and escaped
+\\[[ sequences. The encoded spelling is unambiguous for embedded delimiters;
+legacy Concept names (including literal backslashes) are never reinterpreted.
 
 Python and the frontend preview parser must agree on which spans are references.
 """
@@ -12,10 +14,18 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+from urllib.parse import unquote
 
 CONCEPT_REF_MAX = 160
 ARGUMENT_LABEL_MAX = 240
 ARGUMENT_ID_RE = re.compile(r"^A-[A-Za-z0-9]{1,32}$")
+# Explicitly versioned marker: no legacy literal backslash or bracket sequence
+# in [[concept:Name]] can be confused with the encoded form.
+_ENCODED_CONCEPT_PREFIX = "[[concept-encoded:"
+_ENCODED_BODY_MAX = CONCEPT_REF_MAX * 12
+# A scanner is easier to audit than a backtracking regex for untrusted notes.
+_URL_COMPONENT_SAFE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.!~*'()-")
+_URL_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 _FENCE_CHARS = frozenset("`~")
 
@@ -67,6 +77,12 @@ def parse_research_markup(text: str) -> ResearchMarkup:
         if text[i] == "\\" and i + 2 < n and text[i + 1] == "[" and text[i + 2] == "[":
             i += 3
             continue
+        if text.startswith(_ENCODED_CONCEPT_PREFIX, i):
+            parsed = _try_encoded_concept_ref(text, live, i)
+            if parsed is not None:
+                concepts.append(parsed)
+                i = parsed.end
+                continue
         if i + 11 <= n and live[i:i + 11] == "Y" * 11 and text.startswith("[[concept:", i):
             parsed = _try_concept_ref(text, live, i)
             if parsed is not None:
@@ -188,6 +204,8 @@ def _span_live(live: str, start: int, end: int) -> bool:
 
 
 def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
+    # Legacy references remain completely literal. In particular a backslash
+    # immediately before a bracket is part of the name, not a new escape.
     inner_start = start + len("[[concept:")
     close = text.find("]]", inner_start)
     if close < 0:
@@ -197,8 +215,50 @@ def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
         return None
     if "\n" in text[start:end]:
         return None
-    inner = text[inner_start:close]
-    name = canonical_concept_name(inner)
+    name = canonical_concept_name(text[inner_start:close])
+    if not name or len(name) > CONCEPT_REF_MAX:
+        return None
+    return ConceptRef(start=start, end=end, raw=text[start:end], name=name)
+
+
+def _valid_encoded_concept_body(body: str) -> bool:
+    """Validate percent-encoded UTF-8 syntax in linear time."""
+    if not body:
+        return False
+    i = 0
+    while i < len(body):
+        if body[i] == "%":
+            if i + 2 >= len(body) or body[i + 1] not in _URL_HEX_DIGITS or body[i + 2] not in _URL_HEX_DIGITS:
+                return False
+            i += 3
+        elif body[i] in _URL_COMPONENT_SAFE:
+            i += 1
+        else:
+            return False
+    return True
+
+
+def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
+    inner_start = start + len(_ENCODED_CONCEPT_PREFIX)
+    close = text.find("]]", inner_start, inner_start + _ENCODED_BODY_MAX + 2)
+    if close < 0:
+        return None
+    end = close + 2
+    if not _span_live(live, start, end):
+        return None
+    body = text[inner_start:close]
+    if not _valid_encoded_concept_body(body):
+        return None
+    try:
+        decoded = unquote(body, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    # Concept creation rejects C0 controls and DEL, but permits C1 (except
+    # U+0085, which canonical_concept_name folds to a space). Keep both
+    # boundaries aligned so existing valid names remain referenceable.
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in decoded):
+        return None
+    name = canonical_concept_name(decoded)
     if not name or len(name) > CONCEPT_REF_MAX:
         return None
     return ConceptRef(start=start, end=end, raw=text[start:end], name=name)

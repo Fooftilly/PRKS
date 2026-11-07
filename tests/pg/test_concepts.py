@@ -183,6 +183,18 @@ class DeleteTests(ConceptTestCase):
         self.refused("not_found", self.library.delete_concept, ethics)
         self.assertEqual(self.concept_keys(), [])
 
+    def test_encoded_reference_prevents_deleting_canonical_concept(self) -> None:
+        target = self.concept("Category]] Theory")
+        work = self.library.add_work("W")
+        self.research_note(work, "See [[concept-encoded:Category%5D%5D%20Theory]].")
+        self.refused("concept_in_use", self.library.delete_concept, target)
+        self.assertIsNotNone(self.library.get_concept(target))
+
+        # The validation boundary also accepts C1 code points such as U+0091.
+        c1_target = self.concept("Foo\\Bar\u0091")
+        self.research_note(work, "See [[concept-encoded:Foo%5CBar%C2%91]].")
+        self.refused("concept_in_use", self.library.delete_concept, c1_target)
+
     def test_edges_go_and_every_scope_it_owned_moves_on(self) -> None:
         parent, middle, child = self.concept("Parent"), self.concept("Middle"), self.concept("Child")
         self.library.replace_concept_parents(middle, [parent])

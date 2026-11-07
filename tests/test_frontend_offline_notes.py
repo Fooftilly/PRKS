@@ -92,11 +92,16 @@ class FrontendOfflineNotesGuardTests(unittest.TestCase):
 
     def test_concept_and_argument_picker_onpick_route_through_insert_notes_markup(self):
         src = _read(_WORKS)
-        concept_start = src.index("function prksOpenConceptPicker(cm)")
-        concept_end = src.index("function prksOpenArgumentPicker")
+        # Picker callbacks now live in testable options, but the real picker
+        # must use those options and default to the guarded insertion boundary.
+        concept_start = src.index("function prksConceptPickerOptions(cm, insertMarkup)")
+        concept_end = src.index("function prksOpenArgumentPicker", concept_start)
         concept_body = src[concept_start:concept_end]
         self.assertIn("onPick: function (id) {", concept_body)
-        self.assertIn("prksInsertNotesMarkup(cm,", concept_body)
+        self.assertIn("onCreate: function (name) {", concept_body)
+        self.assertIn("const insert = insertMarkup || prksInsertNotesMarkup;", concept_body)
+        self.assertIn("insert(cm, prksFormatConceptMarkup(name))", concept_body)
+        self.assertIn("prksOpenResearchPicker(prksConceptPickerOptions(cm))", concept_body)
 
         arg_start = src.index("function prksOpenArgumentPicker(cm, work)")
         arg_end = src.index("\nasync function deleteWork", arg_start)

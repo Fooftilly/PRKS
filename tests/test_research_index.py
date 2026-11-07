@@ -50,6 +50,16 @@ class ResearchIndexTests(unittest.TestCase):
         self.assertEqual(summary["updated"], 1)
         self.assertEqual(len(list_concepts(self.db)), 2)
 
+    def test_escaped_concept_delimiter_indexes_one_full_name(self):
+        work = self.db.add_work(title="Escaped Concept")
+        note = "See [[concept-encoded:Category%5D%5D%20Theory]] here."
+        save_work_notes(self.db, work, note)
+        self.index.sync_work(work, note, self.db)
+        concepts = list_concepts(self.db)
+        self.assertEqual([c["name"] for c in concepts], ["Category]] Theory"])
+        self.assertEqual(self.index.mention_count_for_concept(concepts[0]["id"]), 1)
+        self.assertEqual(len(self.index.work_research_refs(work, self.db)["concepts"]), 1)
+
     def test_deleted_work_removes_orphan(self):
         wid = self.db.add_work(title="W")
         text = "[[concept:Culture Industry]]"

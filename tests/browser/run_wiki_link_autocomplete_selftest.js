@@ -92,6 +92,7 @@ assertNull('no opener on the line', 'plain notes text', 16);
 assertNull('closed link is not an open query', '[[a]] ', 6);
 assertNull('pipe ends the query', '[[a|b', 5);
 assertNull('reserved concept prefix defers', '[[concept:x', 11);
+assertNull('encoded concept prefix defers to Research parser', '[[concept-encoded:x', 19);
 assertNull('reserved argument prefix defers', '[[argument:', 11);
 assertNull('reserved pdf prefix defers', '[[pdf:p', 7);
 

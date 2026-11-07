@@ -64,6 +64,104 @@ record(
 );
 record('valid argument remains linked', missingArg.indexOf('#/arguments/A-REAL') >= 0);
 
+// Import the real production helpers using works.js's existing Node export
+// guard. This avoids executing extracted source strings in a test VM.
+global.window = global;
+const workApi = require('../../frontend/js/components/works.js');
+for (const name of ['Category]] Theory',
+    'Math [A] ' + String.fromCharCode(92) + ' Slash ]] name',
+    'Odd]] [[concept:Synthetic Memory Systems|pipe 1022',
+    'Foucault [1977]', 'Set]', 'Foo\\Bar\u0091',
+    'Ordinary Concept']) {
+    const marker = workApi.prksFormatConceptMarkup(name);
+    const parsed = api.prksParseResearchMarkup(marker).conceptRefs;
+    record('picker round-trips name: ' + name,
+        parsed.length === 1 && parsed[0].name === name && parsed[0].raw === marker);
+    if (name.indexOf(']]') >= 0) {
+        record('picker avoids truncated Concept for ' + name,
+            marker.startsWith('[[concept-encoded:') && !marker.includes('[[concept:' ));
+    }
+}
+const unresolvedName = 'Category]] Theory';
+const encodedRef = workApi.prksFormatConceptMarkup(unresolvedName);
+const unresolvedHtml = api.prksReplaceResearchRefs(encodedRef, { concepts: [], arguments: [] });
+record('unresolved encoded name renders without markup escapes',
+    unresolvedHtml.includes(unresolvedName) && !unresolvedHtml.includes('%5D') &&
+    unresolvedHtml.includes('wiki-link-unresolved'));
+
+// Execute the shipped autocomplete code, with a current Work notes editor
+// as owner; completion must replace the entire opening marker.
+const partial = '[[concept:Pick';
+const cmCalls = [];
+const fakeCM = {
+    constructor: { Pos: (line, ch) => ({ line, ch }) },
+    getCursor: () => ({ line: 0, ch: partial.length }),
+    getLine: () => partial,
+    replaceRange: (value, from, to, origin) => cmCalls.push({ value, from, to, origin }),
+};
+fakeCM.__prksOwnerCtx = {
+    getResource: (key) => {
+        if (key === 'workNotes') return { editor: { codemirror: fakeCM } };
+        if (key === 'conceptHintList') return [{ id: 'C-1', name: 'Pick]] Me' }];
+        return null;
+    },
+};
+const completionCtx = workApi.prksGetConceptLinkAutocompleteContext(fakeCM);
+workApi.prksConceptLinkCompletionPick(fakeCM, completionCtx, {
+    text: 'Pick]] Me',
+    from: completionCtx.from,
+    to: completionCtx.to,
+});
+record('autocomplete replaces entire marker for delimiter-heavy Concept',
+    cmCalls.length === 1 &&
+    cmCalls[0].from.ch === 0 &&
+    cmCalls[0].value === '[[concept-encoded:Pick%5D%5D%20Me]]' &&
+    cmCalls[0].origin === 'complete');
+
+// The actual picker uses the same declarative options; inject only the DOM
+// insertion boundary so Node can execute its real selection/Create callbacks.
+const inserted = [];
+const pickerOptions = workApi.prksConceptPickerOptions(
+    fakeCM, (_cm, markup) => { inserted.push(markup); });
+pickerOptions.onPick('C-1');
+pickerOptions.onCreate('Odd]] [[concept:Injected|pipe');
+record('existing Concept picker inserts encoded reference', inserted[0] ===
+    '[[concept-encoded:Pick%5D%5D%20Me]]');
+const chosen = api.prksParseResearchMarkup(inserted[1]);
+record('Create picker does not insert nested/bogus references',
+    chosen.conceptRefs.length === 1 &&
+    chosen.conceptRefs[0].name === 'Odd]] [[concept:Injected|pipe');
+
+
+// Later wiki/PDF passes must only touch original text, never a generated
+// Concept name containing [[Work]] or [[pdf:id]] delimiters.
+global.prksReplaceResearchRefs = api.prksReplaceResearchRefs;
+const innerName = 'Compare [[Hamlet]]';
+const innerMarker = workApi.prksFormatConceptMarkup(innerName);
+for (const found of [true, false]) {
+    const preview = workApi.prksRenderResearchNotesLinks(innerMarker,
+        { concepts: found ? [{ id: 'C-COMPARE', name: innerName }] : [] },
+        { hamlet: 'W-HAMLET' });
+    record((found ? 'resolved' : 'unresolved') + ' Concept label cannot create nested Work link',
+        preview.includes(innerName) &&
+        !preview.includes('#/works/W-HAMLET') &&
+        preview.includes(found ? '#/concepts/C-COMPARE' : 'wiki-link-unresolved'));
+}
+const pdfName = 'Compare [[pdf:A-PDF]]';
+const pdfPreview = workApi.prksRenderResearchNotesLinks(
+    workApi.prksFormatConceptMarkup(pdfName),
+    { concepts: [{ id: 'C-PDF', name: pdfName }] }, {});
+record('Concept label cannot create a nested PDF annotation link',
+    pdfPreview.includes(pdfName) && !pdfPreview.includes('wiki-link-pdf-ann'));
+const literalMarkers = '\\[[concept-encoded:Test%20One]] and `[[concept-encoded:Test%20One]]`';
+const literalPreview = workApi.prksRenderResearchNotesLinks(
+    literalMarkers, { concepts: [] }, { 'concept-encoded:test%20one': 'W-WRONG' });
+record('escaped and inline-code encoded markers stay literal in Work preview',
+    literalPreview === literalMarkers && !literalPreview.includes('#/works/'));
+const normalPreview = workApi.prksRenderResearchNotesLinks(
+    'A normal [[Hamlet]] reference.', { concepts: [] }, { hamlet: 'W-HAMLET' });
+record('ordinary Work wiki markers still resolve', normalPreview.includes('#/works/W-HAMLET'));
+
 rows.forEach(function (r) {
     console.log((r.ok ? 'PASS  ' : 'FAIL  ') + r.name + (r.detail ? ' ' + r.detail : ''));
 });

@@ -158,6 +158,18 @@ class ResearchNetworkTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "concept_in_use")
         self.assertEqual(ctx.exception.http_status, 409)
 
+    def test_delete_concept_blocked_by_encoded_note_with_stale_index(self):
+        concept = create_concept(self.db, "Category]] Theory")
+        wid = self._work()
+        save_work_notes(self.db, wid, "See [[concept-encoded:Category%5D%5D%20Theory]].")
+        # Deliberately leave derived mentions empty: the canonical note is
+        # the deletion guard, not the index or a legacy-marker prefilter.
+        self.assertEqual(self.index.mention_count_for_concept(concept["id"]), 0)
+        with self.assertRaises(ResearchError) as ctx:
+            delete_concept(self.db, concept["id"])
+        self.assertEqual(ctx.exception.code, "concept_in_use")
+        self.assertIsNotNone(get_concept(self.db, concept["id"]))
+
     def test_delete_concept_blocked_when_index_stale_after_sync_failure(self):
         wid = self._work()
         save_work_notes(self.db, wid, "[[concept:Culture Industry]]")
