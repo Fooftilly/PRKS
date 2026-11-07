@@ -203,7 +203,7 @@
         try {
             decoded = decodeURIComponent(body);
         } catch (_e) { return null; }
-        if (/[\r\n\u0000]/.test(decoded)) return null;
+        if (/[\u0000-\u001f\u007f-\u009f]/.test(decoded)) return null;
         const name = canonicalConceptName(decoded);
         if (!name || name.length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end),
