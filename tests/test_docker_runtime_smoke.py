@@ -134,6 +134,28 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                             self.assertEqual(main(["--asset", kind, mime, digest]), result)
         self.assertEqual(main(["--asset", "unknown", "text/javascript", "0" * 64]), 2)
 
+    def test_asset_validation_invocations_are_live_and_fail_closed(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        # Pin executable commands and their continuation arguments together:
+        # checking only "--asset ..." would also accept a no-op in place
+        # of the validator. The loop's command is indented two spaces deeper.
+        for kind, indent in (("bundle", "            "), ("worker", "          ")):
+            prefix = indent + "python scripts/ci/check_runtime_smoke.py \\" + "\n"
+            invocation = (
+                prefix
+                + indent
+                + f'  --asset {kind} "$mime" "$expected_sha" < "$asset"'
+            )
+            with self.subTest(kind=kind):
+                self.assertEqual(source.count(invocation), 1)
+                # A mutation which preserves all arguments but removes the
+                # real validator must fail this exact invocation contract.
+                without_validator = source.replace(
+                    prefix, indent + ": \\" + "\n"
+                )
+                self.assertNotEqual(without_validator, source)
+                self.assertNotIn(invocation, without_validator)
+
     def test_workflow_is_nonrequired_and_narrowly_triggered(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         for event in ("pull_request", "push"):
