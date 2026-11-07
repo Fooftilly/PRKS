@@ -43,7 +43,7 @@ class FrontendWikiLinkAutocompleteTests(unittest.TestCase):
         self.assertIn("const startCh = openAt + 2;", body)
         self.assertIn("const query = before.slice(startCh);", body)
         # The reserved-prefix guard has to see the same slice the hint replaces.
-        self.assertIn("/^(pdf:|concept:|argument:)/i.test(query)", body)
+        self.assertIn("/^(pdf:|concept:|concept-encoded:|argument:)/i.test(query)", body)
         # No regex re-scan of the line: that pattern reported the leftmost opener
         # while `from` used the last one, and was quadratic in line length.
         self.assertNotIn("before.match(", body)
