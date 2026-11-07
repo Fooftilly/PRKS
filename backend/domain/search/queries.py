@@ -5,20 +5,28 @@ The query side of ``derived.work_search``. Python only splits the query
 punctuation cleanup, happens in SQL through the same functions the refresh
 indexed with, so the stored and queried sides cannot drift.
 
-Phase 1 keeps SQLite's union order (§8.3, Ranking). A keyword search lists
-its Works in four tiers, each Work once, in its first tier:
+A keyword search finds what Phase 1 (L-S-1) found: Works whose ``doc``
+holds every token as a prefix, Works whose ``text_norm`` holds every token
+as a substring, and Works whose linked people (``people_norm``) hold the
+whole query. L-S-2 (#638) orders them by one score (§8.3, Ranking):
 
-1. full-text hits on ``doc`` (every token as a prefix), best
-   ``ts_rank_cd`` first;
-2. Works whose primary Manifestation's own title or abstract (the
-   override of the Work's) holds every token as a substring;
-3. the infix fallback: Works whose ``text_norm`` holds every token as a
-   substring;
-4. Works whose linked people (``people_norm``) hold the whole query.
+* each token weighs the best field it matches in, counted once however
+  often it repeats there: a prefix in the title 1.0, in people or author
+  text 0.9, a substring of the title 0.8, of a linked person 0.6, a prefix
+  in the abstract 0.4, in the Research Note 0.2, a substring anywhere else
+  0.15; the Work's base score is the mean over the tokens;
+* plus 0.3 times the trigram similarity of the displayed title to the
+  whole query, so a short exact title comes before a longer one;
+* equal scores are then ordered by ``ts_rank_cd`` (normalization 32), a
+  density tie-break that never outweighs a difference in score.
 
-Inside tiers 2 to 4, and for the filter-only lists, the most recently
-updated Work comes first, then the most recently created, then the id, a
-tie-break SQLite leaves open.
+Only the first 50000 characters of each field are in ``doc`` (the schema's
+tsvector bound); a token found only further on matches through
+``text_norm`` and weighs 0.15, the substring weight.
+
+Equal scores and density, and the filter-only lists, put the most recently
+updated Work first, then the most recently created, then the id. The weights are
+measured on ``tests/pg/search_corpus.py`` by ``tests/pg/search_ranking.py``.
 """
 
 from __future__ import annotations
@@ -59,39 +67,73 @@ phrase AS (
   SELECT '%%' || prks.like_escape(prks.search_norm(%(phrase)s)) || '%%' AS p
   WHERE %(phrase)s <> ''
 ),
-hits AS (
-  SELECT s.work_id, 1 AS tier, ts_rank_cd(s.doc, q.query) AS score
+-- Which Works a query finds is unchanged from Phase 1 (L-S-1): a full-text
+-- hit, every token as a substring, or the whole query in a linked person.
+-- The substring branch keeps Phase 1's primary-Manifestation join, so the
+-- set is exactly the one L-S-1 returned.
+found AS (
+  SELECT s.work_id
   FROM derived.work_search s, q
   WHERE s.library_id = %(library_id)s AND s.doc @@ q.query
-  UNION ALL
+  UNION
   -- The first needle is the trigram index condition; LIKE ALL checks them all.
-  SELECT s.work_id,
-         CASE WHEN prks.search_norm(concat_ws(' ', m.title, m.abstract)) LIKE ALL (needles.p)
-              THEN 2 ELSE 3 END,
-         0
+  SELECT s.work_id
   FROM derived.work_search s
   CROSS JOIN needles
   JOIN prks.works w ON w.library_id = s.library_id AND w.id = s.work_id
   JOIN prks.manifestations m ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id
   WHERE s.library_id = %(library_id)s AND w.library_id = %(library_id)s
     AND s.text_norm LIKE needles.p[1] AND s.text_norm LIKE ALL (needles.p)
-  UNION ALL
-  SELECT s.work_id, 4, 0
+  UNION
+  SELECT s.work_id
   FROM derived.work_search s, phrase
   WHERE s.library_id = %(library_id)s AND s.people_norm LIKE phrase.p ESCAPE '\'
 ),
-best AS (
-  SELECT DISTINCT ON (work_id) work_id, tier, score FROM hits ORDER BY work_id, tier, score DESC
+-- Each token on its own: its prefix query and its substring needle.
+token AS (
+  SELECT i,
+         to_tsquery('prks.prks_search'::regconfig, prks.tsquery_prefix(prks.search_fold(t))) AS tq,
+         CASE WHEN prks.search_token(t) <> ''
+              THEN '%%' || prks.like_escape(prks.search_token(t)) || '%%' END AS needle
+  FROM terms
+),
+-- A token's weight is the best field it matches in, counted once however
+-- often it repeats there (§8.3, Ranking).
+token_weight AS (
+  SELECT f.work_id, k.i,
+         CASE WHEN ts_filter(s.doc, '{a}') @@ k.tq THEN 1.0
+              WHEN ts_filter(s.doc, '{b}') @@ k.tq THEN 0.9
+              WHEN s.title_norm LIKE k.needle THEN 0.8
+              WHEN s.people_norm LIKE k.needle THEN 0.6
+              WHEN ts_filter(s.doc, '{c}') @@ k.tq THEN 0.4
+              WHEN ts_filter(s.doc, '{d}') @@ k.tq THEN 0.2
+              WHEN s.text_norm LIKE k.needle THEN 0.15
+              ELSE 0.0 END AS w
+  FROM found f
+  JOIN derived.work_search s ON s.library_id = %(library_id)s AND s.work_id = f.work_id
+  CROSS JOIN token k
+),
+base AS (
+  SELECT work_id, avg(w) AS w FROM token_weight GROUP BY work_id
+),
+scored AS (
+  SELECT b.work_id,
+         b.w
+         + 0.3 * ext.similarity(s.title_norm, prks.search_norm(%(phrase)s)) AS score,
+         ts_rank_cd(s.doc, q.query, 32) AS density
+  FROM base b
+  JOIN derived.work_search s ON s.library_id = %(library_id)s AND s.work_id = b.work_id
+  CROSS JOIN q
 )
-SELECT best.work_id
-FROM best
-JOIN prks.works w ON w.library_id = %(library_id)s AND w.id = best.work_id
-ORDER BY best.tier, best.score DESC, w.updated_at DESC, w.created_at DESC, best.work_id COLLATE "C"
+SELECT scored.work_id
+FROM scored
+JOIN prks.works w ON w.library_id = %(library_id)s AND w.id = scored.work_id
+ORDER BY scored.score DESC, scored.density DESC, w.updated_at DESC, w.created_at DESC, scored.work_id COLLATE "C"
 """
 
 
 def keyword_work_ids(scope: LibraryScope, text: str) -> list[str]:
-    """The Works a free-text query finds, in Phase 1 union order (module docs)."""
+    """The Works a free-text query finds, best score first (module docs)."""
     tokens = split_query(text)
     if not tokens:
         return []

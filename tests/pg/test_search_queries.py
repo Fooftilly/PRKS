@@ -4,7 +4,7 @@
 where both agree. These tests cover what only PostgreSQL does: the §8.7
 vectors (Unicode folding on both sides of every match, the infix fallback,
 whole-string filters that keep punctuation, wildcards that stay literal,
-NFD queries), the Phase 1 tier order, and Library isolation.
+NFD queries), the L-S-2 ranking (#638), and Library isolation.
 """
 
 from __future__ import annotations
@@ -101,8 +101,10 @@ class VectorTests(SearchQueryTestCase):
 
 
 class OrderTests(SearchQueryTestCase):
-    def test_phase_one_keeps_the_union_order(self) -> None:
-        # The override is older than the note: only its tier lists it first.
+    def test_the_score_orders_every_phase_one_path(self) -> None:
+        # The set is Phase 1's; the order is the L-S-2 score: a title prefix
+        # (1.0), a substring of a linked person (0.6), then two infix-only
+        # matches (0.15), the more recently updated first.
         by_person = self.library.add_work("Fourth")
         person = self.library.add_person("Malphan", "Quill")
         self.library.add_role(person, by_person, "Author")
@@ -112,7 +114,52 @@ class OrderTests(SearchQueryTestCase):
         self.refresh(by_override)
         by_note = self.library.add_work("Third", text_content="zalphaz")
         by_prefix = self.library.add_work("Alphabet")
-        self.assertEqual(self.found("alpha"), [by_prefix, by_override, by_note, by_person])
+        self.assertEqual(self.found("alpha"), [by_prefix, by_person, by_note, by_override])
+
+    def test_a_title_outranks_a_note_that_repeats_the_word(self) -> None:
+        title = self.library.add_work("A Theory of Justice")
+        self.library.add_work("Seminar", text_content=" ".join(["justice again"] * 20))
+        self.assertEqual(self.found("justice")[0], title)
+
+    def test_a_title_infix_outranks_a_note_prefix(self) -> None:
+        compound = self.library.add_work("Erkenntnistheorie")
+        note = self.library.add_work("Vorlesung", text_content="Theorie am Rande")
+        self.assertEqual(self.found("theorie"), [compound, note])
+
+    def test_a_short_exact_title_comes_before_a_longer_one(self) -> None:
+        exact = self.library.add_work("The Republic")
+        longer = self.library.add_work("A Companion to the Long Republic Tradition")
+        self.assertEqual(self.found("republic"), [exact, longer])
+
+    def test_each_token_scores_its_best_field(self) -> None:
+        # Title and credited person together beat both tokens in a note.
+        credited = self.library.add_work("Republic")
+        person = self.library.add_person("Aristocles", "Platonides")
+        self.library.add_role(person, credited, "Author")
+        noted = self.library.add_work("Log", text_content="republic platonides")
+        self.assertEqual(self.found("republic platonides"), [credited, noted])
+
+    def test_an_abstract_prefix_outranks_a_newer_note_prefix(self) -> None:
+        # ts_filter reads the stored C and D weights (lowercase labels match
+        # them): 0.4 beats 0.2 although recency and the note's density
+        # (its repetitions) both favor the note.
+        by_abstract = self.library.add_work("Essays", abstract="Quillon wrote it")
+        by_note = self.library.add_work("Log", text_content=" ".join(["quillon again"] * 10))
+        self.assertEqual(self.found("quillon"), [by_abstract, by_note])
+
+    def test_density_breaks_a_tie_before_recency(self) -> None:
+        # Same title, same field: the scores are equal, so the denser note
+        # comes first although the other Work is newer.
+        dense = self.library.add_work("Log", text_content="quillon and quillon and quillon")
+        sparse = self.library.add_work("Log", text_content="quillon once")
+        self.assertEqual(self.found("quillon"), [dense, sparse])
+
+    def test_a_linked_person_outranks_an_abstract_mention(self) -> None:
+        mention = self.library.add_work("Essays", abstract="Quillon is cited once")
+        credited = self.library.add_work("Collected papers")
+        person = self.library.add_person("Ann", "Quillon")
+        self.library.add_role(person, credited, "Author")
+        self.assertEqual(self.found("quillon"), [credited, mention])
 
     def test_an_abstract_of_the_work_itself_is_an_infix_hit(self) -> None:
         # Tier 2 is the primary Manifestation's override only, as on SQLite.

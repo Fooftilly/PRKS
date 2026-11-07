@@ -487,7 +487,14 @@ interface Window {
   prksBeginConceptDefinitionEdit?: (
     conceptId: string,
   ) => Promise<import('./src/features/concepts/types').ConceptDefinitionEdit | null>
+  prksBeginConceptAliasesEdit?: (
+    conceptId: string,
+  ) => Promise<import('./src/features/concepts/types').ConceptAliasesEdit | null>
   deleteConcept?: (id: string) => Promise<unknown>
-  putConceptAliases?: (id: string, aliases: string[]) => Promise<unknown>
+  putConceptAliases?: (
+    id: string,
+    aliases: string[],
+    options?: { aliasesEdit?: import('./src/features/concepts/types').ConceptAliasesEdit },
+  ) => Promise<unknown>
   putConceptParents?: (id: string, parentIds: string[]) => Promise<unknown>
 }

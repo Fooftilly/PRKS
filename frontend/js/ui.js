@@ -5602,13 +5602,21 @@ function prksWorkTagOwnerLive(ownerCtx, generation, workId, input) {
 
 async function prksAttachExistingTag(entityType, entityId, tagId, ownerCtx, triggerInput, knownTag) {
     if (entityType === 'work') {
-        await prksWorkTagEdit(ownerCtx, tagId, true, knownTag);
-        if (triggerInput) { triggerInput.disabled = false; triggerInput.removeAttribute('aria-busy'); }
+        try {
+            const attached = await prksWorkTagEdit(ownerCtx, tagId, true, knownTag);
+            if (attached === false) throw new Error('Could not queue the Work Tag attachment.');
+        } finally {
+            if (triggerInput) {
+                triggerInput.disabled = false;
+                triggerInput.removeAttribute('aria-busy');
+            }
+        }
         return;
     }
     if (entityType === 'folder') {
         try {
-            await prksFolderTagEdit(ownerCtx, tagId, true, knownTag);
+            const attached = await prksFolderTagEdit(ownerCtx, tagId, true, knownTag);
+            if (attached === false) throw new Error('Could not queue the Folder Tag attachment.');
         } finally {
             if (triggerInput) {
                 triggerInput.disabled = false;
@@ -5704,16 +5712,25 @@ window.prksTagVocabularyMessage = prksTagVocabularyMessage;
 async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInput) {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
+    const key = JSON.stringify([entityType, entityId, trimmed.toLowerCase()]);
+    /* A fast double-click can activate the same result twice even after the
+     * input is disabled: the result's mousedown handler is a separate node.
+     * Claim this input synchronously, before the first catalogue await. */
+    if (triggerInput && (triggerInput.dataset.prksTagCreatePending ||
+        triggerInput.dataset.prksTagCreateDone === key)) return;
     if (triggerInput) {
+        triggerInput.dataset.prksTagCreatePending = key;
         triggerInput.disabled = true;
         triggerInput.setAttribute('aria-busy', 'true');
     }
+    let created = null;
     try {
         const known = typeof fetchTags === 'function' ? await fetchTags() : [];
-        const created = await prksCreateTagDurably({ name: trimmed, color: '#6d6cf7' }, known);
-        /* The row is handed over rather than looked up: this Tag's id was
-         * minted a moment ago and is in no catalogue the server could have
-         * answered with. */
+        created = await prksCreateTagDurably({ name: trimmed, color: '#6d6cf7' }, known);
+        /* Creation has already been committed locally. Even if attachment
+         * fails, another Create would mint a duplicate instead of repairing
+         * the existing Tag. Keep the accepted claim until the input unmounts. */
+        if (triggerInput) triggerInput.dataset.prksTagCreateDone = key;
         await prksAttachExistingTag(entityType, entityId, created.entity_id, ownerCtx,
             triggerInput, { id: created.entity_id, name: trimmed, color: '#6d6cf7', aliases: [] });
     } catch (e) {
@@ -5721,7 +5738,21 @@ async function prksSubmitNewTag(entityType, entityId, name, ownerCtx, triggerInp
             triggerInput.disabled = false;
             triggerInput.removeAttribute('aria-busy');
         }
-        await prksAlertMessage(prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
+        if (created) {
+            /* The Tag already has a durable identity. Retrying Create would
+             * mint a duplicate. Explain the recovery path accurately. */
+            const destination = entityType === 'folder' ? 'Folder' : 'Work';
+            await prksAlertMessage(
+                'Tag "' + trimmed + '" was created locally but could not be attached to this ' +
+                destination + '. Select the existing Tag in the Tag picker to attach it.',
+                'Could not attach Tag');
+        } else {
+            await prksAlertMessage(prksTagVocabularyMessage(e, 'create this tag'), 'Could not save');
+        }
+    } finally {
+        if (triggerInput && triggerInput.dataset.prksTagCreatePending === key) {
+            delete triggerInput.dataset.prksTagCreatePending;
+        }
     }
 }
 

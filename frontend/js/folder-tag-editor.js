@@ -255,6 +255,7 @@
     async function edit(ctx, tagId, present, knownTag) {
         const state = ctx && ctx.getResource('folderTagEditor');
         if (!state || !live(ctx, state)) return;
+        let queued = false;
         try {
             if (state.preparing) await state.preparing;
             if (!state.options) throw new Error();
@@ -273,7 +274,8 @@
             const base = root.prksFolderTagBase(state.options, tagId);
             if (!live(ctx, state)) return;
             await root.prksSync.store.coalesceFolderTag(state.folderId, tagId, present, base.present, base.revision, tag);
-            if (!live(ctx, state)) { root.prksSync.changed(); return; }
+            queued = true;
+            if (!live(ctx, state)) { root.prksSync.changed(); return true; }
             state.error = null;
             if (owns(ctx, state)) {
                 const input = document.getElementById('folder-tag-search');
@@ -283,10 +285,14 @@
             }
             await paint(ctx, state); // committed before optimistic paint
             root.prksSync.changed();
+            return true;
         } catch (_) {
-            if (!live(ctx, state)) return;
-            state.error = 'Could not save this Tag change locally. Please retry.';
+            if (!live(ctx, state)) return queued;
+            state.error = queued
+                ? 'Tag change saved locally, but the panel could not refresh.'
+                : 'Could not save this Tag change locally. Please retry.';
             await paint(ctx, state);
+            return queued;
         }
     }
     root.prksMountFolderTags = mount;

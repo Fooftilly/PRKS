@@ -50,6 +50,21 @@ export interface ConceptDetail {
 export type ConceptIndexAvailability = 'ready' | 'unavailable'
 export type ConceptDetailAvailability = 'ready' | 'unavailable' | 'not-found'
 
+/** Pinned name/alias aggregate as seen when the Search keys editor opens. */
+export interface ConceptAliasesEdit {
+  readonly concept_id: string
+  readonly name: string
+  readonly value: readonly string[]
+  readonly base: {
+    readonly identity: {
+      readonly name: string
+      readonly aliases: readonly string[]
+      readonly revision: number
+    }
+  }
+  readonly expected: { readonly identity: string | null }
+}
+
 /**
  * A Definition editor's session, from `prksBeginConceptDefinitionEdit` when it
  * opens (#568): the text it shows and the base that text was typed on. Opaque

@@ -178,6 +178,26 @@ describe('Tags intents', () => {
     expect(reload).toHaveBeenCalledWith(expect.anything(), 2, { aliasTagId: 't2' })
   })
 
+  it('does not resume its own accepted merge but preserves a newer merge dialog', async () => {
+    window.prksTagsMerge = vi.fn(async () => ({ ok: true }))
+    const reload = vi.fn(async () => true)
+    window.prksReloadTagsVocabulary = reload
+    const state = { generation: 3 }
+    const first = browserTagsIntents(owner(state), 3, {
+      currentDialog: () => ({ mergeSourceId: 'source', mergeTargetId: 'target' }),
+    })
+    expect((await first.merge('source', 'target')).status).toBe('success')
+    expect(reload).toHaveBeenLastCalledWith(expect.anything(), 3, null)
+    const switched = browserTagsIntents(owner(state), 3, {
+      currentDialog: () => ({ mergeSourceId: 'new-source', mergeTargetId: 'new-target' }),
+    })
+    expect((await switched.merge('source', 'target')).status).toBe('success')
+    expect(reload).toHaveBeenLastCalledWith(expect.anything(), 3, {
+      mergeSourceId: 'new-source',
+      mergeTargetId: 'new-target',
+    })
+  })
+
   it('merges through the durable wrapper only while the owner is still current', async () => {
     const state = { generation: 6 }
     const merge = vi.fn(async () => ({ ok: true }))

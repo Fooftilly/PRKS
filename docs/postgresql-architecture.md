@@ -1236,11 +1236,24 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   nothing, and an extraction that locks first commits its row before the
   delete or replace removes it. So a stale extraction never leaves a row
   behind.
-- **Ranking.** Phase 1 reproduces today's union order for parity (FTS hits,
-  then title/abstract substring, then the per-token fallback, then people).
-  Phase 2, as its own PR, replaces the union with one `ts_rank_cd`-weighted
-  score plus a trigram similarity boost, accepted only with before/after
-  results on a synthetic multilingual corpus.
+- **Ranking.** Phase 1 (L-S-1) reproduced the SQLite union order for parity
+  (FTS hits, then title/abstract substring, then the per-token fallback,
+  then people). Phase 2 (L-S-2, #638) keeps the same set of found Works and
+  orders them by one score. Each token weighs the best field it matches in,
+  counted once however often it repeats there, from a title prefix (1.0)
+  down to a substring in the infix text (0.15). The score is the mean over
+  the tokens, plus a trigram similarity boost of the displayed title
+  against the whole query. A `ts_rank_cd` density term (normalization 32)
+  only breaks ties between equal scores. Counting a
+  field once is what stops a note that repeats a word from outranking a
+  title. Plain `ts_rank_cd` sums repetitions, and the before/after results
+  showed that. The weights are listed in `backend/domain/search/queries.py`.
+  They are measured on the synthetic multilingual corpus in
+  `tests/pg/search_corpus.py` with `python -m tests.pg.search_ranking`,
+  and the order on that corpus is pinned in
+  `tests/pg/search_ranking_baseline.json`. Keyword order is no longer
+  compared with SQLite. Parity covers the found set, and SQLite keeps its
+  own order until PG-C2 removes it.
 - **Substring and fuzzy** (`pg_trgm`) replace every `LOWER(…) LIKE` path,
   including author and publisher filters, with Unicode-correct folding via
   `prks.search_norm(s) = ext.unaccent('prks.search_unaccent'::regdictionary,

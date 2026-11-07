@@ -233,7 +233,7 @@ function confirmMerge(): void {
     const outcome = await props.intents.merge(sourceId, targetId)
     if (mergeSourceId.value !== sourceId || mergeTargetId.value !== targetId) return
     if (outcome.status === 'error') mergeError.value = outcome.message
-    else if (outcome.status === 'success') mergeError.value = ''
+    else if (outcome.status === 'success') closeMerge()
   })
 }
 
