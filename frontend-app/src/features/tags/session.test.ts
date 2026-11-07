@@ -342,6 +342,20 @@ describe('Tags route bridge', () => {
     await flush()
     expect(input.value).toBe('')
     expect(document.activeElement).toBe(input)
+
+    // Focus deliberately moved while an async Enter write was in flight.
+    // Its completion must not pull focus back to the old input.
+    input.value = 'Second alias'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    expect(add).toHaveBeenCalledTimes(2)
+    const close = el.querySelector<HTMLButtonElement>('#tags-page-alias-modal-close')!
+    close.focus()
+    expect(document.activeElement).toBe(close)
+    finish?.({ ok: true })
+    await flush()
+    expect(document.activeElement).toBe(close)
   })
 
   it('shows alias and merge failures in the open dialog and stays quiet for a no-op', async () => {

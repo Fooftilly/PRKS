@@ -192,7 +192,10 @@ function addAlias(): void {
       // another alias, but do not steal focus from a different control.
       if (restoreInputFocus) {
         void nextTick(() => {
-          if (aliasTagId.value === tagId) focusAliasInput()
+          if (aliasTagId.value !== tagId) return
+          const active = document.activeElement
+          // Another control took focus while the write was pending: leave it.
+          if (active === input || active === document.body || !active?.isConnected) focusAliasInput()
         })
       }
     }
