@@ -111,7 +111,6 @@ describe('create form host', () => {
     expect(document.getElementById('folder-title-error')?.textContent).toContain('already exists')
     const button = document.getElementById('save-folder-btn') as HTMLButtonElement
     expect(button.disabled).toBe(true)
-    title.setAttribute('aria-invalid', 'true')
     expect(title.getAttribute('aria-invalid')).toBe('true')
   })
 

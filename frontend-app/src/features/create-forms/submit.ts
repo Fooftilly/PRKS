@@ -90,9 +90,9 @@ export async function submitGroupCreate(draft: GroupDraft): Promise<void> {
     await w.prksAlertMessage?.('Could not create group.', 'Could not save')
     return
   }
-  const parentId = await w.prksResolvePersonGroupParent(draft.parentId, draft.parentQuery, null)
-  if (parentId === undefined) return
   try {
+    const parentId = await w.prksResolvePersonGroupParent(draft.parentId, draft.parentQuery, null)
+    if (parentId === undefined) return
     const created = await w.prksCreatePersonGroupDurably({
       name: draft.name.trim(),
       description: draft.description.trim(),
