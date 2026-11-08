@@ -208,17 +208,62 @@ describe('Settings surface', () => {
   it('does not restore a backup until the separate confirmation is submitted', async () => {
     installMatchMedia(false)
     window.prksLoadAppSettings = vi.fn(async () => ({}))
+    document.body.innerHTML = `
+      <input id="prks-restore-confirm-input" type="text" />
+      <button type="button" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
+      <p id="prks-restore-confirm-status"></p>
+    `
     const open = vi.fn()
-    const restore = vi.fn()
+    const stage = vi.fn(async () => ({ token: 'staged-token', summary: { works: 1 }, warnings: [] }))
+    const restore = vi.fn(async () => {
+      throw new Error('stop before reload')
+    })
     window.openModal = open
+    window.prksStageBackup = stage
     window.prksRestoreBackup = restore
     mountSurface()
     await nextTick()
+
     document.getElementById('prks-backup-restore-btn')?.click()
     document.getElementById('prks-backup-verify-btn')?.click()
     await nextTick()
     expect(document.getElementById('prks-backup-restore-status')?.textContent).toBe('Choose a backup file first.')
     expect(open).not.toHaveBeenCalled()
+    expect(stage).not.toHaveBeenCalled()
     expect(restore).not.toHaveBeenCalled()
+
+    const input = document.getElementById('prks-backup-file-input') as HTMLInputElement
+    const file = new File(['backup-bytes'], 'library.prks-backup', { type: 'application/octet-stream' })
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: {
+        0: file,
+        length: 1,
+        item: (index: number) => (index === 0 ? file : null),
+      },
+    })
+    input.dispatchEvent(new Event('change'))
+    document.getElementById('prks-backup-verify-btn')?.click()
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    expect(stage).toHaveBeenCalledTimes(1)
+    expect(document.getElementById('prks-backup-restore-status')?.textContent).toBe('Backup verified')
+    expect(document.getElementById('prks-backup-verified-panel')?.classList.contains('hidden')).toBe(false)
+
+    document.getElementById('prks-backup-restore-btn')?.click()
+    expect(open).toHaveBeenCalledWith('prks-restore-confirm-modal')
+    expect(restore).not.toHaveBeenCalled()
+
+    const confirmInput = document.getElementById('prks-restore-confirm-input') as HTMLInputElement
+    const confirmSubmit = document.getElementById('prks-restore-confirm-submit') as HTMLButtonElement
+    confirmInput.value = 'RESTORE'
+    confirmInput.dispatchEvent(new Event('input'))
+    expect(confirmSubmit.disabled).toBe(false)
+    confirmSubmit.click()
+    await nextTick()
+    await Promise.resolve()
+    await nextTick()
+    expect(restore).toHaveBeenCalledWith('staged-token')
   })
 })
