@@ -6,7 +6,9 @@
  * the item's revision, import (one, or the selected items as a batch) and
  * remove. A refusal that carries the item as it now is replaces the painted
  * item, so a stale revision shows the current draft rather than a guess.
- * Nothing here is cached in the browser: the queue is online-only.
+ * Nothing here is cached in the browser: the queue is online-only. Queue calls
+ * bypass TanStack Query (no retries), so every catch reports a final transport
+ * failure to PRKS reachability itself.
  */
 import { reactive } from 'vue'
 import {
@@ -27,6 +29,7 @@ import {
   type ProcessingItemPage,
   type ProcessingItemUploaded,
 } from '../../api/processing-items'
+import { noteFinalPrksTransportFailure } from '../../api/http'
 
 /** The client calls the queue makes; tests pass fakes. */
 export interface ProcessingQueueApi {
@@ -191,6 +194,7 @@ export class ProcessingQueue {
       this.state.loaded = true
       this.count()
     } catch (error) {
+      noteFinalPrksTransportFailure(error)
       this.state.loadError = processingErrorMessage(error, LOAD_FAILURE)
     } finally {
       this.state.loading = false
@@ -230,6 +234,7 @@ export class ProcessingQueue {
           duplicates: hasDup ? dup : null,
         })
       } catch (error) {
+        noteFinalPrksTransportFailure(error)
         Object.assign(note(), { state: 'failed', message: processingErrorMessage(error, UPLOAD_FAILURE) })
       } finally {
         this.state.uploading -= 1
@@ -245,6 +250,7 @@ export class ProcessingQueue {
     try {
       return await run()
     } catch (error) {
+      noteFinalPrksTransportFailure(error)
       const refusal = processingRefusal(error)
       if (refusal?.item) this.place(refusal.item)
       if (this.state.items.some((one) => one.id === id)) this.state.errors[id] = processingErrorMessage(error, fallback)
@@ -330,6 +336,7 @@ export class ProcessingQueue {
         }
       }
     } catch (error) {
+      noteFinalPrksTransportFailure(error)
       const message = processingErrorMessage(error, IMPORT_FAILURE)
       for (const id of ids) if (this.state.items.some((one) => one.id === id)) this.state.errors[id] = message
     } finally {

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PrksApiError } from '../../api/http'
+
+const reachability = vi.hoisted(() => ({ noted: [] as unknown[] }))
+vi.mock('../../api/http', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/http')>()),
+  noteFinalPrksTransportFailure: (error: unknown) => { reachability.noted.push(error) },
+}))
 import { processingItemRow } from '../../api/processing-items.fixtures'
 import type { ProcessingItem } from '../../api/processing-items'
 import { ProcessingQueue, repaintDraft, type ProcessingQueueApi } from './queue'
@@ -262,5 +268,27 @@ describe('repaintDraft', () => {
 
   it('takes the item as it now is when nothing was submitted (a refusal or another change)', () => {
     expect(repaintDraft({ title: 'Mine' }, null, { title: 'Theirs' })).toEqual({ title: 'Theirs' })
+  })
+})
+
+describe('queue reachability', () => {
+  it('reports each failed queue call to PRKS reachability', async () => {
+    reachability.noted.length = 0
+    const down = () => new TypeError('PRKS API request failed.')
+    const queue = new ProcessingQueue(fakeApi({
+      list: vi.fn()
+        .mockResolvedValueOnce({ items: [item('a'), item('b')], nextCursor: null })
+        .mockRejectedValueOnce(down()),
+      upload: vi.fn(async () => { throw down() }),
+      update: vi.fn(async () => { throw down() }),
+      importMany: vi.fn(async () => { throw down() }),
+    }))
+    await queue.load()
+    await queue.load()
+    await queue.upload([new File(['%PDF'], 'x.pdf', { type: 'application/pdf' })])
+    await queue.save('a', { title: 'T' })
+    queue.toggle('b', true)
+    await queue.importSelected()
+    expect(reachability.noted).toHaveLength(4)
   })
 })

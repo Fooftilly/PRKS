@@ -14,6 +14,7 @@ import {
   type RouteSurfaceOwner,
 } from '../../route-surface/lifecycle'
 import { listProcessingItems } from '../../api/processing-items'
+import type { LeaveAssessResult, LeaveProbe } from '../../lifecycle/tab-leave'
 import type { ProcessingRouteInstance } from '../processing/route'
 import {
   ProcessingQueue,
@@ -44,6 +45,32 @@ export interface ProcessingQueuePresentInput {
 interface QueueRoot {
   prksSetProcessingAttentionCount?: (count: number | null) => void
   prksProcessingQueueCount?: (options?: { signal?: AbortSignal }) => Promise<number>
+  prksTabLeave?: { registerProbe?: (probe: LeaveProbe) => void }
+  prksConfirmUnsavedRouteLeave?: (options: { title: string; message: string }) => Promise<boolean> | boolean
+}
+
+/** The queue each owner (TabContext) shows; a card clears its dirty mark when it unmounts. */
+const queues = new WeakMap<object, ProcessingQueue>()
+
+/** The leave probe's order, after pdf-sync 10, person-profile 20 and work-metadata 30. */
+export const PROCESSING_QUEUE_LEAVE_ORDER = 40
+
+/**
+ * `prksTabLeave` probe: an owner whose queue has a draft with unsaved edits
+ * asks before its route is replaced, parked or destroyed, with the shared
+ * unsaved-changes confirmation. Any other owner is not this probe's concern.
+ */
+export async function assessProcessingQueueLeave(ctx: unknown): Promise<LeaveAssessResult> {
+  const queue = ctx && typeof ctx === 'object' ? queues.get(ctx) : undefined
+  if (!queue || queue.state.dirty.size === 0) return null
+  const blocked = { status: 'rejected-unsaved-edit', feature: PROCESSING_QUEUE_FEATURE } as const
+  const confirm = (globalThis as QueueRoot).prksConfirmUnsavedRouteLeave
+  if (typeof confirm !== 'function') return blocked
+  const ok = await confirm({
+    title: 'Discard draft changes?',
+    message: 'Your unsaved Processing draft changes will be discarded.',
+  })
+  return ok ? null : blocked
 }
 
 function text(value: unknown): string {
@@ -104,6 +131,7 @@ export function presentProcessingQueue(input: ProcessingQueuePresentInput): void
         if (typeof owner.isCurrent === 'function' && !owner.isCurrent(generation)) return
         setBadge(count)
       })
+      queues.set(owner, queue)
       return createVNode(ProcessingQueueRoute, { queue, folders, docTypes })
     },
   })
@@ -123,7 +151,13 @@ export async function processingQueueCount(options: { signal?: AbortSignal } = {
 
 export function registerProcessingQueueBridge(target: Window = window): void {
   registerRouteWindowBridge(target)
-  ;(target as unknown as QueueRoot).prksProcessingQueueCount = processingQueueCount
+  const root = target as unknown as QueueRoot
+  root.prksProcessingQueueCount = processingQueueCount
+  root.prksTabLeave?.registerProbe?.({
+    id: PROCESSING_QUEUE_FEATURE,
+    order: PROCESSING_QUEUE_LEAVE_ORDER,
+    assess: assessProcessingQueueLeave,
+  })
   registerEarlyRoutePresenter(
     PROCESSING_QUEUE_FEATURE,
     (request, host) => {

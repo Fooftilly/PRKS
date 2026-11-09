@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { processingItemRow } from '../../api/processing-items.fixtures'
 import { resetRouteSurfaceForTests } from '../../route-surface/lifecycle'
 import type { ProcessingQueueApi } from './queue'
-import { docTypeOptions, folderOptions, presentProcessingQueue } from './session'
+import { assessProcessingQueueLeave, docTypeOptions, folderOptions, presentProcessingQueue, registerProcessingQueueBridge } from './session'
 
 afterEach(() => {
   resetRouteSurfaceForTests()
@@ -130,5 +130,34 @@ describe('Processing queue page', () => {
     expect(folderOptions([{ id: 'b', title: 'Beta' }, { id: 'a', title: 'Alpha' }, { title: 'no id' }, null]))
       .toEqual([{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }])
     expect(docTypeOptions([{ value: 'book', label: 'Book' }, { label: 'x' }])).toEqual([{ value: 'book', label: 'Book' }])
+  })
+})
+
+describe('Processing queue leave probe', () => {
+  it('asks before leaving an owner whose queue has an unsaved draft, and only then', async () => {
+    const confirm = vi.fn(async () => false)
+    vi.stubGlobal('prksConfirmUnsavedRouteLeave', confirm)
+    const owner = { isCurrent: () => true }
+    const el = host()
+    presentProcessingQueue({ owner, host: el, folders: [], docTypes: [], generation: 1, api: api() })
+    await flush()
+    expect(await assessProcessingQueueLeave(owner)).toBeNull()
+    expect(await assessProcessingQueueLeave({})).toBeNull()
+
+    const title = el.querySelector<HTMLInputElement>('[data-field="title"]')!
+    title.value = 'Unsaved'
+    title.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(await assessProcessingQueueLeave(owner)).toEqual({ status: 'rejected-unsaved-edit', feature: 'processing-queue' })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    confirm.mockResolvedValueOnce(true)
+    expect(await assessProcessingQueueLeave(owner)).toBeNull()
+  })
+
+  it('registers the probe with prksTabLeave', () => {
+    const registerProbe = vi.fn()
+    const target = { prksTabLeave: { registerProbe } } as unknown as Window
+    registerProcessingQueueBridge(target)
+    expect(registerProbe).toHaveBeenCalledWith(expect.objectContaining({ id: 'processing-queue', order: 40 }))
   })
 })
