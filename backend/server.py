@@ -1422,11 +1422,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 body = dict(data)
-                if (
-                    serves_postgres_library()
-                    and "file_path" in body
-                    and str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
-                ):
+                # Adoption lock + existence check only when the stored path
+                # would actually change. Echoing the same file_path on a
+                # title/status PATCH must not 409 missing_pdf when the bytes
+                # are already gone (CodeRabbit Minor on #172); the echo is
+                # dropped below so this request cannot rewrite it after a
+                # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
+                file_path_changing = "file_path" in body and (
+                    str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
+                )
+                if file_path_changing and serves_postgres_library():
                     # Adopting another file is not ported. Refuse before any
                     # part of the PATCH (a folder move, notes) commits, so a
                     # 501 never hides an applied change.
@@ -1440,23 +1445,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': str(e)})
                         return
                 if body:
-                    patched_file_path = "file_path" in body
-                    # Adoption lock + existence check only when the stored
-                    # path would actually change. Echoing the same file_path
-                    # on a title/status PATCH must not 409 missing_pdf when
-                    # the bytes are already gone (CodeRabbit Minor on #172).
-                    # When the echo matches the observed row, DROP file_path
-                    # from the body so this request cannot rewrite it after a
-                    # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
-                    file_path_changing = False
-                    if patched_file_path:
-                        stored_fp = _stored_work_file_path(w_id)
-                        incoming_fp = body.get("file_path")
-                        if str(incoming_fp or "") == str(stored_fp or ""):
-                            body.pop("file_path", None)
-                            file_path_changing = False
-                        else:
-                            file_path_changing = True
+                    if "file_path" in body and not file_path_changing:
+                        # An unchanged echo never rewrites the stored path.
+                        body.pop("file_path", None)
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
