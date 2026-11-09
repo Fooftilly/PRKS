@@ -84,7 +84,7 @@ describe('Processing queue', () => {
     const waiting = queue.load()
     await Promise.resolve()
     expect(list).toHaveBeenCalledTimes(1)
-    finishRemove(item('a', { status: 'removed' }))
+    finishRemove(item('a', { status: 'deleted' }))
     await removing
     await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2))
 
@@ -99,7 +99,7 @@ describe('Processing queue', () => {
   it('splits a large selection into requests within the server batch limit', async () => {
     const many = Array.from({ length: PROCESSING_IMPORT_BATCH_LIMIT + 2 }, (_, i) => item(`i${i}`))
     const importMany = vi.fn(async (ids: readonly string[]) =>
-      ids.map((id) => ({ item_id: id, ok: true, work_id: `W-${id}`, message: '', item: null })))
+      ids.map((id) => ({ item_id: id, ok: true, work_id: `W-${id}`, created: true, code: null, message: '', item: null })))
     const queue = new ProcessingQueue(fakeApi({ list: vi.fn(async () => ({ items: many, nextCursor: null })), importMany }))
     await queue.load()
     for (const one of many) queue.toggle(one.id, true)
