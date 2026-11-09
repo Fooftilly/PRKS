@@ -1,6 +1,6 @@
 PyMuPDF==2.0
 Pillow==13.0.0
-pydantic==2.14.1
+pydantic==2.14.2
 # PostgreSQL canonical runtime and server identity dependencies (#630).
 # psycopg-binary supplies libpq inside the production container.
 psycopg==3.3.6
