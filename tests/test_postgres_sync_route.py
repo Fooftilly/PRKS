@@ -13,6 +13,7 @@ class _Handler:
     """Just enough of ``PRKSHandler`` for ``_handle_postgres_sync_operation``."""
 
     _prks_request_context = object()
+    _prks_request_id = "req-1"
 
     def __init__(self) -> None:
         self.sent: list[tuple[int, dict]] = []

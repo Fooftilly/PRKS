@@ -3868,8 +3868,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 result["research_refs"] = research_index.work_research_refs(data.get("entity_id"), db)
             except Exception as e:
                 LOGGER.warning(
-                    "research_refs_read_failed work_id=%s error_type=%s",
-                    safe_log_id(data.get("entity_id")), safe_error_type(e))
+                    "research_refs_read_failed request_id=%s error_type=%s",
+                    safe_log_id(self._prks_request_id), safe_error_type(e))
         if acknowledged and operation == "DELETE_WORK":
             # Paths are not durable client state; strip before the wire.
             result = {"code": result["code"], "work_id": result["work_id"], "changed": result["changed"]}
