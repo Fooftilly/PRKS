@@ -586,16 +586,19 @@ def _delete_work(work_id: str, *, keep_managed_pdf: bool = False) -> None:
     if not serves_postgres_library():
         delete_library_work(db, text_index, work_id, keep_managed_pdf=keep_managed_pdf)
         return
-    if db.delete_work_record(work_id, claim_pdf=not keep_managed_pdf) is None or not thumbs_dir:
+    deleted = db.delete_work_record(work_id, claim_pdf=not keep_managed_pdf)
+    if deleted is None or not thumbs_dir:
         return
+    # Log the id the database returned, never the request's own value.
+    logged_id = safe_log_id(deleted.work_id)
     try:
-        failed = prks_delete_pdf_thumbnails_for_work_id(work_id, thumbs_dir)
+        failed = prks_delete_pdf_thumbnails_for_work_id(deleted.work_id, thumbs_dir)
         if failed:
             LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s failed_count=%s",
-                           safe_log_id(work_id), len(failed))
+                           logged_id, len(failed))
     except Exception as e:
         LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s error_type=%s",
-                       safe_log_id(work_id), safe_error_type(e))
+                       logged_id, safe_error_type(e))
 
 
 def _prks_pixmap_to_pil(pix):
