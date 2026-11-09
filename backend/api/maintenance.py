@@ -246,7 +246,8 @@ def restore_staged(library: Any, ctx: Any, root: str, data: Any) -> tuple[int, d
         with backup_jobs.private_copy(staged, root) as private:
             result = restore.restore_library(library.database.config.conninfo, storage, private,
                                              ctx.library_id, owner_user_id=ctx.user_id,
-                                             staging_dir=backup_jobs.restore_dir(root))
+                                             staging_dir=backup_jobs.restore_dir(root),
+                                             expected_epoch=ctx.epoch)
     except restore.RestoreFailed as exc:
         return 409, {"error": f"Restore failed. Current PRKS data was not changed. {exc.message}",
                      "reason": exc.reason}, None
