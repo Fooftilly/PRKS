@@ -83,13 +83,18 @@ class WorkMembershipEditorContractTests(unittest.TestCase):
             folder_save.index("if (!still()) return"),
             folder_save.index("patchWorkFolder(attachWid, newFolderId, still)"),
         )
-        playlist_save = (forms / "submit.ts").read_text(encoding="utf-8")
-        playlist_save = playlist_save[playlist_save.index("const pending = w.__prksPendingPlaylistAttach"):]
+        playlist_save = (forms / "playlist-save.ts").read_text(encoding="utf-8")
+        playlist_save = playlist_save[playlist_save.index("const pending = deps.pendingAttach()"):]
         self.assertLess(
-            playlist_save.index("prksCapturedWorkPanelStill"),
-            playlist_save.index("addWorkToPlaylist?.(newId, String(pending.workId), still)"),
+            playlist_save.index("capturedWorkStill(pending)"),
+            playlist_save.index("addWorkToPlaylist(newId, String(pending.workId), still)"),
         )
         self.assertIn("if (pending && pending.workId && still())", playlist_save)
+        self.assertIn("clearPendingIfSame(pending)", playlist_save)
+        self.assertLess(
+            playlist_save.index("const pending = deps.pendingAttach()"),
+            playlist_save.index("await deps.createPlaylist"),
+        )
 
     def test_runtime_stale_membership_does_not_write(self):
         proc = subprocess.run(
