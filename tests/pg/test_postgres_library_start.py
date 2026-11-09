@@ -15,6 +15,7 @@ import http.client
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import uuid
@@ -276,6 +277,23 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             return body
         finally:
             conn.close()
+
+    def test_a_stalled_restore_body_does_not_hold_the_library_gate(self) -> None:
+        with self.serving() as (_name, _root, port, headers):
+            stalled = socket.create_connection(("127.0.0.1", port), timeout=30)
+            try:
+                head = [f"POST /api/backups/restore HTTP/1.1", f"Host: 127.0.0.1:{port}",
+                        "Content-Type: application/json", "Content-Length: 100"]
+                head += [f"{key}: {value}" for key, value in headers.items()]
+                # The headers arrive, the body never does.
+                stalled.sendall(("\r\n".join(head) + "\r\n\r\n").encode("ascii"))
+                status, works, _headers = self.call(port, "GET", "/api/works")
+                self.assertEqual(status, 200, works)
+                status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Not blocked"},
+                                                      headers)
+                self.assertIn(status, (200, 201), created)
+            finally:
+                stalled.close()
 
     def test_backup_and_restore_round_trip_and_fence_the_old_epoch(self) -> None:
         with self.serving(PRKS_EMBEDDED_WORKER="1") as (name, root, port, headers):

@@ -1307,9 +1307,17 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+                # A JSON body is read before the Library gate, as every other
+                # POST does: a client that stalls mid-body must not hold the
+                # restore's exclusive gate. ``stage`` streams its own body.
+                backup_body = None
+                if parsed_path.path != '/api/backups/stage':
+                    backup_body = self._read_json_body()
+                    if backup_body is _JSON_BODY_REJECTED:
+                        return
                 with self._library_access(parsed_path), self._acting_for_request():
                     try:
-                        self._handle_postgres_backup_post(parsed_path.path)
+                        self._handle_postgres_backup_post(parsed_path.path, backup_body)
                     except Exception as exc:
                         self._send_internal_error(exc)
                 return
@@ -4010,11 +4018,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             result = {"code": result["code"], "work_id": result["work_id"], "changed": result["changed"]}
         self.send_json(status, result)
 
-    def _handle_postgres_backup_post(self, path: str) -> None:
+    def _handle_postgres_backup_post(self, path: str, data: object = None) -> None:
         """``POST /api/backups/{progress,stage,restore}`` on the PostgreSQL Library (§11.4).
 
-        Dispatched before any body is read: ``stage`` streams the archive
-        itself, and every earlier answer closes the connection. The SQLite
+        ``stage`` is dispatched before its body is read and streams the
+        archive itself; every earlier answer closes the connection. The other
+        routes' JSON ``data`` was read before the Library gate was taken. The SQLite
         backup service is never reached here, so a restore can only ever
         replace the PostgreSQL Library (``backend.api.maintenance``).
         """
@@ -4048,10 +4057,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             self.send_json(200, body)
             return
-        data = self._read_json_body()
-        if data is _JSON_BODY_REJECTED:
-            return
-        if data is _JSON_BODY_ABSENT:
+        if data is None or data is _JSON_BODY_ABSENT:
             data = {}
         if path == '/api/backups/progress':
             self.send_response(200)
