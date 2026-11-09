@@ -37,14 +37,14 @@ import time
 import uuid
 from collections.abc import Iterator
 from datetime import timedelta
-from typing import LiteralString, Optional
+from typing import Any, LiteralString, Optional
 
 import psycopg
 
 from backend.db.database import Database
 from backend.db.errors import map_database_error
 from backend.domain.identity.authorization import Capability
-from backend.domain.identity.library_scope import LibraryScope, library_command
+from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.maintenance import backup, restore
 from backend.domain.maintenance.connection import maintenance_connection
@@ -71,6 +71,16 @@ _REQUEST_LOCK_SQL: LiteralString = "SELECT pg_advisory_xact_lock(hashtextextende
 _ACTIVE_BACKUP_SQL: LiteralString = (
     "SELECT 1 FROM prks.jobs WHERE library_id = %(library_id)s AND kind = %(kind)s"
     " AND state IN ('queued', 'running') LIMIT 1"
+)
+_ACTIVE_BACKUP_JOB_SQL: LiteralString = (
+    "SELECT id FROM prks.jobs WHERE library_id = %(library_id)s AND kind = %(kind)s"
+    " AND state IN ('queued', 'running') ORDER BY created_at LIMIT 1"
+)
+_JOB_STATUS_SQL: LiteralString = (
+    "SELECT state, progress FROM prks.jobs WHERE library_id = %(library_id)s AND id = %(job_id)s"
+)
+_LIBRARY_RUN_STATE_SQL: LiteralString = (
+    "SELECT state FROM prks.backup_runs WHERE library_id = %(library_id)s AND id = %(run_id)s"
 )
 
 
@@ -176,6 +186,36 @@ def request_backup(db: Database, ctx: RequestContext) -> Optional[uuid.UUID]:
                                          created_by=ctx.user_id)
 
     return library_command(db, ctx, Capability.ADMIN_LIBRARY, enqueue)
+
+
+def authorize_admin(db: Database, ctx: RequestContext) -> None:
+    """Refuse anyone who may not administer the actor's Library (raises ``AccessRefused``)."""
+    library_query(db, ctx, lambda scope: None, capability=Capability.ADMIN_LIBRARY)
+
+
+def active_backup_job(db: Database, ctx: RequestContext) -> Optional[uuid.UUID]:
+    """The actor's Library's queued or running ``backup.create`` job, or None."""
+    row = library_query(db, ctx, lambda scope: scope.execute(
+        _ACTIVE_BACKUP_JOB_SQL, {"kind": BACKUP_KIND}).fetchone(), capability=Capability.ADMIN_LIBRARY)
+    return row["id"] if row is not None else None
+
+
+def backup_job_status(db: Database, ctx: RequestContext,
+                      job_id: uuid.UUID) -> Optional[tuple[str, dict[str, Any]]]:
+    """``(state, progress)`` of a job of the actor's Library, or None when it is gone."""
+    row = library_query(db, ctx, lambda scope: scope.execute(
+        _JOB_STATUS_SQL, {"job_id": job_id}).fetchone(), capability=Capability.ADMIN_LIBRARY)
+    return (row["state"], row["progress"] or {}) if row is not None else None
+
+
+def published_archive(db: Database, ctx: RequestContext, root: str, run_id: uuid.UUID) -> Optional[str]:
+    """The archive of a ``published`` backup run of the actor's Library, or None."""
+    row = library_query(db, ctx, lambda scope: scope.execute(
+        _LIBRARY_RUN_STATE_SQL, {"run_id": run_id}).fetchone(), capability=Capability.ADMIN_LIBRARY)
+    if row is None or row["state"] != "published":
+        return None
+    path = os.path.join(archive_dir(root), f"{run_id}{BACKUP_EXTENSION}")
+    return path if os.path.isfile(path) else None
 
 
 def prune_archives(conninfo: str, directory: str) -> int:

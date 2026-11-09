@@ -14,6 +14,7 @@ import time
 import unittest
 
 from backend.api import maintenance
+from backend.domain.maintenance import staged
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity.authorization import AccessRefused, Refusal
@@ -59,7 +60,7 @@ class MaintenanceApiTests(unittest.TestCase):
 
     def test_a_staged_token_is_bound_to_the_user_who_uploaded_it(self) -> None:
         token = "a" * 32
-        path = maintenance._staged_path(self.root, token, self.owner.context.user_id)
+        path = staged.staged_path(self.root, token, self.owner.context.user_id)
         with open(path, "wb") as handle:
             handle.write(b"not read")
         other = provision_actor(self.db, name="Other").context
@@ -90,18 +91,18 @@ class MaintenanceApiTests(unittest.TestCase):
             objects={StorageKey(NAMESPACE_ASSET_OBJECTS, "a" * 64): None,
                      StorageKey(NAMESPACE_ASSET_OBJECTS, "b" * 64): None,
                      StorageKey(NAMESPACE_PORTRAITS, "c" * 64): None})
-        summary = maintenance._summary(archive)
+        summary = staged.summarize(archive)
         self.assertEqual((summary["works"], summary["pdf_files"], summary["persons"]), (2, 2, None))
 
     def test_old_staged_uploads_are_pruned(self) -> None:
-        old = maintenance._staged_path(self.root, "b" * 32, "u")
-        fresh = maintenance._staged_path(self.root, "c" * 32, "u")
+        old = staged.staged_path(self.root, "b" * 32, "u")
+        fresh = staged.staged_path(self.root, "c" * 32, "u")
         for path in (old, fresh):
             with open(path, "wb"):
                 pass
-        past = time.time() - maintenance.STAGED_TTL_SECONDS - 5
+        past = time.time() - staged.STAGED_TTL_SECONDS - 5
         os.utime(old, (past, past))
-        self.assertEqual(maintenance.prune_staged(self.root), 1)
+        self.assertEqual(staged.prune_staged(self.root), 1)
         self.assertEqual((os.path.exists(old), os.path.exists(fresh)), (False, True))
 
 

@@ -14,7 +14,7 @@ import threading
 import time
 from unittest import mock
 
-from backend.api import maintenance as maintenance_api
+from backend.domain.maintenance import staged
 from backend.api import processing as processing_api
 from tests.pg.test_http_processing import ProcessingHttpTestCase
 
@@ -57,5 +57,5 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
         self.assertIn(b"Connection: close", rest)
         self.assertLess(elapsed, 5)
         self.assertTrue(restored.is_set())
-        staged = maintenance_api.staged_dir(self.server_module._bound_storage.root)
-        self.assertEqual(os.listdir(staged) if os.path.isdir(staged) else [], [])
+        directory = staged.staged_dir(self.server_module._bound_storage.root)
+        self.assertEqual(os.listdir(directory) if os.path.isdir(directory) else [], [])
