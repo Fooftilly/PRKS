@@ -43,6 +43,12 @@ describe('Processing queue page', () => {
       })
       await flushPromises()
       expect(fields(wrapper)).toHaveLength(5)
+      // Each draft control is a shared PrksField, named by its label.
+      for (const field of fields(wrapper)) {
+        expect(field.element.closest('.prks-field')).not.toBeNull()
+        const label = document.getElementById(field.attributes('aria-labelledby') ?? '')
+        expect(label?.tagName).toBe('LABEL')
+      }
       expect(fields(wrapper).every((field) => !field.attributes('disabled'))).toBe(true)
 
       if (mode === 'single') {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { processingItemPdfUrl, type ProcessingItem, type ProcessingItemEdit } from '../../api/processing-items'
 import { repaintDraft, type ProcessingQueueOption } from './queue'
@@ -160,32 +161,27 @@ watch(draft, () => {
       <p class="meta-row prks-processing-card__meta">{{ size }} · uploaded {{ item.created_at.slice(0, 10) }}</p>
     </header>
     <form class="form-pane form-pane--tight prks-processing-card__core" @submit.prevent="save">
-      <div class="form-row">
-        <label :for="`${domId}-title`">Title</label>
-        <input :id="`${domId}-title`" v-model="draft.title" type="text" :disabled="importing" data-field="title" placeholder="Library title">
-      </div>
-      <div class="form-row">
-        <label :for="`${domId}-author`">Author</label>
-        <input :id="`${domId}-author`" v-model="draft.author_text" type="text" :disabled="importing" data-field="author_text">
-      </div>
-      <div class="form-row">
-        <label :for="`${domId}-year`">Year</label>
-        <input :id="`${domId}-year`" v-model="draft.year" type="text" inputmode="numeric" :disabled="importing" data-field="year">
-      </div>
-      <div class="form-row">
-        <label :for="`${domId}-type`">Type</label>
-        <select :id="`${domId}-type`" v-model="draft.doc_type" :disabled="importing" data-field="doc_type">
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Title" :for-id="`${domId}-title`">
+        <input :id="`${domId}-title`" v-model="draft.title" type="text" :disabled="importing" data-field="title" placeholder="Library title" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+      </PrksField>
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Author" :for-id="`${domId}-author`">
+        <input :id="`${domId}-author`" v-model="draft.author_text" type="text" :disabled="importing" data-field="author_text" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+      </PrksField>
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Year" :for-id="`${domId}-year`">
+        <input :id="`${domId}-year`" v-model="draft.year" type="text" inputmode="numeric" :disabled="importing" data-field="year" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
+      </PrksField>
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Type" :for-id="`${domId}-type`">
+        <select :id="`${domId}-type`" v-model="draft.doc_type" :disabled="importing" data-field="doc_type" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
           <option value="">Not set</option>
           <option v-for="option in docTypeChoices" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
-      </div>
-      <div class="form-row">
-        <label :for="`${domId}-folder`">Folder</label>
-        <select :id="`${domId}-folder`" v-model="draft.target_folder_id" :disabled="importing" data-field="target_folder_id">
+      </PrksField>
+      <PrksField v-slot="{ labelledBy, describedBy }" label="Folder" :for-id="`${domId}-folder`">
+        <select :id="`${domId}-folder`" v-model="draft.target_folder_id" :disabled="importing" data-field="target_folder_id" :aria-labelledby="labelledBy" :aria-describedby="describedBy">
           <option value="">No folder</option>
           <option v-for="option in folderChoices" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
-      </div>
+      </PrksField>
       <PrksInlineMessage v-if="error" tone="error" status data-processing-error>{{ error }}</PrksInlineMessage>
       <div class="prks-processing-card__actions">
         <PrksButton type="submit" variant="secondary" :disabled="!dirty" :busy="busy" busy-label="Working..." data-processing-save>Save draft</PrksButton>
