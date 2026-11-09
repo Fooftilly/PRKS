@@ -956,6 +956,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 request_host=self._prks_request_host,
                 parse_origin=parse_request_origin,
                 read_json=read_json,
+                route_fences_epoch=serves_postgres_library(),
             ),
         )
         if isinstance(outcome, session_api.Admitted):
@@ -2899,6 +2900,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             json_body_absent = data is _JSON_BODY_ABSENT
             if json_body_absent:
                 data = {}
+            if path == '/api/sync/operations' and serves_postgres_library():
+                self._handle_postgres_sync_operation(data)
+                return
             if path == '/api/sync/operations':
                 status, result = process_operation(db, data)
                 if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
@@ -3837,6 +3841,39 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(413, {"error": "request_too_large"})
             return None
         return content_length
+
+    def _handle_postgres_sync_operation(self, data) -> None:
+        """``POST /api/sync/operations`` on the PostgreSQL Library (§8.4, §11.4).
+
+        ``backend.sync.protocol`` claims, applies and ledgers the operation in
+        one transaction for the admitted context; a refusal (epoch, device,
+        role) propagates to ``_send_internal_error``, which answers it as
+        admission does. The Research index is kept by the database, so a note
+        ACK only reads its refs, ``pending`` included (the Research-ACK fence).
+        A deleted Work's files are the orphan sweep's (§11.2), never this
+        route's.
+        """
+        from backend.sync.families import Environment
+        from backend.sync.protocol import process_operation as process_postgres_operation
+
+        status, result = process_postgres_operation(
+            db.database, self._prks_request_context, data, Environment(pdfs_dir=pdfs_dir))
+        acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
+        operation = data.get("operation") if isinstance(data, dict) else None
+        if acknowledged and operation == work_note_sync.RESEARCH_OPERATION:
+            # The note and its ledger row are committed; a failed derived read
+            # leaves the refs out (the client reads them later) and never turns
+            # a saved note into an error.
+            try:
+                result["research_refs"] = research_index.work_research_refs(data.get("entity_id"), db)
+            except Exception as e:
+                LOGGER.warning(
+                    "research_refs_read_failed request_id=%s error_type=%s",
+                    safe_log_id(self._prks_request_id), safe_error_type(e))
+        if acknowledged and operation == "DELETE_WORK":
+            # Paths are not durable client state; strip before the wire.
+            result = {"code": result["code"], "work_id": result["work_id"], "changed": result["changed"]}
+        self.send_json(status, result)
 
     def _refuse_sqlite_maintenance(self) -> None:
         """Answer a SQLite backup route on the PostgreSQL Library: it is not ported yet.

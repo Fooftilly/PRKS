@@ -455,6 +455,30 @@ class LoopbackOwnerTests(AdmissionTestCase):
         ))
         self.assertIsInstance(mapped, session_api.Admitted)
 
+    def test_only_a_ledgered_route_leaves_the_epoch_fence_to_itself(self) -> None:
+        self.run_sql("UPDATE prks.libraries SET epoch = 2")
+        headers = Message()
+        headers["Origin"] = f"http://127.0.0.1:{self.port}"
+        headers["PRKS-Library-Epoch"] = "1"
+
+        def admit(path: str, route_fences_epoch: bool):
+            return session_api.handle(self.auth, session_api.HttpRequest(
+                method="POST", path=path, headers=headers, peer="127.0.0.1",
+                request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+                read_json=lambda: {}, route_fences_epoch=route_fences_epoch,
+            ))
+
+        # The sync protocol looks up its ledger, then fences: the stale claim travels.
+        admitted = admit("/api/sync/operations", True)
+        assert isinstance(admitted, session_api.Admitted)
+        self.assertEqual((admitted.epoch, admitted.context.epoch), (2, 1))
+        # Every other route, and the sync route of a store that does not ledger, is fenced here.
+        for path, flag in (("/api/tags", True), ("/api/sync/operations", False)):
+            with self.subTest(path=path, route_fences_epoch=flag):
+                refused = admit(path, flag)
+                assert isinstance(refused, session_api.Reply)
+                self.assertEqual((refused.status, refused.body["code"]), (409, "LIBRARY_EPOCH_CHANGED"))
+
 
 class SqliteRuntimeTests(AdmissionTestCase):
     """Without PRKS_AUTH the application behaves exactly as before."""

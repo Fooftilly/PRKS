@@ -15,6 +15,7 @@ import os
 import signal
 import subprocess
 import sys
+import uuid
 from typing import Any, Optional
 
 from backend.storage import root_binding
@@ -130,6 +131,64 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             self.stop(proc)
         for catalogue in _CATALOGUES:
             self.assertFalse(os.path.lexists(os.path.join(root, catalogue)), catalogue)
+
+    def test_sync_operations_apply_through_postgresql(self) -> None:
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
+        port = _free_port()
+        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            _status, session, _headers = self.call(port, "GET", "/api/session")
+            headers = {"Origin": f"http://127.0.0.1:{port}",
+                       "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+            status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Synced"}, headers)
+            self.assertIn(status, (200, 201), created)
+            work_id = created["id"]
+            device = str(uuid.uuid4())  # a browser the server has never seen
+
+            def op(operation: str, payload: dict[str, Any], base: int) -> dict[str, Any]:
+                return {"op_id": str(uuid.uuid4()), "device_id": device, "operation": operation,
+                        "entity_type": "work", "entity_id": work_id, "payload": payload,
+                        "base_revision": base, "occurred_at": "2026-11-06T10:00:00Z",
+                        "created_at": "2026-11-06T10:00:00Z", "depends_on": []}
+
+            title = op("SET_WORK_METADATA_FIELD", {"field": "title", "value": "Renamed offline"}, 0)
+            status, acked, _headers = self.call(port, "POST", "/api/sync/operations", title, headers)
+            self.assertEqual((status, acked["code"]), (200, "ACKNOWLEDGED"), acked)
+            acked_title = acked
+            # A replay answers from the ledger.
+            self.assertEqual(self.call(port, "POST", "/api/sync/operations", title, headers)[:2],
+                             (200, acked))
+            status, work, _headers = self.call(port, "GET", f"/api/works/{work_id}")
+            self.assertEqual((status, work["title"]), (200, "Renamed offline"))
+            # The note ACK carries the refs, still pending: no worker runs here.
+            note = op("SET_WORK_RESEARCH_NOTE", {"text": "[[concept:Ethics]]"}, 0)
+            status, acked, _headers = self.call(port, "POST", "/api/sync/operations", note, headers)
+            self.assertEqual((status, acked["code"]), (200, "ACKNOWLEDGED"), acked)
+            self.assertEqual(acked["research_refs"], {"concepts": [], "arguments": [], "pending": True})
+            # A stale epoch is refused before anything is applied (§11.4).
+            stale = dict(headers, **{"PRKS-Library-Epoch": str(int(headers["PRKS-Library-Epoch"]) + 1)})
+            retitle = op("SET_WORK_METADATA_FIELD", {"field": "title", "value": "Stale"}, 1)
+            status, refused, _headers = self.call(port, "POST", "/api/sync/operations", retitle, stale)
+            self.assertEqual(status, 409, refused)
+            # A retry of a ledgered op (a lost ACK) replays at any epoch claim.
+            self.assertEqual(self.call(port, "POST", "/api/sync/operations", title, stale)[:2],
+                             (200, acked_title))
+            # A new op without a claim is still refused by the protocol's fence.
+            unclaimed = {k: v for k, v in headers.items() if k != "PRKS-Library-Epoch"}
+            status, refused, _headers = self.call(port, "POST", "/api/sync/operations", retitle, unclaimed)
+            self.assertEqual((status, refused["code"]), (400, "LIBRARY_EPOCH_REQUIRED"), refused)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{work_id}")[1]["title"], "Renamed offline")
+            db = self.db(name)
+            rows = db.query(lambda tx: tx.execute(
+                "SELECT d.user_id, count(o.op_id) AS ops FROM prks.devices d"
+                " JOIN prks.sync_operations o ON o.device_id = d.id WHERE d.id = %s GROUP BY d.user_id",
+                (device,)).fetchall())
+            self.assertEqual([r["ops"] for r in rows], [2])
+        finally:
+            self.stop(proc)
 
     def test_the_selection_needs_prks_auth(self) -> None:
         err = self.refused(self.environment(None, PRKS_LIBRARY_BACKEND="postgres"), self.new_root())

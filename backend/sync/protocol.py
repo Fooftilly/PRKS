@@ -110,6 +110,11 @@ SELECT op_id::text AS op_id, device_id::text AS device_id, status FROM prks.sync
 WHERE library_id = %(library_id)s AND op_id = ANY(%(op_ids)s::uuid[])
 """
 _OWN_DEVICE: LiteralString = "SELECT 1 FROM prks.devices WHERE id = %s AND user_id = %s"
+# A device belongs to the user that first presented it (§9.1): the first
+# operation from a new device_id registers it; another user's stays theirs.
+_BIND_DEVICE: LiteralString = (
+    "INSERT INTO prks.devices (id, user_id) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING"
+)
 
 
 def process_operation(database: Database, ctx: RequestContext, data: object,
@@ -181,6 +186,7 @@ def _replay(seen: dict[str, Any], digest: bytes) -> Result:
 
 def _claim_and_apply(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any], digest: bytes,
                      handler: Handler, received_at: datetime, env: Environment) -> Result:
+    scope.execute_unscoped(_BIND_DEVICE, (op["device_id"], ctx.user_id))
     if scope.execute_unscoped(_OWN_DEVICE, (op["device_id"], ctx.user_id)).fetchone() is None:
         raise AccessRefused(Refusal.FORBIDDEN)
     claimed = scope.execute(_CLAIM, {
