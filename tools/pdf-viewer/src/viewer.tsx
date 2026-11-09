@@ -584,7 +584,14 @@ export async function createPrksPdfViewer(
         root.unmount();
         host.remove();
     };
-    await controller.ready;
+    try {
+        await controller.ready;
+    } catch (error) {
+        // A document that fails to open must not leave a live React root and
+        // engine behind: the caller never gets a handle to destroy it with.
+        handle.destroy();
+        throw error;
+    }
     options.onReady?.(handle);
     return handle;
 }
