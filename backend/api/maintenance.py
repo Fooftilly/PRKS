@@ -39,9 +39,8 @@ from typing import Any, Callable, Optional
 
 LOGGER = logging.getLogger("prks.api.maintenance")
 
-# How often progress polls the backup job, and how long it follows it.
+# How often progress polls the backup job.
 POLL_SECONDS = 0.25
-BACKUP_TIMEOUT_SECONDS = 30 * 60
 CONFIRM = "RESTORE"
 
 
@@ -49,8 +48,16 @@ CONFIRM = "RESTORE"
 
 
 def stream_backup(library: Any, ctx: Any, write_line: Callable[[dict[str, Any]], None], *,
-                  timeout: float = BACKUP_TIMEOUT_SECONDS, poll: float = POLL_SECONDS) -> None:
-    """Queue (or follow) the Library's backup job and write its progress until it ends."""
+                  poll: float = POLL_SECONDS) -> None:
+    """Queue (or follow) the Library's backup job and write its progress until it ends.
+
+    There is no deadline: the download token exists only in the ``ready``
+    line, so the stream follows the job for as long as it runs, however
+    large the Library. It ends when the job does (a job whose worker died
+    fails when its lease is reaped) or when the browser disconnects, which
+    ``write_line`` raises; a later request follows the same job while it is
+    queued or running.
+    """
     from backend.domain.maintenance import jobs as backup_jobs
     from backend.domain.maintenance.format import BACKUP_EXTENSION
 
@@ -63,7 +70,6 @@ def stream_backup(library: Any, ctx: Any, write_line: Callable[[dict[str, Any]],
         write_line({"phase": "failed", "percent": 0, "error": "Another backup is starting; try again."})
         return
     write_line({"phase": "snapshot", "percent": 1})
-    deadline = time.monotonic() + timeout
     percent = 1
     while True:
         status = backup_jobs.backup_job_status(library.database, ctx, job_id)
@@ -78,10 +84,6 @@ def stream_backup(library: Any, ctx: Any, write_line: Callable[[dict[str, Any]],
             return
         if state not in ("queued", "running"):
             break
-        if time.monotonic() >= deadline:
-            write_line({"phase": "failed", "percent": 0,
-                        "error": "The backup is still running; download it from Settings later."})
-            return
         percent = min(95, percent + 1)
         write_line({"phase": "snapshot" if state == "queued" else "objects", "percent": percent})
         time.sleep(poll)

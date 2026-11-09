@@ -7,11 +7,16 @@ upload is bound to.
 
 from __future__ import annotations
 
+import itertools
 import os
 import shutil
 import tempfile
 import time
 import unittest
+from typing import Any
+from unittest import mock
+
+import psycopg
 
 from backend.api import maintenance
 from backend.domain.maintenance import staged
@@ -93,6 +98,30 @@ class MaintenanceApiTests(unittest.TestCase):
                      StorageKey(NAMESPACE_PORTRAITS, "c" * 64): None})
         summary = staged.summarize(archive)
         self.assertEqual((summary["works"], summary["pdf_files"], summary["persons"]), (2, 2, None))
+
+    def test_progress_follows_a_long_backup_until_it_publishes(self) -> None:
+        # The token exists only in the ``ready`` line: the stream must not give
+        # up on a backup that runs long, however many polls it takes.
+        import json
+        import uuid
+
+        ctx = self.owner.context
+        lines: list[dict[str, Any]] = []
+        run = uuid.uuid4()
+
+        def write_line(line: dict[str, Any]) -> None:
+            lines.append(line)
+            if len(lines) == 50:  # far past any old deadline in polls: the worker finishes
+                with psycopg.connect(self.db.config.conninfo, autocommit=True) as conn:
+                    conn.execute("UPDATE prks.jobs SET state = 'succeeded', progress = %s::jsonb"
+                               " WHERE library_id = %s AND kind = 'backup.create'",
+                               (json.dumps({"backup_run": str(run)}), ctx.library_id))
+
+        with mock.patch.object(time, "monotonic", side_effect=itertools.count(0, 3600)):
+            maintenance.stream_backup(self.library, ctx, write_line, poll=0)
+        self.assertEqual(lines[-1]["phase"], "ready")
+        self.assertEqual(lines[-1]["token"], run.hex)
+        self.assertFalse(any(line["phase"] == "failed" for line in lines))
 
     def test_old_staged_uploads_are_pruned(self) -> None:
         old = staged.staged_path(self.root, "b" * 32, "u")
