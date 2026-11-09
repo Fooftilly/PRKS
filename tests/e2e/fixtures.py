@@ -55,8 +55,13 @@ def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
         PRKSResearchIndex(storage=cfg).sync_work(work_id, notes, db)
 
 
-def seed_library(storage_root: str) -> dict:
-    """Create Works, a managed PDF, and an Author role. Returns generated IDs."""
+def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
+    """Create Works, a managed PDF, and an Author role. Returns generated IDs.
+
+    ``prepare_related_pdf(path)`` changes Work B's PDF before any Work names
+    it: on PostgreSQL the Work's create adopts the bytes as an immutable
+    Asset, so they must be final by then.
+    """
     if not MINIMAL_PDF.is_file():
         raise RuntimeError("missing fixture PDF: %s" % MINIMAL_PDF)
     cfg = StorageConfig.for_testing(storage_root)
@@ -66,6 +71,8 @@ def seed_library(storage_root: str) -> dict:
     shutil.copy2(str(MINIMAL_PDF), dest_pdf)
     dest_pdf_b = os.path.join(cfg.pdfs_dir, "e2e-related.pdf")
     shutil.copy2(str(MINIMAL_PDF), dest_pdf_b)
+    if prepare_related_pdf is not None:
+        prepare_related_pdf(dest_pdf_b)
     db = open_library(cfg)
     work_a = db.add_work(
         title=WORK_A_TITLE,
@@ -214,18 +221,10 @@ GRAPH_SOURCED_ARGUMENT = "Sourced Argument"
 IMPORTED_HIGHLIGHT_COMMENT = "Imported highlight comment"
 
 
-def seed_imported_highlight_library(storage_root: str) -> dict:
-    """The default library, but Work B's PDF carries a highlight made elsewhere.
-
-    The highlight lives only in the PDF bytes, the way a file annotated in
-    another reader arrives. Tests that need it to have no canonical row
-    until the user edits it stop the open-time adoption from finding it.
-    """
+def _add_imported_highlight(pdf_path: str) -> None:
+    """Write a highlight made "elsewhere" into the PDF's bytes."""
     import pymupdf
 
-    ids = seed_library(storage_root)
-    cfg = StorageConfig.for_testing(storage_root)
-    pdf_path = os.path.join(cfg.pdfs_dir, "e2e-related.pdf")
     doc = pymupdf.open(pdf_path)
     try:
         page = doc[0]
@@ -238,6 +237,16 @@ def seed_imported_highlight_library(storage_root: str) -> dict:
         doc.saveIncr()
     finally:
         doc.close()
+
+
+def seed_imported_highlight_library(storage_root: str) -> dict:
+    """The default library, but Work B's PDF carries a highlight made elsewhere.
+
+    The highlight lives only in the PDF bytes, the way a file annotated in
+    another reader arrives. Tests that need it to have no canonical row
+    until the user edits it stop the open-time adoption from finding it.
+    """
+    ids = seed_library(storage_root, prepare_related_pdf=_add_imported_highlight)
     ids["imported_highlight_comment"] = IMPORTED_HIGHLIGHT_COMMENT
     return ids
 

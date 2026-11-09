@@ -147,3 +147,20 @@ class PostgresLibraryLegTests(unittest.TestCase):
         self.assertEqual([a["storage_locator"] for a in assets], ["e2e-related.pdf", fixtures.PDF_NAME])
         for name in ("prks_data.db", "prks_data_testing.db"):
             self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
+
+    def test_an_annotated_seed_pdf_is_final_before_its_asset_is_adopted(self) -> None:
+        import hashlib
+
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        postgres_identity.seed_postgres_library(fixtures.seed_imported_highlight_library, self.root, library)
+        assets = self.rows(library.conninfo, "SELECT storage_locator, content_sha256, byte_size FROM prks.assets")
+        self.assertEqual(len(assets), 2)
+        pdfs_dir = fixtures.StorageConfig.for_testing(self.root).pdfs_dir
+        for asset in assets:
+            with open(os.path.join(pdfs_dir, asset["storage_locator"]), "rb") as fh:
+                body = fh.read()
+            self.assertEqual((asset["content_sha256"], asset["byte_size"]),
+                             (hashlib.sha256(body).hexdigest(), len(body)), asset["storage_locator"])
