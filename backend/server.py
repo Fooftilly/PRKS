@@ -3861,7 +3861,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
         operation = data.get("operation") if isinstance(data, dict) else None
         if acknowledged and operation == work_note_sync.RESEARCH_OPERATION:
-            result["research_refs"] = research_index.work_research_refs(data.get("entity_id"), db)
+            # The note and its ledger row are committed; a failed derived read
+            # leaves the refs out (the client reads them later) and never turns
+            # a saved note into an error.
+            try:
+                result["research_refs"] = research_index.work_research_refs(data.get("entity_id"), db)
+            except Exception as e:
+                LOGGER.warning(
+                    "research_refs_read_failed work_id=%s error_type=%s",
+                    safe_log_id(data.get("entity_id")), safe_error_type(e))
         if acknowledged and operation == "DELETE_WORK":
             # Paths are not durable client state; strip before the wire.
             result = {"code": result["code"], "work_id": result["work_id"], "changed": result["changed"]}
