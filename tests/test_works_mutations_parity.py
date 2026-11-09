@@ -122,6 +122,13 @@ class WorksMutationParityTests(WorksParityTestCase):
         self.assertEqual(self.both("get_work_metadata_state", _MISSING), (None, None))
         self.assertEqual(self.both("get_work_notes_state", _MISSING), (None, None))
 
+    def test_the_source_state(self) -> None:
+        plain = self.add_both("plain", title="Plain")
+        video = self.add_both("video", title="Video", source_url=VIDEO)
+        self.same_for("get_work_source_state", plain)
+        self.same_for("get_work_source_state", video)
+        self.assertEqual(self.both("get_work_source_state", _MISSING), (None, None))
+
     def test_a_private_note_through_patch(self) -> None:
         ids = self.add_both("work", title="Work", private_notes="first")
         for value in ("second", "second", "  spaced  ", "", None):

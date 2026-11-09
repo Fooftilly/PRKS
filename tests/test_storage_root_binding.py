@@ -1186,8 +1186,9 @@ class TestProcessEntry(RootTestCase):
             main.index("ensure_runtime_or_exit()"),
             main.index("StorageConfig.from_env(cli_root=args.storage_root)"),
             main.index("open_storage(config"),
+            main.index("refuse_sqlite_catalogue(library_database, bound_root)"),
             main.index("recover_incomplete_restore(config)"),
-            main.index("bind_storage(config)"),
+            main.index("bind_storage(config, library_database=library_database)"),
             # The source report needs logging configured, or INFO is dropped.
             main.index("setup_logging(config)"),
             main.index("bound_root.log_binding()"),

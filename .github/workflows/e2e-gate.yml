@@ -28,6 +28,13 @@ on:
           - "6"
           - "8"
         default: "6"
+      library_backend:
+        description: "Library store for every E2E server; postgres is the PG-C1 leg (#640), PR/master gates stay on sqlite"
+        type: choice
+        options:
+          - sqlite
+          - postgres
+        default: sqlite
 
 concurrency:
   # Manual comparisons must neither cancel master gates nor be cancelled by merges.
@@ -193,6 +200,8 @@ jobs:
           --health-retries 30
     env:
       PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+      # The PG-C1 leg (#640): Library data on PostgreSQL too, dispatch only.
+      PRKS_E2E_LIBRARY_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.library_backend == 'postgres' && 'postgres' || '' }}
     # FULL_GATE_EXTERNAL_SHARDS in tests/e2e/policy.py is the full-mode width.
     # Affected mode sizes matrix.include from selected test count via --ci-plan.
     strategy:

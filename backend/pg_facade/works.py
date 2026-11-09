@@ -96,6 +96,24 @@ class WorksMixin(FacadeMixin):
         finish_work_summary_rows(rows, self._pdfs_dir())
         return rows
 
+    def _holds_managed_pdf(self, name: str) -> bool:
+        """Whether the acting Library has an Asset whose bytes are the managed PDF ``name``.
+
+        One data root serves every Library, so ``/api/pdfs/<name>`` serves a
+        file only to a member of a Library that references it: a name from
+        another Library reads as missing.
+        """
+
+        def read(scope: LibraryScope) -> bool:
+            row = scope.execute(
+                "SELECT 1 FROM prks.assets WHERE library_id = %(library_id)s"
+                " AND (storage_locator = %(name)s OR source_locator = %(name)s) LIMIT 1",
+                {"name": name},
+            ).fetchone()
+            return row is not None
+
+        return self._read(read)
+
     # -- ids and ETags ----------------------------------------------------------
 
     @ported
@@ -443,6 +461,13 @@ class WorksMixin(FacadeMixin):
         self._command(lambda scope: _patch_work(scope, work_id, synced, notes, plain),
                       serializable=bool(notes))
         return ()
+
+    @ported
+    def get_work_source_state(self, work_id: str) -> Optional[dict[str, Any] | str]:
+        """The source's revision, or ``INVALID_SOURCE_STATE``; ``None`` when the Work is missing."""
+        from backend.domain.works import source
+
+        return self._read(lambda scope: source.source_state(scope, work_id))
 
     @ported
     def get_work_metadata_state(self, work_id: str) -> Optional[dict]:

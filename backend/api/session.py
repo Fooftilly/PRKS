@@ -95,6 +95,9 @@ _ADMIN_MUTATIONS = frozenset({"/api/settings"})
 # Reads only the Library owner may make: instance-level job diagnostics.
 _ADMIN_READS = frozenset({"/api/diagnostics/jobs"})
 # Mutations that change no Library content: authorized, never epoch-fenced.
+# Mutations whose route looks up its ledger before it fences the epoch.
+_LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})
+
 _NON_LIBRARY_MUTATIONS = {
     "/api/client-errors": Capability.READ_LIBRARY,  # a browser error report, logged only
     "/api/diagnostics/performance/reset": Capability.ADMIN_LIBRARY,  # process counters
@@ -141,6 +144,9 @@ class HttpRequest:
     parse_origin: OriginParser
     # Reads the JSON body; returns ANSWERED when it already sent a refusal.
     read_json: Callable[[], object]
+    # The route fences the epoch itself, after a ledger lookup (the PostgreSQL
+    # sync protocol, §7.3): admission authorizes it but leaves the fence there.
+    route_fences_epoch: bool = False
 
     def all(self, name: str) -> list[str]:
         return list(self.headers.get_all(name) or [])
@@ -432,6 +438,12 @@ def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
             return _refused(Refusal.NOT_AUTHENTICATED)
         if not fenced:
             ctx = RequestContext.for_session(session)
+            return Admitted(library_query(auth.db, ctx, _current_epoch, capability=capability), ctx)
+        if request.route_fences_epoch and path in _LEDGERED_MUTATIONS:
+            # A replay of a ledgered operation answers whatever the epoch is
+            # now; anything else meets the route's own epoch fence, so the
+            # claim (None when missing) travels with the context.
+            ctx = RequestContext.for_session(session, epoch=epoch)
             return Admitted(library_query(auth.db, ctx, _current_epoch, capability=capability), ctx)
         # A missing or malformed claim is None, which library_command refuses
         # (LIBRARY_EPOCH_REQUIRED) before any database work.

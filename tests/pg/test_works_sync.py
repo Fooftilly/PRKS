@@ -145,12 +145,24 @@ class LedgerTests(SyncTestCase):
     def test_the_device_must_be_the_users(self) -> None:
         work_id = self.library.add_work("Work")
         other = self.other_actor()
-        for device in (str(other.context.device_id), str(uuid.uuid4())):
-            with self.subTest(device=device):
-                with self.assertRaises(AccessRefused) as caught:
-                    self.send(self.title_op(work_id, "Stolen", 0, device_id=device))
-                self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
+        with self.assertRaises(AccessRefused) as caught:
+            self.send(self.title_op(work_id, "Stolen", 0, device_id=str(other.context.device_id)))
+        self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
         self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+
+    def test_a_new_device_is_bound_to_the_user_that_first_presents_it(self) -> None:
+        work_id = self.library.add_work("Work")
+        device = str(uuid.uuid4())
+        status, _result = self.send(self.title_op(work_id, "From a new browser", 0, device_id=device))
+        self.assertEqual(status, 200)
+        self.assertEqual(self.sql("SELECT user_id FROM prks.devices WHERE id = %s", (device,)),
+                         [{"user_id": self.actor.context.user_id}])
+        other = self.other_actor()
+        with facade_context.acting_as(other.context):
+            other_work = self.library.add_work("Theirs")
+        with self.assertRaises(AccessRefused) as caught:
+            self.send(self.title_op(other_work, "Stolen", 0, device_id=device), other.context)
+        self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
 
     def test_a_reader_cannot_send_operations(self) -> None:
         work_id = self.library.add_work("Work")

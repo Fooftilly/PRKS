@@ -3274,6 +3274,11 @@ class PRKSDatabase:
             conn.execute("BEGIN")
             return work_note_sync.get_notes_state_on_conn(conn, work_id)
 
+    def get_work_source_state(self, work_id: str):
+        """The source's revision, or ``INVALID_SOURCE_STATE`` (``work_source_sync.get_source_state``)."""
+        from backend import work_source_sync
+        return work_source_sync.get_source_state(self, work_id)
+
     def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
         """Synchronization state for the supported Work fields.
 
