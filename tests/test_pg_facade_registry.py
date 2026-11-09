@@ -310,10 +310,17 @@ class PostgresReachTests(unittest.TestCase):
                     if library_database is not None:
                         return db.search_works('x')
                     db.update_tag(1)
+
+                def f(a, b):
+                    # Skipping this return proves only that a or b is false.
+                    if a and b and serves_postgres_library():
+                        return
+                    if a:
+                        db.get_all_tags()
                 """})
             self.assertEqual(
                 facade_surface(backend_dir=tmp),
-                frozenset({"get_work", "get_person", "get_saved_views", "get_folder", "search_works"}),
+                frozenset({"get_work", "get_person", "get_saved_views", "get_folder", "search_works", "get_all_tags"}),
             )
 
     def test_a_sqlite_only_scope_reached_outside_sqlite_code_is_named(self):

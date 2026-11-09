@@ -224,7 +224,7 @@ class _SqliteMarker:
 
 
 def _pg_conjunct_names(test: ast.expr) -> set[str]:
-    """``flag`` for ``if flag and serves_postgres_library(): ... return``.
+    """``flag`` for ``if flag and serves_postgres_library(): ... return``, with exactly one flag.
 
     Past that statement, the PostgreSQL runtime never runs code under
     ``if flag:`` (until ``flag`` is assigned again).
@@ -233,9 +233,13 @@ def _pg_conjunct_names(test: ast.expr) -> set[str]:
         return set()
     if not any(_is_pg_test(value) for value in test.values):
         return set()
-    names = {value.id for value in test.values if isinstance(value, ast.Name)}
-    others = [value for value in test.values if not _is_pg_test(value) and not isinstance(value, ast.Name)]
-    return names if not others and len(names) == len(test.values) - 1 else set()
+    rest = [value for value in test.values if not _is_pg_test(value)]
+    # Only ``flag and serves_postgres_library()`` proves ``flag`` is false
+    # past the return. With two flags, skipping it proves only that one of
+    # them is false, so nothing is learned.
+    if len(rest) == 1 and len(test.values) == 2 and isinstance(rest[0], ast.Name):
+        return {rest[0].id}
+    return set()
 
 
 @dataclass(frozen=True)
