@@ -174,9 +174,11 @@ class _SqliteMarker:
         self.rel = rel
         self.scopes = scopes
         self.marked: set[int] = set()
+        self._scope: list[ast.AST] = []  # the enclosing function (or module)
 
     def run(self, tree: ast.Module) -> set[int]:
         whole = self.rel in _SQLITE_FILES
+        self._scope = [tree]
         for stmt in tree.body:
             scoped = isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
                 (self.rel, stmt.name) in self.scopes
@@ -187,7 +189,7 @@ class _SqliteMarker:
     def _block(self, body: list[ast.stmt], sqlite: bool, learned: set[str]) -> None:
         # A flag learned in this block holds only for the rest of this block:
         # a nested branch's return says nothing about the path that skipped
-        # the branch. A flag reassigned anywhere inside is forgotten outside.
+        # the branch.
         local = set(learned)
         for stmt in body:
             self._node(stmt, sqlite, local)
@@ -196,29 +198,26 @@ class _SqliteMarker:
             if _is_pg_test(stmt.test):
                 sqlite = True  # the PostgreSQL runtime left this block above
             else:
-                local.update(_pg_conjunct_names(stmt.test))
-        learned.intersection_update(local)
+                local.update(
+                    name for name in _pg_conjunct_names(stmt.test)
+                    if not _rebound_from(self._scope[-1], name, stmt)
+                )
 
     def _node(self, node: ast.AST, sqlite: bool, learned: set[str] | None = None) -> None:
-        if learned is None or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+        function = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+        if learned is None or function or isinstance(node, ast.ClassDef):
             learned = set()  # what a flag means holds within one function body
+        if function:
+            self._scope.append(node)
+        try:
+            self._visit(node, sqlite, learned)
+        finally:
+            if function:
+                self._scope.pop()
+
+    def _visit(self, node: ast.AST, sqlite: bool, learned: set[str]) -> None:
         if sqlite:
             self.marked.add(id(node))
-        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
-            # A later iteration sees what the body assigned on an earlier one.
-            learned.difference_update(_assigned_names(node))
-        targets: list[ast.AST] = []
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
-            targets = [node.target]
-        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-            targets = [node.optional_vars]
-        if targets:
-            for target in targets:
-                for sub in ast.walk(target):
-                    if isinstance(sub, ast.Name):
-                        learned.discard(sub.id)  # a reassigned flag says nothing any more
         if isinstance(node, ast.If):
             self._node(node.test, sqlite, learned)
             in_sqlite = _is_not_pg_test(node.test) or (isinstance(node.test, ast.Name) and node.test.id in learned)
@@ -237,13 +236,49 @@ class _SqliteMarker:
                 self._node(value, sqlite, learned)
 
 
-def _assigned_names(node: ast.AST) -> set[str]:
-    """Every name ``node`` (re)binds anywhere inside it."""
-    names: set[str] = set()
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
-            names.add(sub.id)
-    return names
+def _bindings(scope: ast.AST, name: str) -> Iterable[ast.AST]:
+    """Every node in ``scope`` (nested scopes included) that may bind ``name``."""
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and node.id == name:
+            yield node
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            yield node
+        elif isinstance(node, ast.ExceptHandler) and node.name == name:
+            yield node
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.partition(".")[0]) == name for alias in node.names
+        ):
+            yield node
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            yield node
+        elif isinstance(node, ast.MatchMapping) and node.rest == name:
+            yield node
+
+
+def _rebound_from(scope: ast.AST, name: str, guard: ast.If) -> bool:
+    """Whether ``name`` may hold a new value once ``guard`` has run.
+
+    True when anything in the function binds it at or after the guard (in its
+    ``else``, later in the body, or anywhere in a loop around both), or when a
+    ``global``/``nonlocal`` lets other code rebind it. Only a flag nothing
+    rebinds keeps the meaning the guard gave it, so this stays sound without
+    tracking every path.
+    """
+    for node in ast.walk(scope):
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+            return True
+    start = (guard.lineno, guard.col_offset)
+    loops = [
+        node for node in ast.walk(scope)
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+        and any(sub is guard for sub in ast.walk(node))
+    ]
+    for binding in _bindings(scope, name):
+        if (getattr(binding, "lineno", 0), getattr(binding, "col_offset", 0)) >= start:
+            return True
+        if any(any(sub is binding for sub in ast.walk(loop)) for loop in loops):
+            return True  # a later iteration runs the guard after this binding
+    return False
 
 
 def _pg_conjunct_names(test: ast.expr) -> set[str]:

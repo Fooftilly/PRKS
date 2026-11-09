@@ -350,12 +350,37 @@ class PostgresReachTests(unittest.TestCase):
                         if flag:
                             db.get_all_folders()
                         flag = True
+
+                def m(flag):
+                    if flag and serves_postgres_library():
+                        return
+                    else:
+                        flag = True
+                    if flag:
+                        db.get_all_works()
+
+                def n(flag, value):
+                    if flag and serves_postgres_library():
+                        return
+                    match value:
+                        case {"flag": flag}:
+                            pass
+                    if flag:
+                        db.get_all_playlists()
+
+                def p(flag):
+                    flag = bool(flag)
+                    if flag and serves_postgres_library():
+                        return
+                    if flag:
+                        db.delete_tag(3)
                 """})
             self.assertEqual(
                 facade_surface(backend_dir=tmp),
                 frozenset({
                     "get_work", "get_person", "get_saved_views", "get_folder", "search_works",
                     "get_all_tags", "get_tags_in_use", "get_all_persons", "get_all_folders",
+                    "get_all_works", "get_all_playlists",
                 }),
             )
 
