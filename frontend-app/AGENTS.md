@@ -15,6 +15,8 @@ The route/component migration under #230/#303 is complete; controller verificati
 - TanStack Query owns disposable ordinary server-read orchestration where adopted. It does not own PRKS durable semantic operations or become an offline mutation queue.
 - VueUse is for generic browser lifecycle helpers where it reduces plumbing; PRKS route/workspace/durable semantics remain explicit.
 
+Settings modal content lives in `src/features/settings/`. `#settings-modal` stays the shell: open, close, Escape, and focus return stay with `ui.js` and the Vue modal host. Category selection is one in-memory ref. Device and library persistence stay the classic preference functions and `/api/settings`. Backup, restore, maintenance, and offline-cache operations stay those classic calls.
+
 ## Design and components
 
 `DESIGN.md` is authoritative for user-visible interaction and visual behavior. Read the sections relevant to the changed component rather than loading the whole file by default.
