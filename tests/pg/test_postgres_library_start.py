@@ -100,7 +100,12 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             conn.request(method, path, body=payload, headers=sent)
             res = conn.getresponse()
             raw = res.read()
-            return res.status, (json.loads(raw) if raw else None), {k.lower(): v for k, v in res.getheaders()}
+            sent_back = {k.lower(): v for k, v in res.getheaders()}
+            if not raw:
+                return res.status, None, sent_back
+            if "json" not in sent_back.get("content-type", "json"):
+                return res.status, raw.decode("utf-8", "replace"), sent_back
+            return res.status, json.loads(raw), sent_back
         finally:
             conn.close()
 
@@ -235,6 +240,33 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                                        {"work_id": work_id}, headers)[0], 404)
             self.assertEqual(self.call(port, "POST", f"/api/folders/{folder['id']}/works",
                                        {"work_id": "W-" + "0" * 32}, headers)[0], 404)
+
+    def test_sqlite_only_routes_never_reach_the_catalogue(self) -> None:
+        """The legacy inbox is retired (404); SQLite-only maintenance is a 501."""
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
+        port = _free_port()
+        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            _status, session, _headers = self.call(port, "GET", "/api/session")
+            headers = {"Origin": f"http://127.0.0.1:{port}",
+                       "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+            self.assertEqual(self.call(port, "GET", "/api/processing-files")[0], 404)
+            self.assertEqual(self.call(port, "GET", "/api/processing-files/a.pdf/pdf")[0], 404)
+            self.assertEqual(self.call(port, "PATCH", "/api/processing-files/a.pdf",
+                                       {"title": "T"}, headers)[0], 404)
+            self.assertEqual(self.call(port, "POST", "/api/processing-files/a.pdf/import",
+                                       {}, headers)[0], 404)
+            status, refused, _headers = self.call(port, "POST", "/api/works/linearize-existing-pdfs",
+                                                  {}, headers)
+            self.assertEqual((status, refused["code"]), (501, "not_ported"), refused)
+            # The queue that replaces the inbox answers on the same process.
+            status, page, _headers = self.call(port, "GET", "/api/processing-items")
+            self.assertEqual((status, page["items"]), (200, []), page)
+        finally:
+            self.stop(proc)
 
     def test_pdf_works_upload_replace_and_delete_through_postgresql(self) -> None:
         with self.serving() as (name, root, port, headers):
