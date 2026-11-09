@@ -3,9 +3,11 @@ import { ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import { fieldValue } from './dom'
-import { submitPersonCreate } from './submit'
+import { createPersonSaveGate } from './person-save'
+import { createPersonDurably, finishPersonCreate, type PersonPayload } from './submit'
 
 const personBusy = ref(false)
+const gate = createPersonSaveGate()
 
 interface PersonWindow {
   parsePersonBirthDeathField?: (text: string) => string | null
@@ -26,51 +28,74 @@ function onAliasesInput(): void {
   window._personAliasesManual = true
 }
 
+function readPayload(): PersonPayload | null {
+  const w = runtime()
+  const parse = w.parsePersonBirthDeathField
+  if (typeof parse !== 'function') return null
+  const birth = parse(fieldValue('person-birth-date'))
+  if (birth === null) return null
+  const death = parse(fieldValue('person-death-date'))
+  if (death === null) return null
+  const lastName = fieldValue('person-lname')
+  if (!lastName) return null
+  return {
+    first_name: fieldValue('person-fname'),
+    last_name: lastName,
+    aliases: fieldValue('person-aliases'),
+    about: fieldValue('person-about'),
+    image_url: fieldValue('person-image-url'),
+    link_wikipedia: fieldValue('person-link-wikipedia'),
+    link_stanford_encyclopedia: fieldValue('person-link-stanford'),
+    link_iep: fieldValue('person-link-iep'),
+    links_other: fieldValue('person-links-other'),
+    birth_date: birth,
+    death_date: death,
+  }
+}
+
 async function onSave(): Promise<void> {
-  if (personBusy.value) return
   const w = runtime()
   const parse = w.parsePersonBirthDeathField
   const help = w.PERSON_DATE_HELP || ''
-  if (typeof parse === 'function') {
-    const birth = parse(fieldValue('person-birth-date'))
-    if (birth === null) {
-      await w.prksAlertMessage?.(`Birth:\n${help}`, 'Validation')
-      return
-    }
-    const death = parse(fieldValue('person-death-date'))
-    if (death === null) {
-      await w.prksAlertMessage?.(`Date of death:\n${help}`, 'Validation')
-      return
-    }
-    const lastName = fieldValue('person-lname')
-    if (!lastName) {
-      await w.prksAlertMessage?.('Last name is required.', 'Validation')
-      return
-    }
-    personBusy.value = true
-    try {
-      await submitPersonCreate({
-        first_name: fieldValue('person-fname'),
-        last_name: lastName,
-        aliases: fieldValue('person-aliases'),
-        about: fieldValue('person-about'),
-        image_url: fieldValue('person-image-url'),
-        link_wikipedia: fieldValue('person-link-wikipedia'),
-        link_stanford_encyclopedia: fieldValue('person-link-stanford'),
-        link_iep: fieldValue('person-link-iep'),
-        links_other: fieldValue('person-links-other'),
-        birth_date: birth,
-        death_date: death,
-      })
-    } finally {
-      personBusy.value = false
-    }
+  if (typeof parse !== 'function') {
+    await w.prksAlertMessage?.('Could not save this person locally. Please retry.', 'Could not save')
     return
   }
-  await w.prksAlertMessage?.('Could not save this person locally. Please retry.', 'Could not save')
+  const birth = parse(fieldValue('person-birth-date'))
+  if (birth === null) {
+    await w.prksAlertMessage?.(`Birth:\n${help}`, 'Validation')
+    return
+  }
+  const death = parse(fieldValue('person-death-date'))
+  if (death === null) {
+    await w.prksAlertMessage?.(`Date of death:\n${help}`, 'Validation')
+    return
+  }
+  if (!fieldValue('person-lname')) {
+    await w.prksAlertMessage?.('Last name is required.', 'Validation')
+    return
+  }
+  await gate.save({
+    modal: () => {
+      const el = document.getElementById('person-modal')
+      return el instanceof HTMLElement ? el : null
+    },
+    isBusy: () => personBusy.value,
+    setBusy: (busy) => {
+      personBusy.value = busy
+    },
+    readPayload,
+    createPerson: createPersonDurably,
+    alert: async (message, title) => {
+      await w.prksAlertMessage?.(message, title)
+    },
+    afterCreate: finishPersonCreate,
+  })
 }
 
 function afterReset(): void {
+  // New opening: allow a fresh Save. An older in-flight create keeps its own
+  // opening token and must not clear this busy flag when it settles.
   personBusy.value = false
 }
 

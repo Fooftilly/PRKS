@@ -22,8 +22,13 @@ interface StubWindow {
   prksResolvePersonGroupParent?: (parentId: string, parentName: string, selfId: null) => Promise<string>
   prksCreatePersonGroupDurably?: (body: { name: string }) => Promise<{ entity_id?: string }>
   prksTakePersonGroupCreateNavigation?: () => { mode: string; tabId?: string }
-  createPlaylist?: (title: string, description: string) => Promise<string>
+  createPlaylist?: (title: string, description: string) => Promise<string | null>
   prksTakePlaylistIndexCreateTabId?: () => string
+  __prksPendingPlaylistAttach?: { workId?: string; tabId?: string; generation?: number } | null
+  prksCapturedWorkPanelStill?: (pending: { workId?: string } | null | undefined) => boolean
+  addWorkToPlaylist?: (playlistId: string, workId: string, still: () => boolean) => Promise<unknown>
+  __prksRefreshPlaylistSelects?: (playlistId: string) => Promise<void>
+  __prksRefreshAllPlaylistSelects?: (playlistId: string) => Promise<void>
 }
 
 function stubs(): StubWindow {
@@ -73,6 +78,11 @@ describe('create form host', () => {
     delete w.prksTakePersonGroupCreateNavigation
     delete w.createPlaylist
     delete w.prksTakePlaylistIndexCreateTabId
+    delete w.__prksPendingPlaylistAttach
+    delete w.prksCapturedWorkPanelStill
+    delete w.addWorkToPlaylist
+    delete w.__prksRefreshPlaylistSelects
+    delete w.__prksRefreshAllPlaylistSelects
   })
 
   function install(): void {
@@ -179,6 +189,9 @@ describe('create form host', () => {
       tabId = options?.tabId || ''
     }
     w.closeModals = () => {}
+    const personModal = document.getElementById('person-modal')
+    personModal?.classList.remove('hidden')
+    if (personModal) personModal.dataset.prksOpenGeneration = '1'
     document.getElementById('save-person-btn')?.click()
     await flush()
     expect(alerts[0]).toContain('Last name is required.')
@@ -229,12 +242,16 @@ describe('create form host', () => {
       hash = next
     }
     w.closeModals = () => {}
+    const groupModal = document.getElementById('group-modal')
+    groupModal?.classList.remove('hidden')
+    if (groupModal) groupModal.dataset.prksOpenGeneration = '1'
     document.getElementById('save-group-btn')?.click()
     await flush()
     expect(alerts[0]).toContain('Group name is required.')
     const name = document.getElementById('group-name') as HTMLInputElement
     name.value = 'Frankfurt'
     document.getElementById('save-group-btn')?.click()
+    await flush()
     await flush()
     expect(groups).toBe(1)
     expect(hash).toBe('#/people/groups/G-1')
@@ -247,6 +264,9 @@ describe('create form host', () => {
       return 'PL-1'
     }
     w.prksTakePlaylistIndexCreateTabId = () => ''
+    const playlistModal = document.getElementById('playlist-modal')
+    playlistModal?.classList.remove('hidden')
+    if (playlistModal) playlistModal.dataset.prksOpenGeneration = '1'
     document.getElementById('save-playlist-btn')?.click()
     await flush()
     expect(document.getElementById('playlist-error')?.textContent).toContain('Playlist title is required.')
@@ -258,5 +278,132 @@ describe('create form host', () => {
     document.getElementById('save-playlist-btn')?.click()
     await flush()
     expect(playlists).toBe(1)
+  })
+
+  it('keeps a reopened Person draft when an older create is still pending', async () => {
+    install()
+    const w = stubs()
+    w.parsePersonBirthDeathField = (text) => text.trim()
+    w.PERSON_DATE_HELP = 'use a date'
+    let resolveCreate: (value: { entity_id: string }) => void = () => {}
+    let creates = 0
+    w.prksCreatePersonDurably = () => {
+      creates += 1
+      return new Promise((resolve) => {
+        resolveCreate = resolve
+      })
+    }
+    let closed = 0
+    let navigated = ''
+    w.closeModals = () => {
+      closed += 1
+      document.getElementById('person-modal')?.classList.add('hidden')
+    }
+    w.prksNavigate = (hash) => {
+      navigated = hash
+    }
+    w.prksTakePersonIndexCreateTabId = () => ''
+    const modal = document.getElementById('person-modal')
+    modal?.classList.remove('hidden')
+    if (modal) modal.dataset.prksOpenGeneration = '1'
+    ;(document.getElementById('person-lname') as HTMLInputElement).value = 'Old'
+    document.getElementById('save-person-btn')?.click()
+    await flush()
+    expect(creates).toBe(1)
+    expect(document.getElementById('save-person-btn')?.getAttribute('aria-busy')).toBe('true')
+
+    // Dismiss → reopen clears fields and busy for the new opening.
+    modal?.classList.add('hidden')
+    if (modal) modal.dataset.prksOpenGeneration = '2'
+    window.prksCreateForms?.afterPersonReset()
+    await flush()
+    ;(document.getElementById('person-lname') as HTMLInputElement).value = ''
+    modal?.classList.remove('hidden')
+    ;(document.getElementById('person-lname') as HTMLInputElement).value = 'New'
+    expect(document.getElementById('save-person-btn')?.getAttribute('aria-busy')).not.toBe('true')
+
+    let resolveSecond: (value: { entity_id: string }) => void = () => {}
+    w.prksCreatePersonDurably = () => {
+      creates += 1
+      return new Promise((resolve) => {
+        resolveSecond = resolve
+      })
+    }
+    document.getElementById('save-person-btn')?.click()
+    await flush()
+    expect(creates).toBe(2)
+
+    resolveCreate({ entity_id: 'P-OLD' })
+    await flush()
+    expect(closed).toBe(0)
+    expect(navigated).toBe('')
+    expect((document.getElementById('person-lname') as HTMLInputElement).value).toBe('New')
+    expect(document.getElementById('save-person-btn')?.getAttribute('aria-busy')).toBe('true')
+
+    resolveSecond({ entity_id: 'P-NEW' })
+    await flush()
+    expect(closed).toBe(1)
+    expect(navigated).toBe('#/people/P-NEW')
+  })
+
+  it('attaches a playlist to the Work captured for that Save opening', async () => {
+    install()
+    const w = stubs()
+    const firstAttach = { workId: 'W-1', tabId: 't1', generation: 1 }
+    const secondAttach = { workId: 'W-2', tabId: 't2', generation: 2 }
+    w.__prksPendingPlaylistAttach = firstAttach
+    w.prksCapturedWorkPanelStill = (pending) => pending === w.__prksPendingPlaylistAttach
+    const attached: Array<{ playlistId: string; workId: string }> = []
+    w.addWorkToPlaylist = async (playlistId, workId) => {
+      attached.push({ playlistId, workId })
+    }
+    w.__prksRefreshPlaylistSelects = async () => {}
+    w.__prksRefreshAllPlaylistSelects = async () => {}
+    let resolveFirst: (id: string) => void = () => {}
+    let resolveSecond: (id: string) => void = () => {}
+    let creates = 0
+    w.createPlaylist = () => {
+      creates += 1
+      return new Promise((resolve) => {
+        if (creates === 1) resolveFirst = resolve
+        else resolveSecond = resolve
+      })
+    }
+    let closed = 0
+    w.closeModals = () => {
+      closed += 1
+      document.getElementById('playlist-modal')?.classList.add('hidden')
+    }
+    w.prksTakePlaylistIndexCreateTabId = () => ''
+    const modal = document.getElementById('playlist-modal')
+    modal?.classList.remove('hidden')
+    if (modal) modal.dataset.prksOpenGeneration = '1'
+    ;(document.getElementById('playlist-title') as HTMLInputElement).value = 'First'
+    document.getElementById('save-playlist-btn')?.click()
+    await flush()
+    expect(creates).toBe(1)
+
+    modal?.classList.add('hidden')
+    window.prksCreateForms?.resetPlaylistFields()
+    await flush()
+    w.__prksPendingPlaylistAttach = secondAttach
+    if (modal) modal.dataset.prksOpenGeneration = '2'
+    modal?.classList.remove('hidden')
+    ;(document.getElementById('playlist-title') as HTMLInputElement).value = 'Second'
+    document.getElementById('save-playlist-btn')?.click()
+    await flush()
+    expect(creates).toBe(2)
+
+    resolveFirst('PL-OLD')
+    await flush()
+    expect(attached).toEqual([])
+    expect(closed).toBe(0)
+    expect(w.__prksPendingPlaylistAttach).toBe(secondAttach)
+
+    resolveSecond('PL-NEW')
+    await flush()
+    expect(attached).toEqual([{ playlistId: 'PL-NEW', workId: 'W-2' }])
+    expect(w.__prksPendingPlaylistAttach).toBeNull()
+    expect(closed).toBe(1)
   })
 })

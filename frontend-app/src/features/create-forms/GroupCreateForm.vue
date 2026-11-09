@@ -4,7 +4,13 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
-import { submitGroupCreate } from './submit'
+import { createGroupSaveGate } from './group-save'
+import {
+  createGroupDurably,
+  finishGroupCreate,
+  groupCreateFailureMessage,
+  resolveGroupParent,
+} from './submit'
 
 interface GroupRow {
   id?: string
@@ -22,6 +28,7 @@ const groupBusy = ref(false)
 const parentRows = ref<Array<{ id: string; label: string }>>([])
 const { hidden: parentHidden, open: parentOpen, show: showParent, hide: hideParent, hideNow: hideParentNow } =
   useComboboxPanel()
+const gate = createGroupSaveGate()
 
 let groups: GroupRow[] = []
 
@@ -52,6 +59,9 @@ async function prepare(): Promise<void> {
   setFieldValue('group-parent-search', '')
   setFieldValue('group-parent-id', '')
   hideParentNow()
+  // New opening: allow a fresh Create. An older in-flight save keeps its own
+  // opening token and must not clear this busy flag when it settles.
+  groupBusy.value = false
   try {
     const rows = await runtime().prksEnsureAllGroupsCache?.()
     groups = Array.isArray(rows) ? rows : []
@@ -83,23 +93,35 @@ function pickParent(row: { id: string; label: string }): void {
 }
 
 async function onSave(): Promise<void> {
-  if (groupBusy.value) return
   const name = fieldValue('group-name')
   if (!name.trim()) {
     await runtime().prksAlertMessage?.('Group name is required.', 'Validation')
     return
   }
-  groupBusy.value = true
-  try {
-    await submitGroupCreate({
+  const w = runtime()
+  await gate.save({
+    modal: () => {
+      const el = document.getElementById('group-modal')
+      return el instanceof HTMLElement ? el : null
+    },
+    isBusy: () => groupBusy.value,
+    setBusy: (busy) => {
+      groupBusy.value = busy
+    },
+    readDraft: () => ({
       name,
       parentId: fieldValue('group-parent-id').trim(),
       parentQuery: fieldValue('group-parent-search').trim(),
       description: fieldValue('group-description'),
-    })
-  } finally {
-    groupBusy.value = false
-  }
+    }),
+    resolveParent: resolveGroupParent,
+    createGroup: createGroupDurably,
+    alert: async (message, title) => {
+      await w.prksAlertMessage?.(message, title)
+    },
+    failureMessage: groupCreateFailureMessage,
+    afterCreate: finishGroupCreate,
+  })
 }
 
 defineExpose({ prepare })
