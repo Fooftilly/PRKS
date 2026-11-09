@@ -256,6 +256,52 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
     return auth
 
 
+def select_library(identity, environ=None):
+    """The database of a PostgreSQL Library (``PRKS_LIBRARY_BACKEND=postgres``), or ``None``.
+
+    ``identity`` comes from :func:`prepare_identity`; the PostgreSQL Library
+    needs it, since every route acts for the admitted request's context
+    (``backend.library_backend``). Any refusal exits with status 2.
+    """
+    from backend.library_backend import ENV, POSTGRES, LibraryBackendError, postgres_selected
+
+    env = os.environ if environ is None else environ
+    try:
+        selected = postgres_selected(env)
+    except LibraryBackendError as exc:
+        if identity is not None:
+            identity[0].close()
+        print(f"PRKS cannot start: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    if not selected:
+        return None
+    if identity is None:
+        print(f"PRKS cannot start: {ENV}={POSTGRES} needs PRKS_AUTH.", file=sys.stderr)
+        raise SystemExit(2)
+    return identity[0]
+
+
+def refuse_sqlite_catalogue(library_database, bound_root):
+    """Refuse a PostgreSQL Library on a root that still holds a SQLite catalogue (exit 2).
+
+    Its PDFs and portraits are files the PostgreSQL catalogue does not name,
+    the rule object maintenance follows (``backend.domain.objects.jobs``).
+    """
+    if library_database is None:
+        return
+    from backend.domain.objects.jobs import root_refusal
+
+    if root_refusal(bound_root.root_real) is not None:
+        library_database.close()
+        bound_root.release()
+        print(
+            "PRKS refuses to start: this data root still holds a SQLite catalogue, "
+            "and its Library is not in PostgreSQL.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
 def migrate_on_start(db, environ):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
@@ -386,10 +432,12 @@ if __name__ == "__main__":
     # touched (PostgreSQL only).
     with startup_phase("startup_identity_config"):
         identity = prepare_identity(args, config)
+        library_database = select_library(identity)
     # Held until this process exits: root.lock, exclusive for the SQLite
     # runtime, shared (with the content lock) for a web paired with PostgreSQL.
     with startup_phase("startup_storage_open"):
         bound_root = open_storage(config, paired=identity is not None)
+        refuse_sqlite_catalogue(library_database, bound_root)
     auth = None
     if identity is not None:
         # The start check and bump under that shared lease; a first run waits
@@ -401,10 +449,13 @@ if __name__ == "__main__":
     # Every later open stays beneath the root that was validated and leased,
     # even if a root symlink is retargeted while the process runs.
     config = bound_root.anchor(config)
-    with startup_phase("startup_restore"):
-        recover_incomplete_restore(config)
+    if library_database is None:
+        # The SQLite store's own restore journal; the PostgreSQL Library's
+        # restore recovers through its jobs (backend.domain.maintenance).
+        with startup_phase("startup_restore"):
+            recover_incomplete_restore(config)
     with startup_phase("startup_bind"):
-        config = bind_storage(config)
+        config = bind_storage(config, library_database=library_database)
     with startup_phase("startup_logging"):
         setup_logging(config)
         bound_root.log_binding()
