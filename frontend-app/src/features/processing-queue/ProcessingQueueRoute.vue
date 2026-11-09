@@ -147,6 +147,7 @@ onMounted(() => {
         :doc-types="docTypes"
         :selected="state.selected.has(item.id)"
         :busy="state.busy.has(item.id)"
+        :importing="state.importing.has(item.id)"
         :error="state.errors[item.id] || ''"
         @save="(edit) => queue.save(item.id, edit)"
         @import="queue.importOne(item.id)"

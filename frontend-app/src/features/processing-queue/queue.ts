@@ -83,6 +83,8 @@ export interface ProcessingQueueState {
   busy: Set<string>
   /** Cards with unsaved edits; an import would use the saved draft and lose them. */
   dirty: Set<string>
+  /** Items whose import was sent and has not answered; their drafts are locked. */
+  importing: Set<string>
   errors: Record<string, string>
   imported: ProcessingImported[]
 }
@@ -141,6 +143,7 @@ export class ProcessingQueue {
       selected: new Set(),
       busy: new Set(),
       dirty: new Set(),
+      importing: new Set(),
       errors: {},
       imported: [],
     }) as ProcessingQueueState
@@ -273,7 +276,15 @@ export class ProcessingQueue {
     const filename = this.state.items.find((one) => one.id === id)?.original_filename ?? ''
     // The server imports the saved draft; the card disables Import while it has unsaved edits.
     if (this.state.dirty.has(id)) return
-    const done = await this.act(id, IMPORT_FAILURE, () => this.api.importOne(id).finally(markImportSent))
+    // The server imports the saved draft and the card leaves on success, so
+    // the draft is locked from the moment the import is sent.
+    const done = await this.act(id, IMPORT_FAILURE, () => {
+      this.state.importing.add(id)
+      return this.api.importOne(id).finally(() => {
+        this.state.importing.delete(id)
+        markImportSent()
+      })
+    })
     if (!done) return
     this.drop(id)
     this.state.imported = [...this.state.imported, { itemId: id, filename, workId: done.workId }]
@@ -301,6 +312,7 @@ export class ProcessingQueue {
     const names = new Map(this.state.items.map((one) => [one.id, one.original_filename]))
     for (const id of ids) {
       this.state.busy.add(id)
+      this.state.importing.add(id)
       delete this.state.errors[id]
     }
     try {
@@ -321,7 +333,10 @@ export class ProcessingQueue {
       const message = processingErrorMessage(error, IMPORT_FAILURE)
       for (const id of ids) if (this.state.items.some((one) => one.id === id)) this.state.errors[id] = message
     } finally {
-      for (const id of ids) this.state.busy.delete(id)
+      for (const id of ids) {
+        this.state.busy.delete(id)
+        this.state.importing.delete(id)
+      }
       this.count()
     }
   }

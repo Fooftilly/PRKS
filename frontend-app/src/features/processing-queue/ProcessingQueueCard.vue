@@ -11,6 +11,8 @@ const props = defineProps<{
   docTypes: ProcessingQueueOption[]
   selected: boolean
   busy: boolean
+  /** An import of this item was sent: the server imports the saved draft, so edits are locked. */
+  importing: boolean
   error: string
 }>()
 
@@ -160,26 +162,26 @@ watch(draft, () => {
     <form class="form-pane form-pane--tight prks-processing-card__core" @submit.prevent="save">
       <div class="form-row">
         <label :for="`${domId}-title`">Title</label>
-        <input :id="`${domId}-title`" v-model="draft.title" type="text" data-field="title" placeholder="Library title">
+        <input :id="`${domId}-title`" v-model="draft.title" type="text" :disabled="importing" data-field="title" placeholder="Library title">
       </div>
       <div class="form-row">
         <label :for="`${domId}-author`">Author</label>
-        <input :id="`${domId}-author`" v-model="draft.author_text" type="text" data-field="author_text">
+        <input :id="`${domId}-author`" v-model="draft.author_text" type="text" :disabled="importing" data-field="author_text">
       </div>
       <div class="form-row">
         <label :for="`${domId}-year`">Year</label>
-        <input :id="`${domId}-year`" v-model="draft.year" type="text" inputmode="numeric" data-field="year">
+        <input :id="`${domId}-year`" v-model="draft.year" type="text" inputmode="numeric" :disabled="importing" data-field="year">
       </div>
       <div class="form-row">
         <label :for="`${domId}-type`">Type</label>
-        <select :id="`${domId}-type`" v-model="draft.doc_type" data-field="doc_type">
+        <select :id="`${domId}-type`" v-model="draft.doc_type" :disabled="importing" data-field="doc_type">
           <option value="">Not set</option>
           <option v-for="option in docTypeChoices" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
       </div>
       <div class="form-row">
         <label :for="`${domId}-folder`">Folder</label>
-        <select :id="`${domId}-folder`" v-model="draft.target_folder_id" data-field="target_folder_id">
+        <select :id="`${domId}-folder`" v-model="draft.target_folder_id" :disabled="importing" data-field="target_folder_id">
           <option value="">No folder</option>
           <option v-for="option in folderChoices" :key="option.value" :value="option.value">{{ option.label }}</option>
         </select>
