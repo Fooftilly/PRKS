@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PrksApiError } from '../../api/http'
 import { processingItemRow } from '../../api/processing-items.fixtures'
 import type { ProcessingItem } from '../../api/processing-items'
@@ -180,5 +180,74 @@ describe('Processing queue', () => {
     await queue.load()
     expect(queue.state.items.map((one) => one.id)).toEqual(['a'])
     expect(queue.state.loadError).toBe('Could not load the Processing queue.')
+  })
+
+  describe('review regressions', () => {
+    afterEach(() => vi.unstubAllGlobals())
+
+    it('never imports a selected card with unsaved edits in a batch', async () => {
+      const importMany = vi.fn()
+      const importOne = vi.fn()
+      const queue = new ProcessingQueue(fakeApi({
+        list: vi.fn(async () => ({ items: [item('a'), item('b')], nextCursor: null })),
+        importMany,
+        importOne,
+      }))
+      await queue.load()
+      queue.toggle('a', true)
+      queue.toggle('b', true)
+      queue.setDirty('b', true)
+      await queue.importSelected()
+      await queue.importOne('b')
+      expect(importMany).not.toHaveBeenCalled()
+      expect(importOne).not.toHaveBeenCalled()
+      expect(queue.state.items.map((one) => one.id)).toEqual(['a', 'b'])
+      queue.setDirty('b', false)
+      importMany.mockResolvedValueOnce([])
+      await queue.importSelected()
+      expect(importMany).toHaveBeenCalledWith(['a', 'b'])
+    })
+
+    it('keeps each batch\'s progress on its own rows when drops overlap', async () => {
+      const pending = new Map<string, () => void>()
+      const queue = new ProcessingQueue(fakeApi({
+        upload: vi.fn((file: File, _key: string, onProgress: (sent: number, total: number) => void) => {
+          onProgress(1, 2)
+          return new Promise((resolve) => {
+            pending.set(file.name, () => resolve({ item: item(file.name), created: true, duplicates: NO_DUPLICATES }))
+          })
+        }) as ProcessingQueueApi['upload'],
+      }))
+      const first = queue.upload([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })])
+      await Promise.resolve()
+      const second = queue.upload([new File(['%PDF'], 'b.pdf', { type: 'application/pdf' })])
+      await Promise.resolve()
+      pending.get('a.pdf')!()
+      await first
+      expect(queue.state.uploads.map((one) => [one.filename, one.state])).toEqual([
+        ['a.pdf', 'done'],
+        ['b.pdf', 'sending'],
+      ])
+      pending.get('b.pdf')!()
+      await second
+      expect(queue.state.uploads.map((one) => one.state)).toEqual(['done', 'done'])
+    })
+
+    it('marks the offline caches changed for every import sent, even a failed one', async () => {
+      const marks = vi.fn()
+      vi.stubGlobal('prksMarkProcessingImportChanged', marks)
+      const queue = new ProcessingQueue(fakeApi({
+        list: vi.fn(async () => ({ items: [item('a'), item('b')], nextCursor: null })),
+        importOne: vi.fn(async () => { throw new TypeError('offline') }),
+        importMany: vi.fn(async () => [
+          { item_id: 'b', ok: true, work_id: 'W-2', created: true, code: null, message: null, item: null },
+        ]),
+      }))
+      await queue.load()
+      await queue.importOne('a')
+      queue.toggle('b', true)
+      await queue.importSelected()
+      expect(marks).toHaveBeenCalledTimes(2)
+    })
   })
 })

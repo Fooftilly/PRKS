@@ -81,6 +81,8 @@ export interface ProcessingQueueState {
   uploads: ProcessingUploadNote[]
   selected: Set<string>
   busy: Set<string>
+  /** Cards with unsaved edits; an import would use the saved draft and lose them. */
+  dirty: Set<string>
   errors: Record<string, string>
   imported: ProcessingImported[]
 }
@@ -90,6 +92,16 @@ const UPLOAD_FAILURE = 'Upload failed.'
 const SAVE_FAILURE = 'Save failed.'
 const IMPORT_FAILURE = 'Import failed.'
 const REMOVE_FAILURE = 'Could not remove the item.'
+
+/**
+ * Tell the offline caches an import may have changed the Library (Folders,
+ * People, Works browse, Recently added), as the classic Processing records
+ * do. Called for every import that was sent, whatever the reply: a failed
+ * reply cannot prove the server did not commit.
+ */
+function markImportSent(): void {
+  ;(globalThis as { prksMarkProcessingImportChanged?: () => void }).prksMarkProcessingImportChanged?.()
+}
 
 export function isPdfFile(file: File): boolean {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
@@ -113,6 +125,7 @@ export class ProcessingQueue {
       uploads: [],
       selected: new Set(),
       busy: new Set(),
+      dirty: new Set(),
       errors: {},
       imported: [],
     }) as ProcessingQueueState
@@ -125,6 +138,7 @@ export class ProcessingQueue {
   private drop(id: string): void {
     this.state.items = this.state.items.filter((one) => one.id !== id)
     this.state.selected.delete(id)
+    this.state.dirty.delete(id)
     delete this.state.errors[id]
   }
 
@@ -171,11 +185,14 @@ export class ProcessingQueue {
    * upload never shows one. Anything but a PDF is refused here.
    */
   async upload(files: readonly File[]): Promise<void> {
-    this.state.uploads = []
+    // A new batch replaces the shown notes; a batch still in flight keeps
+    // updating its own notes, never the new batch's rows.
+    if (!this.state.uploading) this.state.uploads = []
     for (const file of files) {
-      const at = this.state.uploads.push({ filename: file.name, state: 'sending', percent: 0, message: '', duplicates: null }) - 1
-      // Reach the note through the reactive list, so progress repaints.
-      const note = () => this.state.uploads[at]
+      this.state.uploads.push({ filename: file.name, state: 'sending', percent: 0, message: '', duplicates: null })
+      // The reactive proxy of this file's note, so progress repaints and stays on this row.
+      const own = this.state.uploads[this.state.uploads.length - 1]
+      const note = () => own
       if (!isPdfFile(file)) {
         Object.assign(note(), { state: 'failed', message: 'Only PDF files can be uploaded.' })
         continue
@@ -239,11 +256,19 @@ export class ProcessingQueue {
 
   async importOne(id: string): Promise<void> {
     const filename = this.state.items.find((one) => one.id === id)?.original_filename ?? ''
-    const done = await this.act(id, IMPORT_FAILURE, () => this.api.importOne(id))
+    // The server imports the saved draft; the card disables Import while it has unsaved edits.
+    if (this.state.dirty.has(id)) return
+    const done = await this.act(id, IMPORT_FAILURE, () => this.api.importOne(id).finally(markImportSent))
     if (!done) return
     this.drop(id)
     this.state.imported = [...this.state.imported, { itemId: id, filename, workId: done.workId }]
     this.count()
+  }
+
+  /** A card reports whether its draft has unsaved edits. */
+  setDirty(id: string, on: boolean): void {
+    if (on) this.state.dirty.add(id)
+    else this.state.dirty.delete(id)
   }
 
   toggle(id: string, on: boolean): void {
@@ -255,13 +280,16 @@ export class ProcessingQueue {
   async importSelected(): Promise<void> {
     const ids = this.state.items.map((one) => one.id).filter((id) => this.state.selected.has(id))
     if (!ids.length || ids.some((id) => this.state.busy.has(id))) return
+    // The server imports the saved draft: a card with unsaved edits would lose them
+    // (the page disables the batch and says so; each such card shows its own notice).
+    if (ids.some((id) => this.state.dirty.has(id))) return
     const names = new Map(this.state.items.map((one) => [one.id, one.original_filename]))
     for (const id of ids) {
       this.state.busy.add(id)
       delete this.state.errors[id]
     }
     try {
-      const results = await this.api.importMany(ids)
+      const results = await this.api.importMany(ids).finally(markImportSent)
       for (const result of results) {
         if (result.ok && result.work_id) {
           this.drop(result.item_id)

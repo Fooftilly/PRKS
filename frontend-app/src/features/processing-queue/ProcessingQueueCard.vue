@@ -19,6 +19,7 @@ const emit = defineEmits<{
   import: []
   remove: []
   select: [on: boolean]
+  dirty: [on: boolean]
 }>()
 
 /** A viewer the page mounted: the PRKS PDF viewer in read-only preview mode. */
@@ -100,6 +101,9 @@ const dirty = computed(() => {
   const base = fromItem(props.item)
   return (Object.keys(base) as (keyof typeof base)[]).some((key) => base[key] !== draft[key])
 })
+// The queue imports the saved draft, so a batch import must know which cards have unsaved edits.
+watch(dirty, (on) => emit('dirty', on), { immediate: true })
+onBeforeUnmount(() => emit('dirty', false))
 
 const size = computed(() => {
   const bytes = props.item.byte_size

@@ -17,6 +17,7 @@ const dragging = ref(false)
 let dragDepth = 0
 
 const selectedCount = computed(() => state.items.filter((one) => state.selected.has(one.id)).length)
+const selectedUnsaved = computed(() => state.items.some((one) => state.selected.has(one.id) && state.dirty.has(one.id)))
 const allSelected = computed(() => state.items.length > 0 && selectedCount.value === state.items.length)
 
 function pick(): void {
@@ -131,9 +132,10 @@ onMounted(() => {
         <input type="checkbox" :checked="allSelected" data-processing-select-all @change="selectAll(($event.target as HTMLInputElement).checked)">
         Select all shown
       </label>
-      <PrksButton variant="primary" :disabled="!selectedCount" data-processing-import-selected @click="queue.importSelected()">
+      <PrksButton variant="primary" :disabled="!selectedCount || selectedUnsaved" data-processing-import-selected @click="queue.importSelected()">
         Import selected ({{ selectedCount }})
       </PrksButton>
+      <span v-if="selectedUnsaved" class="meta-row" data-processing-batch-unsaved>Save the selected drafts before importing them.</span>
     </div>
     <div class="list-view" data-processing-list>
       <p v-if="state.loaded && !state.items.length" class="meta-row" data-processing-empty>No PDF files waiting for processing.</p>
@@ -149,6 +151,7 @@ onMounted(() => {
         @save="(edit) => queue.save(item.id, edit)"
         @import="queue.importOne(item.id)"
         @remove="queue.remove(item.id)"
+        @dirty="(on) => queue.setDirty(item.id, on)"
         @select="(on) => queue.toggle(item.id, on)"
       />
       <div v-if="state.nextCursor" class="prks-processing-load-more-row">
