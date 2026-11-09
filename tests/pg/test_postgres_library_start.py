@@ -9,6 +9,7 @@ with an unknown value, and on a root that still holds a SQLite catalogue.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -16,7 +17,7 @@ import signal
 import subprocess
 import sys
 import uuid
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from backend.storage import root_binding
 from backend.storage.config import StorageConfig
@@ -68,6 +69,22 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         finally:
             lease.release()
         self.close(name)
+
+    @contextlib.contextmanager
+    def serving(self) -> Iterator[tuple[str, int, dict[str, str]]]:
+        """A ready PostgreSQL web process, with the headers a mutation sends."""
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
+        port = _free_port()
+        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            _status, session, _headers = self.call(port, "GET", "/api/session")
+            yield name, port, {"Origin": f"http://127.0.0.1:{port}",
+                               "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+        finally:
+            self.stop(proc)
 
     def call(self, port: int, method: str, path: str, body: Any = None,
              headers: Optional[dict[str, str]] = None) -> tuple[int, Any, dict[str, str]]:
@@ -133,16 +150,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             self.assertFalse(os.path.lexists(os.path.join(root, catalogue)), catalogue)
 
     def test_sync_operations_apply_through_postgresql(self) -> None:
-        name = self.migrated()
-        root = self.new_root()
-        self.bootstrapped(name, root)
-        port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
-        try:
-            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
-            _status, session, _headers = self.call(port, "GET", "/api/session")
-            headers = {"Origin": f"http://127.0.0.1:{port}",
-                       "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+        with self.serving() as (name, port, headers):
             status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Synced"}, headers)
             self.assertIn(status, (200, 201), created)
             work_id = created["id"]
@@ -187,20 +195,9 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                 " JOIN prks.sync_operations o ON o.device_id = d.id WHERE d.id = %s GROUP BY d.user_id",
                 (device,)).fetchall())
             self.assertEqual([r["ops"] for r in rows], [2])
-        finally:
-            self.stop(proc)
 
     def test_work_routes_read_through_the_facade(self) -> None:
-        name = self.migrated()
-        root = self.new_root()
-        self.bootstrapped(name, root)
-        port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
-        try:
-            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
-            _status, session, _headers = self.call(port, "GET", "/api/session")
-            headers = {"Origin": f"http://127.0.0.1:{port}",
-                       "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+        with self.serving() as (name, port, headers):
             _status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Work"}, headers)
             work_id = created["id"]
             status, people, _headers = self.call(port, "GET", f"/api/works/{work_id}/people-state")
@@ -225,8 +222,6 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                                        {"work_id": work_id}, headers)[0], 404)
             self.assertEqual(self.call(port, "POST", f"/api/folders/{folder['id']}/works",
                                        {"work_id": "W-" + "0" * 32}, headers)[0], 404)
-        finally:
-            self.stop(proc)
 
     def test_the_selection_needs_prks_auth(self) -> None:
         err = self.refused(self.environment(None, PRKS_LIBRARY_BACKEND="postgres"), self.new_root())
