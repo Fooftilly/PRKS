@@ -44,6 +44,11 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
                     "frontend-app/src/api/generated/processing-files.ts",
                 ),
                 (
+                    "processing-items",
+                    "docs/api/openapi-processing-items.json",
+                    "frontend-app/src/api/generated/processing-items.ts",
+                ),
+                (
                     "performance-diagnostics",
                     "docs/api/openapi-performance-diagnostics.json",
                     "frontend-app/src/api/generated/performance-diagnostics.ts",
