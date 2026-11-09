@@ -341,12 +341,21 @@ class PostgresReachTests(unittest.TestCase):
                         pass
                     if flag:
                         db.get_all_persons()
+
+                def k(flag, items):
+                    if flag and serves_postgres_library():
+                        return
+                    while items:
+                        # A later iteration sees flag = True from the one before.
+                        if flag:
+                            db.get_all_folders()
+                        flag = True
                 """})
             self.assertEqual(
                 facade_surface(backend_dir=tmp),
                 frozenset({
                     "get_work", "get_person", "get_saved_views", "get_folder", "search_works",
-                    "get_all_tags", "get_tags_in_use", "get_all_persons",
+                    "get_all_tags", "get_tags_in_use", "get_all_persons", "get_all_folders",
                 }),
             )
 

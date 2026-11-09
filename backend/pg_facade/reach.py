@@ -204,6 +204,9 @@ class _SqliteMarker:
             learned = set()  # what a flag means holds within one function body
         if sqlite:
             self.marked.add(id(node))
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            # A later iteration sees what the body assigned on an earlier one.
+            learned.difference_update(_assigned_names(node))
         targets: list[ast.AST] = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
@@ -232,6 +235,15 @@ class _SqliteMarker:
                             self._node(item, sqlite, learned)
             elif isinstance(value, ast.AST):
                 self._node(value, sqlite, learned)
+
+
+def _assigned_names(node: ast.AST) -> set[str]:
+    """Every name ``node`` (re)binds anywhere inside it."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
+            names.add(sub.id)
+    return names
 
 
 def _pg_conjunct_names(test: ast.expr) -> set[str]:
