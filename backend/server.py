@@ -956,6 +956,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 request_host=self._prks_request_host,
                 parse_origin=parse_request_origin,
                 read_json=read_json,
+                route_fences_epoch=serves_postgres_library(),
             ),
         )
         if isinstance(outcome, session_api.Admitted):

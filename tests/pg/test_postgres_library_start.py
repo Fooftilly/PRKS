@@ -157,6 +157,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             title = op("SET_WORK_METADATA_FIELD", {"field": "title", "value": "Renamed offline"}, 0)
             status, acked, _headers = self.call(port, "POST", "/api/sync/operations", title, headers)
             self.assertEqual((status, acked["code"]), (200, "ACKNOWLEDGED"), acked)
+            acked_title = acked
             # A replay answers from the ledger.
             self.assertEqual(self.call(port, "POST", "/api/sync/operations", title, headers)[:2],
                              (200, acked))
@@ -172,6 +173,14 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             retitle = op("SET_WORK_METADATA_FIELD", {"field": "title", "value": "Stale"}, 1)
             status, refused, _headers = self.call(port, "POST", "/api/sync/operations", retitle, stale)
             self.assertEqual(status, 409, refused)
+            # A retry of a ledgered op (a lost ACK) replays at any epoch claim.
+            self.assertEqual(self.call(port, "POST", "/api/sync/operations", title, stale)[:2],
+                             (200, acked_title))
+            # A new op without a claim is still refused by the protocol's fence.
+            unclaimed = {k: v for k, v in headers.items() if k != "PRKS-Library-Epoch"}
+            status, refused, _headers = self.call(port, "POST", "/api/sync/operations", retitle, unclaimed)
+            self.assertEqual((status, refused["code"]), (400, "LIBRARY_EPOCH_REQUIRED"), refused)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{work_id}")[1]["title"], "Renamed offline")
             db = self.db(name)
             rows = db.query(lambda tx: tx.execute(
                 "SELECT d.user_id, count(o.op_id) AS ops FROM prks.devices d"
