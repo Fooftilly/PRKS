@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { processingItemRow } from './processing-items.fixtures'
 import {
+  newUploadKey,
   deleteProcessingItem,
   importProcessingItems,
   listProcessingItems,
@@ -103,5 +104,17 @@ describe('Processing queue client', () => {
       ['b', false, null, 'The item has been deleted.'],
     ])
     expect(JSON.parse(call()[1].body as string)).toEqual({ item_ids: ['a', 'b'] })
+  })
+})
+
+describe('newUploadKey', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('falls back to getRandomValues without randomUUID (an insecure origin)', () => {
+    const real = globalThis.crypto
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array) => real.getRandomValues(bytes) })
+    const key = newUploadKey()
+    expect(key).toMatch(/^[0-9a-f]{32}$/)
+    expect(newUploadKey()).not.toBe(key)
   })
 })

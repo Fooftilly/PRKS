@@ -240,9 +240,13 @@ export function processingItemPdfUrl(id: string): string {
   return itemPath(id, '/pdf')
 }
 
-/** A fresh idempotency key for one upload. */
+/**
+ * A fresh idempotency key for one upload. ``randomUUID`` needs a secure
+ * context, so a plain-HTTP LAN origin falls back to 16 random bytes from
+ * ``getRandomValues``, which every supported browser has.
+ */
 export function newUploadKey(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
