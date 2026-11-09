@@ -61,4 +61,34 @@ describe('Processing queue page', () => {
       wrapper.unmount()
     })
   }
+
+  it('keeps an unsaved edit when a refresh brings a newer revision of the same item', async () => {
+    const list = vi.fn()
+      .mockResolvedValueOnce({ items: [processingItemRow({ id: 'a', revision: 1 })], nextCursor: null })
+      .mockResolvedValueOnce({
+        items: [processingItemRow({ id: 'a', revision: 2, draft: { ...processingItemRow().draft!, title: 'Saved elsewhere' } })],
+        nextCursor: null,
+      })
+    const update = vi.fn(async () => processingItemRow({ id: 'a', revision: 2 }))
+    const api = { list, upload: vi.fn(), update, remove: vi.fn(), importOne: vi.fn(), importMany: vi.fn() } as unknown as ProcessingQueueApi
+    const wrapper = mount(ProcessingQueueRoute, {
+      props: { queue: new ProcessingQueue(api), folders: [], docTypes: [] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    const title = () => wrapper.find<HTMLInputElement>('[data-processing-item-id="a"] [data-field="title"]')
+    await title().setValue('Typed here')
+
+    await wrapper.find('[data-processing-refresh]').trigger('click')
+    await flushPromises()
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(title().element.value).toBe('Typed here')
+    expect(wrapper.find('[data-processing-item-id="a"] [data-processing-save-status]').text()).toContain('Unsaved changes')
+
+    // The save goes at the revision the edit was made on, so the server decides.
+    await wrapper.find('[data-processing-item-id="a"] form').trigger('submit')
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith('a', 1, expect.objectContaining({ title: 'Typed here' }))
+    wrapper.unmount()
+  })
 })

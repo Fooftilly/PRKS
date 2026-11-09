@@ -230,12 +230,15 @@ export class ProcessingQueue {
         const known = new Set(this.state.items.map((one) => one.id))
         this.state.items = [...this.state.items, ...page.items.filter((one) => !known.has(one.id))]
       } else {
-        // A card with unsaved edits stays shown even when it is not on the
-        // first page any more (a later page, a fresh upload): dropping it
-        // would unmount the card and lose the draft without asking.
+        // A card with unsaved edits keeps the item it was painted from: it
+        // stays shown when the first page no longer lists it (a later page, a
+        // fresh upload), and a newer revision from elsewhere does not repaint
+        // over the edits. Its Save goes at the painted revision, so a change
+        // made elsewhere comes back as a refusal carrying the item as it now is.
+        const painted = new Map(this.state.items.filter((one) => this.state.dirty.has(one.id)).map((one) => [one.id, one]))
         const fresh = new Set(page.items.map((one) => one.id))
-        const kept = this.state.items.filter((one) => this.state.dirty.has(one.id) && !fresh.has(one.id))
-        this.state.items = [...page.items, ...kept]
+        const kept = [...painted.values()].filter((one) => !fresh.has(one.id))
+        this.state.items = [...page.items.map((one) => painted.get(one.id) ?? one), ...kept]
         const live = new Set(this.state.items.map((one) => one.id))
         for (const id of [...this.state.selected]) if (!live.has(id)) this.state.selected.delete(id)
       }
