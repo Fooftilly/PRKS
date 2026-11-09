@@ -166,6 +166,15 @@ The embedded job worker stays off (`PRKS_EMBEDDED_WORKER=0`) while Library data
 still comes from the SQLite seed: its object sweep would delete the seeded
 PDFs, which PostgreSQL does not reference yet (PG-C1 #640).
 
+`PRKS_E2E_LIBRARY_BACKEND=postgres` is the PG-C1 leg: every server also
+serves its Library from that database (`PRKS_LIBRARY_BACKEND=postgres`) with
+its embedded worker on, and the seed runs through the PostgreSQL facade as
+the owner (`postgres_identity.seed_postgres_library`; seeds call only the
+method names `PRKSDatabase` and `PostgresLibrary` share, through
+`fixtures.open_library`). That leg skips the worker-local seed cache. CI runs
+it from a manual dispatch of the Full E2E Gate (`library_backend: postgres`);
+PR and master gates stay on the SQLite Library until #640 makes the leg green.
+
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel. There is no Playwright retry loop in this runner;
 failed tests stay failed.

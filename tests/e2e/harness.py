@@ -39,7 +39,7 @@ from tests.e2e.policy import (
     SEED_CACHE_ENV,
     env_flag_enabled,
 )
-from tests.e2e.postgres_identity import provision_library
+from tests.e2e.postgres_identity import postgres_library, provision_library, seed_postgres_library
 from backend.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1157,7 +1157,12 @@ class AppServer:
             except Exception:
                 self._tmpdir.cleanup()
                 raise
-        if self._seed_fn is not None:
+        if self._seed_fn is not None and postgres_library():
+            # The seed is rows in this server's own database: nothing to
+            # snapshot and clone, so the worker-local seed cache is not used.
+            with profile_e2e_phase("seed_build"):
+                self.ids = seed_postgres_library(self._seed_fn, self.storage_root, self.library)
+        elif self._seed_fn is not None:
             self.ids, self.seed_cache_hit = _materialize_seed(
                 self._seed_fn, self.storage_root
             )

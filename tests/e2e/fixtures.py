@@ -3,19 +3,12 @@ from __future__ import annotations
 
 import os
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 
 from backend.db_manager import PRKSDatabase
 from backend.research_index import PRKSResearchIndex
 from backend.text_index import PRKSTextIndex
-from backend.research_network import (
-    create_argument,
-    create_concept,
-    create_position,
-    replace_concept_aliases,
-    replace_concept_parents,
-    save_work_notes,
-)
 from backend.storage.config import StorageConfig
 
 REPO = Path(__file__).resolve().parents[2]
@@ -30,8 +23,51 @@ PERSON_DISPLAY = "E2E Author"
 PDF_NAME = "e2e-research.pdf"
 
 
-def seed_library(storage_root: str) -> dict:
-    """Create Works, a managed PDF, and an Author role. Returns generated IDs."""
+# The PostgreSQL Library a seed writes to instead of the SQLite store, bound
+# by ``seeding_into`` for one seed (PRKS_E2E_LIBRARY_BACKEND=postgres).
+_POSTGRES_LIBRARY = None
+
+
+@contextmanager
+def seeding_into(library):
+    """Run the seeds inside this block against ``library`` (a bound ``PostgresLibrary``)."""
+    global _POSTGRES_LIBRARY
+    previous, _POSTGRES_LIBRARY = _POSTGRES_LIBRARY, library
+    try:
+        yield
+    finally:
+        _POSTGRES_LIBRARY = previous
+
+
+def open_library(cfg: StorageConfig):
+    """The Library a seed writes: the bound PostgreSQL facade, else the root's SQLite store.
+
+    Every seed calls methods both share (the public ``PRKSDatabase`` names).
+    """
+    if _POSTGRES_LIBRARY is not None:
+        return _POSTGRES_LIBRARY
+    return PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+
+
+def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
+    """Index a seeded Research Note on SQLite; PostgreSQL queues its own reindex job."""
+    if isinstance(db, PRKSDatabase):
+        PRKSResearchIndex(storage=cfg).sync_work(work_id, notes, db)
+
+
+def _managed_pdf(cfg: StorageConfig, name: str) -> str:
+    """Copy the fixture PDF into the root as ``name``; the Work's create adopts it."""
+    shutil.copy2(str(MINIMAL_PDF), os.path.join(cfg.pdfs_dir, name))
+    return "/api/pdfs/%s" % name
+
+
+def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
+    """Create Works, a managed PDF, and an Author role. Returns generated IDs.
+
+    ``prepare_related_pdf(path)`` changes Work B's PDF before any Work names
+    it: on PostgreSQL the Work's create adopts the bytes as an immutable
+    Asset, so they must be final by then.
+    """
     if not MINIMAL_PDF.is_file():
         raise RuntimeError("missing fixture PDF: %s" % MINIMAL_PDF)
     cfg = StorageConfig.for_testing(storage_root)
@@ -41,7 +77,9 @@ def seed_library(storage_root: str) -> dict:
     shutil.copy2(str(MINIMAL_PDF), dest_pdf)
     dest_pdf_b = os.path.join(cfg.pdfs_dir, "e2e-related.pdf")
     shutil.copy2(str(MINIMAL_PDF), dest_pdf_b)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    if prepare_related_pdf is not None:
+        prepare_related_pdf(dest_pdf_b)
+    db = open_library(cfg)
     work_a = db.add_work(
         title=WORK_A_TITLE,
         text_content="Initial research notes.",
@@ -67,22 +105,25 @@ def seed_library(storage_root: str) -> dict:
     db.add_role(person_id, work_a, "Author")
     # Work nodes appear in the graph via explicit note markup / argument sources.
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
-    save_work_notes(db, work_a, seed_notes)
-    PRKSResearchIndex(storage=cfg).sync_work(work_a, seed_notes, db)
+    db.save_work_notes(work_a, seed_notes)
+    _sync_research(cfg, work_a, seed_notes, db)
     # Seed the real *derived* PDF index once in the worker, before the
     # immutable fixture snapshot is cloned. Every fresh server still opens
     # the index, scans canonical works, checks fingerprints and repairs stale
     # or missing rows; unchanged PDFs need no subprocess-local PyMuPDF import.
     # No PDF search results are mocked or inserted into the canonical DB.
-    text_summary = PRKSTextIndex(storage=cfg).reconcile_all(db)
-    if (
-        text_summary["processed"] != 2
-        or text_summary["indexed"] != 2
-        or text_summary["updated"] != 2
-        or text_summary["failed"]
-        or text_summary["skipped"]
-    ):
-        raise RuntimeError("E2E seed PDF text index did not synchronize")
+    # On PostgreSQL each managed PDF's create queued its text.extract job,
+    # which the server's embedded worker runs (backend/domain/search/text.py).
+    if isinstance(db, PRKSDatabase):
+        text_summary = PRKSTextIndex(storage=cfg).reconcile_all(db)
+        if (
+            text_summary["processed"] != 2
+            or text_summary["indexed"] != 2
+            or text_summary["updated"] != 2
+            or text_summary["failed"]
+            or text_summary["skipped"]
+        ):
+            raise RuntimeError("E2E seed PDF text index did not synchronize")
     return {
         "work_a": work_a,
         "work_b": work_b,
@@ -110,24 +151,24 @@ def seed_work_people_library(storage_root: str) -> dict:
     """
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
     jane = db.add_person(first_name="Jane", last_name="Doe")
     ed = db.add_person(first_name="Ed", last_name="Smith")
 
     # No linked Author: `author_text` is what the credit shows today.
     people_work = db.add_work(
         title=PEOPLE_WORK_TITLE, author_text="Text Author", doc_type="article",
-        file_path="/api/pdfs/e2e-people.pdf")
+        file_path=_managed_pdf(cfg, "e2e-people.pdf"))
     # A linked Author AND `author_text`, so removing the Author must reveal it.
     credited = db.add_work(
         title=PEOPLE_CREDITED_TITLE, author_text="Text Author", doc_type="article",
-        file_path="/api/pdfs/e2e-credited.pdf")
+        file_path=_managed_pdf(cfg, "e2e-credited.pdf"))
     db.insert_initial_role(credited, jane, "Author", order_index=0)
     # An Author and an Editor with NO `author_text`, so removing the Author
     # must fall through to the Editor rather than to an empty credit.
     editor_work = db.add_work(
         title=PEOPLE_EDITOR_TITLE, doc_type="article",
-        file_path="/api/pdfs/e2e-editor.pdf")
+        file_path=_managed_pdf(cfg, "e2e-editor.pdf"))
     db.insert_initial_role(editor_work, jane, "Author", order_index=0)
     db.insert_initial_role(editor_work, ed, "Editor", order_index=1)
 
@@ -142,7 +183,7 @@ def seed_person_profile_draft_library(storage_root: str) -> dict:
     """Two independently editable Persons and four deterministic Groups."""
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
     person_a = db.add_person(
         first_name="Ada",
         last_name="Alpha",
@@ -157,10 +198,10 @@ def seed_person_profile_draft_library(storage_root: str) -> dict:
         about="Saved biography B",
         birth_date="1980",
     )
-    group_alpha = db.add_person_group("Group Alpha")
-    group_beta = db.add_person_group("Group Beta")
-    group_gamma = db.add_person_group("Group Gamma")
-    group_delta = db.add_person_group("Group Delta")
+    group_alpha = db.add_person_group_with_parent_options("Group Alpha")
+    group_beta = db.add_person_group_with_parent_options("Group Beta")
+    group_gamma = db.add_person_group_with_parent_options("Group Gamma")
+    group_delta = db.add_person_group_with_parent_options("Group Delta")
     db.add_person_to_group(person_a, group_alpha)
     db.add_person_to_group(person_b, group_beta)
     ids.update(
@@ -186,18 +227,10 @@ GRAPH_SOURCED_ARGUMENT = "Sourced Argument"
 IMPORTED_HIGHLIGHT_COMMENT = "Imported highlight comment"
 
 
-def seed_imported_highlight_library(storage_root: str) -> dict:
-    """The default library, but Work B's PDF carries a highlight made elsewhere.
-
-    The highlight lives only in the PDF bytes, the way a file annotated in
-    another reader arrives. Tests that need it to have no canonical row
-    until the user edits it stop the open-time adoption from finding it.
-    """
+def _add_imported_highlight(pdf_path: str) -> None:
+    """Write a highlight made "elsewhere" into the PDF's bytes."""
     import pymupdf
 
-    ids = seed_library(storage_root)
-    cfg = StorageConfig.for_testing(storage_root)
-    pdf_path = os.path.join(cfg.pdfs_dir, "e2e-related.pdf")
     doc = pymupdf.open(pdf_path)
     try:
         page = doc[0]
@@ -210,6 +243,16 @@ def seed_imported_highlight_library(storage_root: str) -> dict:
         doc.saveIncr()
     finally:
         doc.close()
+
+
+def seed_imported_highlight_library(storage_root: str) -> dict:
+    """The default library, but Work B's PDF carries a highlight made elsewhere.
+
+    The highlight lives only in the PDF bytes, the way a file annotated in
+    another reader arrives. Tests that need it to have no canonical row
+    until the user edits it stop the open-time adoption from finding it.
+    """
+    ids = seed_library(storage_root, prepare_related_pdf=_add_imported_highlight)
     ids["imported_highlight_comment"] = IMPORTED_HIGHLIGHT_COMMENT
     return ids
 
@@ -217,18 +260,17 @@ def seed_imported_highlight_library(storage_root: str) -> dict:
 def seed_graph_context_library(storage_root: str) -> dict:
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
     notes = "[[concept:%s]]\n\n[[concept:%s]]\n" % (GRAPH_CONCEPT_A, GRAPH_CONCEPT_B)
-    save_work_notes(db, ids["work_a"], notes)
-    PRKSResearchIndex(storage=cfg).sync_work(ids["work_a"], notes, db)
-    pos = create_position(db, GRAPH_UNRELATED_POSITION)
-    arg = create_argument(db, name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
+    db.save_work_notes(ids["work_a"], notes)
+    _sync_research(cfg, ids["work_a"], notes, db)
+    pos = db.create_position(GRAPH_UNRELATED_POSITION)
+    arg = db.create_argument(name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
     # Deliberately separate from GRAPH_UNRELATED_ARGUMENT and sourced to work_b (not work_a):
     # this gives tests a deterministic argument_source edge (e.g. relation-filter selection
     # regressions) without perturbing edge counts incident to work_a, which other graph tests
     # (e.g. the node-selection dimming test) assert exactly.
-    sourced_arg = create_argument(
-        db,
+    sourced_arg = db.create_argument(
         name=GRAPH_SOURCED_ARGUMENT,
         kind="argument",
         sources=[{"work_id": ids["work_b"], "pages": "1-2"}],
@@ -258,15 +300,15 @@ def seed_concepts_library(storage_root: str) -> dict:
     """
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
-    parent = create_concept(db, CONCEPT_PARENT_NAME, "Parent concept definition.")
-    child = create_concept(db, CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
-    unvisited = create_concept(db, CONCEPT_UNVISITED_NAME, "Never opened while online.")
-    replace_concept_parents(db, child["id"], [parent["id"]])
-    replace_concept_aliases(db, child["id"], [CONCEPT_CHILD_ALIAS])
+    db = open_library(cfg)
+    parent = db.create_concept(CONCEPT_PARENT_NAME, "Parent concept definition.")
+    child = db.create_concept(CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
+    unvisited = db.create_concept(CONCEPT_UNVISITED_NAME, "Never opened while online.")
+    db.replace_concept_parents(child["id"], [parent["id"]])
+    db.replace_concept_aliases(child["id"], [CONCEPT_CHILD_ALIAS])
     notes = "Initial research notes.\n\n[[concept:%s]]\n" % CONCEPT_CHILD_NAME
-    save_work_notes(db, ids["work_a"], notes)
-    PRKSResearchIndex(storage=cfg).sync_work(ids["work_a"], notes, db)
+    db.save_work_notes(ids["work_a"], notes)
+    _sync_research(cfg, ids["work_a"], notes, db)
     ids.update(
         {
             "concept_parent": parent["id"],
@@ -299,11 +341,10 @@ def seed_positions_library(storage_root: str) -> dict:
     """
     ids = seed_concepts_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
-    position_a = create_position(db, POSITION_A_NAME, POSITION_A_DESCRIPTION)
-    position_b = create_position(db, POSITION_B_NAME, "Never opened while online.")
-    argument = create_argument(
-        db,
+    db = open_library(cfg)
+    position_a = db.create_position(POSITION_A_NAME, POSITION_A_DESCRIPTION)
+    position_b = db.create_position(POSITION_B_NAME, "Never opened while online.")
+    argument = db.create_argument(
         name=POSITION_ARGUMENT_NAME,
         kind="argument",
         targets=[{"type": "position", "id": position_a["id"], "verdict_id": "supports"}],
@@ -342,18 +383,16 @@ def seed_arguments_library(storage_root: str) -> dict:
     """
     ids = seed_positions_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
-    target = create_argument(db, name=ARGUMENT_B_NAME, kind="argument")
-    stance = create_argument(
-        db,
+    db = open_library(cfg)
+    target = db.create_argument(name=ARGUMENT_B_NAME, kind="argument")
+    stance = db.create_argument(
         name=STANCE_NAME,
         kind="stance",
         main_text=STANCE_TEXT,
         targets=[{"type": "position", "id": ids["position_a"], "verdict_id": "holds"}],
     )
-    create_argument(db, name=ARGUMENT_UNVISITED_NAME, kind="argument")
-    argument_a = create_argument(
-        db,
+    unvisited = db.create_argument(name=ARGUMENT_UNVISITED_NAME, kind="argument")
+    argument_a = db.create_argument(
         name=ARGUMENT_A_NAME,
         kind="argument",
         main_text=ARGUMENT_A_TEXT,
@@ -363,25 +402,21 @@ def seed_arguments_library(storage_root: str) -> dict:
             {"type": "argument", "id": target["id"], "verdict_id": "opposes"},
         ],
     )
-    response = create_argument(
-        db,
+    response = db.create_argument(
         name=ARGUMENT_C_NAME,
         kind="argument",
         targets=[{"type": "argument", "id": argument_a["id"], "verdict_id": "opposes"}],
     )
     # Work B's research notes mention Argument A, giving it a mention backlink.
     notes = "Related notes.\n\n[[argument:%s|%s]]\n" % (argument_a["id"], ARGUMENT_A_NAME)
-    save_work_notes(db, ids["work_b"], notes)
-    PRKSResearchIndex(storage=cfg).sync_work(ids["work_b"], notes, db)
+    db.save_work_notes(ids["work_b"], notes)
+    _sync_research(cfg, ids["work_b"], notes, db)
     ids.update(
         {
             "argument_a": argument_a["id"],
             "argument_target": target["id"],
             "argument_response": response["id"],
-            "argument_unvisited": [
-                row["id"]
-                for row in db.execute_query("SELECT id FROM arguments WHERE name = ?", (ARGUMENT_UNVISITED_NAME,))
-            ][0],
+            "argument_unvisited": unvisited["id"],
             "stance": stance["id"],
             "argument_a_name": ARGUMENT_A_NAME,
             "stance_name": STANCE_NAME,
@@ -413,8 +448,8 @@ def seed_people_library(storage_root: str) -> dict:
     """
     ids = seed_arguments_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
-    db.update_person_metadata(
+    db = open_library(cfg)
+    db.update_person_profile(
         ids["person"],
         {
             "about": PERSON_A_ABOUT,
@@ -424,8 +459,8 @@ def seed_people_library(storage_root: str) -> dict:
             "link_wikipedia": "https://example.com/wiki/e2e-author",
         },
     )
-    group_id = db.add_person_group(PERSON_GROUP_NAME)
-    db.set_person_group_memberships(ids["person"], [group_id])
+    group_id = db.add_person_group_with_parent_options(PERSON_GROUP_NAME)
+    db.add_person_to_group(ids["person"], group_id)
     person_b = db.add_person(first_name=PERSON_B_FIRST, last_name=PERSON_B_LAST)
     db.add_role(person_b, ids["work_b"], "Reviewer")
     person_unvisited = db.add_person(
@@ -465,7 +500,7 @@ def seed_playlists_library(storage_root: str) -> dict:
     """
     ids = seed_people_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
     # `provider_id` is written here because Work creation writes it: the server
     # derives it from the URL before the row exists, and the audit in
     # docs/work-source-identity.md found it populated on every video Work in
@@ -528,7 +563,7 @@ def seed_folders_library(storage_root: str) -> dict:
     """
     ids = seed_playlists_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
     parent = db.add_folder(FOLDER_PARENT_TITLE, FOLDER_PARENT_DESCRIPTION, None)
     child = db.add_folder(FOLDER_CHILD_TITLE, "Child folder.", parent)
     unvisited = db.add_folder(FOLDER_UNVISITED_TITLE, "Never opened while online.", None)
@@ -568,7 +603,7 @@ def seed_library_nav_folders(storage_root: str) -> dict:
         └── Networking
     """
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
     research = db.add_folder(LIBRARY_NAV_RESEARCH, "Library nav root.", None)
     philosophy = db.add_folder(LIBRARY_NAV_PHILOSOPHY, "Philosophy branch.", research)
     ethics = db.add_folder(LIBRARY_NAV_ETHICS, "Ethics leaf.", philosophy)

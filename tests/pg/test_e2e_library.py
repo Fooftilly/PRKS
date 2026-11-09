@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -48,14 +49,15 @@ class E2ELibraryTests(unittest.TestCase):
         )
         instance = self.rows(library.conninfo, "SELECT id FROM prks.instance")
         self.assertEqual([row["id"] for row in instance], [library.instance_id])
-        self.assertEqual(
-            library.server_env(),
-            {
-                "PRKS_AUTH": "loopback-owner",
-                "PRKS_DATABASE_URL": library.conninfo,
-                "PRKS_EMBEDDED_WORKER": "0",
-            },
-        )
+        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: ""}):
+            self.assertEqual(
+                library.server_env(),
+                {
+                    "PRKS_AUTH": "loopback-owner",
+                    "PRKS_DATABASE_URL": library.conninfo,
+                    "PRKS_EMBEDDED_WORKER": "0",
+                },
+            )
 
     def test_session_mode_adds_editors_who_sign_in_with_the_e2e_password(self) -> None:
         library = postgres_identity.provision_library(self.root, auth="session", members=("reader",))
@@ -104,3 +106,104 @@ class E2ELibraryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PostgresLibraryLegTests(unittest.TestCase):
+    """``PRKS_E2E_LIBRARY_BACKEND=postgres``: the seed and the server on PostgreSQL (PG-C1 #640)."""
+
+    setUp = E2ELibraryTests.setUp
+    rows = E2ELibraryTests.rows
+
+    def test_the_selection_is_read_from_the_environment(self) -> None:
+        self.assertFalse(postgres_identity.postgres_library({}))
+        self.assertTrue(postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}))
+        with self.assertRaises(ValueError):
+            postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "sqlite"})
+
+    def test_the_server_serves_postgresql_and_runs_its_worker(self) -> None:
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}):
+            env = library.server_env()
+        self.assertEqual(env, {
+            "PRKS_AUTH": "loopback-owner",
+            "PRKS_DATABASE_URL": library.conninfo,
+            "PRKS_LIBRARY_BACKEND": "postgres",
+        })
+
+    def test_the_seed_writes_the_library_through_the_facade(self) -> None:
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        ids = postgres_identity.seed_postgres_library(fixtures.seed_arguments_library, self.root, library)
+        works = self.rows(library.conninfo, "SELECT id, title FROM prks.works ORDER BY title")
+        self.assertEqual({w["title"] for w in works}, {fixtures.WORK_A_TITLE, fixtures.WORK_B_TITLE})
+        self.assertIn(ids["work_a"], {w["id"] for w in works})
+        arguments = self.rows(library.conninfo, "SELECT id FROM prks.arguments")
+        self.assertIn(ids["argument_unvisited"], {a["id"] for a in arguments})
+        # Both managed PDFs were adopted; their text jobs wait for the server's worker.
+        assets = self.rows(library.conninfo, "SELECT storage_locator FROM prks.assets ORDER BY 1")
+        self.assertEqual([a["storage_locator"] for a in assets], ["e2e-related.pdf", fixtures.PDF_NAME])
+        for name in ("prks_data.db", "prks_data_testing.db"):
+            self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
+
+    def test_the_seeds_call_only_ported_facade_methods(self) -> None:
+        import ast
+
+        from backend.pg_facade import PostgresLibrary
+        from backend.pg_facade.registry import ported_methods
+        from tests.e2e import fixtures
+
+        with open(fixtures.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        called = {
+            node.func.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "db"
+        }
+        self.assertTrue(called)
+        self.assertEqual(sorted(called - set(ported_methods(PostgresLibrary))), [])
+
+    def test_the_people_seeds_fill_the_postgresql_library(self) -> None:
+        from tests.e2e import fixtures
+
+        for seed in (fixtures.seed_people_library, fixtures.seed_person_profile_draft_library):
+            with self.subTest(seed=seed.__name__):
+                root = os.path.join(self.root, seed.__name__)
+                os.makedirs(root)
+                library = postgres_identity.provision_library(root)
+                self.addCleanup(library.drop)
+                postgres_identity.seed_postgres_library(seed, root, library)
+                groups = self.rows(library.conninfo, "SELECT id FROM prks.person_groups")
+                self.assertTrue(groups)
+
+    def test_every_seeded_managed_pdf_exists_for_its_work(self) -> None:
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        ids = postgres_identity.seed_postgres_library(fixtures.seed_work_people_library, self.root, library)
+        assets = self.rows(library.conninfo, "SELECT work_id, storage_locator FROM prks.assets")
+        by_work = {a["work_id"]: a["storage_locator"] for a in assets}
+        self.assertEqual(
+            {by_work.get(ids[key]) for key in ("people_work", "credited_work", "editor_work")},
+            {"e2e-people.pdf", "e2e-credited.pdf", "e2e-editor.pdf"},
+        )
+
+    def test_an_annotated_seed_pdf_is_final_before_its_asset_is_adopted(self) -> None:
+        import hashlib
+
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        postgres_identity.seed_postgres_library(fixtures.seed_imported_highlight_library, self.root, library)
+        assets = self.rows(library.conninfo, "SELECT storage_locator, content_sha256, byte_size FROM prks.assets")
+        self.assertEqual(len(assets), 2)
+        pdfs_dir = fixtures.StorageConfig.for_testing(self.root).pdfs_dir
+        for asset in assets:
+            with open(os.path.join(pdfs_dir, asset["storage_locator"]), "rb") as fh:
+                body = fh.read()
+            self.assertEqual((asset["content_sha256"], asset["byte_size"]),
+                             (hashlib.sha256(body).hexdigest(), len(body)), asset["storage_locator"])
