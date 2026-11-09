@@ -189,8 +189,9 @@ def facade_surface(reference: type | None = None, backend_dir: str = _BACKEND_DI
     library object to, so the count follows the code without a hand-kept
     list. Code only the SQLite runtime runs is left out
     (:mod:`backend.pg_facade.reach`, which also proves it unreachable from
-    the PostgreSQL runtime). PG-C1 needs every name here ported, but the
-    retired legacy inbox methods (:data:`~backend.pg_facade.reach.RETIRED_METHODS`).
+    the PostgreSQL runtime). PG-C1 needs every name here ported; the retired
+    legacy inbox methods (:data:`~backend.pg_facade.reach.RETIRED_METHODS`)
+    must not appear here at all.
     """
     from backend.pg_facade.reach import parse_module
 
@@ -236,8 +237,13 @@ class Coverage:
 
     @property
     def complete(self) -> bool:
-        """PG-C1's criterion: every surface name is ported or retired."""
-        return not (self.unported - self.retired)
+        """PG-C1's criterion: every name the PostgreSQL runtime reaches is ported.
+
+        A retired method counts only by staying off the surface: if
+        PostgreSQL code reaches one again, the facade would call a method it
+        does not have, so coverage is incomplete.
+        """
+        return not self.unported
 
     @property
     def ported_outside_surface(self) -> frozenset[str]:

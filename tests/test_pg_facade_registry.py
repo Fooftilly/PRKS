@@ -31,7 +31,7 @@ from backend.pg_facade import (
     validate_registry,
 )
 from backend.pg_facade import reach
-from backend.pg_facade.registry import facade_mixins
+from backend.pg_facade.registry import Coverage, facade_mixins
 
 LANE_MIXINS = {
     "WorksMixin",
@@ -243,6 +243,12 @@ class SurfaceTests(unittest.TestCase):
                 frozenset({"get_work", "get_saved_views", "delete_work_record", "add_tag"}),
             )
 
+    def test_a_retired_method_reached_again_makes_coverage_incomplete(self):
+        report = Coverage(surface=frozenset({"get_processing_files"}), ported={})
+        self.assertIn("get_processing_files", report.retired)
+        self.assertEqual(report.unported, frozenset({"get_processing_files"}))
+        self.assertFalse(report.complete)
+
     def test_coverage_counts_ported_and_unported(self):
         class Library(_ProcessingPort, _BareLibrary):
             pass
@@ -317,10 +323,31 @@ class PostgresReachTests(unittest.TestCase):
                         return
                     if a:
                         db.get_all_tags()
+
+                def g(flag, outer):
+                    # The return holds only where outer is true.
+                    if outer:
+                        if flag and serves_postgres_library():
+                            return
+                        if flag:
+                            db.delete_tag(2)
+                    if flag:
+                        db.get_tags_in_use()
+
+                def h(flag, items):
+                    if flag and serves_postgres_library():
+                        return
+                    for flag in items:
+                        pass
+                    if flag:
+                        db.get_all_persons()
                 """})
             self.assertEqual(
                 facade_surface(backend_dir=tmp),
-                frozenset({"get_work", "get_person", "get_saved_views", "get_folder", "search_works", "get_all_tags"}),
+                frozenset({
+                    "get_work", "get_person", "get_saved_views", "get_folder", "search_works",
+                    "get_all_tags", "get_tags_in_use", "get_all_persons",
+                }),
             )
 
     def test_a_sqlite_only_scope_reached_outside_sqlite_code_is_named(self):

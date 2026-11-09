@@ -185,22 +185,33 @@ class _SqliteMarker:
         return self.marked
 
     def _block(self, body: list[ast.stmt], sqlite: bool, learned: set[str]) -> None:
+        # A flag learned in this block holds only for the rest of this block:
+        # a nested branch's return says nothing about the path that skipped
+        # the branch. A flag reassigned anywhere inside is forgotten outside.
+        local = set(learned)
         for stmt in body:
-            self._node(stmt, sqlite, learned)
+            self._node(stmt, sqlite, local)
             if sqlite or not isinstance(stmt, ast.If) or not _exits(stmt.body):
                 continue
             if _is_pg_test(stmt.test):
                 sqlite = True  # the PostgreSQL runtime left this block above
             else:
-                learned.update(_pg_conjunct_names(stmt.test))
+                local.update(_pg_conjunct_names(stmt.test))
+        learned.intersection_update(local)
 
     def _node(self, node: ast.AST, sqlite: bool, learned: set[str] | None = None) -> None:
         if learned is None or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
             learned = set()  # what a flag means holds within one function body
         if sqlite:
             self.marked.add(id(node))
-        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
+            targets = [node.target]
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            targets = [node.optional_vars]
+        if targets:
             for target in targets:
                 for sub in ast.walk(target):
                     if isinstance(sub, ast.Name):
