@@ -198,10 +198,10 @@ def seed_person_profile_draft_library(storage_root: str) -> dict:
         about="Saved biography B",
         birth_date="1980",
     )
-    group_alpha = db.add_person_group("Group Alpha")
-    group_beta = db.add_person_group("Group Beta")
-    group_gamma = db.add_person_group("Group Gamma")
-    group_delta = db.add_person_group("Group Delta")
+    group_alpha = db.add_person_group_with_parent_options("Group Alpha")
+    group_beta = db.add_person_group_with_parent_options("Group Beta")
+    group_gamma = db.add_person_group_with_parent_options("Group Gamma")
+    group_delta = db.add_person_group_with_parent_options("Group Delta")
     db.add_person_to_group(person_a, group_alpha)
     db.add_person_to_group(person_b, group_beta)
     ids.update(
@@ -449,7 +449,7 @@ def seed_people_library(storage_root: str) -> dict:
     ids = seed_arguments_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    db.update_person_metadata(
+    db.update_person_profile(
         ids["person"],
         {
             "about": PERSON_A_ABOUT,
@@ -459,8 +459,8 @@ def seed_people_library(storage_root: str) -> dict:
             "link_wikipedia": "https://example.com/wiki/e2e-author",
         },
     )
-    group_id = db.add_person_group(PERSON_GROUP_NAME)
-    db.set_person_group_memberships(ids["person"], [group_id])
+    group_id = db.add_person_group_with_parent_options(PERSON_GROUP_NAME)
+    db.add_person_to_group(ids["person"], group_id)
     person_b = db.add_person(first_name=PERSON_B_FIRST, last_name=PERSON_B_LAST)
     db.add_role(person_b, ids["work_b"], "Reviewer")
     person_unvisited = db.add_person(

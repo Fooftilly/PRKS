@@ -148,6 +148,36 @@ class PostgresLibraryLegTests(unittest.TestCase):
         for name in ("prks_data.db", "prks_data_testing.db"):
             self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
 
+    def test_the_seeds_call_only_ported_facade_methods(self) -> None:
+        import ast
+
+        from backend.pg_facade import PostgresLibrary
+        from backend.pg_facade.registry import ported_methods
+        from tests.e2e import fixtures
+
+        with open(fixtures.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        called = {
+            node.func.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == "db"
+        }
+        self.assertTrue(called)
+        self.assertEqual(sorted(called - set(ported_methods(PostgresLibrary))), [])
+
+    def test_the_people_seeds_fill_the_postgresql_library(self) -> None:
+        from tests.e2e import fixtures
+
+        for seed in (fixtures.seed_people_library, fixtures.seed_person_profile_draft_library):
+            with self.subTest(seed=seed.__name__):
+                root = os.path.join(self.root, seed.__name__)
+                os.makedirs(root)
+                library = postgres_identity.provision_library(root)
+                self.addCleanup(library.drop)
+                postgres_identity.seed_postgres_library(seed, root, library)
+                groups = self.rows(library.conninfo, "SELECT id FROM prks.person_groups")
+                self.assertTrue(groups)
+
     def test_every_seeded_managed_pdf_exists_for_its_work(self) -> None:
         from tests.e2e import fixtures
 
