@@ -152,6 +152,31 @@ function prksPaintProcessingNavBadge() {
     }
 }
 
+/**
+ * Which runtime holds the Library's content: 'postgres' (the Processing page
+ * is the upload queue, `/api/processing-items`), 'sqlite' (the path-based
+ * inbox), or null while it is not known.
+ *
+ * A page with no bound scope is the SQLite runtime's (no `PRKS_AUTH`, so no
+ * session to bind). A bound page knows the content only from a confirmed
+ * session answer: one bound offline asks the session again (`verify()`), so
+ * it learns the content once PRKS answers, without a reload. Until then it is
+ * null, and callers show neither Processing page rather than guess one.
+ */
+async function prksLibraryContentMode() {
+    const scope = window.prksBrowserScope;
+    if (!scope || typeof scope.resolve !== 'function' || typeof scope.libraryContent !== 'function') return 'sqlite';
+    try {
+        const bound = await scope.resolve();
+        if (!bound) return 'sqlite';
+        if (!scope.libraryContent() && typeof scope.verify === 'function') await scope.verify();
+    } catch (_e) {
+        return null;
+    }
+    const content = scope.libraryContent();
+    return content === 'postgres' || content === 'sqlite' ? content : null;
+}
+
 async function prksRefreshProcessingNavBadge(options) {
     const opts = options || {};
     const online =
@@ -159,6 +184,21 @@ async function prksRefreshProcessingNavBadge(options) {
     if (!online) {
         // Offline / unreachable: never present a stale count as live.
         prksSetProcessingAttentionCount(null);
+        return;
+    }
+    const mode = await prksLibraryContentMode();
+    if (!mode) {
+        // Not confirmed yet: no count is known for either Processing page.
+        prksSetProcessingAttentionCount(null);
+        return;
+    }
+    if (mode === 'postgres') {
+        if (typeof window.prksProcessingQueueCount !== 'function') return;
+        try {
+            prksSetProcessingAttentionCount(await window.prksProcessingQueueCount({ signal: opts.signal }));
+        } catch (_e) {
+            prksSetProcessingAttentionCount(null);
+        }
         return;
     }
     const records = window.prksProcessingRecords;
@@ -3531,6 +3571,24 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                 break;
             }
             case 'processing-files': {
+                const contentMode = await prksLibraryContentMode();
+                if (stale()) return;
+                // Unconfirmed: the route error view (with Retry), never the
+                // other runtime's Processing page.
+                if (!contentMode) throw new Error('The Library content is not confirmed yet.');
+                if (contentMode === 'postgres') {
+                    // The queue page reads its items and moves the badge itself.
+                    const folders = typeof fetchFolders === 'function'
+                        ? await fetchFolders({ signal: routeSignal })
+                        : [];
+                    if (stale()) return;
+                    prksPresentVueRoute(ctx, contentDiv, 'processing-queue', {
+                        folders: Array.isArray(folders) ? folders : [],
+                        docTypes: Array.isArray(window.PRKS_DOC_TYPES) ? window.PRKS_DOC_TYPES : [],
+                        generation: generation,
+                    });
+                    break;
+                }
                 const loaded = await prksLoadProcessingInbox(routeSignal);
                 if (stale()) return;
                 publishSidebar({ pendingCount: loaded.items.length });

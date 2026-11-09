@@ -444,6 +444,8 @@ if __name__ == "__main__":
         # here, serving nothing, until setup is ready.
         with startup_phase("startup_identity"), SetupWait().watching() as wait:
             auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
+        if library_database is not None:
+            auth.library_content = "postgres"
     with startup_phase("startup_jobs"):
         jobs = start_jobs(auth)
     # Every later open stays beneath the root that was validated and leased,

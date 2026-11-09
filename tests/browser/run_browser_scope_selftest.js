@@ -888,6 +888,27 @@ async function testEpoch() {
     const offlineReload = scopeApi.createPrksBrowserScope({ indexedDB: idb, fetchImpl: sessionFetch([offline()]) });
     await offlineReload.resolve();
     record('an offline reload binds the recorded epoch', offlineReload.pageEpoch() === '1');
+    record('a session without content names none, nor does an offline reload',
+        a.libraryContent() === null && offlineReload.libraryContent() === null);
+    const pg = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { content: 'postgres' }) });
+    const pgPage = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(pg)]) });
+    await pgPage.resolve();
+    record('a confirmed session names the Library content', pgPage.libraryContent() === 'postgres');
+    const oddContent = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { content: 'mysql' }) });
+    const oddPage = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(oddContent)]) });
+    await oddPage.resolve();
+    record('an unknown content is not named', oddPage.libraryContent() === null && oddPage.current() !== null);
+    // A page that started offline binds the recorded scope without content,
+    // then learns it from its first confirmed same-scope answer, no reload.
+    const pgIdb = createFakeIndexedDBFactory();
+    await scopeApi.createPrksBrowserScope({ indexedDB: pgIdb, fetchImpl: sessionFetch([ok(pg)]) }).resolve();
+    const lateStart = scopeApi.createPrksBrowserScope({ indexedDB: pgIdb, fetchImpl: sessionFetch([offline(), ok(pg)]) });
+    const lateBound = await lateStart.resolve();
+    const lateBefore = lateStart.libraryContent();
+    const verdict = await lateStart.verify();
+    record('an offline start learns the content once the session answers',
+        lateBound !== null && lateBefore === null && verdict === 'same' && lateStart.libraryContent() === 'postgres',
+        String(lateBefore) + '/' + verdict + '/' + String(lateStart.libraryContent()));
     const noEpoch = Object.assign({}, SESSION_A, { library: Object.assign({}, SESSION_A.library, { epoch: undefined }) });
     const odd = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([ok(noEpoch)]) });
     record('a session without an epoch binds no scope', (await odd.resolve()) === null && odd.pageEpoch() === null);

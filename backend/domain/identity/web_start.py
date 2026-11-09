@@ -169,6 +169,11 @@ class WebAuth:
     library_id: str
     # The Argon2id hasher logins use; ``None`` is ``passwords.default_hasher()``.
     hasher: Optional[PasswordHasher] = field(default=None, repr=False)
+    # Where this process keeps the Library's content: ``"sqlite"`` (the store
+    # under the root) or ``"postgres"`` (``PRKS_LIBRARY_BACKEND``, PG-C1 #640).
+    # ``GET /api/session`` names it, so the browser shows the pages that
+    # backend serves (the Processing queue, §11.5). PG-C2 removes it.
+    library_content: str = "sqlite"
     _owner_cookie: Optional[str] = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 

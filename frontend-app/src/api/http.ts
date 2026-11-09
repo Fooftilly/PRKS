@@ -8,12 +8,18 @@
 export class PrksApiError extends Error {
   readonly status: number
   readonly code: string | null
+  /**
+   * What the caller's `readError` took from the failed body (never the body
+   * itself), or null.
+   */
+  readonly detail: unknown
 
-  constructor(message: string, status: number, code: string | null = null) {
+  constructor(message: string, status: number, code: string | null = null, detail: unknown = null) {
     super(message)
     this.name = 'PrksApiError'
     this.status = status
     this.code = code
+    this.detail = detail
   }
 }
 
@@ -101,14 +107,92 @@ function resolvePrksApiPath(path: string): string {
   return url.pathname
 }
 
+function abortError(): DOMException {
+  return new DOMException('The request was aborted.', 'AbortError')
+}
+
+function responseHeaders(raw: string): Headers {
+  const headers = new Headers()
+  for (const line of raw.trim().split(/[\r\n]+/)) {
+    const at = line.indexOf(':')
+    if (at > 0) headers.append(line.slice(0, at).trim(), line.slice(at + 1).trim())
+  }
+  return headers
+}
+
+/** One request through XMLHttpRequest, for its upload progress; answers a Response like fetch. */
+function sendWithProgress(
+  url: string,
+  method: string,
+  body: Blob,
+  headers: Record<string, string>,
+  signal: AbortSignal | undefined,
+  onProgress: (sent: number, total: number) => void,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError())
+      return
+    }
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, url)
+    xhr.withCredentials = true
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value)
+    xhr.upload.onprogress = (event) => onProgress(event.loaded, event.lengthComputable ? event.total : body.size)
+    const onAbort = () => xhr.abort()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    const done = () => signal?.removeEventListener('abort', onAbort)
+    xhr.onload = () => {
+      done()
+      if (xhr.status < 200 || xhr.status > 599) {
+        reject(new TypeError('PRKS API request failed.'))
+        return
+      }
+      resolve(new Response(xhr.status === 204 ? null : xhr.responseText, {
+        status: xhr.status,
+        headers: responseHeaders(xhr.getAllResponseHeaders()),
+      }))
+    }
+    xhr.onerror = () => {
+      done()
+      reject(new TypeError('PRKS API request failed.'))
+    }
+    xhr.onabort = () => {
+      done()
+      reject(abortError())
+    }
+    xhr.send(body)
+  })
+}
+
+function contentType(body: string | Blob | undefined): Record<string, string> {
+  if (typeof body === 'string') return body ? { 'Content-Type': 'application/json' } : {}
+  if (body instanceof Blob) return { 'Content-Type': body.type || 'application/octet-stream' }
+  return {}
+}
+
 export async function prksApiRequest(
   path: string,
   init: {
     method?: string
-    body?: string
+    /** A JSON string, or a Blob sent as is under its own type (an upload). */
+    body?: string | Blob
+    /** Extra request headers. Accept, Content-Type and the epoch header are set here. */
+    headers?: Record<string, string>
     signal?: AbortSignal
     /** Query parameters. The path itself never carries a query. */
     query?: Record<string, string>
+    /**
+     * Reads the fields a feature service needs from a failed answer's body.
+     * The result is the error's `detail`; the body itself is not kept.
+     */
+    readError?: (payload: unknown) => unknown
+    /**
+     * Upload progress for a Blob body, in bytes sent. Fetch cannot report
+     * it, so such a request goes through XMLHttpRequest with the same
+     * headers, epoch and answer handling.
+     */
+    onUploadProgress?: (sent: number, total: number) => void
   } = {},
 ): Promise<unknown> {
   const apiPath = resolvePrksApiPath(path)
@@ -120,17 +204,22 @@ export async function prksApiRequest(
     const epoch = await libraryEpochHeaders(method)
     // Read the generation after asynchronous Library epoch preflight.
     issuedAtGeneration = reachabilityGeneration()
-    response = await fetch(search ? `${apiPath}?${search}` : apiPath, {
-      method,
-      body: init.body,
-      signal: init.signal,
-      credentials: 'same-origin',
-      headers: {
-        Accept: 'application/json',
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...epoch,
-      },
-    })
+    const url = search ? `${apiPath}?${search}` : apiPath
+    const headers = {
+      ...(init.headers ?? {}),
+      Accept: 'application/json',
+      ...contentType(init.body),
+      ...epoch,
+    }
+    response = init.onUploadProgress && init.body instanceof Blob
+      ? await sendWithProgress(url, method, init.body, headers, init.signal, init.onUploadProgress)
+      : await fetch(url, {
+        method,
+        body: init.body,
+        signal: init.signal,
+        credentials: 'same-origin',
+        headers,
+      })
   } catch (error) {
     if (isAbortError(error)) throw error
     const transport = error instanceof TypeError ? error : new TypeError('PRKS API request failed.')
@@ -155,6 +244,7 @@ export async function prksApiRequest(
       envelope?.error ?? PRKS_API_FALLBACK_ERROR,
       response.status,
       envelope?.code ?? null,
+      init.readError ? init.readError(payload) : null,
     )
   }
   return payload

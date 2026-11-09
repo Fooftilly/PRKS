@@ -7,6 +7,7 @@ import { registerTypesBridge } from './features/types/session'
 import { registerTagsBridge } from './features/tags/session'
 import { registerPublishersBridge } from './features/publishers/session'
 import { registerProcessingBridge } from './features/processing/session'
+import { registerProcessingQueueBridge } from './features/processing-queue/session'
 import { registerResearchGraphBridge } from './features/research-graph/session'
 import { registerSavedViewsBridge } from './features/saved-views/session'
 import { registerSearchBridge } from './features/search/session'
@@ -45,6 +46,7 @@ registerTypesBridge(window)
 registerTagsBridge(window)
 registerPublishersBridge(window)
 registerProcessingBridge(window)
+registerProcessingQueueBridge(window)
 registerResearchGraphBridge(window)
 registerSearchBridge(window)
 registerSavedViewsBridge(window)

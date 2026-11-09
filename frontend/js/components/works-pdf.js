@@ -1164,6 +1164,21 @@ window.jumpToPdfAnnotationByIndex = async (idx, ctx) => {
 /**
  * Rows for CodeMirror hints: { id, displayText } from the current annotation list cache.
  */
+/**
+ * Mount the PRKS PDF viewer read-only ('preview' mode: no annotation
+ * mutation, nothing persisted) for a PDF that is not a Work yet, such as a
+ * Processing queue item. Resolves the viewer; the caller destroys it.
+ */
+window.prksMountPdfPreview = function (target, src, title) {
+    return createPrksPdfViewer({
+        target: target,
+        src: src,
+        mode: 'preview',
+        documentTitle: title || 'Document',
+        onError: (err) => console.error('PDF preview failed', err),
+    });
+};
+
 window.prksGetPdfAnnotationHintList = function (ctx) {
     const owner = prksPdfOwnerOrFocused(ctx);
     const pdf = prksPdfRuntime(owner);

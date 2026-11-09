@@ -316,6 +316,7 @@ def _session_payload(auth: WebAuth, session: ValidSession) -> tuple[dict[str, An
                 "name": library["name"],
                 "role": member["role"],
                 "epoch": scope.epoch,
+                "content": auth.library_content,
             },
             "expires_at": session.expires_at.astimezone(timezone.utc).isoformat(),
         }

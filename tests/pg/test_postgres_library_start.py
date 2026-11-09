@@ -115,6 +115,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             status, session, _headers = self.call(port, "GET", "/api/session")
             self.assertEqual(status, 200, session)
             epoch = str(session["library"]["epoch"])
+            self.assertEqual(session["library"]["content"], "postgres")
             status, created, _headers = self.call(
                 port, "POST", "/api/works", {"title": "Served from PostgreSQL"},
                 {"Origin": f"http://127.0.0.1:{port}", "PRKS-Library-Epoch": epoch},

@@ -174,6 +174,22 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         esbuild_pin = (pkg.get("devDependencies") or {}).get("esbuild")
         self.assertEqual(manifest.get("esbuild"), esbuild_pin)
 
+    def test_failed_open_destroys_the_partial_viewer(self):
+        """A rejected `ready` destroys the React root and host before the
+        error reaches the caller, who never gets a handle to release."""
+        src = _read(_VIEWER_SRC)
+        factory = src.split("export async function createPrksPdfViewer(", 1)[1]
+        guarded = re.search(
+            r"try \{\s*await controller\.ready;\s*\} catch \(error\) \{(?P<body>.*?)\}\s*options\.onReady",
+            factory,
+            re.S,
+        )
+        self.assertIsNotNone(guarded, "controller.ready must be awaited inside a cleanup guard")
+        body = guarded.group("body")
+        self.assertIn("handle.destroy();", body)
+        self.assertIn("throw error;", body)
+        self.assertLess(factory.index("handle.destroy = () =>"), factory.index("await controller.ready"))
+
     def test_react_bundled_once_in_metafile_inputs(self):
         manifest = json.loads(_read(os.path.join(_VENDOR, "BUILD-MANIFEST.json")))
         inputs = manifest["reactMetafileInputs"]
