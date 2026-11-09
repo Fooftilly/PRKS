@@ -43,17 +43,30 @@ def staged_dir(root: str) -> str:
     return path
 
 
-def staged_path(root: str, token: str, user_id: str) -> str:
+def _staged_name(token: str, user_id: str) -> str:
     owner = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
-    return os.path.join(staged_dir(root), f"{token}.{owner}{_STAGED_SUFFIX}")
+    return f"{token}.{owner}{_STAGED_SUFFIX}"
+
+
+def staged_path(root: str, token: str, user_id: str) -> str:
+    return os.path.join(staged_dir(root), _staged_name(token, user_id))
 
 
 def find_staged(root: str, token: str, user_id: str) -> Optional[str]:
-    """The archive ``user_id`` staged under ``token``, or None."""
+    """The archive ``user_id`` staged under ``token``, or None.
+
+    The path is taken from the directory's own listing, never built from the
+    request's token, so a token can only ever name a file already staged.
+    """
     if not TOKEN_RE.fullmatch(token):
         return None
-    path = staged_path(root, token, user_id)
-    return path if os.path.isfile(path) else None
+    expected = _staged_name(token, user_id)
+    directory = staged_dir(root)
+    for name in os.listdir(directory):
+        if name == expected:
+            path = os.path.join(directory, name)
+            return path if os.path.isfile(path) else None
+    return None
 
 
 def discard(path: str) -> None:
