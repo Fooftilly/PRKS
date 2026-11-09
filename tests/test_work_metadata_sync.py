@@ -937,11 +937,20 @@ class WorkMetadataSyncTests(unittest.TestCase):
                 if re.search(r"\bauthor_text\b\s*=", clause):
                     offenders.append("%s: %s" % (path.name, clause.strip()))
         self.assertEqual(offenders, [])
-        # The oEmbed fill reaches add_work, never an update.
+        # The oEmbed fill reaches a create, never an update: add_work on
+        # SQLite, _create_postgres_work (add_work or _add_work_with_pdf) on
+        # PostgreSQL.
         server = (backend_dir / "server.py").read_text(encoding="utf-8")
         at = server.index("If author_text not provided, fill from oEmbed author_name.")
-        self.assertIn("db.add_work(", server[at: at + 2000])
-        self.assertNotIn("update_work_metadata", server[at: at + 2000])
+        window = server[at: at + 4000]
+        self.assertIn("db.add_work(", window)
+        self.assertIn("_create_postgres_work(", window)
+        self.assertNotIn("update_work_metadata", window)
+        create = server[server.index("def _create_postgres_work("):]
+        create = create[: create.index("\ndef ", 1)]
+        self.assertIn("db.add_work(", create)
+        self.assertIn("db._add_work_with_pdf(", create)
+        self.assertNotIn("update_work_metadata", create)
 
     def test_search_finds_the_new_author_text_after_synchronization(self):
         """`author_text` is an FTS column, kept current by an AFTER UPDATE

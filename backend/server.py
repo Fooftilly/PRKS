@@ -29,6 +29,7 @@ from backend.db_manager import (
     MissingPersonError,
     effective_source_kind,
     managed_pdf_filename,
+    prks_delete_pdf_thumbnails_for_work_id,
     safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
@@ -553,6 +554,51 @@ def _stored_work_file_path(work_id: str) -> str:
         return str((fields or {}).get("file_path") or "")
     rows = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
     return (rows[0].get("file_path") or "") if rows else ""
+
+
+def _create_postgres_work(file_path: str, upload: tuple[str, bytes] | None, fields: dict) -> str:
+    """Create a Work on the PostgreSQL Library, from an upload or an existing managed PDF.
+
+    No adoption lock: the facade checks an existing file for an actor who
+    may edit and adopts it in the create's transaction, and the settle that
+    removes bytes re-checks every Asset under the per-object lock (§7.4,
+    §11.2). An upload is stored by the facade under fresh keys.
+    """
+    if upload is None:
+        return db.add_work(file_path=file_path, **fields)
+    name, data = upload
+
+    def write(out) -> None:
+        out.write(data)
+
+    return db._add_work_with_pdf(name, write, **fields)
+
+
+def _delete_work(work_id: str, *, keep_managed_pdf: bool = False) -> None:
+    """Delete a Work and its derived state on the bound Library.
+
+    On PostgreSQL the delete records its files' cleanup claims in its own
+    transaction and the orphan sweep removes the bytes (§11.2); the text and
+    Research indexes are the database's. Only the Work's thumbnails, derived
+    files under the root, are removed here. On SQLite
+    ``work_deletion.delete_work`` does the whole cleanup.
+    """
+    if not serves_postgres_library():
+        delete_library_work(db, text_index, work_id, keep_managed_pdf=keep_managed_pdf)
+        return
+    deleted = db.delete_work_record(work_id, claim_pdf=not keep_managed_pdf)
+    if deleted is None or not thumbs_dir:
+        return
+    # Log the id the database returned, never the request's own value.
+    logged_id = safe_log_id(deleted.work_id)
+    try:
+        failed = prks_delete_pdf_thumbnails_for_work_id(deleted.work_id, thumbs_dir)
+        if failed:
+            LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s failed_count=%s",
+                           logged_id, len(failed))
+    except Exception as e:
+        LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s error_type=%s",
+                       logged_id, safe_error_type(e))
 
 
 def _prks_pixmap_to_pil(pix):
@@ -1728,7 +1774,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
-                delete_library_work(db, text_index, w_id)
+                _delete_work(w_id)
                 self.send_json(200, {'status': 'deleted'})
             elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
                 pl_id = path.split('/')[-1]
@@ -3155,6 +3201,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     })
                     return
 
+                postgres_upload = None
                 # Upload: PDF (existing behavior)
                 if data.get('file_b64') and data.get('file_name'):
                     try:
@@ -3162,17 +3209,22 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    # Minting, containment, exclusive create and linearization
-                    # belong to the managed-PDF service; this adapter only maps
-                    # the outcome onto a response.
-                    try:
-                        stored_name = work_pdf_replace.store_new_managed_pdf_bytes(
-                            pdfs_dir, data['file_name'], decoded_pdf
-                        )
-                    except work_pdf_replace.ManagedPdfStoreError as exc:
-                        self.send_json(exc.http_status, {'error': exc.message})
-                        return
-                    file_path = f"/api/pdfs/{stored_name}"
+                    if serves_postgres_library():
+                        # The facade stores the bytes as objects and adopts
+                        # them in its create (objects.ingest, §10, §11.2).
+                        postgres_upload = (str(data['file_name']), decoded_pdf)
+                    else:
+                        # Minting, containment, exclusive create and
+                        # linearization belong to the managed-PDF service;
+                        # this adapter only maps the outcome onto a response.
+                        try:
+                            stored_name = work_pdf_replace.store_new_managed_pdf_bytes(
+                                pdfs_dir, data['file_name'], decoded_pdf
+                            )
+                        except work_pdf_replace.ManagedPdfStoreError as exc:
+                            self.send_json(exc.http_status, {'error': exc.message})
+                            return
+                        file_path = f"/api/pdfs/{stored_name}"
 
                 provider = (data.get('provider') or '').strip().lower()
                 provider_id = (data.get('provider_id') or '').strip()
@@ -3189,7 +3241,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # the explicitly labelled ones meant two Works with identical
                 # canonical identity got different titles, authors and
                 # thumbnails purely because one request said so twice.
-                if effective_source_kind(source_kind, source_url, file_path) == 'video':
+                # An upload the facade has not stored yet is still a file.
+                classified_file = file_path or ("upload" if postgres_upload else "")
+                if effective_source_kind(source_kind, source_url, classified_file) == 'video':
                     if not provider:
                         try:
                             host = (urlparse(source_url).netloc or '').lower()
@@ -3220,70 +3274,83 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # A source identity that contradicts itself is the caller's
                 # mistake, not a server fault: `add_work` refuses it at the
                 # creation boundary, and that refusal is a 400.
-                # A caller may point a new Work at an EXISTING managed PDF
-                # instead of uploading one, so the commit that claims ownership
-                # is held under the same per-basename lock cleanup takes, and
-                # re-checks that the bytes still exist under that lock. An
-                # upload needs no guard: it minted its own unique name.
-                try:
-                    with (
-                        work_pdf_replace.managed_pdf_adoption_guard(
-                            pdfs_dir, file_path
-                        )
-                        if not stored_name
-                        else nullcontext()
-                    ) as adopted_name:
-                        # Non-canonical but resolving spellings (outer
-                        # whitespace, …) share cleanup's lock identity; store
-                        # only the exact /api/pdfs/<name> ownership form.
-                        if adopted_name:
-                            file_path = f"/api/pdfs/{adopted_name}"
-                        w_id = db.add_work(
-                            title=data.get('title', 'Untitled'),
-                            status=data.get('status', 'Not Started'),
-                            abstract=data.get('abstract', ''),
-                            text_content=data.get('text_content', ''),
-                            published_date=data.get('published_date', ''),
-                            file_path=file_path,
-                            author_text=data.get('author_text', ''),
-                            year=data.get('year', ''),
-                            publisher=data.get('publisher', ''),
-                            location=data.get('location', ''),
-                            edition=data.get('edition', ''),
-                            journal=data.get('journal', ''),
-                            volume=data.get('volume', ''),
-                            issue=data.get('issue', ''),
-                            pages=data.get('pages', ''),
-                            isbn=data.get('isbn', ''),
-                            doi=data.get('doi', ''),
-                            doc_type=data.get('doc_type', 'article'),
-                            source_kind=source_kind,
-                            source_url=source_url,
-                            source_mime=source_mime,
-                            thumb_url=thumb_url,
-                            provider=provider,
-                            provider_id=provider_id,
-                            urldate=urldate,
-                            thumb_page=data.get('thumb_page'),
-                            private_notes=data.get('private_notes', ''),
-                        )
-                except work_pdf_replace.ManagedPdfStoreError as e:
-                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                    self.send_json(e.http_status, {'error': e.message})
-                    return
-                except ValueError as e:
-                    # The upload is stored before the row exists, so a refused
-                    # create would otherwise leave a PDF nothing references.
-                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                    self.send_json(400, {'error': str(e)})
-                    return
-                except Exception:
-                    # A refusal is not the only exit from this window: add_work
-                    # reaches SQLite, so a locked database or a failed commit
-                    # leaves the same orphan. The service keeps the file unless
-                    # it can prove no Work references it.
-                    work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                    raise
+                work_fields = dict(
+                    title=data.get('title', 'Untitled'),
+                    status=data.get('status', 'Not Started'),
+                    abstract=data.get('abstract', ''),
+                    text_content=data.get('text_content', ''),
+                    published_date=data.get('published_date', ''),
+                    author_text=data.get('author_text', ''),
+                    year=data.get('year', ''),
+                    publisher=data.get('publisher', ''),
+                    location=data.get('location', ''),
+                    edition=data.get('edition', ''),
+                    journal=data.get('journal', ''),
+                    volume=data.get('volume', ''),
+                    issue=data.get('issue', ''),
+                    pages=data.get('pages', ''),
+                    isbn=data.get('isbn', ''),
+                    doi=data.get('doi', ''),
+                    doc_type=data.get('doc_type', 'article'),
+                    source_kind=source_kind,
+                    source_url=source_url,
+                    source_mime=source_mime,
+                    thumb_url=thumb_url,
+                    provider=provider,
+                    provider_id=provider_id,
+                    urldate=urldate,
+                    thumb_page=data.get('thumb_page'),
+                    private_notes=data.get('private_notes', ''),
+                )
+                if serves_postgres_library():
+                    # No adoption lock or discard here: the facade checks an
+                    # adopted file under the actor's edit right, and bytes a
+                    # refused create stored are the orphan sweep's (§11.2).
+                    try:
+                        w_id = _create_postgres_work(file_path, postgres_upload, work_fields)
+                    except ValueError as e:
+                        self.send_json(400, {'error': str(e)})
+                        return
+                else:
+                    # A caller may point a new Work at an EXISTING managed PDF
+                    # instead of uploading one, so the commit that claims
+                    # ownership is held under the same per-basename lock
+                    # cleanup takes, and re-checks that the bytes still exist
+                    # under that lock. An upload needs no guard: it minted its
+                    # own unique name.
+                    try:
+                        with (
+                            work_pdf_replace.managed_pdf_adoption_guard(
+                                pdfs_dir, file_path
+                            )
+                            if not stored_name
+                            else nullcontext()
+                        ) as adopted_name:
+                            # Non-canonical but resolving spellings (outer
+                            # whitespace, …) share cleanup's lock identity;
+                            # store only the exact /api/pdfs/<name> form.
+                            if adopted_name:
+                                file_path = f"/api/pdfs/{adopted_name}"
+                            w_id = db.add_work(file_path=file_path, **work_fields)
+                    except work_pdf_replace.ManagedPdfStoreError as e:
+                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
+                        self.send_json(e.http_status, {'error': e.message})
+                        return
+                    except ValueError as e:
+                        # The upload is stored before the row exists, so a
+                        # refused create would otherwise leave a PDF nothing
+                        # references.
+                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
+                        self.send_json(400, {'error': str(e)})
+                        return
+                    except Exception:
+                        # A refusal is not the only exit from this window:
+                        # add_work reaches SQLite, so a locked database or a
+                        # failed commit leaves the same orphan. The service
+                        # keeps the file unless it can prove no Work
+                        # references it.
+                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
+                        raise
                 try:
                     text_index.sync_work(w_id, file_path)
                 except Exception as e:
@@ -3295,7 +3362,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # Undo this create: a PDF this request uploaded goes with it;
                 # existing bytes it only adopted were never its to remove.
                 def undo_create():
-                    delete_library_work(db, text_index, w_id, keep_managed_pdf=not stored_name)
+                    _delete_work(w_id, keep_managed_pdf=not (stored_name or postgres_upload))
 
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
@@ -3669,6 +3736,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
 
+                    if serves_postgres_library():
+                        status, body = self._replace_postgres_work_pdf(w_id, pdf_bytes, claimed_set_rev)
+                        if status == 200 and save_token:
+                            with _SAVE_TOKEN_LOCK:
+                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
+                        self.send_json(status, body)
+                        return
+
                     # Existence before lock: unknown IDs must not grow
                     # _PDF_MATERIALIZATION_LOCKS. Re-check under the Work lock
                     # inside replace_managed_work_pdf for deletion races.
@@ -3860,6 +3935,38 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(413, {"error": "request_too_large"})
             return None
         return content_length
+
+    def _replace_postgres_work_pdf(self, work_id: str, pdf_bytes: bytes,
+                                   claimed_set_rev: object) -> tuple[int, dict]:
+        """``POST /api/works/{id}/pdf`` on the PostgreSQL Library: SQLite's statuses and bodies.
+
+        The facade checks the Work (and a materialization claim) for an actor
+        who may edit, stores the bytes under fresh keys and adopts them in one
+        command under the Work and Asset locks, so no process lock is taken
+        here. With ``materialized_annotation_set_revision`` the bytes are the
+        viewer's rendered annotations and mark the Work materialized.
+        """
+        from backend.pdf_materialization import STALE_CODE
+
+        def write(out) -> None:
+            out.write(pdf_bytes)
+
+        try:
+            if claimed_set_rev is None:
+                result = db._replace_work_pdf(work_id, write)
+            else:
+                result = db._materialize_work_pdf(work_id, write, claimed_set_rev)
+        except LookupError:
+            # The facade refuses a missing Work and a Work without managed
+            # PDF bytes alike; answer each as SQLite does.
+            if db.get_work(work_id) is None:
+                return 404, {"error": "Work not found"}
+            return 404, {"error": "Work has no managed PDF"}
+        except ValueError as e:
+            if str(e) == STALE_CODE:
+                return 409, work_pdf_replace.stale_materialization_body(db, work_id)
+            return 400, {"error": "Invalid materialization revision"}
+        return 200, {**result, "status": "success"}
 
     def _handle_postgres_sync_operation(self, data) -> None:
         """``POST /api/sync/operations`` on the PostgreSQL Library (§8.4, §11.4).

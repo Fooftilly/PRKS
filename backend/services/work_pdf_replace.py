@@ -167,7 +167,7 @@ def atomic_replace_managed_pdf_bytes(
     return fullpath
 
 
-def _stale_body(db, work_id: str) -> dict[str, Any]:
+def stale_materialization_body(db, work_id: str) -> dict[str, Any]:
     mat = db.get_work_pdf_materialization(work_id) or {}
     return {
         "error": "PDF materialization is stale",
@@ -721,7 +721,7 @@ def replace_managed_work_pdf(
                     if str(e) == STALE_CODE:
                         return {
                             "status": 409,
-                            "body": _stale_body(db, work_id),
+                            "body": stale_materialization_body(db, work_id),
                             "wrote_pdf": False,
                         }
                     return {
@@ -815,7 +815,7 @@ def replace_managed_work_pdf(
                     # COW may already have committed works.file_path to the
                     # exclusive file. Surface that path so the client can leave
                     # the shared URL even though materialization is stale.
-                    stale = _stale_body(db, work_id)
+                    stale = stale_materialization_body(db, work_id)
                     if cow_retarget:
                         stale["file_path"] = target_fp
                     return {

@@ -445,6 +445,11 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
     # The retarget runs behind a ``cow_retarget`` flag the flow analysis
     # cannot correlate with the minting branch, hence the function exemption.
     ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"): "COW retarget",
+    # The PostgreSQL Library adopts an existing file inside the create's own
+    # transaction (PostgresLibrary.add_work); its cleanup settle re-checks
+    # every Asset under the per-object lock (§7.4, §11.2), so the SQLite
+    # basename lock has nothing to protect there.
+    ("backend/server.py", "_create_postgres_work"): "PostgreSQL create",
 }
 # Dict methods that may (re)write a guarded fields dict's file_path entry.
 _DICT_MUTATORS = frozenset({"__ior__", "__setitem__", "setdefault", "update"})
