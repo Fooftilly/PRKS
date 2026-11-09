@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PrksApiError } from '../../api/http'
 import { processingItemRow } from '../../api/processing-items.fixtures'
 import type { ProcessingItem } from '../../api/processing-items'
-import { ProcessingQueue, type ProcessingQueueApi } from './queue'
+import { ProcessingQueue, repaintDraft, type ProcessingQueueApi } from './queue'
 
 const NO_DUPLICATES = { items: [], works: [], more_items: false, more_works: false }
 
@@ -249,5 +249,18 @@ describe('Processing queue', () => {
       await queue.importSelected()
       expect(marks).toHaveBeenCalledTimes(2)
     })
+  })
+})
+
+describe('repaintDraft', () => {
+  it('keeps a field edited while the save was in flight and takes the saved value for the rest', () => {
+    const submitted = { title: 'Saved title', year: '2020' }
+    const shown = { title: 'Saved title', year: '2021' } // the year was edited after Save
+    const incoming = { title: 'Saved title', year: '2020' }
+    expect(repaintDraft(shown, submitted, incoming)).toEqual({ title: 'Saved title', year: '2021' })
+  })
+
+  it('takes the item as it now is when nothing was submitted (a refusal or another change)', () => {
+    expect(repaintDraft({ title: 'Mine' }, null, { title: 'Theirs' })).toEqual({ title: 'Theirs' })
   })
 })

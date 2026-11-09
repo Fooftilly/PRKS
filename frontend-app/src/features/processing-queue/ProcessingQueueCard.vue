@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import { processingItemPdfUrl, type ProcessingItem, type ProcessingItemEdit } from '../../api/processing-items'
-import type { ProcessingQueueOption } from './queue'
+import { repaintDraft, type ProcessingQueueOption } from './queue'
 
 const props = defineProps<{
   item: ProcessingItem
@@ -94,8 +94,14 @@ function fromItem(item: ProcessingItem): Required<ProcessingItemEdit> {
 }
 
 const draft = reactive(fromItem(props.item))
-// A new revision (saved here, or refused with the item as it now is) repaints the draft.
-watch(() => props.item.revision, () => Object.assign(draft, fromItem(props.item)))
+/** The draft as it was when Save was pressed, until the next revision arrives. */
+let submitted: Required<ProcessingItemEdit> | null = null
+// A new revision (saved here, or refused with the item as it now is) repaints
+// the draft, keeping any field edited while the save was in flight.
+watch(() => props.item.revision, () => {
+  Object.assign(draft, repaintDraft({ ...draft }, submitted, fromItem(props.item)))
+  submitted = null
+})
 
 const dirty = computed(() => {
   const base = fromItem(props.item)
@@ -126,6 +132,7 @@ const docTypeChoices = computed(() => {
 
 function save(): void {
   saveStatus.value = 'saving'
+  submitted = { ...draft }
   emit('save', { ...draft })
 }
 

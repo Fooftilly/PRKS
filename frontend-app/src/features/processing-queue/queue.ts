@@ -103,6 +103,21 @@ function markImportSent(): void {
   ;(globalThis as { prksMarkProcessingImportChanged?: () => void }).prksMarkProcessingImportChanged?.()
 }
 
+/**
+ * The draft a card shows once its item has a new revision. A field the user
+ * changed after the draft they submitted was taken keeps that newer edit; any
+ * other field takes the item's value. Without a submitted draft (a refusal or
+ * another tab's change) every field takes the item's value.
+ */
+export function repaintDraft<T extends Record<string, string>>(shown: T, submitted: T | null, incoming: T): T {
+  if (!submitted) return { ...incoming }
+  const next = { ...incoming }
+  for (const key of Object.keys(incoming) as (keyof T)[]) {
+    if (shown[key] !== submitted[key]) next[key] = shown[key]
+  }
+  return next
+}
+
 export function isPdfFile(file: File): boolean {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
 }
