@@ -63,7 +63,9 @@ export function createGroupSaveGate() {
           if (isLiveOpening()) deps.setBusy(false)
         }
       }
-      if (!matchesOpening()) return
+      // Dismiss leaves the generation unchanged; require visibility so we do not
+      // closeModals() into an unrelated open modal draft.
+      if (!isLiveOpening()) return
       await deps.afterCreate(created, matchesOpening)
     } finally {
       if (inFlight === saveToken) {

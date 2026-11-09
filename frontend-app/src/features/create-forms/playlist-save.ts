@@ -68,7 +68,9 @@ export function createPlaylistSaveGate() {
         if (isLiveOpening()) await deps.onError('Could not create playlist')
         return
       }
-      if (!matchesOpening()) return
+      // Dismiss leaves the generation unchanged; require visibility so we do not
+      // closeModals() into an unrelated open modal draft.
+      if (!isLiveOpening()) return
       deps.closeModals()
       const still = () => deps.capturedWorkStill(pending)
       let attachedWork = false
@@ -81,6 +83,8 @@ export function createPlaylistSaveGate() {
         }
       }
       deps.clearPendingIfSame(pending)
+      // After the intentional close the shell is hidden; generation-only checks
+      // still refuse a newer Create Playlist opening.
       if (!matchesOpening()) return
       if (attachedWork) {
         await deps.refreshSelects(newId)

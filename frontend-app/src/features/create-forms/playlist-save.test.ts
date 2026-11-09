@@ -105,6 +105,53 @@ describe('playlist save gate', () => {
     expect(busy).toBe(false)
   })
 
+  it('does not closeModals when the Playlist shell was dismissed before create settles', async () => {
+    const gate = createPlaylistSaveGate()
+    const pendingCreate = deferred<string | null>()
+    const shell = modal('1')
+    const attach: PlaylistPending = { workId: 'W-1' }
+    let livePending: PlaylistPending | null = attach
+    let busy = false
+    let closed = 0
+    let attached = 0
+    const save = gate.save({
+      modal: () => shell,
+      isBusy: () => busy,
+      setBusy: (next: boolean) => {
+        busy = next
+      },
+      readDraft: () => ({ title: 'Lectures', description: '' }),
+      createPlaylist: () => pendingCreate.promise,
+      pendingAttach: () => attach,
+      clearPendingIfSame: (captured) => {
+        if (captured && livePending === captured) livePending = null
+      },
+      capturedWorkStill: (pending) => !!pending && livePending === pending,
+      addWorkToPlaylist: async () => {
+        attached += 1
+      },
+      refreshSelects: async () => {},
+      refreshAllSelects: async () => {},
+      takeIndexCreateTabId: () => 'tab',
+      returnToWorkModal: () => false,
+      closeModals: () => {
+        closed += 1
+      },
+      navigate: () => {
+        throw new Error('must not navigate after dismiss')
+      },
+      onError: async () => {},
+    })
+    await Promise.resolve()
+    shell.classList.add('hidden')
+    busy = false
+    pendingCreate.resolve('PL-1')
+    await save
+    expect(closed).toBe(0)
+    expect(attached).toBe(0)
+    expect(livePending).toBe(attach)
+  })
+
   it('does not clear a newer pending attach when the older create finishes', async () => {
     const gate = createPlaylistSaveGate()
     const pendingCreate = deferred<string | null>()

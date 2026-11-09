@@ -84,6 +84,37 @@ describe('person save gate', () => {
     expect(busy.at(-1)).toBe(false)
   })
 
+  it('does not closeModals when the Person shell was dismissed before create settles', async () => {
+    const gate = createPersonSaveGate()
+    const pending = deferred<{ entity_id: string } | null>()
+    let busy = false
+    let finishes = 0
+    const shell = modal('1')
+    const save = gate.save({
+      modal: () => shell,
+      isBusy: () => busy,
+      setBusy: (next: boolean) => {
+        busy = next
+      },
+      readPayload: () => payload,
+      createPerson: () => pending.promise,
+      alert: async () => {
+        throw new Error('dismissed create must not alert')
+      },
+      afterCreate: async () => {
+        finishes += 1
+      },
+    })
+    await Promise.resolve()
+    // Dismiss Person, then open another modal (generation unchanged).
+    shell.classList.add('hidden')
+    busy = false
+    pending.resolve({ entity_id: 'P-1' })
+    await save
+    expect(finishes).toBe(0)
+    expect(busy).toBe(false)
+  })
+
   it('creates once when save is clicked twice in the same opening', async () => {
     const gate = createPersonSaveGate()
     const pending = deferred<{ entity_id: string } | null>()
