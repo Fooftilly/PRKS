@@ -4040,13 +4040,25 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if content_length is None:
                 return
 
+            # The upload holds the Library's read gate, which a restore waits
+            # out: read it with the Processing upload's idle timeout and
+            # deadline, so a stalled client cannot hold the gate.
+            sock = self.connection
+            previous_timeout = sock.gettimeout()
+
             def receive(dest: str) -> None:
-                stream_upload_to_file(self.rfile, dest, expected_length=content_length,
+                body = processing_api.TimedBody(self.rfile, sock, content_length)
+                stream_upload_to_file(body, dest, expected_length=content_length,
                                       max_bytes=backup_max_upload_bytes())
                 self._prks_unread_body = False
 
             try:
                 body = maintenance_api.stage_upload(db, ctx, root, receive)
+            except processing_api.UploadTimedOut:
+                # The body is unread, so this answer closes the connection.
+                self.send_json(408, {"error": "The backup upload stalled; try again.",
+                                     "reason": "upload_timeout", "request_id": self._prks_request_id})
+                return
             except maintenance_api.StageRefused as exc:
                 self.send_json(exc.status, {"error": exc.message, "reason": exc.reason,
                                             "request_id": self._prks_request_id})
@@ -4055,6 +4067,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(exc.http_status, {"error": exc.message, "reason": exc.reason,
                                                  "request_id": self._prks_request_id})
                 return
+            finally:
+                try:
+                    sock.settimeout(previous_timeout)
+                except OSError:
+                    pass
             self.send_json(200, body)
             return
         if data is None or data is _JSON_BODY_ABSENT:
