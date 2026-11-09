@@ -145,7 +145,6 @@ class RestoreRecoveryTests(unittest.TestCase):
         page.locator("#prks-backup-verify-btn").click()
         page.locator("#prks-backup-verified-panel:not(.hidden)").wait_for(timeout=60000)
         self.assertIn("Backup verified", page.locator("#prks-backup-restore-status").inner_text())
-        page.unroute("**/api/sync/operations")
         page.locator("#prks-backup-restore-btn").click()
         page.locator("#prks-restore-confirm-modal:not(.hidden)").wait_for()
         page.locator("#prks-restore-confirm-input").fill("RESTORE")
@@ -156,6 +155,9 @@ class RestoreRecoveryTests(unittest.TestCase):
         page.wait_for_function("() => !!window.prksSync && !!window.prksBrowserScope")
         page.evaluate("() => prksBrowserScope.resolve()")
         self.assertEqual(page.evaluate("() => prksBrowserScope.pageEpoch()"), "2")
+        # Sync stays held until the page has bound the new epoch: a retry
+        # before the restore could otherwise deliver the queued change.
+        page.unroute("**/api/sync/operations")
         work = _api(page, "GET", "/api/works/%s" % work_id)
         self.assertEqual(work["status"], 200, work)
         self.assertEqual(work["body"]["title"], WORK_A_TITLE, "the rename after the backup is gone")
