@@ -206,12 +206,16 @@ def stage_upload(library: Any, ctx: Any, root: str, receive: Callable[[str], Non
 
 
 def _summary(archive: Any) -> dict[str, Any]:
+    from backend.storage.objects import NAMESPACE_ASSET_OBJECTS
+
     def rows(table: str) -> Optional[int]:
         member = archive.tables.get("prks." + table)
         return member.rows if member is not None else None
 
     return {"created_at": archive.manifest.get("created_at"), "works": rows("works"),
-            "pdf_files": len(archive.objects), "persons": rows("persons"),
+            # Only Asset bytes count as files; portraits and other objects do not.
+            "pdf_files": sum(1 for key in archive.objects if key.namespace == NAMESPACE_ASSET_OBJECTS),
+            "persons": rows("persons"),
             "annotations": rows("annotations")}
 
 

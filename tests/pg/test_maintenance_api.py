@@ -79,6 +79,20 @@ class MaintenanceApiTests(unittest.TestCase):
         self.assertIsNone(maintenance.archive_for_download(self.library, self.owner.context, self.root,
                                                            "0" * 32))
 
+    def test_the_summary_counts_only_asset_objects_as_files(self) -> None:
+        from types import SimpleNamespace
+
+        from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, StorageKey
+
+        archive = SimpleNamespace(
+            manifest={"created_at": "2026-11-09T00:00:00Z"},
+            tables={"prks.works": SimpleNamespace(rows=2)},
+            objects={StorageKey(NAMESPACE_ASSET_OBJECTS, "a" * 64): None,
+                     StorageKey(NAMESPACE_ASSET_OBJECTS, "b" * 64): None,
+                     StorageKey(NAMESPACE_PORTRAITS, "c" * 64): None})
+        summary = maintenance._summary(archive)
+        self.assertEqual((summary["works"], summary["pdf_files"], summary["persons"]), (2, 2, None))
+
     def test_old_staged_uploads_are_pruned(self) -> None:
         old = maintenance._staged_path(self.root, "b" * 32, "u")
         fresh = maintenance._staged_path(self.root, "c" * 32, "u")
