@@ -9,6 +9,7 @@ with an unknown value, and on a root that still holds a SQLite catalogue.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -16,7 +17,7 @@ import signal
 import subprocess
 import sys
 import uuid
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from backend.storage import root_binding
 from backend.storage.config import StorageConfig
@@ -68,6 +69,22 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         finally:
             lease.release()
         self.close(name)
+
+    @contextlib.contextmanager
+    def serving(self) -> Iterator[tuple[str, int, dict[str, str]]]:
+        """A ready PostgreSQL web process, with the headers a mutation sends."""
+        name = self.migrated()
+        root = self.new_root()
+        self.bootstrapped(name, root)
+        port = _free_port()
+        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            _status, session, _headers = self.call(port, "GET", "/api/session")
+            yield name, port, {"Origin": f"http://127.0.0.1:{port}",
+                               "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+        finally:
+            self.stop(proc)
 
     def call(self, port: int, method: str, path: str, body: Any = None,
              headers: Optional[dict[str, str]] = None) -> tuple[int, Any, dict[str, str]]:
@@ -133,16 +150,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             self.assertFalse(os.path.lexists(os.path.join(root, catalogue)), catalogue)
 
     def test_sync_operations_apply_through_postgresql(self) -> None:
-        name = self.migrated()
-        root = self.new_root()
-        self.bootstrapped(name, root)
-        port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
-        try:
-            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
-            _status, session, _headers = self.call(port, "GET", "/api/session")
-            headers = {"Origin": f"http://127.0.0.1:{port}",
-                       "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+        with self.serving() as (name, port, headers):
             status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Synced"}, headers)
             self.assertIn(status, (200, 201), created)
             work_id = created["id"]
@@ -187,8 +195,42 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                 " JOIN prks.sync_operations o ON o.device_id = d.id WHERE d.id = %s GROUP BY d.user_id",
                 (device,)).fetchall())
             self.assertEqual([r["ops"] for r in rows], [2])
-        finally:
-            self.stop(proc)
+
+    def test_work_routes_read_through_the_facade(self) -> None:
+        with self.serving() as (name, port, headers):
+            _status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Work"}, headers)
+            work_id = created["id"]
+            status, people, _headers = self.call(port, "GET", f"/api/works/{work_id}/people-state")
+            self.assertEqual(status, 200, people)
+            status, source, _headers = self.call(port, "GET", f"/api/works/{work_id}/source-state")
+            self.assertEqual((status, source), (200, {"work_id": work_id, "revision": 0}))
+            # An echoed file_path is dropped; the rest of the patch applies.
+            status, _body, _headers = self.call(port, "PATCH", f"/api/works/{work_id}",
+                                                {"title": "Patched", "file_path": ""}, headers)
+            self.assertEqual(status, 200)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{work_id}")[1]["title"], "Patched")
+            # Changing it is not ported: a 501, never a SQLite fallback.
+            status, refused, _headers = self.call(port, "PATCH", f"/api/works/{work_id}",
+                                                  {"file_path": "/api/pdfs/elsewhere.pdf"}, headers)
+            self.assertEqual((status, refused["code"]), (501, "not_ported"), refused)
+            _status, folder, _headers = self.call(port, "POST", "/api/folders", {"title": "Shelf"}, headers)
+            # The refusal comes before any part of the PATCH commits: a folder
+            # move sent with a retarget is not applied behind the 501.
+            before = self.call(port, "GET", f"/api/works/{work_id}/folder-state")[1]
+            status, refused, _headers = self.call(
+                port, "PATCH", f"/api/works/{work_id}",
+                {"folder_id": folder["id"], "file_path": "/api/pdfs/elsewhere.pdf"}, headers)
+            self.assertEqual((status, refused["code"]), (501, "not_ported"), refused)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{work_id}/folder-state")[1], before)
+            self.assertNotEqual(before.get("folder_id"), folder["id"], before)
+            # Both exist, so the facade decides: a filed Work stays in its one folder.
+            status, body, _headers = self.call(port, "POST", f"/api/folders/{folder['id']}/works",
+                                               {"work_id": work_id}, headers)
+            self.assertEqual((status, body), (409, {"error": "This file is already in another folder."}))
+            self.assertEqual(self.call(port, "POST", "/api/folders/F-missing/works",
+                                       {"work_id": work_id}, headers)[0], 404)
+            self.assertEqual(self.call(port, "POST", f"/api/folders/{folder['id']}/works",
+                                       {"work_id": "W-" + "0" * 32}, headers)[0], 404)
 
     def test_the_selection_needs_prks_auth(self) -> None:
         err = self.refused(self.environment(None, PRKS_LIBRARY_BACKEND="postgres"), self.new_root())

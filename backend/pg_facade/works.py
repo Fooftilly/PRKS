@@ -463,6 +463,13 @@ class WorksMixin(FacadeMixin):
         return ()
 
     @ported
+    def get_work_source_state(self, work_id: str) -> Optional[dict[str, Any] | str]:
+        """The source's revision, or ``INVALID_SOURCE_STATE``; ``None`` when the Work is missing."""
+        from backend.domain.works import source
+
+        return self._read(lambda scope: source.source_state(scope, work_id))
+
+    @ported
     def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
         from backend.domain.works import metadata
 
