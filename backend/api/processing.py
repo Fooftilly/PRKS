@@ -227,7 +227,7 @@ class UploadTimedOut(Exception):
     """The body stalled for ``UPLOAD_IDLE_SECONDS`` or missed its deadline."""
 
 
-class _TimedBody:
+class TimedBody:
     """The request body, read with an idle timeout and an overall deadline.
 
     Each ``read`` makes at most one socket read (``read1``), so a client that
@@ -294,7 +294,7 @@ def handle_upload(handler: Any, db: Any) -> None:
         uploaded = commands.upload(
             library.database, handler._prks_request_context, _storage(library),
             upload_key=upload_key or "", filename=filename,
-            body=_TimedBody(handler.rfile, sock, int(raw_length)),
+            body=TimedBody(handler.rfile, sock, int(raw_length)),
             content_length=int(raw_length), max_bytes=MAX_UPLOAD_BYTES)
     except UploadTimedOut:
         # The body is unread, so this answer closes the connection.

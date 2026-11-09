@@ -113,7 +113,7 @@ class RestoreResult:
 # -- run bookkeeping --------------------------------------------------------------------------
 
 _START_SQL: LiteralString = """
-SELECT l.maintenance,
+SELECT l.maintenance, l.epoch,
        EXISTS (SELECT 1 FROM prks.library_memberships m
                 WHERE m.library_id = l.id AND m.user_id = %(user_id)s AND m.role = 'owner') AS is_owner
   FROM prks.libraries l WHERE l.id = %(library_id)s FOR NO KEY UPDATE
@@ -133,15 +133,16 @@ _FAIL_RUN_SQL: LiteralString = (
 
 
 def _start_run(conn: psycopg.Connection[Any], library_id: str, owner_user_id: str,
-               lease_seconds: int) -> uuid.UUID:
+               lease_seconds: int, expected_epoch: Optional[int]) -> uuid.UUID:
     with conn.transaction():
         row = conn.execute(_START_SQL, {"library_id": library_id, "user_id": owner_user_id}).fetchone()
         if row is None:
             raise RestoreFailed("library_missing", "The Library does not exist.")
-        if not row[1]:
+        if not row[2]:
             raise RestoreFailed("forbidden", "Only an owner of the Library can restore it.")
         if row[0] is not None:
             raise RestoreFailed("MAINTENANCE", "The Library is under maintenance; try the restore again later.")
+        _check_epoch(row[1], expected_epoch)
         run = conn.execute(_INSERT_RUN_SQL, (library_id, lease_seconds)).fetchone()
         assert run is not None
         return run[0]
@@ -191,17 +192,35 @@ SELECT l.maintenance IS NOT NULL AS in_maintenance,
 """
 
 
-_LOCK_LIBRARY_ROW_SQL: LiteralString = "SELECT 1 FROM prks.libraries WHERE id = %(library_id)s FOR NO KEY UPDATE"
+_LOCK_LIBRARY_ROW_SQL: LiteralString = (
+    "SELECT epoch FROM prks.libraries WHERE id = %(library_id)s FOR NO KEY UPDATE"
+)
 
 
-def _enter(conn: psycopg.Connection[Any], library_id: str, run_id: uuid.UUID) -> None:
+def _check_epoch(current: int, expected: Optional[int]) -> None:
+    """Refuse a restore the caller prepared against another epoch (§11.4).
+
+    A restore admitted at epoch N must not replace a Library another restore
+    has already moved past N: the caller never saw that Library.
+    """
+    if expected is not None and current != expected:
+        raise RestoreFailed("LIBRARY_EPOCH_CHANGED",
+                            "The Library changed since this page loaded; reload it and try again.")
+
+
+def _enter(conn: psycopg.Connection[Any], library_id: str, run_id: uuid.UUID,
+           expected_epoch: Optional[int]) -> None:
     params = {"run": run_id, "library_id": library_id}
     with conn.transaction():
         # Wait for the Library row first: a backup's start holds it while it
         # inserts its run, and a statement that waited on the lock still
         # reads its subqueries from the snapshot it began with. The UPDATE
         # below starts after the wait, so it sees a run committed meanwhile.
-        conn.execute(_LOCK_LIBRARY_ROW_SQL, params)
+        # The epoch is checked under the same row lock that sets the flag, so
+        # no other restore can commit between the check and the entry.
+        locked = conn.execute(_LOCK_LIBRARY_ROW_SQL, params).fetchone()
+        if locked is not None:
+            _check_epoch(locked[0], expected_epoch)
         if conn.execute(_ENTER_SQL, params).rowcount == 1:
             return
         row = conn.execute(_ENTER_REFUSAL_SQL, params).fetchone()
@@ -474,8 +493,13 @@ def restore_library(
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
     hooks: Optional[dict[str, Callable[[], None]]] = None,
+    expected_epoch: Optional[int] = None,
 ) -> RestoreResult:
     """Restore ``archive_path`` over ``library_id``; see the module docstring.
+
+    With ``expected_epoch`` (the epoch the caller acted on) the restore is
+    refused with ``LIBRARY_EPOCH_CHANGED`` when the Library is at another
+    epoch, both before the run starts and under the row lock that enters R2.
 
     Raises :class:`RestoreFailed` (the run is marked failed with the same
     reason) unless R4 committed. ``hooks`` maps a ``HOOK_*`` name to a
@@ -489,7 +513,7 @@ def restore_library(
             hook()
 
     with maintenance_connection(conninfo) as conn, _side_connection(conninfo) as side:
-        run_id = _start_run(conn, library_id, owner_user_id, lease_seconds)
+        run_id = _start_run(conn, library_id, owner_user_id, lease_seconds, expected_epoch)
         lease = _Lease(side, run_id, lease_seconds)
         entered = False
         archive: Optional[Archive] = None
@@ -501,7 +525,7 @@ def restore_library(
                            owner_user_id=owner_user_id, storage=storage, renew=lease.tick)
             reach(HOOK_STAGED)
             lease.enter(PHASE_ENTER)
-            _enter(conn, library_id, run_id)
+            _enter(conn, library_id, run_id, expected_epoch)
             entered = True
             reach(HOOK_ENTERED)
             lease.enter(PHASE_DRAIN)

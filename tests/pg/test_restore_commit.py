@@ -320,6 +320,25 @@ class RefusalTests(RestoreTestCase):
         self.assertEqual(waited, [True], "R2 never waited on the Library row")
         self.assertIsNone(self.library_row()["maintenance"])
 
+    def test_a_restore_prepared_at_another_epoch_is_refused_before_its_run(self) -> None:
+        self.refused(self.archive, "LIBRARY_EPOCH_CHANGED", expected_epoch=self.library_row()["epoch"] + 1)
+        self.assertEqual(self.restore_runs(), [])
+
+    def test_a_restore_that_another_restore_overtakes_is_refused_at_r2(self) -> None:
+        epoch = self.library_row()["epoch"]
+
+        def another_restore_commits() -> None:
+            # Another restore admitted at the same epoch commits while this one stages.
+            self.sql("UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.actor.library_id,))
+
+        self.refused(self.archive, "LIBRARY_EPOCH_CHANGED", expected_epoch=epoch,
+                     hooks={restore.HOOK_STAGED: another_restore_commits})
+        self.assert_unchanged_after_abort([self.work], epoch + 1, "LIBRARY_EPOCH_CHANGED")
+
+    def test_a_restore_at_the_current_epoch_commits(self) -> None:
+        epoch = self.library_row()["epoch"]
+        self.assertEqual(self.restore(self.archive, expected_epoch=epoch).epoch, epoch + 1)
+
     def test_a_backup_whose_lease_expired_does_not_block(self) -> None:
         self.sql("INSERT INTO prks.backup_runs (library_id, locked_until) VALUES (%s, now() - interval '1 s')",
                  (self.actor.library_id,))

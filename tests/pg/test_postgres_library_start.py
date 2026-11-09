@@ -15,6 +15,7 @@ import http.client
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import uuid
@@ -72,18 +73,18 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         self.close(name)
 
     @contextlib.contextmanager
-    def serving(self) -> Iterator[tuple[str, int, dict[str, str]]]:
-        """A ready PostgreSQL web process, with the headers a mutation sends."""
+    def serving(self, **extra: str) -> Iterator[tuple[str, str, int, dict[str, str]]]:
+        """A ready PostgreSQL web process: its database, root, port and the headers a mutation sends."""
         name = self.migrated()
         root = self.new_root()
         self.bootstrapped(name, root)
         port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres", **extra), root, port)
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
             _status, session, _headers = self.call(port, "GET", "/api/session")
-            yield name, port, {"Origin": f"http://127.0.0.1:{port}",
-                               "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+            yield name, root, port, {"Origin": f"http://127.0.0.1:{port}",
+                                     "PRKS-Library-Epoch": str(session["library"]["epoch"])}
         finally:
             self.stop(proc)
 
@@ -126,12 +127,13 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             rows = db.query(lambda tx: tx.execute("SELECT title FROM prks.works").fetchall())
             self.assertEqual([r["title"] for r in rows], ["Served from PostgreSQL"])
             origin = {"Origin": f"http://127.0.0.1:{port}", "PRKS-Library-Epoch": epoch}
-            # The SQLite backup routes would replace the root and rebind to SQLite.
-            for method, path in (("POST", "/api/backups/restore"), ("POST", "/api/backups/progress"),
-                                 ("GET", "/api/backups/download")):
-                status, refused, _headers = self.call(port, method, path, {} if method == "POST" else None,
-                                                      origin if method == "POST" else None)
-                self.assertEqual((status, refused["code"]), (501, "not_ported"), path)
+            # The backup routes are PostgreSQL's: a token nothing published names is unknown,
+            # and the SQLite catalogue is never created (checked after the run).
+            status, refused, _headers = self.call(port, "GET", "/api/backups/download?token=" + "0" * 32)
+            self.assertEqual((status, refused["reason"]), (404, "unknown_token"))
+            status, refused, _headers = self.call(port, "POST", "/api/backups/restore",
+                                                  {"token": "0" * 32, "confirm": "RESTORE"}, origin)
+            self.assertEqual((status, refused["reason"]), (400, "unknown_token"))
             # A file on the shared root that no Asset of this Library names is not served.
             pdfs = StorageConfig.for_testing(root).pdfs_dir
             os.makedirs(pdfs, exist_ok=True)
@@ -151,7 +153,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             self.assertFalse(os.path.lexists(os.path.join(root, catalogue)), catalogue)
 
     def test_sync_operations_apply_through_postgresql(self) -> None:
-        with self.serving() as (name, port, headers):
+        with self.serving() as (name, root, port, headers):
             status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Synced"}, headers)
             self.assertIn(status, (200, 201), created)
             work_id = created["id"]
@@ -198,7 +200,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             self.assertEqual([r["ops"] for r in rows], [2])
 
     def test_work_routes_read_through_the_facade(self) -> None:
-        with self.serving() as (name, port, headers):
+        with self.serving() as (name, root, port, headers):
             _status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Work"}, headers)
             work_id = created["id"]
             status, people, _headers = self.call(port, "GET", f"/api/works/{work_id}/people-state")
@@ -234,7 +236,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                                        {"work_id": "W-" + "0" * 32}, headers)[0], 404)
 
     def test_pdf_works_upload_replace_and_delete_through_postgresql(self) -> None:
-        with self.serving() as (name, port, headers):
+        with self.serving() as (name, root, port, headers):
             first = b"%PDF-1.7\n% first upload\n%%EOF\n"
             status, created, _headers = self.call(port, "POST", "/api/works", {
                 "title": "Uploaded", "file_name": "paper.pdf",
@@ -272,6 +274,77 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             res = conn.getresponse()
             body = res.read()
             self.assertEqual(res.status, 200, path)
+            return body
+        finally:
+            conn.close()
+
+    def test_a_stalled_restore_body_does_not_hold_the_library_gate(self) -> None:
+        with self.serving() as (_name, _root, port, headers):
+            stalled = socket.create_connection(("127.0.0.1", port), timeout=30)
+            try:
+                head = [f"POST /api/backups/restore HTTP/1.1", f"Host: 127.0.0.1:{port}",
+                        "Content-Type: application/json", "Content-Length: 100"]
+                head += [f"{key}: {value}" for key, value in headers.items()]
+                # The headers arrive, the body never does.
+                stalled.sendall(("\r\n".join(head) + "\r\n\r\n").encode("ascii"))
+                status, works, _headers = self.call(port, "GET", "/api/works")
+                self.assertEqual(status, 200, works)
+                status, created, _headers = self.call(port, "POST", "/api/works", {"title": "Not blocked"},
+                                                      headers)
+                self.assertIn(status, (200, 201), created)
+            finally:
+                stalled.close()
+
+    def test_backup_and_restore_round_trip_and_fence_the_old_epoch(self) -> None:
+        with self.serving(PRKS_EMBEDDED_WORKER="1") as (name, root, port, headers):
+            old_epoch = headers["PRKS-Library-Epoch"]
+            _status, kept, _headers = self.call(port, "POST", "/api/works", {"title": "In the backup"}, headers)
+            lines = self.ndjson(port, "/api/backups/progress", headers)
+            ready = lines[-1]
+            self.assertEqual(ready["phase"], "ready", lines)
+            archive = self.raw(port, "GET", "/api/backups/download?token=" + ready["token"])
+            self.assertGreater(len(archive), 0)
+            # A Work made after the backup goes away with the restore.
+            _status, later, _headers = self.call(port, "POST", "/api/works", {"title": "After it"}, headers)
+            staged = self.raw_json(port, "/api/backups/stage", archive, headers)
+            self.assertEqual((staged["verified"], staged["summary"]["works"]), (True, 1), staged)
+            status, restored, response_headers = self.call(
+                port, "POST", "/api/backups/restore", {"token": staged["token"], "confirm": "RESTORE"}, headers)
+            self.assertEqual((status, restored["status"]), (200, "restored"), restored)
+            self.assertEqual(response_headers.get("prks-library-epoch"), str(restored["epoch"]))
+            self.assertNotEqual(str(restored["epoch"]), old_epoch)
+            _status, works, _headers = self.call(port, "GET", "/api/works")
+            self.assertEqual([w["id"] for w in works], [kept["id"]])
+            # A tab that still holds the old epoch is refused before anything is written (§11.4).
+            status, refused, _headers = self.call(port, "PATCH", f"/api/works/{kept['id']}",
+                                                  {"title": "Written before the restore"}, headers)
+            self.assertEqual((status, refused.get("code")), (409, "LIBRARY_EPOCH_CHANGED"), refused)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{kept['id']}")[1]["title"], "In the backup")
+            # The staged token was used up.
+            status, _body, _headers = self.call(port, "POST", "/api/backups/restore",
+                                                {"token": staged["token"], "confirm": "RESTORE"},
+                                                dict(headers, **{"PRKS-Library-Epoch": str(restored["epoch"])}))
+            self.assertEqual(status, 400)
+            del later
+        for catalogue in _CATALOGUES:
+            self.assertFalse(os.path.lexists(os.path.join(root, catalogue)), catalogue)
+
+    def ndjson(self, port: int, path: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+        body = self.raw(port, "POST", path, b"{}", dict(headers, **{"Content-Type": "application/json"}))
+        return [json.loads(line) for line in body.decode("utf-8").splitlines() if line.strip()]
+
+    def raw_json(self, port: int, path: str, payload: bytes, headers: dict[str, str]) -> dict[str, Any]:
+        body = self.raw(port, "POST", path, payload, dict(headers, **{"Content-Type": "application/octet-stream"}))
+        return json.loads(body)
+
+    def raw(self, port: int, method: str, path: str, payload: Optional[bytes] = None,
+            headers: Optional[dict[str, str]] = None) -> bytes:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=120)
+        try:
+            conn.request(method, path, body=payload, headers=headers or {})
+            res = conn.getresponse()
+            body = res.read()
+            self.assertEqual(res.status, 200, body[:500])
             return body
         finally:
             conn.close()
