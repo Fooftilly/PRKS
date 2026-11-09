@@ -55,6 +55,44 @@ interface Window {
   prksReportClientError?: (input: { kind: string; source: string; request_id?: string }) => void
   prksVueActivatePerformanceDiagnostics?: () => void
   __prksPerformanceDiagnosticsRequested?: boolean
+  __prksSettingsOpenRequested?: boolean
+  prksOpenSettingsToLastCategory?: () => void
+  prksActivateSettingsCategory?: (categoryId: string, options?: { focusTab?: boolean }) => void
+  prksSyncSettingsNavOrientation?: () => void
+  PRKS_BIBTEX_EXPORT_FIELD_DEFS?: ReadonlyArray<readonly [string, string]>
+  prksGetHintsEnabled?: () => boolean
+  prksSetHintsEnabled?: (enabled: boolean) => void
+  prksApplyHintsPreferenceToDocument?: () => void
+  prksCloseHintPopover?: () => void
+  prksGetForceMobileEnabled?: () => boolean
+  prksApplyForceMobileEnabled?: (enabled: boolean) => void
+  prksGetMobileWorkNotesRightEnabled?: () => boolean
+  prksSetMobileWorkNotesRightEnabled?: (enabled: boolean) => void
+  prksSyncWorkNotesMobileSideClass?: () => void
+  prksGetPdfRememberLastPageEnabled?: () => boolean
+  prksSetPdfRememberLastPageEnabled?: (enabled: boolean) => void
+  prksReadStoredTheme?: () => string
+  prksCommitTheme?: (theme: string) => void
+  prksLoadAppSettings?: () => Promise<unknown>
+  prksPatchAppSettings?: (partial: {
+    annotation_author?: string
+    bibtex_export_fields?: Record<string, boolean>
+  }) => Promise<unknown>
+  prksSetAnnotationAuthorCache?: (value: string) => void
+  prksSetBibtexExportFieldsCache?: (value: Record<string, boolean>) => void
+  __prksAnnotationAuthor?: string
+  __prksBibtexExportFields?: Record<string, boolean> | null
+  prksLoadOfflineCacheStatus?: () => Promise<void> | void
+  prksOfflineClearCache?: () => Promise<void>
+  prksStartBackupProgress?: (signal: AbortSignal) => Promise<ReadableStreamDefaultReader<Uint8Array>>
+  prksStageBackup?: (file: File) => Promise<{
+    token?: string
+    summary?: Record<string, unknown>
+    warnings?: string[]
+  }>
+  prksRestoreBackup?: (token: string) => Promise<{ warnings?: string[] }>
+  prksReindexPdfText?: () => Promise<Record<string, unknown>>
+  prksLinearizeExistingPdfs?: (unlinearizedOnly?: boolean) => Promise<Record<string, unknown>>
   prksRequestCoordinatorSnapshot?: () => {
     counts?: Record<string, unknown>
     current?: Record<string, unknown>

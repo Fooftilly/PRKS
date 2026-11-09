@@ -16,6 +16,7 @@ import { registerPersonGroupsBridge } from './features/person-groups/session'
 import { registerPlaylistsBridge } from './features/playlists/session'
 import { registerPositionsBridge } from './features/positions/session'
 import { registerPerformanceDiagnosticsBridge } from './features/performance-diagnostics/activation'
+import { registerSettingsNavigationBridge } from './features/settings/navigation'
 import { registerProgressBridge } from './features/progress/session'
 import { registerWorkPanelReadBridge } from './features/work/panel-session'
 import { registerWorkMetadataEditorBridge } from './features/work/metadata-session'
@@ -34,6 +35,7 @@ if (target) {
 }
 
 registerPerformanceDiagnosticsBridge(window)
+registerSettingsNavigationBridge(window)
 registerProgressBridge(window)
 registerConceptsBridge(window)
 registerFolderLibraryBridge(window)

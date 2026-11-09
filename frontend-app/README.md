@@ -7,7 +7,7 @@ The Python process serves the committed production bundle:
 - `frontend/vue/prks-vue.js` (Vue, plus component CSS inlined by `vite-plugin-css-injected-by-js`)
 - `frontend/vue/BUILD-MANIFEST.json`
 
-Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the bundle on a hidden `#prks-vue-root`. That app teleports Settings performance diagnostics into `#prks-settings-perf-root` and the workspace presentation into `#prks-workspace-tabs` and `#page-content`. It is not a router and not a second workspace state model.
+Legacy UI remains `frontend/js/` and `frontend/index.html`. The shell loads the bundle on a hidden `#prks-vue-root`. That app teleports the Settings surface into `#prks-settings-root` (the `#settings-modal` shell stays classic) and the workspace presentation into `#prks-workspace-tabs` and `#page-content`. It is not a router and not a second workspace state model.
 
 The legacy PRKS router stays canonical. `src/route-surface/` is the owner-scoped bridge from a TabContext route instance into a Vue view. Route-local runtime cannot live on `window`. Generations are never compared across TabContexts. Global shell and navigation state belongs to the shell/router. Generic browser lifecycle and this PRKS route-instance lifecycle are different concerns. Early presentation is feature-scoped: each feature registers its own presenter, and a pending request paints only on the host that stored it.
 
