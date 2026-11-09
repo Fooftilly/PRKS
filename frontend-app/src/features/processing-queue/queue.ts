@@ -185,8 +185,13 @@ export class ProcessingQueue {
         const known = new Set(this.state.items.map((one) => one.id))
         this.state.items = [...this.state.items, ...page.items.filter((one) => !known.has(one.id))]
       } else {
-        this.state.items = page.items
-        const live = new Set(page.items.map((one) => one.id))
+        // A card with unsaved edits stays shown even when it is not on the
+        // first page any more (a later page, a fresh upload): dropping it
+        // would unmount the card and lose the draft without asking.
+        const fresh = new Set(page.items.map((one) => one.id))
+        const kept = this.state.items.filter((one) => this.state.dirty.has(one.id) && !fresh.has(one.id))
+        this.state.items = [...page.items, ...kept]
+        const live = new Set(this.state.items.map((one) => one.id))
         for (const id of [...this.state.selected]) if (!live.has(id)) this.state.selected.delete(id)
       }
       this.state.nextCursor = page.nextCursor

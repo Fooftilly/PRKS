@@ -47,6 +47,23 @@ describe('Processing queue', () => {
     expect(counts).toEqual([1, 2])
   })
 
+  it('keeps a card with unsaved edits through a refresh that no longer lists it', async () => {
+    const list = vi.fn()
+      .mockResolvedValueOnce({ items: [item('a')], nextCursor: 'c' })
+      .mockResolvedValueOnce({ items: [item('b'), item('c')], nextCursor: null })
+      .mockResolvedValueOnce({ items: [item('a')], nextCursor: 'c' })
+    const queue = new ProcessingQueue(fakeApi({ list }))
+    await queue.load()
+    await queue.load(true)
+    queue.setDirty('b', true)
+    queue.toggle('b', true)
+    queue.toggle('c', true)
+    await queue.load()
+    expect(queue.state.items.map((one) => one.id)).toEqual(['a', 'b'])
+    expect([...queue.state.selected]).toEqual(['b'])
+    expect(queue.state.dirty.has('b')).toBe(true)
+  })
+
   it('uploads each PDF with its own key and refuses other files', async () => {
     const keys: string[] = []
     const upload = vi.fn(async (file: File, key: string) => {
