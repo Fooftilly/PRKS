@@ -8,7 +8,9 @@
  * item, so a stale revision shows the current draft rather than a guess.
  * Nothing here is cached in the browser: the queue is online-only. Queue calls
  * bypass TanStack Query (no retries), so every catch reports a final transport
- * failure to PRKS reachability itself.
+ * failure to PRKS reachability itself. A read waits for pending writes and
+ * is taken again when a write overtakes it, so it never paints over a newer
+ * answer (read-after-write).
  */
 import { reactive } from 'vue'
 import {
@@ -97,6 +99,10 @@ const UPLOAD_FAILURE = 'Upload failed.'
 const SAVE_FAILURE = 'Save failed.'
 const IMPORT_FAILURE = 'Import failed.'
 const REMOVE_FAILURE = 'Could not remove the item.'
+/** The server's per-request import limit (`MAX_BATCH` in backend/api/processing.py). */
+export const PROCESSING_IMPORT_BATCH_LIMIT = 500
+/** Reads a write overtook before the queue keeps its own painted state. */
+const READ_ATTEMPTS = 3
 
 /**
  * Tell the offline caches an import may have changed the Library (Folders,
@@ -129,6 +135,11 @@ export function isPdfFile(file: File): boolean {
 
 export class ProcessingQueue {
   readonly state: ProcessingQueueState
+  /** Writes sent and not answered; a read waits for them. */
+  private writes = 0
+  /** Moves at every write's start and end; a read taken across a move is stale. */
+  private epoch = 0
+  private idle: (() => void)[] = []
 
   constructor(
     private readonly api: ProcessingQueueApi = browserProcessingQueueApi,
@@ -174,13 +185,47 @@ export class ProcessingQueue {
     else this.state.items.splice(at, 1, item)
   }
 
+  /** Run one write so that reads are fenced behind it. */
+  private async write<T>(run: () => Promise<T>): Promise<T> {
+    this.writes += 1
+    this.epoch += 1
+    try {
+      return await run()
+    } finally {
+      this.writes -= 1
+      this.epoch += 1
+      if (!this.writes) for (const wake of this.idle.splice(0)) wake()
+    }
+  }
+
+  private settled(): Promise<void> {
+    return this.writes ? new Promise((resolve) => this.idle.push(resolve)) : Promise.resolve()
+  }
+
+  /**
+   * A page read after every pending write has answered, and taken again when
+   * a write starts or ends while it is in flight, so a read never paints over
+   * a newer save, import, removal or upload. Null when writes kept overtaking
+   * it: what is painted already holds their answers.
+   */
+  private async freshPage(cursor: string | null): Promise<ProcessingItemPage | null> {
+    for (let attempt = 0; attempt < READ_ATTEMPTS; attempt += 1) {
+      await this.settled()
+      const epoch = this.epoch
+      const page = await this.api.list({ cursor })
+      if (epoch === this.epoch) return page
+    }
+    return null
+  }
+
   /** Read the first page again, or the next one with `more`. */
   async load(more = false): Promise<void> {
     if (this.state.loading) return
     if (more && !this.state.nextCursor) return
     this.state.loading = true
     try {
-      const page = await this.api.list({ cursor: more ? this.state.nextCursor : null })
+      const page = await this.freshPage(more ? this.state.nextCursor : null)
+      if (!page) return
       if (more) {
         const known = new Set(this.state.items.map((one) => one.id))
         this.state.items = [...this.state.items, ...page.items.filter((one) => !known.has(one.id))]
@@ -226,9 +271,9 @@ export class ProcessingQueue {
       }
       this.state.uploading += 1
       try {
-        const uploaded = await this.api.upload(file, newUploadKey(), (sent, total) => {
+        const uploaded = await this.write(() => this.api.upload(file, newUploadKey(), (sent, total) => {
           note().percent = total > 0 ? Math.min(100, Math.floor((sent / total) * 100)) : 0
-        })
+        }))
         this.place(uploaded.item)
         const dup = uploaded.duplicates
         const hasDup = dup.items.length > 0 || dup.works.length > 0
@@ -253,7 +298,7 @@ export class ProcessingQueue {
     this.state.busy.add(id)
     delete this.state.errors[id]
     try {
-      return await run()
+      return await this.write(run)
     } catch (error) {
       noteFinalPrksTransportFailure(error)
       const refusal = processingRefusal(error)
@@ -313,7 +358,10 @@ export class ProcessingQueue {
     else this.state.selected.delete(id)
   }
 
-  /** Import the selected items, each on its own; a failed one stays with its message. */
+  /**
+   * Import the selected items, each on its own; a failed one stays with its
+   * message. Requests go one after another, at most the server's batch limit each.
+   */
   async importSelected(): Promise<void> {
     const ids = this.state.items.map((one) => one.id).filter((id) => this.state.selected.has(id))
     if (!ids.length || ids.some((id) => this.state.busy.has(id))) return
@@ -326,30 +374,39 @@ export class ProcessingQueue {
       this.state.importing.add(id)
       delete this.state.errors[id]
     }
+    let at = 0
     try {
-      const results = await this.api.importMany(ids).finally(markImportSent)
-      for (const result of results) {
-        if (result.ok && result.work_id) {
-          this.drop(result.item_id)
-          this.state.imported = [...this.state.imported,
-            { itemId: result.item_id, filename: names.get(result.item_id) ?? '', workId: result.work_id }]
-          continue
-        }
-        if (result.item) this.place(result.item)
-        if (this.state.items.some((one) => one.id === result.item_id)) {
-          this.state.errors[result.item_id] = result.message || IMPORT_FAILURE
-        }
+      for (; at < ids.length; at += PROCESSING_IMPORT_BATCH_LIMIT) {
+        const chunk = ids.slice(at, at + PROCESSING_IMPORT_BATCH_LIMIT)
+        const results = await this.write(() => this.api.importMany(chunk).finally(markImportSent))
+        this.applyImports(results, names)
       }
     } catch (error) {
       noteFinalPrksTransportFailure(error)
       const message = processingErrorMessage(error, IMPORT_FAILURE)
-      for (const id of ids) if (this.state.items.some((one) => one.id === id)) this.state.errors[id] = message
+      // The failed request and every one not sent yet.
+      for (const id of ids.slice(at)) if (this.state.items.some((one) => one.id === id)) this.state.errors[id] = message
     } finally {
       for (const id of ids) {
         this.state.busy.delete(id)
         this.state.importing.delete(id)
       }
       this.count()
+    }
+  }
+
+  private applyImports(results: readonly ProcessingImportResult[], names: ReadonlyMap<string, string>): void {
+    for (const result of results) {
+      if (result.ok && result.work_id) {
+        this.drop(result.item_id)
+        this.state.imported = [...this.state.imported,
+          { itemId: result.item_id, filename: names.get(result.item_id) ?? '', workId: result.work_id }]
+        continue
+      }
+      if (result.item) this.place(result.item)
+      if (this.state.items.some((one) => one.id === result.item_id)) {
+        this.state.errors[result.item_id] = result.message || IMPORT_FAILURE
+      }
     }
   }
 }

@@ -8,7 +8,7 @@ vi.mock('../../api/http', async (importOriginal) => ({
 }))
 import { processingItemRow } from '../../api/processing-items.fixtures'
 import type { ProcessingItem } from '../../api/processing-items'
-import { ProcessingQueue, repaintDraft, type ProcessingQueueApi } from './queue'
+import { PROCESSING_IMPORT_BATCH_LIMIT, ProcessingQueue, repaintDraft, type ProcessingQueueApi } from './queue'
 
 const NO_DUPLICATES = { items: [], works: [], more_items: false, more_works: false }
 
@@ -62,6 +62,50 @@ describe('Processing queue', () => {
     expect(queue.state.items.map((one) => one.id)).toEqual(['a', 'b'])
     expect([...queue.state.selected]).toEqual(['b'])
     expect(queue.state.dirty.has('b')).toBe(true)
+  })
+
+  it('reads after a pending write and reads again when a write overtakes the read', async () => {
+    let finishRemove!: (row: ProcessingItem) => void
+    const remove = vi.fn(() => new Promise<ProcessingItem>((resolve) => { finishRemove = resolve }))
+    let finishList!: () => void
+    const list = vi.fn()
+      .mockResolvedValueOnce({ items: [item('a'), item('b')], nextCursor: null })
+      // Taken before the removal below answers: it still lists 'a'.
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        finishList = () => resolve({ items: [item('a'), item('b')], nextCursor: null })
+      }))
+      .mockResolvedValueOnce({ items: [item('b')], nextCursor: null })
+    const update = vi.fn(async () => item('b', { revision: 2 }))
+    const queue = new ProcessingQueue(fakeApi({ list, remove, update }))
+    await queue.load()
+
+    // A refresh while a removal is pending waits for it.
+    const removing = queue.remove('a')
+    const waiting = queue.load()
+    await Promise.resolve()
+    expect(list).toHaveBeenCalledTimes(1)
+    finishRemove(item('a', { status: 'removed' }))
+    await removing
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+
+    // A write that starts and ends while that read is in flight makes it stale.
+    await queue.save('b', { title: 'B' } as never)
+    finishList()
+    await waiting
+    expect(list).toHaveBeenCalledTimes(3)
+    expect(queue.state.items.map((one) => one.id)).toEqual(['b'])
+  })
+
+  it('splits a large selection into requests within the server batch limit', async () => {
+    const many = Array.from({ length: PROCESSING_IMPORT_BATCH_LIMIT + 2 }, (_, i) => item(`i${i}`))
+    const importMany = vi.fn(async (ids: readonly string[]) =>
+      ids.map((id) => ({ item_id: id, ok: true, work_id: `W-${id}`, message: '', item: null })))
+    const queue = new ProcessingQueue(fakeApi({ list: vi.fn(async () => ({ items: many, nextCursor: null })), importMany }))
+    await queue.load()
+    for (const one of many) queue.toggle(one.id, true)
+    await queue.importSelected()
+    expect(importMany.mock.calls.map((call) => call[0].length)).toEqual([PROCESSING_IMPORT_BATCH_LIMIT, 2])
+    expect(queue.state.items).toEqual([])
   })
 
   it('uploads each PDF with its own key and refuses other files', async () => {
