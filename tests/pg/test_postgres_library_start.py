@@ -214,6 +214,15 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                                                   {"file_path": "/api/pdfs/elsewhere.pdf"}, headers)
             self.assertEqual((status, refused["code"]), (501, "not_ported"), refused)
             _status, folder, _headers = self.call(port, "POST", "/api/folders", {"title": "Shelf"}, headers)
+            # The refusal comes before any part of the PATCH commits: a folder
+            # move sent with a retarget is not applied behind the 501.
+            before = self.call(port, "GET", f"/api/works/{work_id}/folder-state")[1]
+            status, refused, _headers = self.call(
+                port, "PATCH", f"/api/works/{work_id}",
+                {"folder_id": folder["id"], "file_path": "/api/pdfs/elsewhere.pdf"}, headers)
+            self.assertEqual((status, refused["code"]), (501, "not_ported"), refused)
+            self.assertEqual(self.call(port, "GET", f"/api/works/{work_id}/folder-state")[1], before)
+            self.assertNotEqual(before.get("folder_id"), folder["id"], before)
             # Both exist, so the facade decides: a filed Work stays in its one folder.
             status, body, _headers = self.call(port, "POST", f"/api/folders/{folder['id']}/works",
                                                {"work_id": work_id}, headers)

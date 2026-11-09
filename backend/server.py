@@ -1356,6 +1356,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 body = dict(data)
+                if (
+                    serves_postgres_library()
+                    and "file_path" in body
+                    and str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
+                ):
+                    # Adopting another file is not ported. Refuse before any
+                    # part of the PATCH (a folder move, notes) commits, so a
+                    # 501 never hides an applied change.
+                    self._send_not_ported("Changing a Work's file_path is not ported to PostgreSQL yet.")
+                    return
                 if 'folder_id' in body:
                     raw_folder = body.pop('folder_id')
                     try:
@@ -1381,11 +1391,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             file_path_changing = False
                         else:
                             file_path_changing = True
-                    if file_path_changing and serves_postgres_library():
-                        # Adopting another file is not ported; the SQLite
-                        # adoption guard must not touch the shared root.
-                        self._send_not_ported("Changing a Work's file_path is not ported to PostgreSQL yet.")
-                        return
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
