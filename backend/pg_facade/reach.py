@@ -360,7 +360,19 @@ def _dotted(node: ast.expr) -> str | None:
     return ".".join(reversed(parts))
 
 
-def _aliases(tree: ast.Module, module: str, name: str) -> tuple[set[str], set[str]]:
+def _absolute(node: ast.ImportFrom, importer: str) -> str | None:
+    """The module ``from <node.module> import ...`` names, from module ``importer``."""
+    if node.level == 0:
+        return node.module
+    # The package of ``backend.x.y`` (or of ``backend.x.__init__``) is ``backend.x``.
+    package = importer.split(".")[:-1]
+    if node.level - 1 >= len(package):
+        return None
+    base = package[: len(package) - (node.level - 1)]
+    return ".".join(base + ([node.module] if node.module else []))
+
+
+def _aliases(tree: ast.Module, module: str, name: str, importer: str = "") -> tuple[set[str], set[str]]:
     """Local names bound to ``module.name``, and local spellings of ``module``.
 
     A spelling is an alias (``from backend import legacy``, ``import
@@ -371,11 +383,12 @@ def _aliases(tree: ast.Module, module: str, name: str) -> tuple[set[str], set[st
     modules: set[str] = set()
     package, _, base = module.rpartition(".")
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level == 0:
+        if isinstance(node, ast.ImportFrom):
+            source = _absolute(node, importer)
             for alias in node.names:
-                if node.module == module and alias.name == name:
+                if source == module and alias.name == name:
                     direct.add(alias.asname or alias.name)
-                elif node.module == package and alias.name == base:
+                elif source == package and alias.name == base:
                     modules.add(alias.asname or alias.name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
@@ -403,7 +416,7 @@ def _references(parsed: ParsedModule, scope: tuple[str, str]) -> Iterable[tuple[
     if parsed.rel == rel:
         direct, modules = {name}, set()
     else:
-        direct, modules = _aliases(parsed.tree, module, name)
+        direct, modules = _aliases(parsed.tree, module, name, _module_name(parsed.rel))
     if not direct and not modules:
         return
     for node in ast.walk(parsed.tree):

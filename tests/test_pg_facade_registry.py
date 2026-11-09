@@ -407,12 +407,18 @@ class PostgresReachTests(unittest.TestCase):
                 # Unaliased imports reach it through the dotted path.
                 "worker.py": "import backend.legacy\n\ndef w(db):\n    return backend.legacy.old(db)\n",
                 "jobs.py": "import backend\n\ndef j(db):\n    return backend.legacy.old(db)\n",
+                # Relative imports resolve against the importing package.
+                "tasks.py": "from .legacy import old\n\ndef t(db):\n    return old(db)\n",
+                "pkg/__init__.py": "",
+                "pkg/run.py": "from .. import legacy\n\ndef r(db):\n    return legacy.old(db)\n",
             })
             problems = reach.reach_problems(tmp, scopes=scopes, dispatch=frozenset())
         self.assertEqual(problems, [
             "backend/jobs.py:4 reaches legacy.py:old",
+            "backend/pkg/run.py:4 reaches legacy.py:old",
             "backend/server.py:13 reaches legacy.py:Index",
             "backend/server.py:13 reaches legacy.py:old",
+            "backend/tasks.py:4 reaches legacy.py:old",
             "backend/worker.py:4 reaches legacy.py:old",
         ])
 
