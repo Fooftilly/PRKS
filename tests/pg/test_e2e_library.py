@@ -148,6 +148,19 @@ class PostgresLibraryLegTests(unittest.TestCase):
         for name in ("prks_data.db", "prks_data_testing.db"):
             self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
 
+    def test_every_seeded_managed_pdf_exists_for_its_work(self) -> None:
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        ids = postgres_identity.seed_postgres_library(fixtures.seed_work_people_library, self.root, library)
+        assets = self.rows(library.conninfo, "SELECT work_id, storage_locator FROM prks.assets")
+        by_work = {a["work_id"]: a["storage_locator"] for a in assets}
+        self.assertEqual(
+            {by_work.get(ids[key]) for key in ("people_work", "credited_work", "editor_work")},
+            {"e2e-people.pdf", "e2e-credited.pdf", "e2e-editor.pdf"},
+        )
+
     def test_an_annotated_seed_pdf_is_final_before_its_asset_is_adopted(self) -> None:
         import hashlib
 

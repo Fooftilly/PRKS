@@ -55,6 +55,12 @@ def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
         PRKSResearchIndex(storage=cfg).sync_work(work_id, notes, db)
 
 
+def _managed_pdf(cfg: StorageConfig, name: str) -> str:
+    """Copy the fixture PDF into the root as ``name``; the Work's create adopts it."""
+    shutil.copy2(str(MINIMAL_PDF), os.path.join(cfg.pdfs_dir, name))
+    return "/api/pdfs/%s" % name
+
+
 def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     """Create Works, a managed PDF, and an Author role. Returns generated IDs.
 
@@ -152,17 +158,17 @@ def seed_work_people_library(storage_root: str) -> dict:
     # No linked Author: `author_text` is what the credit shows today.
     people_work = db.add_work(
         title=PEOPLE_WORK_TITLE, author_text="Text Author", doc_type="article",
-        file_path="/api/pdfs/e2e-people.pdf")
+        file_path=_managed_pdf(cfg, "e2e-people.pdf"))
     # A linked Author AND `author_text`, so removing the Author must reveal it.
     credited = db.add_work(
         title=PEOPLE_CREDITED_TITLE, author_text="Text Author", doc_type="article",
-        file_path="/api/pdfs/e2e-credited.pdf")
+        file_path=_managed_pdf(cfg, "e2e-credited.pdf"))
     db.insert_initial_role(credited, jane, "Author", order_index=0)
     # An Author and an Editor with NO `author_text`, so removing the Author
     # must fall through to the Editor rather than to an empty credit.
     editor_work = db.add_work(
         title=PEOPLE_EDITOR_TITLE, doc_type="article",
-        file_path="/api/pdfs/e2e-editor.pdf")
+        file_path=_managed_pdf(cfg, "e2e-editor.pdf"))
     db.insert_initial_role(editor_work, jane, "Author", order_index=0)
     db.insert_initial_role(editor_work, ed, "Editor", order_index=1)
 
