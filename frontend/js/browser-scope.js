@@ -38,7 +38,8 @@
  * A retired scope's stores close and refuse to open, sync stops for good, and
  * nothing is deleted. A reload binds whoever is signed in then.
  *
- * Library content. A confirmed session answer also names which runtime
+ * Library content. A confirmed session answer (at start, or a later
+ * same-scope `verify()`) also names which runtime
  * holds the Library's content (`libraryContent()`: 'sqlite' or 'postgres').
  * A scope bound from the offline record names none (null), so a caller that
  * needs it treats an offline page as not knowing.
@@ -534,6 +535,9 @@
                     }
                     if (sameScope(answer.scope, scope)) {
                         raiseEpoch(answer.epoch);
+                        // A page bound offline learns the content from its
+                        // first confirmed answer, without a reload.
+                        if (answer.content) libraryContent = answer.content;
                         return 'same';
                     }
                     retire('changed');

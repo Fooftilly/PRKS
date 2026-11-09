@@ -1,5 +1,8 @@
 """Processing Files: the coordinator rescans the inbox and Vue paints it."""
+import json
 import os
+import shutil
+import subprocess
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -198,6 +201,47 @@ class FrontendProcessingPageTests(unittest.TestCase):
         self.assertIn("window.prksMarkProcessingImportChanged?.()", records)
         session = _read(os.path.join(_VUE, "session.ts"))
         self.assertIn("target.prksProcessingRecords = processingRecords()", session)
+
+    @unittest.skipUnless(shutil.which("node"), "node is required")
+    def test_content_mode_waits_for_a_confirmed_answer_and_learns_it_without_reload(self):
+        """An offline-bound page names no content (neither Processing page),
+        and learns it from the first confirmed answer; no scope is SQLite."""
+        app = _read(_APP)
+        fn = "async function prksLibraryContentMode(" + app.split("async function prksLibraryContentMode(", 1)[1].split(
+            "\n}\n", 1
+        )[0] + "\n}\n"
+        script = fn + """
+const out = [];
+function stub(bound, answers) {
+    let content = null;
+    return {
+        resolve: async () => bound,
+        libraryContent: () => content,
+        verify: async () => { content = answers.shift() || null; return 'same'; },
+    };
+}
+(async () => {
+    globalThis.window = {};
+    out.push(await prksLibraryContentMode());
+    window.prksBrowserScope = stub(null, []);
+    out.push(await prksLibraryContentMode());
+    window.prksBrowserScope = stub({ libraryId: 'L' }, [null, 'postgres']);
+    out.push(await prksLibraryContentMode());
+    out.push(await prksLibraryContentMode());
+    out.push(await prksLibraryContentMode());
+    console.log(JSON.stringify(out));
+})();
+"""
+        done = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout), ["sqlite", "sqlite", None, "postgres", "postgres"])
+        route = app[app.index("case 'processing-files':"):app.index("case 'search':")]
+        self.assertIn("if (!contentMode) throw new Error(", route)
+        badge = app.split("async function prksRefreshProcessingNavBadge(", 1)[1].split(
+            "async function prksRefreshSyncQueueCue(", 1
+        )[0]
+        self.assertIn("if (!mode) {", badge)
+        self.assertIn("prksSetProcessingAttentionCount(null)", badge)
 
 
 if __name__ == "__main__":
