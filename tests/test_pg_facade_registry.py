@@ -370,11 +370,16 @@ class PostgresReachTests(unittest.TestCase):
                         return legacy.old(db), SqliteIndex()
                     """,
                 "db_manager.py": "from backend import legacy\n\ndef m(db):\n    return legacy.old(db)\n",
+                # Unaliased imports reach it through the dotted path.
+                "worker.py": "import backend.legacy\n\ndef w(db):\n    return backend.legacy.old(db)\n",
+                "jobs.py": "import backend\n\ndef j(db):\n    return backend.legacy.old(db)\n",
             })
             problems = reach.reach_problems(tmp, scopes=scopes, dispatch=frozenset())
         self.assertEqual(problems, [
+            "backend/jobs.py:4 reaches legacy.py:old",
             "backend/server.py:13 reaches legacy.py:Index",
             "backend/server.py:13 reaches legacy.py:old",
+            "backend/worker.py:4 reaches legacy.py:old",
         ])
 
     def test_a_renamed_sqlite_only_scope_is_refused(self):

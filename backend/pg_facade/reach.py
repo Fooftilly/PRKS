@@ -301,8 +301,25 @@ def _annotation_ids(tree: ast.Module) -> set[int]:
     return {id(sub) for root in roots for sub in ast.walk(root)}
 
 
+def _dotted(node: ast.expr) -> str | None:
+    """``a.b.c`` for a chain of attribute reads on a name."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
 def _aliases(tree: ast.Module, module: str, name: str) -> tuple[set[str], set[str]]:
-    """Local names bound to ``module.name``, and local names bound to ``module``."""
+    """Local names bound to ``module.name``, and local spellings of ``module``.
+
+    A spelling is an alias (``from backend import legacy``, ``import
+    backend.legacy as legacy``) or the dotted path itself once a plain
+    ``import backend.legacy`` (or ``import backend``) binds its first name.
+    """
     direct: set[str] = set()
     modules: set[str] = set()
     package, _, base = module.rpartition(".")
@@ -317,6 +334,8 @@ def _aliases(tree: ast.Module, module: str, name: str) -> tuple[set[str], set[st
             for alias in node.names:
                 if alias.name == module and alias.asname:
                     modules.add(alias.asname)
+                elif not alias.asname and (alias.name == module or module.startswith(alias.name + ".")):
+                    modules.add(module)
     return direct, modules
 
 
@@ -348,8 +367,7 @@ def _references(parsed: ParsedModule, scope: tuple[str, str]) -> Iterable[tuple[
         ) or (
             isinstance(node, ast.Attribute)
             and node.attr == name
-            and isinstance(node.value, ast.Name)
-            and node.value.id in modules
+            and _dotted(node.value) in modules
         )
         if hit:
             yield node, Reference(parsed.rel, getattr(node, "lineno", 0), scope)
