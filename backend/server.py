@@ -3957,7 +3957,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 result = db._materialize_work_pdf(work_id, write, claimed_set_rev)
         except LookupError:
-            return 404, {"error": "Work not found"}
+            # The facade refuses a missing Work and a Work without managed
+            # PDF bytes alike; answer each as SQLite does.
+            if db.get_work(work_id) is None:
+                return 404, {"error": "Work not found"}
+            return 404, {"error": "Work has no managed PDF"}
         except ValueError as e:
             if str(e) == STALE_CODE:
                 return 409, work_pdf_replace.stale_materialization_body(db, work_id)

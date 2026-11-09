@@ -253,6 +253,12 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             status, missing, _headers = self.call(port, "POST", f"/api/works/W-{'0' * 32}/pdf", {
                 "file_b64": base64.b64encode(second).decode("ascii")}, headers)
             self.assertEqual((status, missing), (404, {"error": "Work not found"}))
+            # A Work without a managed PDF is told apart from a missing one.
+            _status, bare, _headers = self.call(port, "POST", "/api/works", {"title": "No PDF"}, headers)
+            status, refused, _headers = self.call(port, "POST", f"/api/works/{bare['id']}/pdf", {
+                "file_b64": base64.b64encode(second).decode("ascii")}, headers)
+            self.assertEqual((status, refused), (404, {"error": "Work has no managed PDF"}))
+            self.assertEqual(self.call(port, "DELETE", f"/api/works/{bare['id']}", None, headers)[0], 200)
             status, _body, _headers = self.call(port, "DELETE", f"/api/works/{work_id}", None, headers)
             self.assertEqual(status, 200)
             db = self.db(name)
