@@ -95,7 +95,7 @@ onBeforeUnmount(() => {
     </PrksSectionHeader>
     <p class="prks-settings-hint">When a toggle is on, that field is included when you copy BibTeX. Turn off to keep data in the app but omit it from export.</p>
     <p id="prks-bibtex-export-summary" class="prks-settings-hint prks-bibtex-export-summary" aria-live="polite">{{ summary }}</p>
-    <div id="prks-bibtex-export-fields" role="group" aria-label="Fields to include in BibTeX export">
+    <div id="prks-bibtex-export-fields" class="prks-bibtex-export-toggles" role="group" aria-label="Fields to include in BibTeX export">
       <div v-for="field in fields" :key="field.id" class="prks-setting-row">
         <div class="prks-setting-row__text">
           <span class="prks-setting-row__label" :id="`prks-lbl-bibtex-export-${field.id}`">{{ field.label }}</span>

@@ -197,6 +197,8 @@ describe('Settings surface', () => {
     await nextTick()
     const summary = document.getElementById('prks-bibtex-export-summary')
     expect(summary?.textContent).toBe('2 of 2 fields included')
+    const fieldsHost = document.getElementById('prks-bibtex-export-fields')
+    expect(fieldsHost?.classList.contains('prks-bibtex-export-toggles')).toBe(true)
     const first = document.querySelector<HTMLButtonElement>('#prks-bibtex-export-fields button.prks-toggle')
     expect(first?.getAttribute('aria-checked')).toBe('true')
     first?.click()

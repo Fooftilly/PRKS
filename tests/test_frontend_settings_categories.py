@@ -110,6 +110,11 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         ]
         for the_id in preserved_ids:
             self.assertIn(f'id="{the_id}"', vue, msg=f"missing id={the_id}")
+        self.assertIn(
+            'id="prks-bibtex-export-fields" class="prks-bibtex-export-toggles"',
+            vue,
+            msg="BibTeX export fields host must keep prks-bibtex-export-toggles for the CSS grid",
+        )
 
     def test_general_category_is_calm_first_impression(self):
         general = _panel_source("SettingsGeneral.vue")
