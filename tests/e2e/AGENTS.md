@@ -174,6 +174,11 @@ method names `PRKSDatabase` and `PostgresLibrary` share, through
 `fixtures.open_library`). That leg skips the worker-local seed cache. CI runs
 it from a manual dispatch of the Full E2E Gate (`library_backend: postgres`);
 PR and master gates stay on the SQLite Library until #640 makes the leg green.
+Only that leg runs `tests.e2e.test_postgres_library_flows` (opt-in
+`POSTGRES_LIBRARY_MODULE` in `run.py`): restore through Settings, the
+Processing upload queue and the Research-ACK fence. The path-based inbox test
+(`test_processing_route_surface`) belongs to the SQLite Library and loads no
+tests on that leg.
 
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel. There is no Playwright retry loop in this runner;
