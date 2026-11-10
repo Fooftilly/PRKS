@@ -3356,17 +3356,36 @@ class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
 
         pattern = "**/api/works/%s/pdf" % work_id
         page.route(pattern, fail_first_pdf_write)
+        # Record every error the sync state reports. A later successful
+        # durable write (e.g. a commit echo) may clear it again before a
+        # poll would see it.
+        page.evaluate(
+            """() => {
+                const state = (%s).syncState;
+                let value = state.lastError;
+                window.__prksSyncErrors = [];
+                Object.defineProperty(state, 'lastError', {
+                    configurable: true,
+                    enumerable: true,
+                    get() { return value; },
+                    set(next) {
+                        if (next) window.__prksSyncErrors.push(String(next));
+                        value = next;
+                    },
+                });
+            }"""
+            % _FOCUSED_PDF
+        )
         try:
             _commit_pdf_highlight(page)
             ann_id = _only_viewer_annotation_id(page)
             # Marked after the highlight: committing it may scroll the page.
             page_number = page.evaluate(_MARK_MOUNTED_VIEWER_JS)
             # The annotation is acknowledged and canonical even though its
-            # PDF bytes could not be written.
+            # PDF bytes could not be written, and the failure was reported.
             _wait_server_annotation(page, work_id, ann_id)
             page.wait_for_function(
-                "() => { const pdf = %s; return !!(pdf && pdf.syncState && pdf.syncState.lastError); }"
-                % _FOCUSED_PDF,
+                "() => window.__prksSyncErrors.some(e => e !== 'local_save_failed')",
                 timeout=30000,
             )
             # The retry writes the acknowledged state without a reload.
