@@ -43,7 +43,7 @@ class SearchMixin(FacadeMixin):
         return [projection.work_summary(by_id[i], with_folder=with_folder) for i in work_ids if i in by_id]
 
     def _finish_summaries(self, rows: List[dict]) -> List[dict]:
-        from backend.db_manager import finish_work_summary_rows
+        from backend.domain.works.rules import finish_work_summary_rows
 
         if self._storage is None:
             raise RuntimeError("this PostgreSQL library has no data root")

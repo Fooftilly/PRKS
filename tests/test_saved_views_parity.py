@@ -23,7 +23,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
-from backend.db_manager import PRKS_SAVED_VIEW_MAX, SavedViewError
+from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
 from tests.backend_parity import parametrize_backends
 from tests.test_tags_parity import TagParityTestCase, TagSide
 

@@ -21,7 +21,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import PRKS_BULK_WORK_MAX, BulkWorkError
+from backend.domain.works.rules import PRKS_BULK_WORK_MAX, BulkWorkError
 from tests.backend_parity import parametrize_backends
 from tests.test_folders_parity import FolderParityTestCase
 from tests.test_tags_parity import SyncParityTestCase, both

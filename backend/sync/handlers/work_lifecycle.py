@@ -71,7 +71,7 @@ def new_work(work_id: str, fields: dict[str, Any], identity: dict[str, Any]) -> 
 
 def apply_create(scope: LibraryScope, op: dict[str, Any], received_at: datetime,
                  env: Environment) -> Result:
-    from backend.db_manager import _canonical_new_source
+    from backend.domain.works.rules import _canonical_new_source
 
     del received_at
     work_id = op["entity_id"]

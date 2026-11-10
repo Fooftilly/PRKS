@@ -22,7 +22,7 @@ from run_tests import apply_isolated_test_env
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import (
+from backend.derived_caches import (
     prks_person_image_cache_path,
     prks_person_image_legacy_bin_path,
     prks_person_image_url_hash,
@@ -32,7 +32,7 @@ from backend.person_image import PortraitImage, decode_and_transcode
 from backend.storage.config import StorageConfig
 
 import backend.server as server_module
-import backend.db_manager as db_manager_module
+import backend.managed_pdf_names as managed_pdf_names_module
 
 unittest.defaultTestLoader.sortTestMethodsUsing = None
 
@@ -491,7 +491,7 @@ class TestServerAPI(unittest.TestCase):
 
     def test_create_rejects_url_delimiter_file_path_spellings(self):
         """Adoption must refuse ``?``/``;``/``#`` that GET strips via urlparse."""
-        from backend.db_manager import managed_pdf_filename
+        from backend.managed_pdf_names import managed_pdf_filename
 
         name = "delim-adopt.pdf"
         pdfs_dir = server_module.pdfs_dir
@@ -542,7 +542,7 @@ class TestServerAPI(unittest.TestCase):
         """
         from urllib.parse import urlparse
 
-        from backend.db_manager import managed_pdf_filename
+        from backend.managed_pdf_names import managed_pdf_filename
         from backend.server import _safe_pdf_path_for_route
 
         name = "route_delim_strip.pdf"
@@ -610,7 +610,7 @@ class TestServerAPI(unittest.TestCase):
 
     def test_create_with_whitespace_file_path_stores_canonical_and_holds_lock(self):
         """Outer whitespace is trimmed once; exact ownership form is stored."""
-        from backend.db_manager import managed_pdf_filename
+        from backend.managed_pdf_names import managed_pdf_filename
         from backend.services import work_pdf_replace
 
         name = "adopt-ws-canonical.pdf"
@@ -1784,7 +1784,7 @@ class TestServerAPI(unittest.TestCase):
         except Exception:
             self.skipTest("pymupdf unavailable")
 
-        from backend.db_manager import prks_thumb_cache_stem
+        from backend.derived_caches import prks_thumb_cache_stem
 
         def _pdf_bytes(label: str) -> bytes:
             doc = fitz.open()
@@ -3082,7 +3082,7 @@ class TestServerAPI(unittest.TestCase):
 
     def test_22c11_shared_managed_pdf_cow_keeps_sibling_materialization_honest(self):
         """Two Works on one path: both materialize → exclusive files; not both non-stale on one blob."""
-        from backend.db_manager import managed_pdf_filename
+        from backend.managed_pdf_names import managed_pdf_filename
         import uuid as _uuid
 
         suffix = _uuid.uuid4().hex[:10]
@@ -3177,7 +3177,7 @@ class TestServerAPI(unittest.TestCase):
         """
         from unittest import mock
         from backend.pdf_materialization import STALE_CODE
-        from backend.db_manager import managed_pdf_filename
+        from backend.managed_pdf_names import managed_pdf_filename
         import uuid as _uuid
 
         suffix = _uuid.uuid4().hex[:10]
@@ -3239,7 +3239,7 @@ class TestServerAPI(unittest.TestCase):
         file and leave the Work on the shared path.
         """
         from unittest import mock
-        from backend.db_manager import managed_pdf_filename
+        from backend.managed_pdf_names import managed_pdf_filename
         from backend.services import work_pdf_replace
         import uuid as _uuid
 
@@ -6827,8 +6827,8 @@ class TestServerAPI(unittest.TestCase):
             def now(tz=None):
                 return frozen
 
-        with patch.object(db_manager_module, "datetime", _FrozenDatetime):
-            minted = [db_manager_module.mint_managed_pdf_filename("paper.pdf") for _ in range(2)]
+        with patch.object(managed_pdf_names_module, "datetime", _FrozenDatetime):
+            minted = [managed_pdf_names_module.mint_managed_pdf_filename("paper.pdf") for _ in range(2)]
             stamps = {name.split("_", 1)[0] for name in minted}
             self.assertEqual(len(stamps), 1, "both names carry one timestamp: %s" % minted)
             status_a, work_a = self._upload_work("Collide A", "paper.pdf", first_body)
@@ -6915,7 +6915,7 @@ class TestServerAPI(unittest.TestCase):
         failed with ENAMETOOLONG."""
         from backend.services.work_pdf_replace import allocate_exclusive_managed_filename
 
-        minted = db_manager_module.mint_managed_pdf_filename("a" * 300 + ".pdf")
+        minted = managed_pdf_names_module.mint_managed_pdf_filename("a" * 300 + ".pdf")
         self.assertEqual(len(minted.encode("utf-8")), 255, "the worst case is a maximal name")
 
         root = os.path.realpath(server_module.pdfs_dir)

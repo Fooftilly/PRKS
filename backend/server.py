@@ -23,21 +23,18 @@ from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend.db_manager import (
-    PRKSDatabase,
-    BulkWorkError,
-    MissingPersonError,
-    effective_source_kind,
-    managed_pdf_filename,
+from backend.db_manager import PRKSDatabase, prune_orphan_pdf_thumbnails
+from backend.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
-    safe_pdf_path_under_dir,
     prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
-    prune_orphan_pdf_thumbnails,
     prks_person_image_cache_path,
     prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
+from backend.domain.people.errors import MissingPersonError
+from backend.domain.works.rules import BulkWorkError, effective_source_kind
+from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.services import work_pdf_replace

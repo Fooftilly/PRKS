@@ -30,7 +30,8 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
-from backend.db_manager import (
+import backend.domain.saved_views.constraints  # noqa: F401  (registers the lane's constraints)
+from backend.domain.saved_views.rules import (
     PRKS_SAVED_VIEW_MAX,
     SavedViewError,
     normalize_saved_view_name,

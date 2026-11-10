@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, LiteralString, Optional
 
+import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import person_metadata_sync as rules
 from backend import work_metadata_sync as meta
 from backend.domain.identity.library_scope import LibraryScope

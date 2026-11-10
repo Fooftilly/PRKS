@@ -34,7 +34,7 @@ from backend.pg_facade.context import current_context
 from backend.pg_facade.registry import FacadeMixin, ported
 
 if TYPE_CHECKING:
-    from backend.db_manager import DeletedWorkRecord
+    from backend.domain.works.rules import DeletedWorkRecord
     from backend.domain.identity.library_scope import LibraryScope
     from backend.domain.works.commands import ManagedFile, NewAsset
     from backend.storage.objects import StorageBackend, Writer
@@ -91,7 +91,7 @@ class WorksMixin(FacadeMixin):
         return LocalFilesystemStorage.for_config(self._storage)
 
     def _finish(self, rows: List[dict]) -> List[dict]:
-        from backend.db_manager import finish_work_summary_rows
+        from backend.domain.works.rules import finish_work_summary_rows
 
         finish_work_summary_rows(rows, self._pdfs_dir())
         return rows
@@ -125,9 +125,9 @@ class WorksMixin(FacadeMixin):
     @staticmethod
     @ported
     def etag_for_representation(label: str, rows: List[dict]) -> str:
-        from backend.db_manager import PRKSDatabase
+        from backend.etags import etag_for_representation as derive
 
-        return PRKSDatabase.etag_for_representation(label, rows)
+        return derive(label, rows)
 
     @ported
     def etag_works_catalog(self, rows: List[dict]) -> str:
@@ -208,7 +208,7 @@ class WorksMixin(FacadeMixin):
         return self._add_work(arguments, (file_name, write))
 
     def _add_work(self, fields: dict[str, Any], upload: Optional[tuple[str, Writer]]) -> str:
-        from backend.db_manager import _canonical_new_source, normalize_doc_type
+        from backend.domain.works.rules import _canonical_new_source, normalize_doc_type
         from backend.domain.objects import ingest
         from backend.domain.works import commands
 
@@ -274,7 +274,7 @@ class WorksMixin(FacadeMixin):
         return commands.NewAsset(source=managed or self._managed_file(file_path), **presentation)
 
     def _managed_file(self, file_path: str) -> ManagedFile:
-        from backend.db_manager import managed_pdf_filename, safe_pdf_path_under_dir
+        from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
         from backend.domain.works import commands
 
         name = managed_pdf_filename(file_path)
@@ -420,7 +420,7 @@ class WorksMixin(FacadeMixin):
         """
         from backend import work_metadata_sync as rules
         from backend import work_source_sync
-        from backend.db_manager import normalize_doc_type
+        from backend.domain.works.rules import normalize_doc_type
         from backend.pg_facade.registry import NotPortedError
 
         allowed = {'title', 'status', 'abstract', 'published_date',
@@ -492,7 +492,7 @@ class WorksMixin(FacadeMixin):
         bytes) records none; bytes nothing names are still orphans to the
         sweep after its grace period.
         """
-        from backend.db_manager import DeletedWorkRecord
+        from backend.domain.works.rules import DeletedWorkRecord
         from backend.domain.works import commands
 
         deleted = self._command(lambda scope: commands.delete_work(scope, work_id, claim_files=claim_pdf))
@@ -515,7 +515,7 @@ class WorksMixin(FacadeMixin):
         single-Work writers (``backend.domain.works.bulk``), so revisions
         advance only for Works whose state changes.
         """
-        from backend.db_manager import (
+        from backend.domain.works.rules import (
             BULK_FOLDER_MISSING,
             BULK_TAGS_MISSING,
             BULK_WORKS_MISSING,
@@ -556,12 +556,12 @@ class WorksMixin(FacadeMixin):
 
         The citation record, the citation Manifestation's credits and the
         Library's export profile come from ``backend.domain.works.citation``;
-        ``PRKSDatabase.format_bibtex`` turns them into the entry, so equal
+        ``backend.domain.works.bibtex_format.format_bibtex`` turns them into the entry, so equal
         data exports byte-identical text. A Work that is not in this
         Library, or an id PostgreSQL text cannot hold (NUL), gives ``""``.
         """
-        from backend.db_manager import PRKSDatabase
         from backend.domain.works import citation
+        from backend.domain.works.bibtex_format import format_bibtex
 
         if "\x00" in work_id:
             return ""
@@ -570,8 +570,7 @@ class WorksMixin(FacadeMixin):
             return ""
         record, roles, profile = inputs
         # The projection's "video" means the target's primary Asset is a stream.
-        return PRKSDatabase.format_bibtex(record, roles, profile,
-                                          video=record["source_kind"] == "video")
+        return format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
 
 
 def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],

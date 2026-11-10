@@ -42,11 +42,8 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend import fs_durability
-from backend.db_manager import (
-    PRKSDatabase,
-    managed_pdf_filename,
-    referenced_managed_pdf_filename,
-)
+from backend.db_manager import PRKSDatabase
+from backend.managed_pdf_names import managed_pdf_filename, referenced_managed_pdf_filename
 from backend.services import work_pdf_replace
 from backend.storage.config import StorageConfig
 from backend.work_deletion import (

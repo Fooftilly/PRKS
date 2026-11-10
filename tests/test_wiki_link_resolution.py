@@ -12,7 +12,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-from backend.db_manager import PRKSDatabase, wiki_link_spans
+from backend.db_manager import PRKSDatabase
+from backend.domain.works.rules import wiki_link_spans
 from backend.storage.config import StorageConfig
 
 

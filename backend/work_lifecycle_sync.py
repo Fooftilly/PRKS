@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from backend.db_manager import (
-    DeletedWorkRecord,
-    _canonical_new_source,
+from backend.domain.works.rules import DeletedWorkRecord, _canonical_new_source, normalize_doc_type
+from backend.managed_pdf_names import (
     managed_basenames_protected_by,
-    normalize_doc_type,
     row_strongly_references_managed_pdf,
 )
 from backend.entity_ids import generate as generate_entity_id

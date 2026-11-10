@@ -155,7 +155,7 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         refused by the aggregate.
         """
         import json
-        from backend.db_manager import effective_source_kind
+        from backend.domain.works.rules import effective_source_kind
 
         rows = [
             {'source_kind': 'video', 'file_path': '', 'source_url': ''},

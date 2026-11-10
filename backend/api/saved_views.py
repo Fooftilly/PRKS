@@ -23,7 +23,7 @@ from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.saved_views import SavedView, SavedViewDeleted
-from backend.db_manager import SavedViewError
+from backend.domain.saved_views.rules import SavedViewError
 from backend.log_safety import safe_log_id, safe_log_label
 
 LOGGER = logging.getLogger("prks.api.saved_views")

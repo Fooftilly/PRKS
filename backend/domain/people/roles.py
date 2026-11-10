@@ -50,6 +50,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable, LiteralString, Optional
 
+import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import work_role_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons
@@ -493,12 +494,12 @@ def insert_initial_roles(scope: LibraryScope, work_id: str, wanted: list[Initial
     Every named Person is locked first (``FOR SHARE``, or ``FOR NO KEY
     UPDATE`` when a credit may become an alias), in id order, after the
     Work; if any is missing nothing is written and
-    :class:`~backend.db_manager.MissingPersonError` is raised. A role the
+    :class:`~backend.domain.people.errors.MissingPersonError` is raised. A role the
     Work already has, and an invalid role or credit, are skipped when
     ``skip_invalid`` (``insert_initial_roles``) and raise ``ValueError``
     otherwise (``insert_initial_role``). Returns how many roles were inserted.
     """
-    from backend.db_manager import MissingPersonError
+    from backend.domain.people.errors import MissingPersonError
 
     if not wanted:
         return 0

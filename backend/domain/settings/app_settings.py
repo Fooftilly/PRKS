@@ -28,9 +28,9 @@ from __future__ import annotations
 import json
 from typing import Any, LiteralString
 
-from backend.db_manager import (
+from backend.db_manager import PRKSDatabase
+from backend.domain.settings.rules import (
     PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT,
-    PRKSDatabase,
     _prks_merge_bibtex_export_fields_patch,
     _prks_parse_bibtex_export_fields_json,
 )

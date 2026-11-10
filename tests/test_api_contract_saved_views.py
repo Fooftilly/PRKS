@@ -19,7 +19,7 @@ from backend.api_contract.saved_views import (
     SavedViewDeleted,
     SavedViewSearch,
 )
-from backend.db_manager import saved_view_api_row
+from backend.domain.saved_views.rules import saved_view_api_row
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CLIENT = _ROOT / "frontend-app" / "src" / "api" / "saved-views.ts"

@@ -24,11 +24,11 @@ import os
 from dataclasses import dataclass
 from typing import Collection, Optional
 
-from backend.db_manager import (
-    PRKSDatabase,
+from backend.db_manager import PRKSDatabase
+from backend.derived_caches import prks_delete_pdf_thumbnails_for_work_id
+from backend.managed_pdf_names import (
     managed_basenames_protected_by,
     owned_managed_pdf_basename,
-    prks_delete_pdf_thumbnails_for_work_id,
     row_references_managed_pdf,
     row_strongly_references_managed_pdf,
     safe_pdf_path_under_dir,

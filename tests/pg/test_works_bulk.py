@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Optional
 from unittest import mock
 
-from backend.db_manager import PRKS_BULK_WORK_MAX, BulkWorkError
+from backend.domain.works.rules import PRKS_BULK_WORK_MAX, BulkWorkError
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import folders, links, tags
