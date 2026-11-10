@@ -13,12 +13,12 @@ import os
 import time
 import unittest
 
-from backend import work_lifecycle_sync, work_note_sync
-from backend.db_manager import PRKSDatabase
+from backend import work_note_sync
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -87,7 +87,15 @@ class _WorkNotesPage:
         page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
+
+    def other_device_writes_research(self, server, work, text):
+        """Another device's acknowledged Research Note, through the store's own writer."""
+        from backend.domain.works import notes
+
+        self.db_for(server).command(
+            sqlite=lambda conn, db: work_note_sync.set_research_note_on_conn(conn, db, work, text),
+            postgres=lambda scope: notes.set_note(scope, work, notes.RESEARCH, text))
 
     def set_notes(self, page, text):
         page.evaluate(
@@ -136,8 +144,8 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
         self.assertEqual(self.db_for(server).get_work(work)['text_content'],
                          'See [[concept:Culture Industry]].')
-        names = {row['name'] for row in self.db_for(server).execute_query(
-            'SELECT name FROM concepts')}
+        names = {row['name'] for row in self.db_for(server).query(
+            sqlite='SELECT name FROM concepts', postgres='SELECT name FROM prks.concepts')}
         self.assertIn('Culture Industry', names)
         cached = self.cached_work(page, work)
         self.assertEqual(cached['text_content'], 'See [[concept:Culture Industry]].')
@@ -172,7 +180,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual(db.get_work(work)['text_content'], 'Research B')
         self.assertEqual(db.get_work(work)['private_notes'],
                          'Remind me: [[concept:Should Not Exist]].')
-        names = {row['name'] for row in db.execute_query('SELECT name FROM concepts')}
+        names = {row['name'] for row in db.query(sqlite='SELECT name FROM concepts', postgres='SELECT name FROM prks.concepts')}
         self.assertNotIn('Should Not Exist', names)
 
     def test_text_typed_behind_a_failed_save_is_saved_after_recovery(self):
@@ -240,7 +248,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.offline(page, context)
         self.set_notes(page, 'This device wrote B')
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 1)
-        work_note_sync.set_research_note(self.db_for(server), work, 'Other device wrote C')
+        self.other_device_writes_research(server, work, 'Other device wrote C')
         self.reconnect(page, context)
         self.conflicts(page, 'SET_WORK_RESEARCH_NOTE', 1)
         result = page.evaluate("""() => prksSync.store.listOperations().then(rows => {
@@ -452,7 +460,7 @@ class ResearchNotesRecoveryTests(_RecoveryPage, unittest.TestCase):
         work = server.ids['work_a']
         self.type_marker(page, ' Mine')
         self.wait_recorded(page, work, ' Mine')
-        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        self.other_device_writes_research(server, work, 'Another device wrote this.')
         page.reload(wait_until='domcontentloaded')
         page.wait_for_selector('.CodeMirror')
         page.wait_for_function(
@@ -636,7 +644,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.wait_recorded(page, work, ' Mine')
         mine = self.records(page, work)[0]['body']
         self.close_tab(page)
-        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        self.other_device_writes_research(server, work, 'Another device wrote this.')
         tab = self.new_tab(context, server)
         self.notice(tab).wait_for()
         self.assertIn('Unsaved Research Notes from an earlier session are available.', self.notice(tab).inner_text())
@@ -677,7 +685,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.wait_recorded(page, work, ' Copy me')
         mine = self.records(page, work)[0]['body']
         self.close_tab(page)
-        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        self.other_device_writes_research(server, work, 'Another device wrote this.')
         tab = self.new_tab(context, server)
         self.notice(tab).wait_for()
         dialog = self.open_review(tab)
@@ -716,7 +724,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.wait_recorded(page, work, ' Fallback copy')
         mine = self.records(page, work)[0]['body']
         self.close_tab(page)
-        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        self.other_device_writes_research(server, work, 'Another device wrote this.')
         tab = self.new_tab(context, server)
         self.notice(tab).wait_for()
         dialog = self.open_review(tab)
@@ -897,7 +905,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.type_marker(page, ' Keep me')
         self.wait_recorded(page, work, ' Keep me')
         self.close_tab(page)
-        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        self.other_device_writes_research(server, work, 'Another device wrote this.')
         tab = self.new_tab(context, server)
         self.notice(tab).wait_for()
         self.notice(tab).locator('[data-prks-role="editor-recovery-hide"]').click()
@@ -934,7 +942,7 @@ class ResearchNotesTabCloseAndReviewTests(_RecoveryPage, unittest.TestCase):
         self.type_marker(page, ' Pending review')
         self.wait_recorded(page, work, ' Pending review')
         self.close_tab(page)
-        work_note_sync.set_research_note(self.db_for(server), work, 'Another device wrote this.')
+        self.other_device_writes_research(server, work, 'Another device wrote this.')
         tab = self.new_tab(context, server)
         self.open_review(tab)
         tab.evaluate("() => { location.hash = '#/folders'; }")
@@ -999,9 +1007,11 @@ class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
         return self.db_for(server).get_work(work)['private_notes'] or ''
 
     def set_server_reminder(self, server, work, text):
-        with self.db_for(server).connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            work_note_sync.set_private_note_on_conn(conn, work, text)
+        from backend.domain.works import notes
+
+        self.db_for(server).command(
+            sqlite=lambda conn, _db: work_note_sync.set_private_note_on_conn(conn, work, text),
+            postgres=lambda scope: notes.set_note(scope, work, notes.PRIVATE, text))
 
     def wait_server_reminder(self, page, work, text):
         wait_for_async(
@@ -1307,9 +1317,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
                 }],
             }));
         }""", work)
-        with self.db_for(server).connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.db_for(server).delete_work_record(work)
         self.close_tab(page)
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
@@ -1364,9 +1372,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.wait_reminder_recorded(page, work, ' Elsewhere')
         # The server no longer has the Work (deleted elsewhere, or another library on this
         # origin); this tab closes before its save. This device never saw it deleted.
-        with self.db_for(server).connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.db_for(server).delete_work_record(work)
         self.close_tab(page)
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
@@ -1476,9 +1482,7 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         self.type_reminder(page, server, ' Reminder too')
         self.wait_reminder_recorded(page, work, ' Reminder too')
         # The Work is deleted elsewhere: its page can no longer be opened.
-        with self.db_for(server).connection() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            work_lifecycle_sync.delete_work_record_on_conn(conn, work)
+        self.db_for(server).delete_work_record(work)
         self.close_tab(page)
         tab = self.folders_tab(context, server)
         probes = []

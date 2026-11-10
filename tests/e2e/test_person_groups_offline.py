@@ -5,9 +5,11 @@ import unittest
 from urllib.parse import urlparse
 
 from tests.e2e import test_offline as o
-from tests.e2e.fixtures import PRKSDatabase, StorageConfig, SCHEMA, seed_people_library
+from tests.e2e.fixtures import StorageConfig, seed_people_library
 from tests.e2e.harness import (AppServer, open_app_page, require_chromium,
                                wait_for_async)
+from tests.e2e.library_store import library_for
+from tests.e2e.fixtures import open_library
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -26,12 +28,12 @@ def tearDownModule():
 
 def seed_groups(root):
     ids = seed_people_library(root)
-    db = PRKSDatabase(storage=StorageConfig.for_testing(root), schema_path=str(SCHEMA))
-    parent = db.add_person_group('Parent Branch', description='Parent description')
+    db = open_library(StorageConfig.for_testing(root))
+    parent = db.add_person_group_with_parent_options('Parent Branch', description='Parent description')
     group = ids['person_group']
     db.update_person_group(group, {'parent_id': parent, 'description': 'Group description'})
-    child = db.add_person_group('Child Branch', group, 'Child description')
-    unseen = db.add_person_group('Unvisited Branch', parent)
+    child = db.add_person_group_with_parent_options('Child Branch', parent_id=group, description='Child description')
+    unseen = db.add_person_group_with_parent_options('Unvisited Branch', parent_id=parent)
     db.add_person_to_group(ids['person_unvisited'], group)
     ids.update(group_parent=parent, group_child=child, group_unvisited=unseen)
     return ids
@@ -138,7 +140,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
     def test_empty_index_and_missing_cache_are_distinct(self):
         def empty(root):
             ids = seed_people_library(root)
-            db = PRKSDatabase(storage=StorageConfig.for_testing(root), schema_path=str(SCHEMA))
+            db = open_library(StorageConfig.for_testing(root))
             db.delete_person_group(ids['person_group'])
             return ids
         server, page, context = self.start(empty)
@@ -466,8 +468,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         wait_for_async(
             page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=50000, message='reparented Group operations did not drain')
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
-                          schema_path=str(SCHEMA))
+        db = library_for(server)
         saved = db.get_person_group(draft['child'])
         self.assertIsNotNone(saved)
         self.assertEqual(saved['name'], 'Offline Kept Child')
@@ -518,8 +519,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         wait_for_async(
             page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=50000, message='parent deletion stalled after child move cancellation')
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
-                          schema_path=str(SCHEMA))
+        db = library_for(server)
         self.assertIsNone(db.get_person_group(ids['group_unvisited']))
         self.assertEqual(db.get_person_group(ids['person_group'])['parent_id'],
                          ids['group_parent'])
@@ -553,8 +553,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
             }""",
             arg=[draft['child'], draft['removal']], timeout=50000,
             message='rejected child kept parent deletion permanently pending')
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
-                          schema_path=str(SCHEMA))
+        db = library_for(server)
         self.assertIsNone(db.get_person_group(ids['group_unvisited']))
         self.assertIsNone(db.get_person_group(draft['child']))
 

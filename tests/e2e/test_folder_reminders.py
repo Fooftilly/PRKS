@@ -10,11 +10,12 @@ boundaries. All Folder data is synthetic.
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
+from tests.e2e.fixtures import open_library
 
 FOLDER_A_TITLE = 'Reminders Folder Alpha'
 FOLDER_B_TITLE = 'Reminders Folder Beta'
@@ -40,7 +41,7 @@ def tearDownModule():
 
 def seed(root):
     ids = seed_library(root)
-    db = PRKSDatabase(storage=StorageConfig.for_testing(root))
+    db = open_library(StorageConfig.for_testing(root))
     ids['folder_a'] = db.add_folder(FOLDER_A_TITLE, 'Synthetic folder A.')
     ids['folder_b'] = db.add_folder(FOLDER_B_TITLE, 'Synthetic folder B.')
     db.update_folder_metadata(ids['folder_a'], {'private_notes': FOLDER_A_NOTES})
@@ -64,7 +65,7 @@ class _FolderRemindersPage:
         return server, page, context
 
     def db(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
 
     def open_folder(self, page, folder_id):
         page.evaluate("id => prksNavigate('#/folders/' + encodeURIComponent(id))", folder_id)

@@ -3,11 +3,11 @@ import json
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
-from tests.e2e.fixtures import WORK_A_TITLE, seed_library
+from tests.e2e.fixtures import WORK_A_TITLE, open_library, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -25,7 +25,7 @@ def tearDownModule():
 
 def seed(root):
     ids = seed_library(root)
-    db = PRKSDatabase(storage=StorageConfig.for_testing(root))
+    db = open_library(StorageConfig.for_testing(root))
     ids['tag'] = db.add_tag('Offline Existing')['id']
     ids['assigned'] = db.add_tag('Initially Assigned')['id']
     db.add_tag_to_work(ids['work_a'], ids['assigned'])
@@ -56,9 +56,12 @@ class OfflineWorkTagTests(unittest.TestCase):
         return page.evaluate(
             "() => prksSync.store.listOperations().then(rows => rows.filter(r => %s))" % self.TAG_OPS)
 
-    def tag_ledger(self, server, columns='*'):
-        return self.db_for(server).execute_query(
-            'SELECT %s FROM sync_operations WHERE %s' % (columns, self.TAG_LEDGER))
+    def tag_ledger(self, server):
+        """This family's server-ledger rows: op_id (text) and status."""
+        return library_for(server).query(
+            sqlite='SELECT op_id, status FROM sync_operations WHERE %s ORDER BY rowid' % self.TAG_LEDGER,
+            postgres='SELECT op_id::text AS op_id, status FROM prks.sync_operations WHERE %s'
+                     ' ORDER BY applied_at, op_id' % self.TAG_LEDGER)
 
     def manage(self, page):
         page.locator('#panel-content button', has_text='Manage tags').click()
@@ -123,8 +126,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         server._release_process()
         server._seed_fn = None; server.start()
         self.reconnect(page, context); self.pending(page, 0)
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
-        self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']], db.execute_query("SELECT operation_type, result_json FROM sync_operations"))
+        db = library_for(server)
+        self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']], self.tag_ledger(server))
         self.offline(page, context); page.reload()
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
@@ -149,7 +152,7 @@ class OfflineWorkTagTests(unittest.TestCase):
     def test_revision_conflict_retains_intent_and_apply_creates_new_operation(self):
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        db = library_for(server)
         w, t = server.ids['work_a'], server.ids['tag']
         db.add_tag_to_work(w, t); db.remove_tag_from_work(w, t)
         original = self.tag_operations(page)[0]['op_id']
@@ -164,7 +167,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertIn(t, [r['id'] for r in db.get_work_tags(w)])
         # The ledger proves a NEW operation carried the reapplied intent: the
         # original id kept its recorded conflict and was never reused.
-        ledger = {r['op_id']: r['status'] for r in self.tag_ledger(server, 'op_id, status')}
+        ledger = {r['op_id']: r['status'] for r in self.tag_ledger(server)}
         self.assertEqual(ledger.pop(original), 'REVISION_CONFLICT')
         self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'])
 
@@ -177,7 +180,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.locator('[data-prks-role=offline-unavailable]').wait_for()
         self.pending(page, 1)
         self.reconnect(page, context); self.pending(page, 0)
-        db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        db = library_for(server)
         self.assertIn(server.ids['tag'], [t['id'] for t in db.get_work_tags(server.ids['work_a'])])
 
     # ---- helpers for the degraded and conflicted paths ----
@@ -195,7 +198,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         return seen
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
 
     def sole_conflict(self, page):
         """The single durable operation, once it has reached a terminal
@@ -314,7 +317,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         db = self.db_for(server)
         self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']])
         self.assertEqual(
-            sorted(r['status'] for r in self.tag_ledger(server, 'status')),
+            sorted(r['status'] for r in self.tag_ledger(server)),
             ['ACKNOWLEDGED', 'ACKNOWLEDGED'])
 
     # ---- Phase E: the conflict branches the browser run had not covered ----
@@ -336,7 +339,7 @@ class OfflineWorkTagTests(unittest.TestCase):
                          'resolving with server state creates no replacement operation')
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
         # The conflict itself was ledgered; resolving it mutated nothing more.
-        rows = self.tag_ledger(server, 'status')
+        rows = self.tag_ledger(server)
         self.assertEqual([r['status'] for r in rows], ['REVISION_CONFLICT'])
         options = page.evaluate(
             """id => window.createPrksOfflineStore().getEntity('work-tag-options', id)
@@ -369,7 +372,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertEqual(self.tag_operations(page), [])
         self.assertEqual([t['id'] for t in db.get_work_tags(w)], [target],
                          'discarding a merge conflict retargets nothing')
-        self.assertNotIn(source, [r['id'] for r in db.execute_query('SELECT id FROM tags')])
+        self.assertNotIn(source, [r['id'] for r in db.get_all_tags()])
 
     def test_tag_deleted_conflict_never_recreates_the_tag(self):
         server, page, context = self.start()
@@ -386,7 +389,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.get_by_role('button', name='Discard local change', exact=True).click()
         self.pending(page, 0)
         self.assertEqual(self.tag_operations(page), [])
-        self.assertNotIn(t, [r['id'] for r in db.execute_query('SELECT id FROM tags')])
+        self.assertNotIn(t, [r['id'] for r in db.get_all_tags()])
         self.assertEqual([r['id'] for r in db.get_work_tags(w)], [server.ids['assigned']])
 
     def test_missing_work_is_terminal_and_stays_discoverable(self):
@@ -435,7 +438,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         wait_for_async(page,
             "() => prksSync.store.listOperations().then(rows => rows.every(r => !%s))" % self.TAG_OPS)
         self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
-        self.assertEqual([r['status'] for r in self.tag_ledger(server, 'status')], ['REVISION_CONFLICT'])
+        self.assertEqual([r['status'] for r in self.tag_ledger(server)], ['REVISION_CONFLICT'])
 
     # ---- the Tag vocabulary itself -------------------------------------------
 

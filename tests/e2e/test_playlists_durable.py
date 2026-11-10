@@ -12,7 +12,6 @@ doomed request fail before the cache answers.
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_library
@@ -20,6 +19,8 @@ from tests.e2e.fixtures import seed_library
 VIDEO_A_TITLE = 'E2E Lecture One'
 VIDEO_B_TITLE = 'E2E Lecture Two'
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
+from tests.e2e.fixtures import open_library
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -42,7 +43,7 @@ def seed(root):
     PDF would make every assertion about that card vacuous.
     """
     ids = seed_library(root)
-    db = PRKSDatabase(storage=StorageConfig.for_testing(root))
+    db = open_library(StorageConfig.for_testing(root))
     ids['video_a'] = db.add_work(
         title=VIDEO_A_TITLE, doc_type='video', source_kind='video',
         source_url='https://www.youtube.com/watch?v=E2EONELECT')
@@ -130,7 +131,7 @@ class DurablePlaylistTests(unittest.TestCase):
     def db_for(self, server):
         existing = getattr(self, '_db', None)
         if existing is None:
-            existing = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            existing = library_for(server)
             self._db = existing
         return existing
 
@@ -138,9 +139,10 @@ class DurablePlaylistTests(unittest.TestCase):
         return {row['title']: row for row in self.db_for(server).get_all_playlists()}
 
     def order_in_db(self, server, playlist_id):
-        rows = self.db_for(server).execute_query(
-            'SELECT work_id FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC',
-            (playlist_id,))
+        rows = self.db_for(server).query(
+            sqlite='SELECT work_id FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC',
+            postgres='SELECT work_id FROM prks.playlist_items WHERE playlist_id = %s ORDER BY position ASC',
+            params=(playlist_id,))
         return [row['work_id'] for row in rows]
 
     # ---- creation -----------------------------------------------------------

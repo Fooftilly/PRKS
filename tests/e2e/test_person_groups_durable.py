@@ -15,12 +15,12 @@ import json
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (PERSON_B_LAST, PERSON_DISPLAY, PERSON_GROUP_NAME,
                                 seed_people_library)
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -109,7 +109,7 @@ class DurablePersonGroupTests(unittest.TestCase):
     def db_for(self, server):
         existing = getattr(self, '_db', None)
         if existing is None:
-            existing = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            existing = library_for(server)
             self._db = existing
         return existing
 
@@ -346,9 +346,10 @@ class DurablePersonGroupTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.settled(page)
-        rows = self.db_for(server).execute_query(
-            'SELECT 1 FROM person_group_members WHERE group_id = ? AND person_id = ?',
-            (group, person))
+        rows = self.db_for(server).query(
+            sqlite='SELECT 1 FROM person_group_members WHERE group_id = ? AND person_id = ?',
+            postgres='SELECT 1 FROM prks.person_group_members WHERE group_id = %s AND person_id = %s',
+            params=(group, person))
         self.assertEqual(len(rows), 1)
 
     def test_a_membership_added_and_taken_back_leaves_nothing(self):
@@ -400,9 +401,10 @@ class DurablePersonGroupTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.settled(page)
-        rows = self.db_for(server).execute_query(
-            'SELECT 1 FROM person_group_members WHERE group_id = ? AND person_id = ?',
-            (group, person))
+        rows = self.db_for(server).query(
+            sqlite='SELECT 1 FROM person_group_members WHERE group_id = ? AND person_id = ?',
+            postgres='SELECT 1 FROM prks.person_group_members WHERE group_id = %s AND person_id = %s',
+            params=(group, person))
         self.assertEqual(len(rows), 1, 'all three reached the server, in order')
 
     # ---- deletion -----------------------------------------------------------
@@ -479,8 +481,9 @@ class DurablePersonGroupTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.settled(page)
-        self.assertEqual(self.db_for(server).execute_query(
-            'SELECT 1 FROM persons WHERE id = ?', (person,)), [])
+        self.assertEqual(self.db_for(server).query(
+            sqlite='SELECT 1 FROM persons WHERE id = ?',
+            postgres='SELECT 1 FROM prks.persons WHERE id = %s', params=(person,)), [])
 
     def test_a_person_credited_on_a_file_cannot_be_deleted(self):
         """The protection is canonical and unchanged: the relationship is a

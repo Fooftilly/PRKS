@@ -2,13 +2,6 @@
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
-from backend.research_network import (
-    get_argument,
-    replace_argument_sources,
-    replace_argument_targets,
-    update_argument,
-)
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
@@ -20,6 +13,7 @@ from tests.e2e.fixtures import (
 )
 from tests.e2e.harness import (AppServer, open_app_page, profile_e2e_phase,
                                record_e2e_phase_seconds, require_chromium, wait_for_async)
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -139,7 +133,7 @@ class DurableArgumentTests(unittest.TestCase):
     def db_for(self, server):
         db = getattr(self, "_db", None)
         if db is None:
-            db = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            db = library_for(server)
             self._db = db
         return db
 
@@ -202,9 +196,10 @@ class DurableArgumentTests(unittest.TestCase):
         self.detail(page, ids[0]); o._wait_content_contains(page, "Offline Argument")
 
         self.reconnect(page, context); self.drained(page)
-        rows = self.db_for(server).execute_query(
-            "SELECT id, name FROM arguments WHERE name IN (?, ?)",
-            ("Offline Argument", "Offline Stance"))
+        rows = self.db_for(server).query(
+            sqlite="SELECT id, name FROM arguments WHERE name IN (?, ?)",
+            postgres="SELECT id, name FROM prks.arguments WHERE name IN (%s, %s)",
+            params=("Offline Argument", "Offline Stance"))
         self.assertEqual({row["id"] for row in rows}, set(ids))
         self.assertEqual(len(rows), 2, "one canonical row per construction")
 
@@ -237,7 +232,7 @@ class DurableArgumentTests(unittest.TestCase):
         self.assertEqual(remaining, 0)
 
         self.reconnect(page, context); self.drained(page)
-        stored = get_argument(self.db_for(server), argument)
+        stored = self.db_for(server).get_argument(argument)
         self.assertEqual((stored["name"], stored["kind"], stored["main_text"]),
                          ("Offline Rename", "stance", "Offline body"))
 
@@ -260,7 +255,7 @@ class DurableArgumentTests(unittest.TestCase):
         o._wait_content_contains(page, "pp. 1")
 
         self.reconnect(page, context); self.drained(page)
-        stored = get_argument(self.db_for(server), argument)
+        stored = self.db_for(server).get_argument(argument)
         self.assertEqual([row["work_id"] for row in stored["sources"]], works)
         self.assertEqual([(row["type"], row["id"], row["verdict_id"])
                           for row in stored["targets"]],
@@ -270,7 +265,7 @@ class DurableArgumentTests(unittest.TestCase):
         server, page, context = self.start()
         argument = server.ids["argument_a"]
         self.prepare(page, argument)
-        replace_argument_sources(self.db_for(server), argument,
+        self.db_for(server).replace_argument_sources(argument,
                                  [{"work_id": server.ids["work_b"], "pages": "server"}])
         self.offline(page, context)
         page.evaluate("([id,work]) => putArgumentSources(id,[{work_id:work,pages:'device'}])",
@@ -279,7 +274,7 @@ class DurableArgumentTests(unittest.TestCase):
         conflict = page.evaluate("() => prksSync.store.listOperations().then(rows => rows.find("
             "op => op.operation === 'SET_ARGUMENT_SOURCES').server_result)")
         self.assertEqual(conflict["code"], "REVISION_CONFLICT")
-        self.assertEqual(get_argument(self.db_for(server), argument)["sources"][0]["pages"], "server")
+        self.assertEqual(self.db_for(server).get_argument(argument)["sources"][0]["pages"], "server")
 
     def test_response_and_create_from_work_are_atomic_constructions(self):
         server, page, context = self.start()
@@ -298,8 +293,8 @@ class DurableArgumentTests(unittest.TestCase):
                          [{"work_id": server.ids["work_a"], "pages": "44"}])
         self.assertIsNotNone(response); self.assertIsNotNone(from_work)
         self.reconnect(page, context); self.drained(page)
-        self.assertEqual(get_argument(self.db_for(server), response["id"])["targets"][0]["id"], parent)
-        self.assertEqual(get_argument(self.db_for(server), from_work["id"])["sources"][0]["work_id"],
+        self.assertEqual(self.db_for(server).get_argument(response["id"])["targets"][0]["id"], parent)
+        self.assertEqual(self.db_for(server).get_argument(from_work["id"])["sources"][0]["work_id"],
                          server.ids["work_a"])
 
     def test_deleting_work_offline_keeps_unsent_stance_and_edited_body(self):
@@ -344,7 +339,7 @@ class DurableArgumentTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        saved = get_argument(self.db_for(server), draft["id"])
+        saved = self.db_for(server).get_argument(draft["id"])
         self.assertIsNotNone(saved, "independently authored Stance reached PostgreSQL")
         self.assertEqual(saved["kind"], "stance")
         self.assertEqual(saved["name"], "Independent offline stance")
@@ -352,8 +347,9 @@ class DurableArgumentTests(unittest.TestCase):
         self.assertEqual([(source["work_id"], source["pages"])
                           for source in saved["sources"]],
                          [(remaining_work, "5-6")])
-        works = self.db_for(server).execute_query(
-            "SELECT id FROM works WHERE id = ?", (deleted_work,))
+        works = self.db_for(server).query(
+            sqlite="SELECT id FROM works WHERE id = ?",
+            postgres="SELECT id FROM prks.works WHERE id = %s", params=(deleted_work,))
         self.assertEqual(works, [], "the selected Work was still deleted")
 
     def test_position_argument_argument_dependency_chain_and_failure(self):
@@ -394,8 +390,9 @@ class DurableArgumentTests(unittest.TestCase):
         result = page.evaluate("id => prksSync.store.listOperations().then(rows => rows.find("
             "op => op.entity_id === id).server_result)", created["id"])
         self.assertEqual(result["code"], "POSITION_NOT_FOUND")
-        rows = self.db_for(server).execute_query("SELECT id FROM arguments WHERE id = ?",
-                                                 (created["id"],))
+        rows = self.db_for(server).query(
+            sqlite="SELECT id FROM arguments WHERE id = ?",
+            postgres="SELECT id FROM prks.arguments WHERE id = %s", params=(created["id"],))
         self.assertEqual(rows, [], "refused construction rolls INSERT back")
 
     def test_delete_tombstone_ack_and_both_refusals(self):
@@ -411,7 +408,7 @@ class DurableArgumentTests(unittest.TestCase):
         page.wait_for_function("name => !document.body.innerText.includes(name)",
                                arg="E2E Unvisited Argument")
         self.reconnect(page, context); self.drained(page)
-        self.assertIsNone(get_argument(self.db_for(server), safe))
+        self.assertIsNone(self.db_for(server).get_argument(safe))
 
         for entity_id, code, name in (
             (server.ids["argument_a"], "ARGUMENT_IN_USE", ARGUMENT_A_NAME),

@@ -1,6 +1,7 @@
 """Real Chromium + real PRKS server scenarios. Collected only when PRKS_E2E=1."""
 from __future__ import annotations
 
+import base64
 import os
 import json
 import re
@@ -146,9 +147,8 @@ def _server_work_title(server, work_id):
     """The title the server actually stores, read from the database rather
     than from the page -- the point of a durable-first assertion is that the
     two can legitimately disagree until an operation is acknowledged."""
-    from backend.db_manager import PRKSDatabase
-    from backend.storage.config import StorageConfig
-    return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root)).get_work(work_id)["title"]
+    from tests.e2e.library_store import library_for
+    return library_for(server).get_work(work_id)["title"]
 
 
 def _wait_queue_drained(page):
@@ -3139,18 +3139,30 @@ def _wait_pdf_materialized(page, work_id, timeout=30000):
     )
 
 
-def _managed_pdf_annotation_contents(page, server, work_id):
-    """Every annotation /Contents in the managed PDF bytes the server holds."""
+def _managed_pdf_annotation_contents(page, work_id):
+    """Every annotation /Contents in the managed PDF bytes the server holds.
+
+    Read through the server's own PDF route, so the bytes are the ones the
+    store names on either backend (a file under ``pdfs/`` on SQLite, a
+    managed object on PostgreSQL).
+    """
     import pymupdf
 
-    file_path = page.evaluate(
-        """(workId) => fetch('/api/works/' + workId, { cache: 'no-store' })
-            .then(r => r.json()).then(w => w && w.file_path)""",
-        arg=work_id,
+    encoded = page.evaluate(
+        """async (workId) => {
+            const work = await fetch('/api/works/' + workId, { cache: 'no-store' }).then(r => r.json());
+            const res = await fetch(work.file_path, { cache: 'no-store' });
+            if (!res.ok) throw new Error('PDF read ' + res.status);
+            const bytes = new Uint8Array(await res.arrayBuffer());
+            let text = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) {
+                text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+            }
+            return btoa(text);
+        }""",
+        work_id,
     )
-    name = unquote(urlparse(file_path).path.rsplit("/", 1)[-1])
-    path = os.path.join(server.storage_root, "pdfs", name)
-    doc = pymupdf.open(path)
+    doc = pymupdf.open(stream=base64.b64decode(encoded), filetype="pdf")
     try:
         return [a.info.get("content", "") for a in doc[0].annots()]
     finally:
@@ -3257,7 +3269,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             _wait_pdf_annotation_ops_drained(page, work_id)
             _wait_pdf_materialized(page, work_id)
             self.assertEqual(_popup_comment(page, ann_id), text)
-        self.assertIn(texts[-1], _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertIn(texts[-1], _managed_pdf_annotation_contents(page, work_id))
 
     def test_repeated_comment_edits_on_prks_highlight_persist(self):
         server, page, _collector = self._start_app()
@@ -3389,7 +3401,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _wait_local_save_warning_cleared(page)
         self.assertEqual(_server_annotation(page, work_id, ann_id)["contents"], "second that saves")
         self.assertEqual(_popup_comment(page, ann_id), "second that saves")
-        self.assertIn("second that saves", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertIn("second that saves", _managed_pdf_annotation_contents(page, work_id))
         self.assertFalse(_pdf_has_pending_sync(page))
 
     def test_an_edit_the_viewer_never_commits_is_reported_and_does_not_stick(self):
@@ -3462,7 +3474,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         _wait_pdf_materialized(page, work_id)
         _wait_local_save_warning_cleared(page)
         self.assertFalse(_pdf_has_pending_sync(page))
-        self.assertIn("committed again", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertIn("committed again", _managed_pdf_annotation_contents(page, work_id))
 
     def test_an_uncommitted_edit_does_not_hold_another_annotations_rollback(self):
         with profile_e2e_phase("pdf_rollback_setup"):
@@ -3646,7 +3658,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
                 return Promise.resolve(pdf.flushAnnotations()).then(() => true);
             }""",
         )
-        self.assertNotIn("imported draft", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertNotIn("imported draft", _managed_pdf_annotation_contents(page, work_id))
         self.assertTrue(_pdf_has_pending_sync(page))
 
         _close_annotation_popup(page)
@@ -3672,7 +3684,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
                 );
             }""",
         )
-        contents = _managed_pdf_annotation_contents(page, server, work_id)
+        contents = _managed_pdf_annotation_contents(page, work_id)
         self.assertIn("imported retry", contents)
         self.assertNotIn("imported draft", contents)
 
@@ -3750,7 +3762,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
                 );
             }""",
         )
-        self.assertIn("unacknowledged first", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertIn("unacknowledged first", _managed_pdf_annotation_contents(page, work_id))
 
     def test_a_delete_that_fails_after_its_popup_closed_does_not_wait_on_it(self):
         server, page, _collector = self._start_app()
@@ -3917,7 +3929,7 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
             }""",
             timeout=15000,
         )
-        self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, server, work_id))
+        self.assertIn("comment that failed", _managed_pdf_annotation_contents(page, work_id))
         self.assertFalse(_pdf_has_pending_sync(page))
 
     def test_closing_the_popup_of_a_failed_edit_clears_the_warning(self):
