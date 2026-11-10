@@ -1364,6 +1364,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if data is _JSON_BODY_ABSENT:
                 data = {}
             if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
+                if serves_postgres_library():
+                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
+                    # Processing queue (/api/processing-items) instead.
+                    self.send_error(404, "API endpoint not found")
+                    return
                 pf_id = path.split('/')[-1]
                 if not isinstance(data, dict):
                     self.send_json(400, {'error': 'JSON object body required'})
@@ -1417,11 +1422,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': 'JSON object body required'})
                     return
                 body = dict(data)
-                if (
-                    serves_postgres_library()
-                    and "file_path" in body
-                    and str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
-                ):
+                # Adoption lock + existence check only when the stored path
+                # would actually change. Echoing the same file_path on a
+                # title/status PATCH must not 409 missing_pdf when the bytes
+                # are already gone (CodeRabbit Minor on #172); the echo is
+                # dropped below so this request cannot rewrite it after a
+                # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
+                file_path_changing = "file_path" in body and (
+                    str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
+                )
+                if file_path_changing and serves_postgres_library():
                     # Adopting another file is not ported. Refuse before any
                     # part of the PATCH (a folder move, notes) commits, so a
                     # 501 never hides an applied change.
@@ -1435,23 +1445,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': str(e)})
                         return
                 if body:
-                    patched_file_path = "file_path" in body
-                    # Adoption lock + existence check only when the stored
-                    # path would actually change. Echoing the same file_path
-                    # on a title/status PATCH must not 409 missing_pdf when
-                    # the bytes are already gone (CodeRabbit Minor on #172).
-                    # When the echo matches the observed row, DROP file_path
-                    # from the body so this request cannot rewrite it after a
-                    # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
-                    file_path_changing = False
-                    if patched_file_path:
-                        stored_fp = _stored_work_file_path(w_id)
-                        incoming_fp = body.get("file_path")
-                        if str(incoming_fp or "") == str(stored_fp or ""):
-                            body.pop("file_path", None)
-                            file_path_changing = False
-                        else:
-                            file_path_changing = True
+                    if "file_path" in body and not file_path_changing:
+                        # An unchanged echo never rewrites the stored path.
+                        body.pop("file_path", None)
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
@@ -2068,6 +2064,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif processing_api.handle_head(self, db, path):
                 return
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
+                if serves_postgres_library():
+                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
+                    # Processing queue (/api/processing-items) instead.
+                    self.send_error(404, "API endpoint not found")
+                    return
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'pdf':
                     pf_id = parts[3]
@@ -2946,6 +2947,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 token = (query.get('token') or [''])[0]
                 self._handle_backup_download(token=token)
             elif path == '/api/processing-files':
+                if serves_postgres_library():
+                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
+                    # Processing queue (/api/processing-items) instead.
+                    self.send_error(404, "API endpoint not found")
+                    return
                 rescan_raw = (query.get('rescan') or [''])[0]
                 rescan = str(rescan_raw).strip().lower() in ('1', 'true', 'yes')
                 if rescan:
@@ -2954,6 +2960,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     data = db.get_processing_files(include_imported=False)
                 self.send_json(200, dump_response(ProcessingFile, data))
             elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
+                if serves_postgres_library():
+                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
+                    # Processing queue (/api/processing-items) instead.
+                    self.send_error(404, "API endpoint not found")
+                    return
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'pdf':
                     pf_id = parts[3]
@@ -2982,10 +2993,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             json_body_absent = data is _JSON_BODY_ABSENT
             if json_body_absent:
                 data = {}
-            if path == '/api/sync/operations' and serves_postgres_library():
-                self._handle_postgres_sync_operation(data)
-                return
             if path == '/api/sync/operations':
+                if serves_postgres_library():
+                    self._handle_postgres_sync_operation(data)
+                    return
                 status, result = process_operation(db, data)
                 if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
                         data.get("operation") == work_note_sync.RESEARCH_OPERATION):
@@ -3097,6 +3108,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 summary = text_index.reconcile_all(db, force=force)
                 self.send_json(200, {"status": "ok", **summary})
             elif path == '/api/works/linearize-existing-pdfs':
+                if serves_postgres_library():
+                    # Managed PDFs on PostgreSQL are immutable stored objects;
+                    # rewriting them in place is not ported.
+                    self._send_not_ported("Linearizing existing PDFs is not ported to PostgreSQL yet.")
+                    return
                 unlinearized_only = bool(data.get("unlinearized_only", True))
                 rows = db.execute_query("SELECT id, file_path FROM works WHERE file_path LIKE '/api/pdfs/%'")
                 unique_paths = {}
@@ -3149,6 +3165,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     },
                 )
             elif path.startswith('/api/processing-files/') and path.endswith('/import'):
+                if serves_postgres_library():
+                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
+                    # Processing queue (/api/processing-items) instead.
+                    self.send_error(404, "API endpoint not found")
+                    return
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'import':
                     pf_id = parts[3]
@@ -4182,6 +4203,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     discard_temp_path(upload_path)
 
     def _handle_backup_restore(self, data) -> None:
+        if serves_postgres_library():
+            # The PostgreSQL Library's restore is _handle_postgres_backup_post's,
+            # dispatched before this; a SQLite restore must never run beside it.
+            self._send_not_ported("The SQLite restore does not serve the PostgreSQL Library.")
+            return
         if _bound_storage is None:
             self._send_internal_error()
             return

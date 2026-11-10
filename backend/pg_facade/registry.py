@@ -186,16 +186,22 @@ def facade_surface(reference: type | None = None, backend_dir: str = _BACKEND_DI
 
     Read from every backend module except ``db_manager.py``, ``backend/db/``
     and ``backend/pg_facade/``: the adapter and every helper it passes the
-    library object to (``delete_library_work``, the sync handlers), so the
-    count follows the code without a hand-kept list. PG-C1 needs every name
-    here ported.
+    library object to, so the count follows the code without a hand-kept
+    list. Code only the SQLite runtime runs is left out
+    (:mod:`backend.pg_facade.reach`, which also proves it unreachable from
+    the PostgreSQL runtime). PG-C1 needs every name here ported; the retired
+    legacy inbox methods (:data:`~backend.pg_facade.reach.RETIRED_METHODS`)
+    must not appear here at all.
     """
+    from backend.pg_facade.reach import parse_module
+
     ref = reference if reference is not None else _reference_class()
     names: set[str] = set()
     for path in _surface_files(backend_dir):
-        with open(path, encoding="utf-8") as handle:
-            tree = ast.parse(handle.read(), filename=path)
-        for node in ast.walk(tree):
+        parsed = parse_module(os.path.relpath(path, backend_dir).replace(os.sep, "/"), backend_dir)
+        for node in ast.walk(parsed.tree):
+            if parsed.is_sqlite(node):
+                continue  # only the SQLite runtime runs it (backend.pg_facade.reach)
             if (
                 isinstance(node, ast.Attribute)
                 and isinstance(node.value, ast.Name)
@@ -221,6 +227,23 @@ class Coverage:
     @property
     def unported(self) -> frozenset[str]:
         return self.surface - frozenset(self.ported)
+
+    @property
+    def retired(self) -> frozenset[str]:
+        """The legacy inbox methods §11.5 replaces: never ported, never reached."""
+        from backend.pg_facade.reach import RETIRED_METHODS
+
+        return RETIRED_METHODS - frozenset(self.ported)
+
+    @property
+    def complete(self) -> bool:
+        """PG-C1's criterion: every name the PostgreSQL runtime reaches is ported.
+
+        A retired method counts only by staying off the surface: if
+        PostgreSQL code reaches one again, the facade would call a method it
+        does not have, so coverage is incomplete.
+        """
+        return not self.unported
 
     @property
     def ported_outside_surface(self) -> frozenset[str]:
