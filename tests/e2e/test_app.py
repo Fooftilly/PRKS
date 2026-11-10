@@ -29,6 +29,7 @@ from tests.e2e.harness import (
     wait_for_async,
 )
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer
+from tests.e2e.postgres_identity import postgres_library
 from tests.ux_tour.fixtures import TAG_NAMES, seed_ux_tour_library
 
 NOTES = """# E2E Research Note
@@ -3258,6 +3259,150 @@ def _pdf_has_pending_sync(page):
     )
 
 
+_MARK_MOUNTED_VIEWER_JS = """() => {
+    const ctx = window.prksGetFocusedTabContext();
+    const pdf = ctx.getResource('pdf');
+    const node = ctx.root.querySelector('[data-prks-role="pdf-viewer"]');
+    window.__prksMountedViewer = { viewer: pdf.viewer, node: node,
+        docId: pdf.viewer.getDocumentId ? pdf.viewer.getDocumentId() : null };
+    return pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null;
+}"""
+
+_SAME_MOUNTED_VIEWER_JS = """() => {
+    const ctx = window.prksGetFocusedTabContext();
+    const pdf = ctx.getResource('pdf');
+    const was = window.__prksMountedViewer;
+    const node = ctx.root.querySelector('[data-prks-role="pdf-viewer"]');
+    return {
+        viewer: !!was && pdf.viewer === was.viewer,
+        node: !!was && node === was.node && node.isConnected,
+        docId: !!was && (pdf.viewer.getDocumentId ? pdf.viewer.getDocumentId() : null) === was.docId,
+        page: pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null,
+        filePath: String(pdf.filePath || '').split('?')[0],
+    };
+}"""
+
+
+class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
+    """An annotation-only save never reloads the open document.
+
+    On PostgreSQL every materialization stores the bytes under a fresh
+    immutable key; that is the same document, so the viewer instance, its
+    DOM, document and page all stay. Only bytes that are not this viewer's
+    export (a replacement) would remount.
+    """
+
+    def _open(self):
+        server, page, collector = self._start_app()
+        self.collector = collector
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        return server, page, work_id
+
+    def _assert_viewer_kept(self, page, page_number):
+        kept = page.evaluate(_SAME_MOUNTED_VIEWER_JS)
+        self.assertTrue(kept["viewer"], "the viewer instance was replaced")
+        self.assertTrue(kept["node"], "the viewer element was remounted")
+        self.assertTrue(kept["docId"], "the open document changed")
+        self.assertEqual(kept["page"], page_number)
+        return kept
+
+    def test_repeated_and_back_to_back_saves_keep_the_viewer_and_its_page(self):
+        server, page, work_id = self._open()
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        page_number = page.evaluate(_MARK_MOUNTED_VIEWER_JS)
+        paths = {page.evaluate(_SAME_MOUNTED_VIEWER_JS)["filePath"]}
+
+        for text in ("first", "second", "third"):
+            _wait_pdf_annotation_durable(page)
+            _save_annotation_comment(page, ann_id, text)
+            _wait_server_comment(page, work_id, ann_id, text)
+            _wait_pdf_annotation_ops_drained(page, work_id)
+            _wait_pdf_materialized(page, work_id)
+            paths.add(self._assert_viewer_kept(page, page_number)["filePath"])
+
+        # Two saves with no wait between them, then one materialization.
+        _wait_pdf_annotation_durable(page)
+        _save_annotation_comment(page, ann_id, "fourth")
+        _save_annotation_comment(page, ann_id, "fifth")
+        _wait_server_comment(page, work_id, ann_id, "fifth")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        self._assert_viewer_kept(page, page_number)
+        self.assertEqual(_popup_comment(page, ann_id), "fifth")
+        self.assertIn("fifth", _managed_pdf_annotation_contents(page, work_id))
+        if postgres_library():
+            # Each materialization is a new immutable object for the same document.
+            self.assertGreater(len(paths), 1)
+
+    def test_a_failed_materialization_keeps_the_saved_annotation_and_retries(self):
+        server, page, work_id = self._open()
+        writes = []
+
+        def fail_first_pdf_write(route):
+            if route.request.method != "POST":
+                route.fallback()
+                return
+            writes.append(route.request.url)
+            if len(writes) == 1:
+                route.fulfill(status=500, content_type="application/json", body="{}")
+            else:
+                route.fallback()
+
+        pattern = "**/api/works/%s/pdf" % work_id
+        page.route(pattern, fail_first_pdf_write)
+        # Record every error the sync state reports. A later successful
+        # durable write (e.g. a commit echo) may clear it again before a
+        # poll would see it.
+        page.evaluate(
+            """() => {
+                const state = (%s).syncState;
+                let value = state.lastError;
+                window.__prksSyncErrors = [];
+                Object.defineProperty(state, 'lastError', {
+                    configurable: true,
+                    enumerable: true,
+                    get() { return value; },
+                    set(next) {
+                        if (next) window.__prksSyncErrors.push(String(next));
+                        value = next;
+                    },
+                });
+            }"""
+            % _FOCUSED_PDF
+        )
+        try:
+            _commit_pdf_highlight(page)
+            ann_id = _only_viewer_annotation_id(page)
+            # Marked after the highlight: committing it may scroll the page.
+            page_number = page.evaluate(_MARK_MOUNTED_VIEWER_JS)
+            # The annotation is acknowledged and canonical even though its
+            # PDF bytes could not be written, and the failure was reported.
+            _wait_server_annotation(page, work_id, ann_id)
+            page.wait_for_function(
+                "() => window.__prksSyncErrors.some(e => e !== 'local_save_failed')",
+                timeout=30000,
+            )
+            # The retry writes the acknowledged state without a reload.
+            _wait_pdf_materialized(page, work_id, timeout=45000)
+            self.assertGreaterEqual(len(writes), 2)
+        finally:
+            page.unroute(pattern, fail_first_pdf_write)
+        # The one injected 500 is this test's; anything else still fails it.
+        expected = "/api/works/%s/pdf" % work_id
+        self.collector.http_5xx[:] = [e for e in self.collector.http_5xx if expected not in e]
+        self.collector.console_errors[:] = [
+            e for e in self.collector.console_errors
+            if not ("status of 500" in e and expected in e)]
+        self._assert_viewer_kept(page, page_number)
+        self.assertIsNotNone(_server_annotation(page, work_id, ann_id))
+
+
 class PdfAnnotationCommentEditTests(_BrowserE2E):
     """#401: every comment edit reaches the server, the PDF and a reload."""
 
@@ -3825,23 +3970,33 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         """Save ``text_value`` from the popup while the local durable write
         fails once; return the still-open popup and its text field once the
         rollback has settled."""
-        # The local durable write fails once (quota, blocked IndexedDB, ...).
+        # The local durable write of this edit fails once (quota, blocked
+        # IndexedDB, ...). Only that write: a late commit echo of another
+        # annotation's earlier save also writes durably, and must neither
+        # take the failure nor count as this edit's events.
         page.evaluate(
-            """() => {
+            """([annId, comment]) => {
                 const pdf = window.prksGetFocusedTabContext().getResource('pdf');
                 window.__prksCommittedUpdates = 0;
                 pdf.viewer.onAnnotationEvent((evt) => {
-                    if (evt && evt.kind === 'update' && evt.committed === true) {
+                    if (evt && evt.kind === 'update' && evt.committed === true &&
+                        String(evt.annotationId) === annId) {
                         window.__prksCommittedUpdates += 1;
                     }
                 });
                 const store = window.prksSync.store;
                 const real = store.savePdfAnnotation;
-                store.savePdfAnnotation = function () {
+                store.savePdfAnnotation = function (workId, desired) {
+                    const ann = desired && desired.annotation;
+                    const text = ann && ((ann.custom && ann.custom.prksComment) || ann.contents);
+                    if (!desired || String(desired.annotation_id) !== annId || text !== comment) {
+                        return real.apply(this, arguments);
+                    }
                     store.savePdfAnnotation = real;
                     return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
                 };
-            }"""
+            }""",
+            [str(ann_id), text_value],
         )
         _wait_pdf_annotation_durable(page)
         popup = _open_annotation_popup(page, ann_id)

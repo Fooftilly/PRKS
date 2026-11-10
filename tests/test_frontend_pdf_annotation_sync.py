@@ -56,6 +56,28 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_durable_write_does_not_wait_on_materialization_handoff(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_write_handoff_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
+    def test_same_document_under_a_new_key_keeps_the_viewer(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_stored_export_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_comment_save_selftests(self):
         """#401: every comment edit records an intent; failures are reported."""
         proc = subprocess.run(
@@ -460,7 +482,8 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         cache put throws before coherence hooks and before the caller clears
         pendingMaterializationRevision. A COW remount failure still skips
         those hooks. Whole-file puts that can race a service-worker GET go
-        through prks-pdf-cache-install.
+        through prks-pdf-cache-install. The bytes cached are the key's own
+        (prksStoredPdfBytes), which linearization may have rewritten.
         """
         works_pdf = (ROOT / "frontend" / "js" / "components" / "works-pdf.js").read_text(
             encoding="utf-8"
@@ -475,17 +498,27 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("throw new Error('PDF save missing file path')", export_fn)
         self.assertNotIn("runtime.filePath, buffer", export_fn)
         self.assertNotIn("if (!sawRetarget)", export_fn)
-        refresh = "const cached = await cacheManagedPdfBytes(canonical, buffer);"
+        # The cache only ever gets the key's own bytes (prksStoredPdfBytes),
+        # read before either arm, never the export under a key that names
+        # other bytes (linearized on PostgreSQL).
+        stored_at = export_fn.index(
+            "const stored = await prksStoredPdfBytes(okBody, canonical, buffer, bufferSha);"
+        )
+        refresh = "const cached = await cacheManagedPdfBytes(canonical, stored);"
         self.assertIn(refresh, export_fn)
+        self.assertNotIn("cacheManagedPdfBytes(canonical, buffer)", export_fn)
         refresh_at = export_fn.index(refresh)
         fail_at = export_fn.index("if (!cached) throw new Error('PDF cache update failed')")
         self.assertLess(export_fn.index("throw new Error(`PDF save failed"), refresh_at)
         retarget_at = export_fn.index("if (needsRetarget)")
+        self.assertLess(stored_at, retarget_at)
         self.assertLess(retarget_at, refresh_at)
         self.assertLess(refresh_at, fail_at)
         self.assertLess(fail_at, export_fn.index("prksOfflineMarkEntityChanged"))
         retarget_arm = export_fn[retarget_at:export_fn.index("} else {", retarget_at)]
-        self.assertIn("applyCowPdfRetarget(canonical, buffer)", retarget_arm)
+        self.assertIn("applyCowPdfRetarget(canonical, stored)", retarget_arm)
+        self.assertIn("rebindViewerToStoredExport(canonical, stored, activeViewer)", retarget_arm)
+        self.assertNotIn("(canonical, buffer", retarget_arm)
         self.assertNotIn("cacheManagedPdfBytes", retarget_arm)
         rethrow = export_fn.index("throw cowRemountFailed")
         self.assertLess(fail_at, rethrow)
