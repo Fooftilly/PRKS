@@ -14,9 +14,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from unittest import mock
 
 from backend import sync_protocol
 from backend.domain.identity.authorization import AccessRefused, Refusal
+from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links, tags
 from backend.entity_ids import generate
 from backend.pg_facade import context as facade_context
@@ -257,6 +259,44 @@ class LinkTests(TagSyncTestCase):
                 missing = generate(owner[0])
                 self.assertEqual(self.send(self.link(add, missing, tag, 0)),
                                  (404, {"code": "ENTITY_NOT_FOUND", link.owner_key: missing, "tag_id": tag}))
+
+    def test_a_failure_finishing_the_ledger_rolls_the_link_back(self) -> None:
+        """The change is applied before the ledger row is finished; failing either step undoes both."""
+        work, tag = self.library.add_work("W"), self.create_tag("Ethics")
+        before = self.ledger()
+        finish = protocol._FINISH
+        real_execute = LibraryScope.execute
+        linked_at_finish: list[int] = []
+
+        def failing_finish(scope: LibraryScope, statement: Any, *args: Any, **kwargs: Any) -> Any:
+            if statement is finish:
+                # The link is already written in this transaction when the ledger is finished.
+                linked_at_finish.append(real_execute(
+                    scope, "SELECT count(*) AS n FROM prks.work_tags WHERE library_id = %(library_id)s", {}).fetchone()["n"])
+                raise RuntimeError("the ledger result could not be written")
+            return real_execute(scope, statement, *args, **kwargs)
+
+        failures = (
+            ("no result", mock.patch.object(FamilyHandler, "ledgered", side_effect=RuntimeError("no result"))),
+            ("could not be written", mock.patch.object(LibraryScope, "execute", autospec=True,
+                                                       side_effect=failing_finish)),
+        )
+        data = self.link("ADD_WORK_TAG", work, tag, 0)
+        for point, failure in failures:
+            with self.subTest(point=point):
+                with failure, self.assertRaisesRegex(RuntimeError, point):
+                    self.send(data)
+                self.assertEqual(self.count("work_tags"), 0)
+                self.assertEqual(self.revisions("work-tag"), {})
+                self.assertEqual(self.ledger(), before)  # the claim rolled back too
+        self.assertEqual(linked_at_finish, [1])
+        # The op_id was not burnt: the same operation then applies once.
+        status, result = self.send(data)
+        self.assertEqual((status, result["code"], result["server_revision"], result["changed"]),
+                         (200, "ACKNOWLEDGED", 1, True))
+        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
+        self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
+        self.assertEqual(len(self.ledger()), len(before) + 1)
 
     def test_a_deleted_or_merged_tag_is_never_linked_or_redirected(self) -> None:
         work = self.library.add_work("W")
