@@ -1,0 +1,342 @@
+{
+  "module": "tests/test_argument_sync.py",
+  "tests": {
+    "ArgumentSyncTests.test_an_argument_is_created_under_the_id_the_client_minted": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentCreateTests.test_a_create_acknowledges_and_converges",
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_a_create_carries_its_lists_without_advancing_a_revision"
+      ]
+    },
+    "ArgumentSyncTests.test_a_stance_is_the_same_family_with_a_different_kind": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_a_create_carries_its_lists_without_advancing_a_revision"
+      ]
+    },
+    "ArgumentSyncTests.test_construction_carries_its_initial_sources_and_targets": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_a_create_carries_its_lists_without_advancing_a_revision",
+        "tests/pg/test_arguments_sync.py::ArgumentCreateTests.test_a_create_acknowledges_and_converges"
+      ]
+    },
+    "ArgumentSyncTests.test_a_refused_initial_target_creates_no_argument_at_all": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_a_create_carries_its_lists_without_advancing_a_revision",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_a_refused_initial_source_creates_no_argument_at_all": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentCreateTests.test_a_refused_create_is_ledgered_and_leaves_nothing",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_a_replayed_creation_is_idempotent_not_a_refusal": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentCreateTests.test_a_create_acknowledges_and_converges",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_a_server_minted_id_is_refused_as_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_an_unknown_kind_is_an_envelope_error_not_a_refusal": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_construction_requires_every_key_including_the_empty_lists": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_construction_carries_no_base_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_each_field_advances_only_its_own_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_three_fields_compose_without_seeing_each_other": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_a_stale_base_on_a_different_value_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_a_stale_base_on_the_same_value_converges": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_a_base_ahead_of_the_server_is_a_future_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_a_field_edit_on_a_missing_argument_is_terminal": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_a_field_edit_requires_a_base_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_an_unknown_field_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_an_unknown_kind_on_a_field_edit_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_the_acknowledgement_omits_the_value_it_was_given": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_the_whole_citation_list_is_replaced_under_one_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentListTests.test_the_lists_decision_tables",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_reordering_the_same_works_is_a_different_citation_list": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::VersionAwareSourcesTests.test_create_and_replace_with_pins_and_the_decision_table",
+        "tests/pg/test_arguments.py::ArgumentTests.test_only_a_change_advances_a_scope"
+      ]
+    },
+    "ArgumentSyncTests.test_two_devices_choosing_different_citations_is_one_conflict": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentListTests.test_the_lists_decision_tables"
+      ]
+    },
+    "ArgumentSyncTests.test_the_same_citation_list_from_a_stale_base_converges": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentListTests.test_the_lists_decision_tables",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_a_citation_naming_a_missing_work_is_a_named_refusal": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::VersionAwareSourcesTests.test_a_version_refusal_is_ledgered_and_changes_nothing",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_a_duplicate_citation_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_a_citation_list_requires_a_base_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::VersionAwareSourcesTests.test_the_envelope_of_a_version_aware_list"
+      ]
+    },
+    "ArgumentSyncTests.test_positions_and_arguments_are_replaced_as_one_list": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_replacing_with_only_positions_drops_the_argument_targets": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds"
+      ]
+    },
+    "ArgumentSyncTests.test_a_verdict_change_alone_is_a_new_target_list": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds"
+      ]
+    },
+    "ArgumentSyncTests.test_two_devices_choosing_different_targets_is_one_conflict": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds"
+      ]
+    },
+    "ArgumentSyncTests.test_the_same_target_list_from_a_stale_base_converges": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds"
+      ]
+    },
+    "ArgumentSyncTests.test_a_cycle_is_a_named_refusal_the_client_could_not_have_known": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentListTests.test_the_lists_decision_tables",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_targeting_itself_is_the_shortest_cycle": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds",
+        "tests/pg/test_arguments_sync.py::ArgumentCreateTests.test_a_refused_create_is_ledgered_and_leaves_nothing"
+      ]
+    },
+    "ArgumentSyncTests.test_a_missing_position_target_keeps_its_own_name": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds"
+      ]
+    },
+    "ArgumentSyncTests.test_a_missing_argument_target_keeps_its_own_name": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_an_unknown_verdict_is_a_named_refusal_not_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_an_unknown_target_type_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_a_duplicate_target_of_one_kind_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ArgumentSyncTests.test_the_two_aggregates_do_not_share_a_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds",
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_ordinary_list_replacements_advance_the_same_revisions"
+      ]
+    },
+    "ArgumentSyncTests.test_an_aggregate_never_advances_a_field_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds",
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_ordinary_list_replacements_advance_the_same_revisions"
+      ]
+    },
+    "ArgumentSyncTests.test_deleting_an_argument_removes_it": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentDeleteTests.test_in_use_refused_absence_converges_and_no_base_outlives_it",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_deleting_an_argument_twice_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentDeleteTests.test_in_use_refused_absence_converges_and_no_base_outlives_it",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_an_argument_another_one_answers_is_refused_by_name": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentListTests.test_the_lists_decision_tables",
+        "tests/pg/test_arguments.py::ArgumentTests.test_an_answered_or_noted_argument_refuses_its_delete"
+      ]
+    },
+    "ArgumentSyncTests.test_a_deletion_carries_no_base_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_arguments"
+      ]
+    },
+    "ArgumentSyncTests.test_ordinary_creation_goes_through_the_shared_primitive": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_a_create_carries_its_lists_without_advancing_a_revision"
+      ]
+    },
+    "ArgumentSyncTests.test_ordinary_creation_advances_no_revision_either": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_a_create_carries_its_lists_without_advancing_a_revision",
+        "tests/pg/test_arguments.py::ArgumentTests.test_create_with_sources_and_targets_and_read"
+      ]
+    },
+    "ArgumentSyncTests.test_an_ordinary_edit_advances_only_the_fields_it_was_given": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it",
+        "tests/pg/test_arguments.py::ArgumentTests.test_only_a_change_advances_a_scope"
+      ]
+    },
+    "ArgumentSyncTests.test_an_ordinary_edit_to_the_same_value_advances_nothing": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it",
+        "tests/pg/test_arguments.py::ArgumentTests.test_only_a_change_advances_a_scope"
+      ]
+    },
+    "ArgumentSyncTests.test_an_ordinary_edit_then_a_stale_durable_edit_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_an_ordinary_source_replacement_advances_the_same_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_ordinary_list_replacements_advance_the_same_revisions"
+      ]
+    },
+    "ArgumentSyncTests.test_an_ordinary_target_replacement_advances_the_same_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_ordinary_list_replacements_advance_the_same_revisions"
+      ]
+    },
+    "ArgumentSyncTests.test_an_ordinary_replacement_to_the_same_list_advances_nothing": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_ordinary_list_replacements_advance_the_same_revisions",
+        "tests/pg/test_arguments.py::ArgumentTests.test_only_a_change_advances_a_scope"
+      ]
+    },
+    "ArgumentSyncTests.test_the_ordinary_deletion_keeps_raising_its_own_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments.py::ArgumentTests.test_an_answered_or_noted_argument_refuses_its_delete",
+        "tests/test_arguments_parity.py::ArgumentFacadeParityTests.test_delete"
+      ]
+    },
+    "ArgumentSyncTests.test_the_ordinary_deletion_still_removes_a_free_argument": {
+      "replaced_by": [
+        "tests/pg/test_arguments.py::ArgumentTests.test_an_answered_or_noted_argument_refuses_its_delete",
+        "tests/test_arguments_parity.py::ArgumentFacadeParityTests.test_delete"
+      ]
+    },
+    "ArgumentSyncTests.test_only_the_revision_aware_boundary_writes_argument_rows": {
+      "replaced_by": [
+        "tests/test_relationship_writers.py::RelationshipWriterTests.test_only_the_revision_aware_boundary_writes_each_relationship"
+      ],
+      "note": "The SQLite check read research_network.py; the PostgreSQL audit reads every backend module for writes of the Argument tables and allows only backend/domain/research/arguments.py."
+    },
+    "ArgumentSyncTests.test_the_sync_state_endpoint_reports_every_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it",
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_the_target_list_is_one_aggregate_of_both_kinds"
+      ]
+    },
+    "ArgumentSyncTests.test_the_sync_state_of_a_missing_argument_is_none": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it"
+      ]
+    },
+    "ArgumentSyncTests.test_the_sync_state_carries_revisions_and_no_values": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_each_field_is_its_own_scope_and_ordinary_edits_share_it",
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_ordinary_list_replacements_advance_the_same_revisions"
+      ]
+    },
+    "ArgumentSyncTests.test_every_family_is_registered_against_the_argument_entity_type": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_every_argument_operation_is_registered_under_the_argument_type"
+      ]
+    },
+    "ArgumentSyncTests.test_a_wrong_entity_type_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_every_argument_operation_is_registered_under_the_argument_type",
+        "tests/pg/test_arguments_sync.py::ArgumentEnvelopeAndFieldTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    }
+  }
+}

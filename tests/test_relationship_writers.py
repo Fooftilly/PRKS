@@ -5,8 +5,10 @@ scope (``docs/local-first-sync.md``): a write that changes a link without
 advancing its revision is a change another device can overwrite without ever
 being told there was a conflict. So each table below is written only by the
 module that advances the revision with the write, and by the deletes that
-tombstone every scope of what they delete. This is the PostgreSQL form of the
-SQLite writer audits PG-C2 (#641) retires; the source is read, nothing runs.
+tombstone every scope of what they delete. Positions, Arguments and Concepts
+carry per-field and per-list revisions, so their tables are audited the same
+way. This is the PostgreSQL form of the SQLite writer audits PG-C2 (#641)
+retires; the source is read, nothing runs.
 """
 
 from __future__ import annotations
@@ -25,6 +27,33 @@ WRITERS: dict[str, dict[str, str]] = {
     "folder_tags": {
         "backend/domain/organization/links.py": "the Folder-Tag boundary advances the scope with the write",
         "backend/domain/organization/folders.py": "a Folder delete tombstones every scope of the Folder",
+    },
+    "positions": {
+        "backend/domain/research/positions.py": "each Position field advances its own scope with the write",
+    },
+    "arguments": {
+        "backend/domain/research/arguments.py": "each Argument field advances its own scope with the write",
+    },
+    "argument_sources": {
+        "backend/domain/research/arguments.py": "the citation list advances its one scope with the write",
+    },
+    "argument_target_positions": {
+        "backend/domain/research/arguments.py": "the target list advances its one scope with the write",
+    },
+    "argument_target_arguments": {
+        "backend/domain/research/arguments.py": "the target list advances its one scope with the write",
+    },
+    "concepts": {
+        "backend/domain/research/concepts.py": "creates, renames and edits advance the identity and definition scopes",
+    },
+    "concept_aliases": {
+        "backend/domain/research/concepts.py": "an alias change advances the identity scope it shares with the name",
+    },
+    "concept_keys": {
+        "backend/domain/research/concepts.py": "the one namespace of names and aliases moves with the identity",
+    },
+    "concept_parents": {
+        "backend/domain/research/concepts.py": "a hierarchy change advances both ends of each edge",
     },
 }
 
