@@ -79,7 +79,9 @@ class PeopleSyncParityTests(PeopleParityTestCase):
                 "created_at": "2026-10-21T10:00:00Z", "depends_on": []}
 
     def send(self, side: PeopleSide, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        if side is self.ref or self.parity_backend == SQLITE:
+        if side is self.ref:
+            return side.db.process_operation(data)
+        if self.parity_backend == SQLITE:
             from backend import sync_protocol
 
             return sync_protocol.process_operation(side.db, data)

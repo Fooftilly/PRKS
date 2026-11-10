@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
+from tests.parity_reference import reference_for
 from tests.backend_parity import POSTGRES, SQLITE, BackendParityTestCase
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -87,7 +88,8 @@ class WorksParityTestCase(BackendParityTestCase):
         ref_storage = StorageConfig.for_testing(os.path.join(self.tmp, "ref"))
         leg_db = self.open_library(leg_storage)
         self.leg = _Side(leg_db, leg_storage.pdfs_dir, self._leg_device())
-        self.ref = _Side(PRKSDatabase(storage=ref_storage, schema_path=_SCHEMA_PATH), ref_storage.pdfs_dir,
+        self.ref = _Side(reference_for(self, lambda: PRKSDatabase(storage=ref_storage, schema_path=_SCHEMA_PATH)),
+                         ref_storage.pdfs_dir,
                          str(uuid.uuid4()))
 
     def _leg_device(self) -> str:
@@ -106,7 +108,9 @@ class WorksParityTestCase(BackendParityTestCase):
         for the bound actor; an operation it has no handler for is a
         refusal the parity log records, so the test is skipped, not failed.
         """
-        if side is self.ref or self.parity_backend == SQLITE:
+        if side is self.ref:
+            return side.db.process_operation(data)
+        if self.parity_backend == SQLITE:
             from backend import sync_protocol
 
             return sync_protocol.process_operation(side.db, data)

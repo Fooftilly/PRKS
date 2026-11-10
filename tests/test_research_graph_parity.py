@@ -38,12 +38,18 @@ from backend.research_graph import GraphTooLargeError
 from backend.research_index import PRKSResearchIndex
 from backend.research_network import save_work_notes
 from backend.storage.config import StorageConfig
+from tests.parity_reference import reference_for
 from tests.backend_parity import POSTGRES, parametrize_backends
 from tests.test_arguments_parity import ArgumentParityTestCase, ArgumentSide
 
 Pair = tuple[str, str]
 # A snippet can cut an id short; the cut ids differ per side.
 _CUT_ID = re.compile(r"\b[ACPW]-[0-9A-F]{1,31}…")
+
+
+def graph_dict(index: Any, db: Any, include_people: bool) -> dict[str, Any]:
+    """The Research graph of ``index`` over ``db``, as the API serializes it."""
+    return index.build_graph(db, include_people=include_people).to_dict()
 
 
 @parametrize_backends
@@ -53,7 +59,9 @@ class ResearchReadParityTests(ArgumentParityTestCase):
         self.ids: dict[str, Pair] = {}
         self.indexes: dict[int, Any] = {
             id(self.leg): self._leg_index(),
-            id(self.ref): PRKSResearchIndex(storage=StorageConfig.for_testing(os.path.join(self.tmp, "ref"))),
+            id(self.ref): reference_for(
+                self, lambda: PRKSResearchIndex(storage=StorageConfig.for_testing(os.path.join(self.tmp, "ref"))),
+                name="index"),
         }
 
     def _leg_index(self) -> Any:
@@ -102,6 +110,9 @@ class ResearchReadParityTests(ArgumentParityTestCase):
             text = template.format(**{label: ids[side is self.ref] for label, ids in self.ids.items()})
             if self.on_postgres(side):
                 side.db.update_work_metadata(wid, {"text_content": text})
+            elif side is self.ref:
+                side.db.apply("backend.research_network:save_work_notes", side.db, wid, text)
+                self.indexes[id(side)].sync_work(wid, text, side.db)
             else:
                 save_work_notes(side.db, wid, text)
                 self.indexes[id(side)].sync_work(wid, text, side.db)
@@ -141,13 +152,16 @@ class ResearchReadParityTests(ArgumentParityTestCase):
 
     # -- reading both sides -------------------------------------------------------
 
-    def graph(self, side: ArgumentSide, include_people: bool = False) -> Any:
-        return self.indexes[id(side)].build_graph(side.db, include_people=include_people)
+    def graph(self, side: ArgumentSide, include_people: bool = False) -> dict[str, Any]:
+        if side is self.ref:
+            return side.db.apply("tests.test_research_graph_parity:graph_dict", self.indexes[id(side)],
+                                 side.db, include_people)
+        return graph_dict(self.indexes[id(side)], side.db, include_people)
 
     def same_graph(self, include_people: bool = False) -> dict[str, Any]:
         out = []
         for side in self.sides():
-            snapshot = side.normal(self.graph(side, include_people).to_dict())
+            snapshot = side.normal(self.graph(side, include_people))
             snapshot["edges"] = sorted(snapshot["edges"], key=repr)
             out.append(snapshot)
         self.assertEqual(out[0], out[1])

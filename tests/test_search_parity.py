@@ -97,6 +97,9 @@ class SearchParityTests(PeopleParityTestCase):
             values = {**params, "library_id": current_context().library_id}
             side.db.parity_library.database.command(lambda tx: tx.execute(pg_sql, values))
             return
+        if side is self.ref:
+            side.db.sql(sqlite_sql, params)
+            return
         with side.db.connection() as conn:
             conn.execute(sqlite_sql, params)
 

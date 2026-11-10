@@ -19,6 +19,7 @@ from typing import Any
 
 from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
+from tests.parity_reference import reference_for
 from tests.backend_parity import BackendParityTestCase
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,7 +95,8 @@ class PeopleParityTestCase(BackendParityTestCase):
         leg_storage = StorageConfig.for_testing(os.path.join(self.tmp, "leg"))
         ref_storage = StorageConfig.for_testing(os.path.join(self.tmp, "ref"))
         self.leg = PeopleSide(self.open_library(leg_storage))
-        self.ref = PeopleSide(PRKSDatabase(storage=ref_storage, schema_path=_SCHEMA_PATH))
+        self.ref = PeopleSide(reference_for(
+            self, lambda: PRKSDatabase(storage=ref_storage, schema_path=_SCHEMA_PATH)))
 
     def sides(self) -> tuple[PeopleSide, PeopleSide]:
         return self.leg, self.ref

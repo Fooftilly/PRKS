@@ -1,0 +1,140 @@
+"""The recorded SQLite reference of the parity tests (PG-C2 #641, ``tests/parity_reference.py``)."""
+
+from __future__ import annotations
+
+import glob
+import importlib
+import json
+import os
+import sys
+import unittest
+from unittest import mock
+
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _PROJECT_DIR)
+
+from run_tests import apply_isolated_test_env
+
+apply_isolated_test_env(_PROJECT_DIR)
+
+from backend.domain.works.rules import DeletedWorkRecord
+from tests import parity_reference
+from tests.parity_reference import RECORD_ENV, reference_for
+
+
+class _Live:
+    """A stand-in reference library: returns what the test tells it to."""
+
+    def __init__(self) -> None:
+        self.answers: list[object] = []
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def __getattr__(self, name: str):
+        def call(*args: object, **kwargs: object) -> object:
+            self.calls.append((name, args))
+            answer = self.answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        return call
+
+
+class _Case(unittest.TestCase):
+    def test_x(self) -> None:  # the id the references are recorded under
+        pass
+
+
+W = "W-" + "A" * 32
+OP = "0f0e0d0c-0b0a-4908-8706-050403020100"
+
+
+class RecordAndReplayTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.recorded: dict[str, dict[str, list[dict[str, object]]]] = {}
+        patcher = mock.patch.object(parity_reference, "_recorded", self.recorded)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def record(self, live: _Live, script) -> list[dict[str, object]]:
+        case = _Case("test_x")
+        with mock.patch.dict(os.environ, {RECORD_ENV: "1"}):
+            ref = reference_for(case, lambda: live)
+            script(ref)
+        case.doCleanups()
+        (steps,) = self.recorded[__name__.rsplit(".", 1)[-1]].values()
+        return steps
+
+    def replay(self, steps: list[dict[str, object]], script) -> None:
+        case = _Case("test_x")
+        module = __name__.rsplit(".", 1)[-1]
+        with mock.patch.dict(os.environ, {RECORD_ENV: ""}), \
+                mock.patch.object(parity_reference, "_cache", {module: {"_Case.test_x": steps}}):
+            ref = reference_for(case, lambda: self.fail("a replay opens no SQLite library"))
+            script(ref)
+            ref.close()  # what the test's cleanup runs
+
+    def test_values_ids_and_errors_round_trip(self) -> None:
+        live = _Live()
+        live.answers = [W, (1, b"\x00", DeletedWorkRecord(W, "", False)), ValueError("Work not found")]
+
+        def script(ref) -> object:
+            work = ref.add_work(title="T", op=OP)
+            self.assertEqual(ref.delete_work_record(work)[2], DeletedWorkRecord(work, "", False))
+            with self.assertRaisesRegex(ValueError, "Work not found"):
+                ref.get_work(work)
+            return work
+
+        steps = self.record(live, script)
+        self.assertEqual(steps[0]["result"], "<W#1>")  # the op UUID came first, as <~uuid#0>
+        self.assertNotIn(W, json.dumps(steps))
+        # A replay gets an id of the same kind, minted for the run, never the recorded one.
+        seen: list[str] = []
+
+        def replayed(ref) -> None:
+            work = ref.add_work(title="T", op="11111111-2222-4333-8444-555555555555")
+            seen.append(work)
+            self.assertTrue(work.startswith("W-") and work != W)
+            self.assertEqual(ref.delete_work_record(work)[:2], (1, b"\x00"))
+            with self.assertRaisesRegex(ValueError, "Work not found"):
+                ref.get_work(work)
+
+        self.replay(steps, replayed)
+        self.assertEqual(len(seen), 1)
+
+    def test_a_replay_refuses_other_calls_and_leftover_steps(self) -> None:
+        live = _Live()
+        live.answers = [W, None]
+
+        def both(ref) -> None:
+            ref.delete_work_record(ref.add_work(title="T"))
+
+        steps = self.record(live, both)
+        self.replay(steps, both)
+        with self.assertRaisesRegex(AssertionError, "differs from the recording"):
+            self.replay(steps, lambda ref: ref.add_work(title="Other"))
+        with self.assertRaisesRegex(AssertionError, "1 recorded calls were not replayed"):
+            self.replay(steps, lambda ref: ref.add_work(title="T"))
+        with self.assertRaisesRegex(AssertionError, "was never recorded"):
+            self.replay(steps, lambda ref: (both(ref), ref.get_work(W)))
+
+
+class RecordingsTests(unittest.TestCase):
+    def test_every_recording_belongs_to_a_test_that_exists(self) -> None:
+        directory = os.path.join(_PROJECT_DIR, "tests", "parity_reference")
+        files = sorted(glob.glob(os.path.join(directory, "*.json")))
+        self.assertTrue(files)
+        for path in files:
+            module = importlib.import_module("tests." + os.path.basename(path)[:-5])
+            with open(path, encoding="utf-8") as handle:
+                recorded = json.load(handle)
+            for key in recorded:
+                test_id = key.split("#", 1)[0]
+                class_name, _, method = test_id.partition(".")
+                with self.subTest(file=os.path.basename(path), test=key):
+                    self.assertTrue(callable(getattr(getattr(module, class_name, None), method, None)),
+                                    "a stale recording: re-record with %s=1" % RECORD_ENV)
+
+
+if __name__ == "__main__":
+    unittest.main()
