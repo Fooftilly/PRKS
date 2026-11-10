@@ -18,12 +18,15 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from unittest import mock
 
+from backend import person_metadata_sync as person_rules
 from backend import sync_protocol
+from backend import work_metadata_sync as results
 from backend.db.database import Isolation
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import groups, persons, roles
+from backend.entity_ids import is_distributed
 from backend.pg_facade import context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
@@ -185,6 +188,69 @@ class LedgerTests(PeopleSyncTestCase):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(len(self.ledger()), 2)
+
+
+class EnvelopeAndBoundTests(PeopleSyncTestCase):
+    """What the People envelopes refuse and what their results hold (retired SQLite people sync tests)."""
+
+    def test_ids_fields_and_base_revisions_are_refused_before_the_ledger(self) -> None:
+        person_id, group_id = self.create_person(), self.create_group("Analysts")
+        before = self.ledger()
+        refused = [("legacy id", self.envelope("CREATE_PERSON", "P-A1B2C3D4", person_payload()), "INVALID_ENVELOPE"),
+                   ("person base", self.person_field(person_id, "about", "x", 0) | {"base_revision": None},
+                    "INVALID_BASE_REVISION"),
+                   ("portrait", self.person_field(person_id, "image_url", "javascript:alert(1)", 0),
+                    "INVALID_ENVELOPE"),
+                   ("group base", self.group_field(group_id, "name", "X", 0) | {"base_revision": None},
+                    "INVALID_BASE_REVISION"),
+                   ("empty name", self.group_field(group_id, "name", "   ", 0), "INVALID_ENVELOPE"),
+                   ("person delete base", self.envelope("DELETE_PERSON", person_id, {}, 0), "INVALID_BASE_REVISION"),
+                   ("group delete base", self.envelope("DELETE_PERSON_GROUP", group_id, {}, 0),
+                    "INVALID_BASE_REVISION")]
+        for field in ("id", "created_at", "updated_at", "aliases; DROP TABLE persons", ""):
+            refused.append(("person field " + field, self.person_field(person_id, field, "x", 0), "INVALID_ENVELOPE"))
+        for field in ("id", "created_at", "updated_at", "name; DROP TABLE person_groups", ""):
+            refused.append(("group field " + field, self.group_field(group_id, field, "x", 0), "INVALID_ENVELOPE"))
+        for label, data, code in refused:
+            with self.subTest(label):
+                self.assertEqual(self.send(data), (400, {"code": code}))
+        self.assertEqual(self.ledger(), before)
+        self.assertEqual(person_rules.SYNCED_FIELDS, frozenset(persons.FIELDS))
+
+    def test_a_long_value_is_never_echoed_and_a_long_conflict_still_fits(self) -> None:
+        person_id, group_id = self.create_person(), self.create_group("Analysts")
+        status, result = self.send(self.person_field(person_id, "about", "x" * 20000, 0))
+        self.assertEqual((status, result["value_omitted"], "value" in result), (200, True, False))
+        self.assertLessEqual(results.serialized_result_bytes(result), results.MAX_DURABLE_RESULT_BYTES)
+        self.assertEqual(self.library.get_person(person_id)["about"], "x" * 20000)
+        self.send(self.person_field(person_id, "about", "A" * 40000, 1))
+        status, result = self.send(self.person_field(person_id, "about", "B" * 40000, 0))
+        self.assertEqual((status, "current_preview" in result, "current_value" in result), (409, True, False))
+        self.assertLessEqual(results.serialized_result_bytes(result), results.MAX_DURABLE_RESULT_BYTES)
+        self.send(self.group_field(group_id, "description", "A" * 2000, 0))
+        status, result = self.send(self.group_field(group_id, "description", "B" * 2000, 0))
+        self.assertEqual(status, 409)
+        self.assertLessEqual(results.serialized_result_bytes(result), results.MAX_DURABLE_RESULT_BYTES)
+
+    def test_a_role_may_depend_on_the_creation_of_its_person(self) -> None:
+        work_id, person_id = self.library.add_work("Essay"), "P-" + uuid.uuid4().hex.upper()
+        create = self.envelope("CREATE_PERSON", person_id, person_payload())
+        role = self.role("ADD_WORK_PERSON_ROLE", work_id, person_id, 0, credit="") | {"depends_on": [create["op_id"]]}
+        self.assertEqual(self.send(role), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
+        self.assertEqual((self.library.get_person(person_id), self.library.get_work_roles(work_id)), (None, []))
+        self.assertEqual(self.send(create)[1]["code"], "ACKNOWLEDGED")
+        status, result = self.send(role)
+        self.assertEqual((status, result["code"], result["present"]), (200, "ACKNOWLEDGED", True))
+        self.assertEqual([(row["id"], row["role_type"]) for row in self.library.get_work_roles(work_id)],
+                         [(person_id, "Author")])
+        self.assertTrue(is_distributed(self.library.add_person("Online", "Person"), "P"))
+
+    def test_a_membership_row_without_a_revision_reads_as_revision_0(self) -> None:
+        person_id, group_id = self.create_person(), self.create_group("Analysts")
+        self.sql("INSERT INTO prks.person_group_members (library_id, person_id, group_id) VALUES (%s, %s, %s)",
+                 (self.actor.library_id, person_id, group_id))
+        self.assertEqual(self.library.get_person_group_sync_state(group_id)["members"],
+                         [{"person_id": person_id, "revision": 0, "present": True}])
 
 
 class RaceRerunTests(PeopleSyncTestCase):
