@@ -26,7 +26,7 @@ snapshot:
 A target holding NUL, which PostgreSQL text cannot hold, matches nothing and
 is not sent.
 
-Lookups go in batches of at most ``PRKSDatabase._WIKI_LINK_LOOKUP_CHUNK``
+Lookups go in batches of at most ``LOOKUP_CHUNK``
 targets, one statement per batch and table, as bound array parameters; the
 Person lookup only sees the targets no Work claimed. Each statement has one
 branch per way a row can match, so each probes an index (the Library's id
@@ -42,6 +42,11 @@ from __future__ import annotations
 from typing import Any, LiteralString
 
 from backend.domain.identity.library_scope import LibraryScope
+
+# Distinct targets per lookup statement. The targets bind as one array
+# parameter, so the bound keeps a statement's plan and size small, not under a
+# variable limit.
+LOOKUP_CHUNK = 400
 
 # One branch per way a row can match, so each probes its own index; DISTINCT ON
 # then keeps the first row per target.
@@ -70,9 +75,7 @@ ORDER BY target, created_at, id COLLATE "C"
 
 
 def _first_matches(scope: LibraryScope, sql: LiteralString, targets: list[str]) -> dict[str, tuple[Any, Any]]:
-    from backend.db_manager import PRKSDatabase
-
-    chunk = PRKSDatabase._WIKI_LINK_LOOKUP_CHUNK
+    chunk = LOOKUP_CHUNK
     found: dict[str, tuple[Any, Any]] = {}
     for start in range(0, len(targets), chunk):
         for row in scope.execute(sql, {"targets": targets[start:start + chunk]}).fetchall():

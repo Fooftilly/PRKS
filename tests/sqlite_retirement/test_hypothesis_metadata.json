@@ -1,0 +1,28 @@
+{
+  "module": "tests/test_hypothesis_metadata.py",
+  "tests": {
+    "MetadataFieldProperties.test_patch_and_sync_interleavings_follow_independent_field_revisions": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_properties.py::MetadataPropertyTests.test_patch_and_sync_interleavings_follow_independent_field_revisions"
+      ],
+      "note": "The PostgreSQL test job installs only runtime requirements, so seeded random sequences (twelve seeds) and every ordered field pair replace Hypothesis draws of the same size."
+    },
+    "MetadataFieldProperties.test_conflicting_stale_field_does_not_block_unrelated_sync": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_properties.py::MetadataPropertyTests.test_a_conflicting_stale_field_never_blocks_another"
+      ],
+      "note": "The PostgreSQL test job installs only runtime requirements, so seeded random sequences (twelve seeds) and every ordered field pair replace Hypothesis draws of the same size."
+    },
+    "MetadataFieldProperties.test_independent_patch_and_sync_commute": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_properties.py::MetadataPropertyTests.test_independent_patch_and_sync_commute"
+      ],
+      "note": "All 30 ordered field pairs are enumerated instead of sampled."
+    },
+    "MetadataFieldProperties.test_metadata_scope_keys_preserve_structural_identity": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::CodecTests.test_scope_keys_round_trip_and_never_collide"
+      ]
+    }
+  }
+}

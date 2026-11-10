@@ -1,0 +1,76 @@
+{
+  "module": "tests/test_research_graph.py",
+  "tests": {
+    "ResearchGraphTests.test_representative_network": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_a_representative_network"
+      ]
+    },
+    "ResearchGraphTests.test_namespaced_ids_survive_person_position_collision": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_a_person_and_a_position_of_one_id_are_two_nodes",
+        "tests/test_research_graph_rules.py::GraphRuleTests.test_node_ids_are_namespaced_by_kind"
+      ]
+    },
+    "ResearchGraphTests.test_no_duplicate_mention_edges": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_a_representative_network"
+      ]
+    },
+    "ResearchGraphTests.test_argument_response_direction": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_a_representative_network"
+      ]
+    },
+    "ResearchGraphTests.test_source_and_mention_are_distinct": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_a_citation_and_a_mention_of_one_pair_are_two_edges"
+      ]
+    },
+    "ResearchGraphTests.test_unrelated_work_omitted": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_a_representative_network"
+      ]
+    },
+    "ResearchGraphTests.test_people_optional_authors_only": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_people_are_optional_and_authors_only"
+      ]
+    },
+    "ResearchGraphTests.test_derived_index_failure_is_fail_soft": {
+      "obsolete": "On PostgreSQL the mention rows are tables of the Library database read in the same snapshot as the canonical rows, so there is no separate index file whose failure the graph could survive; derived_note_edges_available is always true (tests/pg/test_research_graph.py and test_research_graph_parity.py check it)."
+    },
+    "ResearchGraphTests.test_query_count_is_bounded": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_the_statement_count_does_not_grow_with_the_network"
+      ]
+    },
+    "ResearchGraphTests.test_privacy_sentinels_stay_out_of_logs": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_the_names_stay_out_of_logs_and_a_graph_too_large_reports_counts_only"
+      ],
+      "note": "The PostgreSQL graph logs no node_count line or performance span of its own; what is kept is that no log line carries a name the graph returns."
+    },
+    "ResearchGraphTests.test_graph_too_large_reports_counts_only": {
+      "replaced_by": [
+        "tests/pg/test_research_graph.py::ProjectionTests.test_the_names_stay_out_of_logs_and_a_graph_too_large_reports_counts_only"
+      ]
+    },
+    "ResearchGraphTests.test_safe_route": {
+      "replaced_by": [
+        "tests/test_research_graph_rules.py::GraphRuleTests.test_the_route_is_logged_without_its_query"
+      ]
+    },
+    "ResearchGraphTests.test_bounds_constants": {
+      "replaced_by": [
+        "tests/test_research_graph_rules.py::GraphRuleTests.test_the_bounds"
+      ]
+    },
+    "ResearchGraphTests.test_no_write_api": {
+      "replaced_by": [
+        "tests/test_research_graph_rules.py::GraphRuleTests.test_the_postgresql_graph_never_writes"
+      ],
+      "note": "The SQLite ResearchGraphBuilder's method names are replaced by a check that no statement of the PostgreSQL graph module writes."
+    }
+  }
+}

@@ -11,8 +11,13 @@ compares the answers with SQLite's.
 
 from __future__ import annotations
 
+import io
+import logging
 from typing import Any
+from unittest import mock
 
+from backend import research_graph
+from backend.domain.identity.library_scope import LibraryScope
 from backend.pg_facade.research_index import PostgresResearchIndex
 from backend.pg_facade import context as facade_context
 from backend.research_graph import graph_node_id
@@ -177,3 +182,153 @@ class BacklinkTests(GraphReadTestCase):
         self.assertEqual([[o["start"] for o in row["occurrences"]] for row in rows], [[7, 34], [7, 34]])
         self.assertEqual(rows[0]["occurrences"][0]["snippet"],
                          "Before [[concept:Ethics]] between [[concept:ethics]] after.")
+
+
+PRIVATE_CONCEPT = "PRIVATE_CONCEPT_GRAPH_X9Q7"
+PRIVATE_ARGUMENT = "PRIVATE_ARGUMENT_GRAPH_X9Q7"
+PRIVATE_WORK = "PRIVATE_WORK_GRAPH_X9Q7"
+
+
+class ProjectionTests(GraphReadTestCase):
+    """The projection's nodes, edges, people, bounds and privacy (the retired ``tests/test_research_graph.py``)."""
+
+    def network(self) -> dict[str, str]:
+        parent, child = self.concept("Critical Theory"), self.concept(PRIVATE_CONCEPT)
+        self.library.replace_concept_parents(child, [parent])
+        pos = self.position("Standardization thesis")
+        work_x, work_y = self.library.add_work(PRIVATE_WORK), self.library.add_work("Minima Moralia")
+        arg1 = self.argument(PRIVATE_ARGUMENT, sources=[{"work_id": work_x, "pages": "12-14"}],
+                             targets=[{"type": "position", "id": pos, "verdict_id": "supports"}])
+        arg2 = self.argument("Counter", kind="stance", targets=[{"type": "argument", "id": arg1, "verdict_id": "opposes"}])
+        self.research_note(work_x, "[[concept:%s]] [[concept:%s]] [[concept:%s]]" % ((PRIVATE_CONCEPT,) * 3))
+        self.research_note(work_y, "See [[argument:%s]]" % arg1)
+        self.run_jobs()
+        return {"parent": parent, "child": child, "pos": pos, "work_x": work_x, "work_y": work_y,
+                "arg1": arg1, "arg2": arg2}
+
+    def of_type(self, snap: dict[str, Any], edge_type: str) -> list[dict[str, Any]]:
+        return [edge for edge in snap["edges"] if edge["type"] == edge_type]
+
+    def test_a_representative_network(self) -> None:
+        n = self.network()
+        self.library.add_work("Unrelated library file")
+        snap = self.graph()
+        nodes = {item["id"]: item for item in snap["nodes"]}
+        g = graph_node_id
+        self.assertEqual(set(nodes), {g("concept", n["parent"]), g("concept", n["child"]), g("position", n["pos"]),
+                                      g("argument", n["arg1"]), g("argument", n["arg2"]),
+                                      g("work", n["work_x"]), g("work", n["work_y"])})
+        self.assertEqual(nodes[g("argument", n["arg2"])]["kind"], "stance")
+        self.assertNotIn("main_text", nodes[g("argument", n["arg1"])])
+        self.assertNotIn("description", nodes[g("concept", n["child"])])
+        edges = {item["id"]: item for item in snap["edges"]}
+        parent_edge = "concept_parent:%s>%s" % (g("concept", n["child"]), g("concept", n["parent"]))
+        self.assertEqual(edges[parent_edge]["type"], "concept_parent")
+        (supports,) = self.of_type(snap, "argument_position")
+        self.assertEqual((supports["source"], supports["target"], supports["verdict_id"], supports["verdict_label"]),
+                         (g("argument", n["arg1"]), g("position", n["pos"]), "supports", "Supports"))
+        (response,) = self.of_type(snap, "argument_argument")
+        self.assertEqual((response["source"], response["target"]), (g("argument", n["arg2"]), g("argument", n["arg1"])))
+        (source,) = self.of_type(snap, "argument_source")
+        self.assertEqual((source["source"], source["target"], source["pages"]),
+                         (g("argument", n["arg1"]), g("work", n["work_x"]), "12-14"))
+        (mention_c,) = self.of_type(snap, "mentions_concept")
+        self.assertEqual((mention_c["source"], mention_c["target"], mention_c["count"]),
+                         (g("work", n["work_x"]), g("concept", n["child"]), 3))
+        (mention_a,) = self.of_type(snap, "mentions_argument")
+        self.assertEqual((mention_a["source"], mention_a["target"]), (g("work", n["work_y"]), g("argument", n["arg1"])))
+        self.assertEqual((snap["meta"]["derived_note_edges_available"], snap["meta"]["people_included"]), (True, False))
+        types = [item["type"] for item in snap["nodes"]]
+        self.assertEqual(types, sorted(types))
+
+    def test_a_citation_and_a_mention_of_one_pair_are_two_edges(self) -> None:
+        n = self.network()
+        self.research_note(n["work_x"], "[[concept:%s]] [[argument:%s]]" % (PRIVATE_CONCEPT, n["arg1"]))
+        self.run_jobs()
+        snap = self.graph()
+        src, work = graph_node_id("argument", n["arg1"]), graph_node_id("work", n["work_x"])
+        sources = [e for e in self.of_type(snap, "argument_source") if (e["source"], e["target"]) == (src, work)]
+        mentions = [e for e in self.of_type(snap, "mentions_argument") if (e["source"], e["target"]) == (work, src)]
+        self.assertEqual((len(sources), len(mentions)), (1, 1))
+        self.assertNotEqual(sources[0]["id"], mentions[0]["id"])
+
+    def test_people_are_optional_and_authors_only(self) -> None:
+        n = self.network()
+        author = self.library.add_person("Max", "Horkheimer")
+        editor = self.library.add_person("Ed", "Itor")
+        self.library.add_role(author, n["work_x"], "Author")
+        self.library.add_role(editor, n["work_x"], "Editor")
+        off = self.graph(include_people=False)
+        self.assertFalse(off["meta"]["people_included"])
+        self.assertFalse(any(item["type"] == "person" for item in off["nodes"]))
+        on = self.graph(include_people=True)
+        self.assertTrue(on["meta"]["people_included"])
+        self.assertEqual({p["record_id"] for p in on["nodes"] if p["type"] == "person"}, {author})
+        (authored,) = self.of_type(on, "work_author")
+        self.assertEqual((authored["source"], authored["target"]),
+                         (graph_node_id("person", author), graph_node_id("work", n["work_x"])))
+
+    def test_a_person_and_a_position_of_one_id_are_two_nodes(self) -> None:
+        person = self.library.add_person("Ada", "Lovelace")
+        position = self.position("Collision Position")
+        self.sql("UPDATE prks.positions SET id = %s WHERE id = %s", (person, position))
+        work = self.library.add_work("Linked")
+        self.concept(PRIVATE_CONCEPT)
+        self.research_note(work, "[[concept:%s]]" % PRIVATE_CONCEPT)
+        self.run_jobs()
+        self.library.add_role(person, work, "Author")
+        nodes = {node["id"]: node for node in self.graph(include_people=True)["nodes"]}
+        for kind in ("person", "position"):
+            node = nodes[kind + ":" + person]
+            self.assertEqual((node["record_id"], node["type"]), (person, kind))
+
+    def test_the_statement_count_does_not_grow_with_the_network(self) -> None:
+        def fill(prefix: str, count: int) -> None:
+            for i in range(count):
+                name = "%s concept %s" % (prefix, i)
+                self.concept(name)
+                work = self.library.add_work("%s work %s" % (prefix, i))
+                self.argument("%s arg %s" % (prefix, i), sources=[{"work_id": work, "pages": "1"}])
+                self.research_note(work, "[[concept:%s]]" % name)
+            self.run_jobs()
+
+        def statements() -> int:
+            real, seen = LibraryScope.execute, []
+
+            def record(scope: LibraryScope, query: Any, params: Any = None) -> Any:
+                seen.append(query)
+                return real(scope, query, params)
+
+            with mock.patch.object(LibraryScope, "execute", autospec=True, side_effect=record):
+                self.graph()
+            return len(seen)
+
+        fill("small", 8)
+        small = statements()
+        fill("big", 24)
+        self.assertEqual(statements(), small)
+        self.assertLessEqual(small, 12)
+
+    def test_the_names_stay_out_of_logs_and_a_graph_too_large_reports_counts_only(self) -> None:
+        self.network()
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        root = logging.getLogger()
+        previous = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        try:
+            blob = str(self.graph())
+            with mock.patch.object(research_graph, "MAX_GRAPH_NODES", 1), \
+                    self.assertRaises(research_graph.GraphTooLargeError) as caught:
+                self.graph()
+        finally:
+            root.removeHandler(handler)
+            root.setLevel(previous)
+        for sentinel in (PRIVATE_CONCEPT, PRIVATE_ARGUMENT, PRIVATE_WORK):
+            self.assertIn(sentinel, blob)
+            self.assertNotIn(sentinel, stream.getvalue())
+            self.assertNotIn(sentinel, str(caught.exception))
+            self.assertNotIn(sentinel, str(caught.exception.extra))
+        self.assertEqual(caught.exception.code, "graph_too_large")
+        self.assertGreaterEqual(caught.exception.extra["node_count"], 2)

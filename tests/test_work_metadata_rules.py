@@ -114,6 +114,16 @@ class CodecTests(unittest.TestCase):
         self.assertNotEqual(meta.scope_key("W-a:b", "doi"), meta.scope_key("W-a", "b:doi"))
         self.assertEqual(json.loads(meta.scope_key("W-a", "doi")), ["W-a", "doi"])
 
+    def test_scope_keys_round_trip_and_never_collide(self) -> None:
+        values = ["", "a", "Z9", " ", "/", ":", "|", '"', "\\", "'", "é", "λ", "中", "🔥", 'a","b', "W-a:b", "b:doi"]
+        keys = {}
+        for work in values:
+            for field in values:
+                key = meta.scope_key(work, field)
+                self.assertEqual(json.loads(key), [work, field])
+                self.assertNotIn(key, keys, (work, field))
+                keys[key] = (work, field)
+
 
 class ResultBoundTests(unittest.TestCase):
     def test_the_server_and_the_browser_agree_on_the_result_bound(self) -> None:
