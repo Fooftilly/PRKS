@@ -369,10 +369,40 @@ def reference_for(test: Any, open_live: Callable[[], Any], *, name: str = "libra
     them returned means the same thing passed to another, and one order of
     calls, so a replay runs them interleaved as the recording did.
     """
-    test_id = "%s.%s" % (type(test).__name__.removesuffix("_postgres"), test._testMethodName)
+    test_id = _test_id(test)
     varying = test.__dict__.setdefault("_parity_reference_varying", _Varying())
     turns = test.__dict__.setdefault("_parity_reference_turns", _Turns())
-    module_file = importlib.import_module(type(test).__module__).__file__
-    ref = Reference(test_id, name, module_file or "", open_live, varying, turns)
+    created = test.__dict__.get("_parity_reference_names")
+    if created is None:
+        created = test.__dict__["_parity_reference_names"] = set()
+        if not recording():
+            # Registered first, so it runs after every reference's own close().
+            test.addCleanup(check_every_reference_created, test)
+    created.add(name)
+    ref = Reference(test_id, name, _module_file(test), open_live, varying, turns)
     test.addCleanup(ref.close)
     return ref
+
+
+def check_every_reference_created(test: Any) -> None:
+    """A replayed test must create every reference its recording holds.
+
+    Each reference's ``close()`` checks its own steps; a reference the test
+    no longer creates has no ``close()``, so its recording would be dropped
+    silently.
+    """
+    test_id = _test_id(test)
+    module = os.path.basename(_module_file(test)).rsplit(".", 1)[0]
+    recorded = {key.partition("#")[2] or "library" for key in _load(module) if key.split("#", 1)[0] == test_id}
+    missing = sorted(recorded - test.__dict__.get("_parity_reference_names", set()))
+    if missing:
+        raise AssertionError("%s: the recording holds the %s reference(s), which the test never created; "
+                             "run it with %s=1" % (test_id, ", ".join(missing), RECORD_ENV))
+
+
+def _test_id(test: Any) -> str:
+    return "%s.%s" % (type(test).__name__.removesuffix("_postgres"), test._testMethodName)
+
+
+def _module_file(test: Any) -> str:
+    return importlib.import_module(type(test).__module__).__file__ or ""
