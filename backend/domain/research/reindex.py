@@ -52,6 +52,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, LiteralString, Optional
 
+import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend.domain.research import rules as research_rules
 from backend.research_markup import canonical_concept_name
 from backend.domain.identity.authorization import Capability

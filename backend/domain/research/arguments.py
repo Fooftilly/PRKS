@@ -71,6 +71,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional, Sequence
 
+import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import argument_sync as rules
 from backend.domain.research import rules as research_rules
 from backend.domain.identity.library_scope import LibraryScope

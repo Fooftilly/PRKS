@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional, Sequence
 
+import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import concept_sync as rules
 from backend.domain.research import rules as research_rules
 from backend.research_markup import canonical_concept_name

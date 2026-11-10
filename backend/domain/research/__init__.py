@@ -58,12 +58,3 @@ KEY SHARE``, then its note ``FOR SHARE``, and writes only ``derived`` rows,
 which no command locks: a note write or a Work delete waits for it at most
 once and never holds anything it waits on.
 """
-
-from backend.db import register_constraint
-
-# The name and every alias of every Concept are one key namespace
-# (``concept_keys``, §8.1). A rename or an alias written while a concurrent
-# writer holds the key fails on the primary key when that writer commits;
-# the command then runs once more and refuses from what it reads
-# (``concepts.KEY_INDEX``).
-register_constraint("concept_keys_pkey", "CONCEPT_EXISTS")
