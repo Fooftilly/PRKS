@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import contextmanager
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Optional
@@ -91,23 +92,20 @@ def postgres_library(environ=None) -> bool:
     raise ValueError(f"{LIBRARY_BACKEND_ENV} must be unset or 'postgres'")
 
 
-def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> dict:
-    """Run ``seed_fn(storage_root)`` against ``library``'s PostgreSQL Library, as its owner.
+@contextmanager
+def owner_facade(library: E2ELibrary, storage_root: str):
+    """The :class:`~backend.pg_facade.PostgresLibrary` of ``library``, and its owner's context.
 
-    The seed functions (``tests/e2e/fixtures.py``) call the public method
-    names both stores share, so the same seed fills either one; here they
-    reach :class:`~backend.pg_facade.PostgresLibrary` acting for a session
-    of the bootstrap owner. Managed PDFs are copied into the root first, as
-    the SQLite seed copies them, and adopted by the create.
+    The context is a fresh session of the bootstrap owner at the Library's
+    current epoch; calls on the facade must run inside
+    ``acting_as(context)``. The database pool closes when the block ends.
     """
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
     from backend.domain.identity import sessions
     from backend.domain.identity.request_context import RequestContext
     from backend.pg_facade import PostgresLibrary
-    from backend.pg_facade.context import acting_as
     from backend.storage.config import StorageConfig
-    from tests.e2e.fixtures import seeding_into
 
     db = Database(DatabaseConfig(conninfo=library.conninfo, role="test", pool_min=0, pool_max=2))
     try:
@@ -120,12 +118,28 @@ def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> di
         new, epoch = db.command(owner_session)
         valid = sessions.resolve_session(db, new.token.reveal())
         if valid is None:  # pragma: no cover - the session was just created
-            raise RuntimeError("the E2E seed session does not resolve")
+            raise RuntimeError("the E2E owner session does not resolve")
         facade = PostgresLibrary(db, storage=StorageConfig.for_testing(os.path.realpath(storage_root)))
-        with acting_as(RequestContext.for_session(valid, epoch=epoch)), seeding_into(facade):
-            return seed_fn(storage_root) or {}
+        yield facade, RequestContext.for_session(valid, epoch=epoch)
     finally:
         db.close()
+
+
+def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> dict:
+    """Run ``seed_fn(storage_root)`` against ``library``'s PostgreSQL Library, as its owner.
+
+    The seed functions (``tests/e2e/fixtures.py``) call the public method
+    names both stores share, so the same seed fills either one; here they
+    reach :class:`~backend.pg_facade.PostgresLibrary` acting for a session
+    of the bootstrap owner. Managed PDFs are copied into the root first, as
+    the SQLite seed copies them, and adopted by the create.
+    """
+    from backend.pg_facade.context import acting_as
+    from tests.e2e.fixtures import seeding_into
+
+    with owner_facade(library, storage_root) as (facade, ctx):
+        with acting_as(ctx), seeding_into(facade):
+            return seed_fn(storage_root) or {}
 
 
 def require_server() -> None:

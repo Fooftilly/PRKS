@@ -1143,6 +1143,9 @@ class AppServer:
         # `auth="session"` signs accounts in by password; `members` adds
         # editors beside the owner.
         self.library = None
+        # The test's own handle on this Library (tests/e2e/library_store.py),
+        # closed before the database is dropped.
+        self._library_store = None
         self._auth = auth
         self._members = tuple(members)
 
@@ -1318,6 +1321,9 @@ class AppServer:
 
 
     def _drop_library(self):
+        store, self._library_store = self._library_store, None
+        if store is not None:
+            store.close()  # its pool would hold the database open
         # Cleared only once dropped, so a failed drop can be retried by stop().
         if self.library is not None:
             with profile_e2e_phase("postgres_drop"):

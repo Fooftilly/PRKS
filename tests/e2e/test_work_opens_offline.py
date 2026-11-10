@@ -4,11 +4,10 @@ import unittest
 from datetime import datetime
 
 from backend import work_open_sync
-from backend.db_manager import PRKSDatabase
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, WORK_B_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -91,13 +90,14 @@ class OfflineWorkOpenTests(unittest.TestCase):
         page.on('request', lambda request: seen.append(request.url))
         return seen
 
-    def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
-
     def server_opened_at(self, server, work_id):
-        rows = self.db_for(server).execute_query(
-            "SELECT last_opened_at FROM works WHERE id = ?", (work_id,))
-        return rows[0]['last_opened_at']
+        rows = library_for(server).query(
+            sqlite="SELECT last_opened_at FROM works WHERE id = ?",
+            postgres="SELECT last_opened_at FROM prks.works WHERE id = %s",
+            params=(work_id,))
+        value = rows[0]['last_opened_at']
+        # SQLite stores the canonical text; PostgreSQL a timestamptz.
+        return value if isinstance(value, str) or value is None else work_open_sync.format_moment(value)
 
     def canonical(self, iso):
         return work_open_sync.format_moment(datetime.fromisoformat(iso.replace('Z', '+00:00')))
