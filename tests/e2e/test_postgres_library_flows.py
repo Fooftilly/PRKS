@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import stat
+import tempfile
 import unittest
 
 import psycopg
@@ -73,8 +76,8 @@ def seed_queue_library(storage_root: str) -> dict:
     return ids
 
 
-def _start(test, seed_fn, service_workers="block"):
-    server = AppServer(seed_fn=seed_fn)
+def _start(test, seed_fn, service_workers="block", extra_env=None):
+    server = AppServer(seed_fn=seed_fn, extra_env=extra_env)
     test.addCleanup(server.stop)
     server.start()
     page, context, collector = open_app_page(_BROWSER, server.origin, service_workers=service_workers)
@@ -434,6 +437,112 @@ class PdfReplacedBytesTests(unittest.TestCase):
         a._wait_pdf_viewer(page)
         a._wait_pdf_annotation_durable(page)
         return server, page, work_id
+
+    # Stands in for qpdf on the server's PATH: a "linearized" copy is the
+    # input plus one trailing comment, so the stored working file is the same
+    # document under different bytes, as with the real qpdf in the image.
+    LINEARIZED_MARK = b"% prks-e2e-linearized\n"
+    _FAKE_QPDF = """#!/bin/sh
+[ "$1" = "--linearize" ] || exit 2
+cat "$2" > "$3" && printf '%s\\n' '% prks-e2e-linearized' >> "$3"
+"""
+
+    def _linearizing_env(self):
+        bin_dir = tempfile.mkdtemp(prefix="prks-e2e-qpdf-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        qpdf = os.path.join(bin_dir, "qpdf")
+        with open(qpdf, "w", encoding="ascii") as handle:
+            handle.write(self._FAKE_QPDF)
+        os.chmod(qpdf, os.stat(qpdf).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        return {"PATH": bin_dir + os.pathsep + os.environ.get("PATH", ""), "PRKS_PDF_LINEARIZE": "1"}
+
+    def test_a_linearized_save_caches_the_stored_bytes_and_reopens_them_offline(self):
+        """The whole-file cache for the new key holds that key's bytes.
+
+        Linearization rewrites the stored working file, so it is not the
+        export the viewer uploaded. The viewer stays mounted (same document),
+        and the scoped cache for the new key holds the stored bytes, hashing
+        to the Asset's ``content_sha256``; offline reopen serves them.
+        """
+        server, page, context = _start(self, seed_library, service_workers="allow",
+                                       extra_env=self._linearizing_env())
+        work_id = server.ids["work_a"]
+        o._wait_sw_active(page)
+        a._open_work_from_home(page, WORK_A_TITLE)
+        a._wait_pdf_viewer(page)
+        a._wait_pdf_annotation_durable(page)
+        page.evaluate("() => { window.__prksViewerBeforeSave = (%s).viewer; }" % a._FOCUSED_PDF)
+        before = page.evaluate("() => String((%s).filePath || '').split('?')[0]" % a._FOCUSED_PDF)
+
+        a._commit_pdf_highlight(page)
+        a._wait_pdf_annotation_ops_drained(page, work_id)
+        a._wait_pdf_materialized(page, work_id)
+        # The server's revision can be read before this tab has applied the
+        # response; wait for the tab to move to the new key.
+        page.wait_for_function(
+            "(was) => String((%s).filePath || '').split('?')[0] !== was" % a._FOCUSED_PDF,
+            arg=before, timeout=30000)
+        canonical = page.evaluate("() => String((%s).filePath || '').split('?')[0]" % a._FOCUSED_PDF)
+        self.assertNotEqual(canonical, before)
+        self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
+        # Same document: no reload.
+        self.assertTrue(page.evaluate("() => (%s).viewer === window.__prksViewerBeforeSave" % a._FOCUSED_PDF))
+
+        with psycopg.connect(server.library.conninfo) as conn:
+            row = conn.execute(
+                "SELECT content_sha256 FROM prks.assets WHERE library_id = %s AND storage_locator = %s",
+                (str(server.library.library_id), canonical[len("/api/pdfs/"):]),
+            ).fetchone()
+        self.assertIsNotNone(row, canonical)
+        content_sha256 = str(row[0])
+
+        cached_js = """async (path) => {
+            const cache = await caches.open(await prksOfflinePdfCacheName());
+            const match = await cache.match(path);
+            if (!match) return null;
+            const bytes = new Uint8Array(await match.arrayBuffer());
+            const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+            const tail = new TextDecoder().decode(bytes.slice(Math.max(0, bytes.length - 64)));
+            return { sha256: Array.from(digest, b => b.toString(16).padStart(2, '0')).join(''), tail };
+        }"""
+        o._wait_pdf_whole_file_cached(page, canonical)
+        cached = page.evaluate(cached_js, canonical)
+        self.assertEqual(cached["sha256"], content_sha256, "the cache holds the key's own bytes")
+        self.assertTrue(cached["tail"].endswith(self.LINEARIZED_MARK.decode("ascii")), cached["tail"])
+
+        # Offline reopen reads the key's bytes from the cache.
+        warmed = page.evaluate(
+            """async (id) => {
+                const result = await prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id));
+                return !!(result && result.value && result.value.id === id);
+            }""",
+            work_id,
+        )
+        self.assertTrue(warmed)
+        o._wait_entity_cached(page, "work", work_id)
+        context.set_offline(True)
+        page.reload(wait_until="domcontentloaded")
+        a._wait_pdf_viewer(page)
+        served = page.evaluate(
+            """async (path) => {
+                const res = await fetch(path);
+                if (!res.ok) return { status: res.status, sha256: '' };
+                const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await res.arrayBuffer()));
+                return { status: res.status, sha256: Array.from(digest, b => b.toString(16).padStart(2, '0')).join('') };
+            }""",
+            canonical,
+        )
+        self.assertEqual(served, {"status": 200, "sha256": content_sha256})
+        reopened = page.evaluate("() => String((%s).viewerFilePath || '').split('?')[0]" % a._FOCUSED_PDF)
+        self.assertEqual(reopened, canonical)
+        page.wait_for_function(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                const v = pdf && pdf.viewer;
+                return !!(v && v.getAnnotations && v.getAnnotations().length >= 1);
+            }""",
+            timeout=20000,
+        )
 
     def test_stored_bytes_that_are_not_this_export_remount_on_the_same_page(self):
         server, page, work_id = self._open()

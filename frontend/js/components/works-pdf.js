@@ -118,16 +118,50 @@ async function prksSha256Hex(buffer) {
  * hash to compare, or if hashing fails, the answer is false and the caller
  * remounts.
  */
-async function prksStoredExportMatches(body, buffer) {
+async function prksStoredExportMatches(body, buffer, bufferSha) {
     if (!body || !buffer || typeof buffer.byteLength !== 'number') return false;
     const named = typeof body.export_sha256 === 'string' ? body.export_sha256 : body.content_sha256;
     const want = typeof named === 'string' ? named.toLowerCase() : '';
     if (!/^[0-9a-f]{64}$/.test(want)) return false;
     try {
-        return (await prksSha256Hex(buffer)) === want;
+        const have = typeof bufferSha === 'string' && bufferSha ? bufferSha : await prksSha256Hex(buffer);
+        return have === want;
     } catch (_eDigest) {
         return false;
     }
+}
+
+/**
+ * The bytes a successful PDF write stored under `path`, to seed the
+ * whole-file cache with. An immutable key must only ever be served with its
+ * own bytes, so when the response names the stored working file
+ * (`content_sha256`) and it is not `buffer` (linearization rewrote it, or the
+ * stored document is another one), the stored bytes are read from the
+ * network and must hash to `content_sha256`. Anything else throws, which
+ * keeps the materialization claim for a retry. A response that names no
+ * stored hash (the SQLite adapter writes in place) seeds `buffer`, as before.
+ * `bufferSha` is the caller's hash of `buffer`, when it has one.
+ */
+async function prksStoredPdfBytes(body, path, buffer, bufferSha, fetchImpl) {
+    const raw = body && typeof body.content_sha256 === 'string' ? body.content_sha256 : '';
+    if (!raw) return buffer;
+    const want = raw.toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('PDF cache update failed');
+    const have = typeof bufferSha === 'string' && bufferSha ? bufferSha : await prksSha256Hex(buffer);
+    if (have === want) return buffer;
+    const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : null);
+    if (!doFetch || !path) throw new Error('PDF cache update failed');
+    let stored = null;
+    try {
+        const res = await doFetch(path, { credentials: 'same-origin', cache: 'no-store' });
+        if (res && res.status === 200) stored = await res.arrayBuffer();
+    } catch (_eFetch) {
+        stored = null;
+    }
+    if (!stored || !stored.byteLength || (await prksSha256Hex(stored)) !== want) {
+        throw new Error('PDF cache update failed');
+    }
+    return stored;
 }
 
 function prksResolvePdfCtx(element) {
@@ -2419,15 +2453,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
      * open document is unchanged, so the viewer stays mounted with its page,
      * zoom, scroll, search, selection and editor state: the canonical path
      * and the scoped cache move to the new key, and the viewer is recorded as
-     * holding that key's bytes. A document actually replaced elsewhere does
-     * not come through here (its bytes are not this export) and remounts.
+     * showing that key's document. The cache gets `storedBytes`, the key's
+     * own bytes (prksStoredPdfBytes), which may be a linearized copy of the
+     * export. A document actually replaced elsewhere does not come through
+     * here (its bytes are not this export) and remounts.
      */
-    async function rebindViewerToStoredExport(newPath, buffer, exportViewer) {
+    async function rebindViewerToStoredExport(newPath, storedBytes, exportViewer) {
         const path = managedPdfApiPath(newPath);
         if (!path || !exportViewer || liveAnnotationViewer() !== exportViewer) return false;
         // Seed the cache first; a failed put stays retryable (the claim is
         // kept) and leaves the runtime on the previous key.
-        const seeded = await cacheManagedPdfBytes(path, buffer);
+        const seeded = await cacheManagedPdfBytes(path, storedBytes);
         if (!seeded) throw new Error('PDF cache update failed');
         if (!stillLive() || liveAnnotationViewer() !== exportViewer) return false;
         runtime.filePath = path;
@@ -2537,15 +2573,25 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             const pendingCow = runtime && managedPdfApiPath(runtime._cowRemountPendingPath);
             const needsRetarget = canonical !== current
                 || (pendingCow === canonical && !viewerBoundToManagedPath(canonical));
+            // Hash the export once; both checks below compare against it.
+            let bufferSha = '';
+            try {
+                bufferSha = await prksSha256Hex(buffer);
+            } catch (_eDigest) {
+                bufferSha = '';
+            }
+            // The key's own bytes, which linearization may have rewritten:
+            // never the export under a key that names other bytes.
+            const stored = await prksStoredPdfBytes(okBody, canonical, buffer, bufferSha);
             if (needsRetarget) {
                 // Same document, new key: keep the viewer. Anything else (the
                 // bytes there are not this export, or cannot be confirmed to
                 // be) is a replacement and remounts.
-                const sameDocument = await prksStoredExportMatches(okBody, buffer)
-                    && await rebindViewerToStoredExport(canonical, buffer, activeViewer);
-                if (!sameDocument) await applyCowPdfRetarget(canonical, buffer);
+                const sameDocument = await prksStoredExportMatches(okBody, buffer, bufferSha)
+                    && await rebindViewerToStoredExport(canonical, stored, activeViewer);
+                if (!sameDocument) await applyCowPdfRetarget(canonical, stored);
             } else {
-                const cached = await cacheManagedPdfBytes(canonical, buffer);
+                const cached = await cacheManagedPdfBytes(canonical, stored);
                 if (!cached) throw new Error('PDF cache update failed');
             }
         } catch (eCow) {
