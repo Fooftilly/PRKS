@@ -50,6 +50,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable, LiteralString, Optional
 
+import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import work_role_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons

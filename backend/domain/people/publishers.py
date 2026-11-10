@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, LiteralString, Optional
 
+import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
 from backend.domain.identity.library_scope import LibraryScope
 
 _OWNER_SQL: LiteralString = """
