@@ -1,0 +1,48 @@
+{
+  "module": "tests/test_research_index.py",
+  "tests": {
+    "ResearchIndexTests.test_changed_note_reindexed_unchanged_skipped": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::MentionTests.test_a_note_creates_the_concepts_it_names_once_each",
+        "tests/pg/test_research_index.py::MentionTests.test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index",
+        "tests/pg/test_research_index.py::JobTests.test_running_the_job_again_or_twice_changes_nothing"
+      ],
+      "note": "PostgreSQL reindexes by a job each note change enqueues, so an unchanged note enqueues nothing instead of being skipped by a reconcile pass."
+    },
+    "ResearchIndexTests.test_escaped_concept_delimiter_indexes_one_full_name": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::EncodedReferenceTests.test_an_escaped_concept_delimiter_indexes_one_full_name"
+      ]
+    },
+    "ResearchIndexTests.test_deleted_work_removes_orphan": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ConcurrencyTests.test_a_work_deleted_while_a_reindex_of_it_is_paused_leaves_no_rows",
+        "tests/pg/test_research_index.py::ConcurrencyTests.test_a_stale_reindex_after_the_delete_cannot_recreate_rows",
+        "tests/pg/test_research_graph.py::StaleRowTests.test_a_deleted_work_leaves_the_reads_before_its_reindex_runs"
+      ]
+    },
+    "ResearchIndexTests.test_corrupt_derived_recreated_canonical_untouched": {
+      "replaced_by": [
+        "tests/pg/test_admin_rebuild_derived.py::RebuildDerivedTests.test_queues_a_full_rebuild_once"
+      ],
+      "note": "The PostgreSQL index is the derived schema of the Library database, not a separate file that can be corrupt; it is rebuilt by the rebuild-derived job, which leaves canonical rows alone."
+    },
+    "ResearchIndexTests.test_index_sync_failure_does_not_roll_back_notes": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::FenceTests.test_the_research_ack_does_not_wait_for_the_index",
+        "tests/pg/test_research_index.py::MentionTests.test_a_failed_note_write_rolls_back_its_concepts_and_job"
+      ],
+      "note": "The reindex runs as its own job after the note commits, so a failing reindex cannot touch the note."
+    },
+    "ResearchIndexTests.test_missing_argument_omitted_from_work_research_refs": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::MentionTests.test_concept_and_argument_references_become_mentions"
+      ]
+    },
+    "ResearchIndexTests.test_content_hash_stable": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::EncodedReferenceTests.test_the_content_hash_names_the_text"
+      ]
+    }
+  }
+}
