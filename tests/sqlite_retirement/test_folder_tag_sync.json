@@ -1,0 +1,38 @@
+{
+ "module": "tests/test_folder_tag_sync.py",
+ "tests": {
+  "FolderTagSyncTests.test_direct_add_remove_advance_revision_once": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::LinkTests.test_links_advance_their_scopes_and_no_op_edits_leave_no_row"
+   ]
+  },
+  "FolderTagSyncTests.test_entity_type_is_folder": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::EnvelopeTests.test_every_tag_operation_is_registered_under_its_entity_type"
+   ]
+  },
+  "FolderTagSyncTests.test_merge_and_delete_advance_folder_tag_revisions": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::MergeTests.test_a_merge_moves_links_aliases_and_the_name",
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle"
+   ]
+  },
+  "FolderTagSyncTests.test_null_base_is_rejected": {
+   "replaced_by": [
+    "tests/test_tags_parity.py::TagSyncParityTests.test_work_and_folder_links",
+    "tests/pg/test_tags_sync.py::ReplayTests.test_a_malformed_envelope_is_refused_before_the_ledger"
+   ]
+  },
+  "FolderTagSyncTests.test_sync_ack_and_conflict_matrix": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LinkTests.test_the_decision_table",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_work_and_folder_links"
+   ]
+  },
+  "FolderTagSyncTests.test_tag_options_shape_and_tombstone": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::LinkTests.test_links_advance_their_scopes_and_no_op_edits_leave_no_row"
+   ]
+  }
+ }
+}

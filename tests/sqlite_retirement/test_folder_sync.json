@@ -1,0 +1,222 @@
+{
+ "module": "tests/test_folder_sync.py",
+ "tests": {
+  "FolderSyncTests.test_a_cycle_is_refused_by_the_server_that_sees_the_whole_tree": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::FieldTests.test_moves_refuse_cycles_and_taken_titles",
+    "tests/pg/test_folders_sync.py::FieldTests.test_two_crossed_moves_cannot_close_a_cycle",
+    "tests/pg/test_folders.py::HierarchyTests.test_a_cycle_is_refused_at_any_depth"
+   ]
+  },
+  "FolderSyncTests.test_a_field_edit_advances_only_its_own_revision": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::FieldTests.test_the_decision_table"
+   ]
+  },
+  "FolderSyncTests.test_a_folder_holding_files_is_refused_rather_than_cascaded": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::DeleteTests.test_refusals_and_convergence"
+   ]
+  },
+  "FolderSyncTests.test_a_folder_is_created_under_the_id_the_client_minted": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_title",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_create_folder"
+   ]
+  },
+  "FolderSyncTests.test_a_folder_with_subfolders_is_refused": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::DeleteTests.test_refusals_and_convergence"
+   ]
+  },
+  "FolderSyncTests.test_a_move_that_would_collide_where_it_lands_is_terminal": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::FieldTests.test_moves_refuse_cycles_and_taken_titles",
+    "tests/pg/test_folders.py::IdentityTests.test_a_move_or_rename_into_a_taken_title_is_refused"
+   ]
+  },
+  "FolderSyncTests.test_a_parent_that_does_not_exist_is_terminal": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_title"
+   ]
+  },
+  "FolderSyncTests.test_a_patch_that_changes_nothing_advances_nothing": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::HierarchyTests.test_only_a_change_advances_a_field"
+   ]
+  },
+  "FolderSyncTests.test_a_stale_base_that_disagrees_about_the_folder_is_a_conflict": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::WorkFolderTests.test_the_decision_table"
+   ]
+  },
+  "FolderSyncTests.test_a_stale_base_with_a_different_value_is_a_conflict": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::FieldTests.test_the_decision_table"
+   ]
+  },
+  "FolderSyncTests.test_a_title_another_folder_has_in_the_same_place_is_terminal": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_title",
+    "tests/pg/test_folders_sync.py::CreateTests.test_two_creates_of_one_title_make_one_folder"
+   ]
+  },
+  "FolderSyncTests.test_a_work_in_no_folder_reads_as_empty_at_revision_zero": {
+   "replaced_by": [
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_work_filing_and_the_work_projection"
+   ]
+  },
+  "FolderSyncTests.test_a_works_folder_is_a_scalar_with_its_own_revision": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::WorkFolderTests.test_the_decision_table"
+   ]
+  },
+  "FolderSyncTests.test_an_empty_folder_is_deleted": {
+   "replaced_by": [
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_work_folder_and_delete",
+    "tests/pg/test_folders_sync.py::DeleteTests.test_a_base_from_before_the_delete_never_lands_on_the_folder_created_again"
+   ]
+  },
+  "FolderSyncTests.test_an_empty_title_becomes_the_placeholder_on_both_paths": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::EnvelopeTests.test_an_empty_title_becomes_the_placeholder_on_both_paths",
+    "tests/pg/test_folders.py::IdentityTests.test_what_postgresql_cannot_hold_or_the_schema_bounds_is_refused_before_any_write"
+   ]
+  },
+  "FolderSyncTests.test_clearing_a_parent_stores_null_not_an_empty_string": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::EnvelopeTests.test_clearing_a_parent_by_sync_leaves_no_parent"
+   ]
+  },
+  "FolderSyncTests.test_clearing_a_works_folder_is_the_same_operation": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::WorkFolderTests.test_the_decision_table"
+   ]
+  },
+  "FolderSyncTests.test_creation_requires_a_collision_resistant_id": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::EnvelopeTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_create_folder"
+   ]
+  },
+  "FolderSyncTests.test_delete_folder_on_conn_is_a_no_op_when_the_row_is_already_gone": {
+   "obsolete": "It tests folder_sync.delete_folder_on_conn, the SQLite connection helper PG-C2 deletes; on PostgreSQL a delete of a gone Folder converges through backend.domain.organization.folders.delete, asserted by tests/pg/test_folders_sync.py::DeleteTests.test_refusals_and_convergence."
+  },
+  "FolderSyncTests.test_delete_folder_on_conn_rolls_back_with_the_callers_transaction": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::DeleteTests.test_a_delete_in_a_failed_command_leaves_the_folder"
+   ]
+  },
+  "FolderSyncTests.test_deleting_a_folder_that_is_already_gone_is_convergence": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::DeleteTests.test_refusals_and_convergence",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_work_folder_and_delete"
+   ]
+  },
+  "FolderSyncTests.test_destruction_addresses_an_identity_and_carries_no_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::EnvelopeTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_work_folder_and_delete"
+   ]
+  },
+  "FolderSyncTests.test_editing_requires_a_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::EnvelopeTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_folder_fields"
+   ]
+  },
+  "FolderSyncTests.test_filing_into_a_folder_that_is_gone_is_terminal": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::WorkFolderTests.test_the_decision_table",
+    "tests/pg/test_folders_sync.py::WorkFolderTests.test_a_filing_into_a_folder_being_deleted_is_refused"
+   ]
+  },
+  "FolderSyncTests.test_http_and_sync_delete_leave_equivalent_canonical_state": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::DeleteTests.test_a_delete_removes_its_tag_links_and_tombstones_every_scope",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_work_folder_and_delete",
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_delete"
+   ]
+  },
+  "FolderSyncTests.test_http_delete_maps_not_empty_and_subfolder_refusals": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::DeleteTests.test_a_folder_with_files_or_subfolders_is_refused",
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_delete"
+   ]
+  },
+  "FolderSyncTests.test_http_delete_of_missing_folder_still_raises": {
+   "replaced_by": [
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_delete"
+   ]
+  },
+  "FolderSyncTests.test_moving_a_folder_is_a_field_edit": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::FieldTests.test_moves_refuse_cycles_and_taken_titles"
+   ]
+  },
+  "FolderSyncTests.test_moving_a_work_replaces_rather_than_accumulates": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::WorkFilingTests.test_filing_moving_and_clearing_advance_the_work_folder",
+    "tests/pg/test_folders_sync.py::WorkFolderTests.test_two_moves_of_one_work_advance_it_in_turn"
+   ]
+  },
+  "FolderSyncTests.test_only_editable_columns_are_reachable": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::EnvelopeTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_folder_fields"
+   ]
+  },
+  "FolderSyncTests.test_ordinary_delete_shares_the_destruction_boundary": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::DeleteTests.test_a_delete_removes_its_tag_links_and_tombstones_every_scope",
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_delete"
+   ]
+  },
+  "FolderSyncTests.test_recreating_the_same_id_acknowledges_without_overwriting": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_title",
+    "tests/pg/test_folders_sync.py::CreateTests.test_two_creates_of_one_id_make_one_folder"
+   ]
+  },
+  "FolderSyncTests.test_the_folder_state_projection_reports_revisions_only": {
+   "replaced_by": [
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_create_read_and_list",
+    "tests/test_folders_parity.py::FolderSyncParityTests.test_folder_fields",
+    "tests/pg/test_folders_sync.py::FieldTests.test_the_decision_table"
+   ]
+  },
+  "FolderSyncTests.test_the_ordinary_creation_shares_the_construction_boundary": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::IdentityTests.test_titles_are_unique_per_parent_by_identity_key",
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_create_read_and_list"
+   ]
+  },
+  "FolderSyncTests.test_the_ordinary_delete_keeps_its_empty_only_rule": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::DeleteTests.test_a_folder_with_files_or_subfolders_is_refused"
+   ]
+  },
+  "FolderSyncTests.test_the_ordinary_move_advances_the_works_own_revision": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::WorkFilingTests.test_filing_moving_and_clearing_advance_the_work_folder"
+   ]
+  },
+  "FolderSyncTests.test_the_ordinary_patch_advances_the_same_revisions": {
+   "replaced_by": [
+    "tests/pg/test_folders.py::HierarchyTests.test_only_a_change_advances_a_field",
+    "tests/test_folders_parity.py::FolderFacadeParityTests.test_fields_hierarchy_and_their_revisions"
+   ]
+  },
+  "FolderSyncTests.test_the_same_title_under_a_different_parent_is_not_a_collision": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_title",
+    "tests/pg/test_folders.py::IdentityTests.test_titles_are_unique_per_parent_by_identity_key"
+   ]
+  },
+  "FolderSyncTests.test_two_devices_that_typed_the_same_title_have_not_collided": {
+   "replaced_by": [
+    "tests/pg/test_folders_sync.py::FieldTests.test_the_decision_table"
+   ]
+  }
+ }
+}

@@ -1,0 +1,171 @@
+{
+ "module": "tests/test_tag_sync.py",
+ "tests": {
+  "TagVocabularySyncTests.test_a_created_tag_is_immediately_usable_by_the_relationship_family": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LinkTests.test_the_decision_table"
+   ]
+  },
+  "TagVocabularySyncTests.test_a_deleted_tag_stays_deleted_for_the_relationship_family": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LinkTests.test_a_deleted_or_merged_tag_is_never_linked_or_redirected",
+    "tests/pg/test_tags_sync.py::CreateTests.test_a_deleted_or_merged_id_is_never_constructed_again"
+   ]
+  },
+  "TagVocabularySyncTests.test_a_name_another_tag_already_has_is_terminal": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+    "tests/pg/test_tags_sync.py::CreateTests.test_two_creates_of_one_name_make_one_tag"
+   ]
+  },
+  "TagVocabularySyncTests.test_a_name_that_is_another_tags_alias_is_taken_too": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+    "tests/pg/test_tags_sync.py::CreateTests.test_a_create_racing_an_alias_of_its_name"
+   ]
+  },
+  "TagVocabularySyncTests.test_a_replay_of_the_same_op_id_is_exact": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_create"
+   ]
+  },
+  "TagVocabularySyncTests.test_a_tag_is_created_under_the_id_the_client_minted": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_create"
+   ]
+  },
+  "TagVocabularySyncTests.test_an_empty_name_never_reaches_the_catalogue": {
+   "replaced_by": [
+    "tests/test_tags_parity.py::TagSyncParityTests.test_create",
+    "tests/pg/test_tags_sync.py::CreateTests.test_nul_is_an_invalid_envelope"
+   ]
+  },
+  "TagVocabularySyncTests.test_creation_requires_a_collision_resistant_id": {
+   "replaced_by": [
+    "tests/test_tags_parity.py::TagSyncParityTests.test_create",
+    "tests/pg/test_tags_sync.py::CreateTests.test_another_librarys_id_is_refused_unledgered"
+   ]
+  },
+  "TagVocabularySyncTests.test_css_declarations_and_invalid_hex_are_rejected_before_persistence": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::EnvelopeTests.test_a_colour_that_is_not_hex_is_refused_and_hex_is_kept_as_sent"
+   ]
+  },
+  "TagVocabularySyncTests.test_delete_tag_on_conn_is_a_no_op_when_the_row_is_already_gone": {
+   "obsolete": "It tests tag_sync.delete_tag_on_conn, the SQLite connection helper PG-C2 deletes; on PostgreSQL a delete of a gone Tag answers through backend.domain.organization.tags.delete_tag, whose convergence (changed false) tests/pg/test_tags_sync.py::LifecycleTests.test_delete_and_merge_answers asserts."
+  },
+  "TagVocabularySyncTests.test_delete_tag_on_conn_rolls_back_with_the_callers_transaction": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_in_a_failed_command_leaves_the_tag_and_its_links"
+   ]
+  },
+  "TagVocabularySyncTests.test_deleting_a_merged_tag_is_refused_rather_than_redirected": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LifecycleTests.test_delete_and_merge_answers"
+   ]
+  },
+  "TagVocabularySyncTests.test_deleting_a_tag_advances_folder_tag_revisions": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_delete_and_merge"
+   ]
+  },
+  "TagVocabularySyncTests.test_deleting_a_tag_removes_it_and_advances_its_relationships": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_delete_and_merge"
+   ]
+  },
+  "TagVocabularySyncTests.test_deleting_a_tag_that_is_already_gone_is_convergence": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LifecycleTests.test_delete_and_merge_answers"
+   ]
+  },
+  "TagVocabularySyncTests.test_destruction_addresses_an_identity_and_carries_no_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::EnvelopeTests.test_delete_and_merge_address_an_identity_and_carry_no_base_revision"
+   ]
+  },
+  "TagVocabularySyncTests.test_direct_tag_create_rejects_css_declarations": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::IdentityTests.test_untrusted_tag_color_is_rejected_on_postgresql"
+   ]
+  },
+  "TagVocabularySyncTests.test_http_and_sync_delete_leave_equivalent_canonical_state": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_delete_and_merge"
+   ]
+  },
+  "TagVocabularySyncTests.test_http_delete_of_missing_tag_still_raises": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle",
+    "tests/test_tags_parity.py::TagFacadeParityTests.test_delete"
+   ]
+  },
+  "TagVocabularySyncTests.test_merge_addresses_an_identity_and_carries_no_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::EnvelopeTests.test_delete_and_merge_address_an_identity_and_carry_no_base_revision"
+   ]
+  },
+  "TagVocabularySyncTests.test_merge_into_self_is_refused": {
+   "replaced_by": [
+    "tests/test_tags_parity.py::TagSyncParityTests.test_delete_and_merge",
+    "tests/pg/test_tags.py::MergeTests.test_refusals_name_sqlites_messages"
+   ]
+  },
+  "TagVocabularySyncTests.test_merge_is_registered": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::EnvelopeTests.test_every_tag_operation_is_registered_under_its_entity_type"
+   ]
+  },
+  "TagVocabularySyncTests.test_merge_moves_work_and_folder_links_and_keeps_source_as_alias": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::MergeTests.test_a_merge_moves_links_aliases_and_the_name",
+    "tests/test_tags_parity.py::TagSyncParityTests.test_delete_and_merge"
+   ]
+  },
+  "TagVocabularySyncTests.test_merge_of_an_already_merged_source_is_refused": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LifecycleTests.test_delete_and_merge_answers"
+   ]
+  },
+  "TagVocabularySyncTests.test_merge_refuses_a_deleted_or_unknown_target": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::LifecycleTests.test_delete_and_merge_answers"
+   ]
+  },
+  "TagVocabularySyncTests.test_ordinary_delete_shares_the_destruction_boundary": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_a_deleted_or_merged_id_is_never_constructed_again",
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle"
+   ]
+  },
+  "TagVocabularySyncTests.test_ordinary_merge_shares_the_sync_boundary": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_a_deleted_or_merged_id_is_never_constructed_again",
+    "tests/pg/test_tags.py::MergeTests.test_a_merge_moves_links_aliases_and_the_name"
+   ]
+  },
+  "TagVocabularySyncTests.test_recreating_the_same_id_acknowledges_without_overwriting": {
+   "replaced_by": [
+    "tests/pg/test_tags_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+    "tests/pg/test_tags_sync.py::CreateTests.test_two_creates_of_one_id_make_one_tag"
+   ]
+  },
+  "TagVocabularySyncTests.test_the_ordinary_creation_shares_the_construction_boundary": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::LinkTests.test_links_advance_their_scopes_and_no_op_edits_leave_no_row",
+    "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle"
+   ]
+  },
+  "TagVocabularySyncTests.test_the_ordinary_creation_still_converges_on_an_existing_name": {
+   "replaced_by": [
+    "tests/pg/test_tags.py::IdentityTests.test_names_compare_by_identity_key",
+    "tests/test_tags_parity.py::TagFacadeParityTests.test_names_aliases_and_the_catalog"
+   ]
+  }
+ }
+}

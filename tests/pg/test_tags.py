@@ -183,6 +183,11 @@ class LinkTests(OrganizationTestCase):
         self.assertEqual(self.library.get_tags_in_use(), [])
 
 
+    def test_scope_ids_are_structural(self) -> None:
+        for link in (links.WORK, links.FOLDER):
+            with self.subTest(owner=link.owner_key):
+                self.assertNotEqual(link.scope_id("a:b", "c"), link.scope_id("a", "b:c"))
+
 class DeleteTests(OrganizationTestCase):
     def test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle(self) -> None:
         work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
@@ -209,6 +214,24 @@ class DeleteTests(OrganizationTestCase):
         self.assertNotEqual(self.tag("ethics"), tag)
         self.assert_integrity()
 
+
+    def test_a_delete_in_a_failed_command_leaves_the_tag_and_its_links(self) -> None:
+        work, tag = self.library.add_work("W"), self.tag("Ethics")
+        self.library.add_tag_to_work(work, tag)
+
+        class Abort(Exception):
+            pass
+
+        def delete_then_fail(scope: LibraryScope) -> None:
+            self.assertEqual(tags.delete_tag(scope, tag)[0], True)
+            raise Abort()
+
+        with self.assertRaises(Abort):
+            self.run_command(delete_then_fail)
+        self.assertEqual(self.lifecycle_of(tag), {"state": lifecycle.ACTIVE})
+        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
+        self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
+        self.assert_integrity()
 
 class MergeTests(OrganizationTestCase):
     def test_a_merge_moves_links_aliases_and_the_name(self) -> None:

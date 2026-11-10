@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
+from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import folders, links, tags
 from backend.domain.works import commands
 from backend.entity_ids import generate
@@ -171,6 +172,20 @@ class DeleteTests(FolderTestCase):
         self.assertEqual(self.field_revisions(folder_id)["description"], 1)
         self.assertEqual(self.library.get_folder_tag_options(folder_id)["known_absent"], {kept: 2, removed: 3})
 
+
+    def test_a_delete_in_a_failed_command_leaves_the_folder(self) -> None:
+        folder_id = self.add("Drafts")
+
+        class Abort(Exception):
+            pass
+
+        def delete_then_fail(scope: LibraryScope) -> None:
+            self.assertEqual(folders.delete(scope, folder_id), (True, None))
+            raise Abort()
+
+        with self.assertRaises(Abort):
+            self.run_command(delete_then_fail)
+        self.assertEqual(self.library.get_folder(folder_id)["title"], "Drafts")
 
 class WorkFilingTests(FolderTestCase):
     def test_filing_moving_and_clearing_advance_the_work_folder(self) -> None:

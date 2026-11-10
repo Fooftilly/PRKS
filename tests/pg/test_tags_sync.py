@@ -14,12 +14,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from unittest import mock
 
 from backend import sync_protocol
 from backend.domain.identity.authorization import AccessRefused, Refusal
+from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links, tags
 from backend.entity_ids import generate
 from backend.pg_facade import context as facade_context
+from backend.sync import protocol
 from backend.sync.families import FamilyHandler
 from backend.sync.handlers import tag as tag_handlers
 from backend.sync.handlers import tag_link
@@ -132,6 +135,110 @@ class CreateTests(TagSyncTestCase):
                                            "target_tag_id": ethics}))
 
 
+class EnvelopeTests(TagSyncTestCase):
+    """What the envelope and payload refuse before any write (retired ``tests/test_tag_sync.py``)."""
+
+    def test_a_colour_that_is_not_hex_is_refused_and_hex_is_kept_as_sent(self) -> None:
+        for bad in ("red;position:fixed;inset:0", "x;background:url(https://example.test/a)",
+                    "#12345", "javascript:alert(1)", "red", "#fff;"):
+            with self.subTest(color=bad):
+                self.assertEqual(self.send(self.create("Bad colour", color=bad)), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual((self.count("tags"), self.ledger()), (0, []))
+        for good in ("#abc", "#abcd", "#AABBCC", "#AABBCCdd"):
+            with self.subTest(color=good):
+                status, result = self.send(self.create("Hex " + good, color=good))
+                self.assertEqual((status, result["tag"]["color"]), (200, good))
+        self.assertEqual(sorted(row["color"] for row in self.library.get_all_tags()),
+                         sorted(["#abc", "#abcd", "#AABBCC", "#AABBCCdd"]))
+
+    def test_delete_and_merge_address_an_identity_and_carry_no_base_revision(self) -> None:
+        source, target = self.create_tag("A"), self.create_tag("B")
+        for data in (self.envelope("DELETE_TAG", source, {}, 0), self.merge(source, target) | {"base_revision": 0}):
+            with self.subTest(operation=data["operation"]):
+                self.assertEqual(self.send(data), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(sorted(row["id"] for row in self.library.get_all_tags()), sorted([source, target]))
+
+    def test_every_tag_operation_is_registered_under_its_entity_type(self) -> None:
+        self.assertLessEqual({"CREATE_TAG", "DELETE_TAG", "MERGE_TAG", "ADD_WORK_TAG", "REMOVE_WORK_TAG",
+                              "ADD_FOLDER_TAG", "REMOVE_FOLDER_TAG"}, protocol.supported_operations())
+        folder, tag = self.folder(), self.create_tag("Ethics")
+        for entity_type in ("work", "tag"):
+            with self.subTest(entity_type=entity_type):
+                data = self.link("ADD_FOLDER_TAG", folder, tag, 0) | {"entity_type": entity_type}
+                self.assertEqual(self.send(data), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.count("folder_tags"), 0)
+
+
+class ReplayTests(TagSyncTestCase):
+    """The ledger answers a resent ``op_id`` (retired ``tests/test_work_tag_sync.py``)."""
+
+    def state(self) -> tuple[Any, ...]:
+        return (self.sql("SELECT work_id, tag_id FROM prks.work_tags ORDER BY 1, 2"),
+                self.sql("SELECT scope_type, scope_id, revision FROM prks.entity_revisions ORDER BY 1, 2"),
+                self.sql("SELECT tag_id, state, target_tag_id FROM prks.sync_tag_lifecycle ORDER BY 1"))
+
+    def test_a_replay_answers_what_was_ledgered_after_the_world_moved_on(self) -> None:
+        work, tag = self.library.add_work("W"), self.create_tag("Ethics")
+        merged, target, doomed = self.create_tag("Merged"), self.create_tag("Target"), self.create_tag("Doomed")
+        sent: dict[str, tuple[dict[str, Any], Any]] = {}
+
+        def record(code: str, data: dict[str, Any]) -> None:
+            result = self.send(data)
+            self.assertEqual(result[1]["code"], code, result)
+            sent[code] = (data, result)
+
+        record("ACKNOWLEDGED", self.link("ADD_WORK_TAG", work, tag, 0))
+        record("REVISION_CONFLICT", self.link("REMOVE_WORK_TAG", work, tag, 0))
+        record("ENTITY_NOT_FOUND", self.link("ADD_WORK_TAG", generate("W"), tag, 0))
+        self.library.merge_tags_into(merged, target)
+        record("TAG_MERGED", self.link("ADD_WORK_TAG", work, merged, 0))
+        self.library.delete_tag(doomed)
+        record("TAG_DELETED", self.link("ADD_WORK_TAG", work, doomed, 0))
+        record("FUTURE_REVISION", self.link("ADD_WORK_TAG", work, tag, 99))
+        # Every way a replay could re-derive another answer: the link flips,
+        # the merge target is deleted, a new Tag appears.
+        self.library.remove_tag_from_work(work, tag)
+        self.library.add_tag_to_work(work, tag)
+        self.library.delete_tag(target)
+        self.create_tag("Newcomer")
+        before, ledger = self.state(), self.ledger()
+        for code, (data, result) in sent.items():
+            with self.subTest(code=code):
+                self.assertEqual(self.send(data), result)
+        self.assertEqual((self.state(), self.ledger()), (before, ledger))
+
+    def test_the_envelope_is_normalized_before_it_is_compared(self) -> None:
+        work, tag = self.library.add_work("W"), self.create_tag("Ethics")
+        data = self.link("ADD_WORK_TAG", work, tag, 0)
+        first = self.send(data)
+        reordered = dict(reversed(list(data.items())), occurred_at="2026-09-11T10:00:00+00:00")
+        self.assertEqual(self.send(reordered), first)
+        self.assertEqual(self.send(data | {"operation": "REMOVE_WORK_TAG"}), (409, {"code": "OP_ID_REUSE"}))
+        self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
+
+    def test_a_malformed_envelope_is_refused_before_the_ledger(self) -> None:
+        work, tag = self.library.add_work("W"), self.create_tag("Ethics")
+        before = self.ledger()
+        for field, value in (("base_revision", True), ("base_revision", -1), ("base_revision", 1.2),
+                             ("base_revision", None), ("device_id", "bad"), ("op_id", "bad"),
+                             ("operation", "RENAME_EVERYTHING"), ("payload", {"tag_id": tag, "extra": 1}),
+                             ("occurred_at", "yesterday"), ("created_at", None),
+                             ("entity_type", "folder"), ("depends_on", [str(uuid.uuid4())])):
+            with self.subTest(field=field, value=value):
+                self.assertEqual(self.send(self.link("ADD_WORK_TAG", work, tag, 0) | {field: value})[0], 400)
+        self.assertEqual((self.ledger(), self.count("work_tags"), self.revisions("work-tag")), (before, 0, {}))
+
+
+    def test_a_lifecycle_cycle_fails_the_operation_unledgered(self) -> None:
+        work, first, second = self.library.add_work("W"), self.create_tag("A"), self.create_tag("B")
+        self.library.merge_tags_into(first, second)
+        self.sql("UPDATE prks.sync_tag_lifecycle SET state = 'merged', target_tag_id = %s WHERE tag_id = %s",
+                 (first, second))
+        before = self.ledger()
+        with self.assertRaises(RuntimeError):
+            self.send(self.link("ADD_WORK_TAG", work, first, 0))
+        self.assertEqual((self.ledger(), self.count("work_tags")), (before, 0))
+
 class LinkTests(TagSyncTestCase):
     def test_the_decision_table(self) -> None:
         work, folder, tag = self.library.add_work("W"), self.folder(), self.create_tag("Ethics")
@@ -152,6 +259,44 @@ class LinkTests(TagSyncTestCase):
                 missing = generate(owner[0])
                 self.assertEqual(self.send(self.link(add, missing, tag, 0)),
                                  (404, {"code": "ENTITY_NOT_FOUND", link.owner_key: missing, "tag_id": tag}))
+
+    def test_a_failure_finishing_the_ledger_rolls_the_link_back(self) -> None:
+        """The change is applied before the ledger row is finished; failing either step undoes both."""
+        work, tag = self.library.add_work("W"), self.create_tag("Ethics")
+        before = self.ledger()
+        finish = protocol._FINISH
+        real_execute = LibraryScope.execute
+        linked_at_finish: list[int] = []
+
+        def failing_finish(scope: LibraryScope, statement: Any, *args: Any, **kwargs: Any) -> Any:
+            if statement is finish:
+                # The link is already written in this transaction when the ledger is finished.
+                linked_at_finish.append(real_execute(
+                    scope, "SELECT count(*) AS n FROM prks.work_tags WHERE library_id = %(library_id)s", {}).fetchone()["n"])
+                raise RuntimeError("the ledger result could not be written")
+            return real_execute(scope, statement, *args, **kwargs)
+
+        failures = (
+            ("no result", mock.patch.object(FamilyHandler, "ledgered", side_effect=RuntimeError("no result"))),
+            ("could not be written", mock.patch.object(LibraryScope, "execute", autospec=True,
+                                                       side_effect=failing_finish)),
+        )
+        data = self.link("ADD_WORK_TAG", work, tag, 0)
+        for point, failure in failures:
+            with self.subTest(point=point):
+                with failure, self.assertRaisesRegex(RuntimeError, point):
+                    self.send(data)
+                self.assertEqual(self.count("work_tags"), 0)
+                self.assertEqual(self.revisions("work-tag"), {})
+                self.assertEqual(self.ledger(), before)  # the claim rolled back too
+        self.assertEqual(linked_at_finish, [1])
+        # The op_id was not burnt: the same operation then applies once.
+        status, result = self.send(data)
+        self.assertEqual((status, result["code"], result["server_revision"], result["changed"]),
+                         (200, "ACKNOWLEDGED", 1, True))
+        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
+        self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
+        self.assertEqual(len(self.ledger()), len(before) + 1)
 
     def test_a_deleted_or_merged_tag_is_never_linked_or_redirected(self) -> None:
         work = self.library.add_work("W")

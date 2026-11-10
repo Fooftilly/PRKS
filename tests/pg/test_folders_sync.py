@@ -126,6 +126,40 @@ class CreateTests(FolderSyncTestCase):
         self.assertEqual(self.count("folders"), 1)
 
 
+class EnvelopeTests(FolderSyncTestCase):
+    """What the envelope and payload decide before any write (retired ``tests/test_folder_sync.py``)."""
+
+    def test_ids_fields_and_base_revisions_are_refused_before_the_ledger(self) -> None:
+        folder_id = self.create_folder("Drafts")
+        before = self.ledger()
+        for bad in ("F-ABCD1234", "drafts", "T-" + "A" * 32):
+            with self.subTest(folder_id=bad):
+                self.assertEqual(self.send(self.create("X", bad)), (400, {"code": "INVALID_ENVELOPE"}))
+        for name in ("id", "created_at", "title; DROP TABLE folders", ""):
+            with self.subTest(field=name):
+                self.assertEqual(self.send(self.field(folder_id, name, "x", 0)), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.envelope("SET_FOLDER_FIELD", folder_id, {"field": "title", "value": "X"})),
+                         (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(self.send(self.envelope("DELETE_FOLDER", folder_id, {}, 0)),
+                         (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual((self.ledger(), self.count("folders")), (before, 1))
+
+    def test_an_empty_title_becomes_the_placeholder_on_both_paths(self) -> None:
+        folder_id = self.create_folder("   ")
+        self.assertEqual(self.library.get_folder(folder_id)["title"], "Untitled Folder")
+        top = self.create_folder("Top")
+        self.assertEqual(self.library.get_folder(self.library.add_folder("  ", "", top))["title"],
+                         "Untitled Folder")
+
+    def test_clearing_a_parent_by_sync_leaves_no_parent(self) -> None:
+        top = self.create_folder("Top")
+        child = self.create_folder("Child", parent_id=top)
+        self.assertEqual(self.send(self.field(child, "parent_id", "", 0))[1]["server_revision"], 1)
+        self.assertEqual(self.sql("SELECT parent_id FROM prks.folders WHERE id = %s", (child,)),
+                         [{"parent_id": None}])
+        self.assertIsNone(self.library.get_folder(child)["parent"])
+
+
 class FieldTests(FolderSyncTestCase):
     def test_the_decision_table(self) -> None:
         folder_id, work_id = self.create_folder("Folder"), self.library.add_work("W")
