@@ -3405,8 +3405,8 @@ class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
                 return
             response = route.fetch()
             body = response.json()
-            self.assertIn("content_sha256", body)
-            body["content_sha256"] = "0" * 64
+            self.assertIn("export_sha256", body)
+            body["export_sha256"] = "0" * 64
             tampered.append(body["file_path"])
             route.fulfill(response=response, json=body)
 

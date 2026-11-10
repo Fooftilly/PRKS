@@ -134,6 +134,7 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.read(after["storage_locator"]), RENDERED)
         self.assertEqual(done, {"work_id": work_id, "file_path": "/api/pdfs/" + after["storage_locator"],
                                 "content_sha256": digest, "byte_size": len(RENDERED),
+                                "export_sha256": digest, "export_byte_size": len(RENDERED),
                                 "materialized_pdf_annotation_revision": canonical,
                                 "canonical_annotation_set_revision": canonical, "stale": False})
         self.assertEqual(self.objects.verify(StorageKey(NAMESPACE_ASSET_OBJECTS, after["storage_locator"]), digest),
@@ -177,6 +178,24 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.claims(), {old, written.source.key.name})
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 2})
         self.assertEqual(self.names(), {written.working.key.name})
+
+
+    def test_a_linearized_write_reports_the_uploaded_export_beside_the_stored_bytes(self) -> None:
+        work_id = self.add_pdf_work()
+        canonical = self.edited(work_id)
+        linearized = RENDERED + b"% linearized\n"
+        with mock.patch("backend.domain.objects.ingest._linearized",
+                        lambda storage, source, name, context: (self.put(linearized), "ok")):
+            done = self.materialize(work_id, canonical)
+        after = self.asset(work_id)
+        self.assertEqual((done["content_sha256"], done["byte_size"]),
+                         (hashlib.sha256(linearized).hexdigest(), len(linearized)))
+        self.assertEqual((after["content_sha256"], self.read(after["storage_locator"])),
+                         (done["content_sha256"], linearized))
+        # The export is what the viewer sent, so it can tell its own document
+        # from a replacement after the server rewrote the bytes.
+        self.assertEqual((done["export_sha256"], done["export_byte_size"]),
+                         (hashlib.sha256(RENDERED).hexdigest(), len(RENDERED)))
 
 
 class RenderingRaceTests(MaterializeTestCase):

@@ -214,8 +214,12 @@ class AnnotationsMixin(FacadeMixin):
         if isinstance(done, str):
             _raise_refused(done)
         self._mention(work_id, labels)
+        # ``export_*`` name the bytes as uploaded; ``content_*`` the stored
+        # working file, which linearization may have rewritten. The viewer
+        # compares the export to tell its own document from a replacement.
         return {"work_id": work_id, "file_path": "/api/pdfs/" + done.locator,
                 "content_sha256": done.sha256, "byte_size": done.size,
+                "export_sha256": written.source.sha256, "export_byte_size": written.source.size,
                 "materialized_pdf_annotation_revision": done.revision,
                 "canonical_annotation_set_revision": done.revision, "stale": False}
 

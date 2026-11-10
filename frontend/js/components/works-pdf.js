@@ -32,15 +32,21 @@ function prksViewerBoundToManagedPath(runtime, path) {
 }
 
 /**
- * Whether a successful PDF write stored exactly `buffer`, the bytes this
- * viewer exported. Prefers the server's SHA-256 (`content_sha256`); where
- * Web Crypto is unavailable (plain-HTTP LAN origins) the byte size of this
- * request's own response stands in. Without either, the answer is false and
- * the caller falls back to remounting.
+ * Whether a successful PDF write stored `buffer`, the bytes this viewer
+ * exported. The server names the upload as `export_sha256` /
+ * `export_byte_size`: linearization may rewrite the stored working file
+ * (`content_sha256`), which is still this document. A response without the
+ * export fields is compared on `content_sha256`. Where Web Crypto is
+ * unavailable (plain-HTTP LAN origins) the byte size of this request's own
+ * response stands in. Without either, the answer is false and the caller
+ * falls back to remounting.
  */
 async function prksStoredExportMatches(body, buffer) {
     if (!body || !buffer || typeof buffer.byteLength !== 'number') return false;
-    const want = typeof body.content_sha256 === 'string' ? body.content_sha256.toLowerCase() : '';
+    const exported = typeof body.export_sha256 === 'string';
+    const named = exported ? body.export_sha256 : body.content_sha256;
+    const size = exported ? body.export_byte_size : body.byte_size;
+    const want = typeof named === 'string' ? named.toLowerCase() : '';
     const subtle = typeof crypto !== 'undefined' && crypto && crypto.subtle;
     if (want && subtle && typeof subtle.digest === 'function') {
         try {
@@ -52,8 +58,8 @@ async function prksStoredExportMatches(body, buffer) {
             return false;
         }
     }
-    if (want && Number.isSafeInteger(body.byte_size)) {
-        return body.byte_size === buffer.byteLength;
+    if (want && Number.isSafeInteger(size)) {
+        return size === buffer.byteLength;
     }
     return false;
 }

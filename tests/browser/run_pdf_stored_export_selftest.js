@@ -71,6 +71,15 @@ async function storedExport() {
     assert.equal(await matches({ content_sha256: sha256(other), byte_size: other.byteLength }, exported), false,
         'other bytes of the same size are another document');
 
+    // Linearization rewrote the stored bytes: the export fields still name
+    // this viewer's upload, and they decide over the stored file's hash.
+    const linearized = { content_sha256: sha256(other), byte_size: other.byteLength + 9 };
+    assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
+        export_byte_size: exported.byteLength }, linearized), exported), true);
+    assert.equal(await matches(Object.assign({ export_sha256: sha256(other),
+        export_byte_size: other.byteLength }, { content_sha256: sha256(exported) }), exported), false,
+        'an export that is not these bytes is not rescued by the stored hash');
+
     // No answer to compare against is not a match: the caller remounts.
     assert.equal(await matches({ byte_size: exported.byteLength }, exported), false);
     assert.equal(await matches({}, exported), false);
@@ -83,6 +92,10 @@ async function storedExport() {
         assert.equal(await matches({ content_sha256: sha256(exported), byte_size: exported.byteLength + 1 }, exported), false);
         assert.equal(await matches({ content_sha256: sha256(exported) }, exported), false);
         assert.equal(await matches({ byte_size: exported.byteLength }, exported), false);
+        assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
+            export_byte_size: exported.byteLength }, linearized), exported), true);
+        assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
+            export_byte_size: exported.byteLength + 9 }, { byte_size: exported.byteLength }), exported), false);
     });
 }
 
