@@ -173,6 +173,23 @@ class CrossReferenceOrderTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "ran in another order"):
             self.replay(recording, self.sync_then_create)
 
+    def test_a_recorded_reference_the_test_no_longer_creates_is_refused(self) -> None:
+        recording = self.record(self.create_then_sync)
+        case = _Case("test_x")
+        with mock.patch.dict(os.environ, {RECORD_ENV: ""}), \
+                mock.patch.object(parity_reference, "_cache", {self.module: recording}):
+            library = reference_for(case, lambda: self.fail("a replay opens no SQLite library"))
+            library.create_concept("Virtue")
+            library.close()  # the library's own steps were all replayed
+            with self.assertRaisesRegex(AssertionError, "the index reference.*never created"):
+                parity_reference.check_every_reference_created(case)
+            self.assertFalse(case.doCleanups())  # the check also runs at the test's cleanup
+            # A test that creates both passes the same check.
+            both = _Case("test_x")
+            self.create_then_sync(reference_for(both, lambda: None),
+                                  reference_for(both, lambda: None, name="index"))
+            self.assertTrue(both.doCleanups())
+
     def test_a_recording_of_two_references_without_their_order_is_refused(self) -> None:
         recording = self.record(self.create_then_sync)
         unordered = {key: [{name: value for name, value in step.items() if name != "at"} for step in steps]
