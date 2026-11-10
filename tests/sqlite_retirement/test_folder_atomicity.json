@@ -1,0 +1,63 @@
+{
+  "module": "tests/test_folder_atomicity.py",
+  "tests": {
+    "TestFolderAtomicity.test_deleting_a_folder_keeps_its_tags_in_the_catalog": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_deleting_a_folder_keeps_its_tags"
+      ]
+    },
+    "TestFolderAtomicity.test_removing_a_tag_from_a_folder_keeps_the_tag": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag"
+      ]
+    },
+    "TestFolderAtomicity.test_removing_a_tag_from_a_work_keeps_the_tag": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag"
+      ]
+    },
+    "TestFolderAtomicity.test_bulk_tag_removal_keeps_the_tags": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_bulk_tag_removal_keeps_the_tags"
+      ]
+    },
+    "TestFolderAtomicity.test_a_tag_on_a_processing_file_is_never_collected_by_a_work_edit": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::EditTests.test_a_work_tag_edit_never_takes_a_draft_tag",
+        "tests/pg/test_tags.py::TagIdentityTests.test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag"
+      ]
+    },
+    "TestFolderAtomicity.test_merge_moves_a_processing_file_relationship_to_the_target": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::EditTests.test_a_tag_merge_moves_draft_tags"
+      ]
+    },
+    "TestFolderAtomicity.test_merge_deduplicates_when_the_file_already_had_both": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::EditTests.test_a_tag_merge_keeps_one_draft_tag_when_the_draft_had_both"
+      ]
+    },
+    "TestFolderAtomicity.test_explicit_delete_tag_still_cascades_a_processing_file_link": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::EditTests.test_deleting_a_folder_person_or_tag_updates_the_draft"
+      ]
+    },
+    "TestFolderAtomicity.test_explicit_delete_tag_still_destroys_it_and_cascades": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_an_explicit_delete_destroys_the_tag_and_all_its_links",
+        "tests/pg/test_tags.py::DeleteTests.test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle"
+      ]
+    },
+    "TestFolderAtomicity.test_merge_destroys_only_the_source_tag": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_a_merge_destroys_only_the_source_tag",
+        "tests/pg/test_tags.py::MergeTests.test_a_merge_moves_links_aliases_and_the_name"
+      ]
+    },
+    "TestFolderAtomicity.test_folder_patch_reports_member_work_ids_for_rename": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::WorkFilingTests.test_filing_moving_and_clearing_advance_the_work_folder"
+      ]
+    }
+  }
+}

@@ -458,6 +458,25 @@ class EditTests(QueueTestCase):
         self.library.merge_tags_into(source, target)
         self.assertEqual([tag["id"] for tag in self.get(item["id"])["draft"]["tags"]], [target])
 
+    def test_a_tag_merge_keeps_one_draft_tag_when_the_draft_had_both(self) -> None:
+        item = self.ready()
+        source = self.library.add_tag("logic")["id"]
+        target = self.library.add_tag("maths")["id"]
+        self.edit(item["id"], 0, {"tags": [{"id": source}, {"id": target}]})
+        self.library.merge_tags_into(source, target)
+        self.assertEqual([tag["id"] for tag in self.get(item["id"])["draft"]["tags"]], [target])
+        self.assertEqual(self.sql("SELECT tag_id FROM prks.processing_item_tags WHERE item_id = %s",
+                                  (item["id"],)), [{"tag_id": target}])
+
+    def test_a_work_tag_edit_never_takes_a_draft_tag(self) -> None:
+        item = self.ready()
+        tag = self.library.add_tag("staged only")["id"]
+        work = self.library.add_work("Unrelated")
+        self.library.add_tag_to_work(work, tag)
+        self.edit(item["id"], 0, {"tags": [{"id": tag}]})
+        self.library.remove_tag_from_work(work, tag)
+        self.assertEqual([row["id"] for row in self.get(item["id"])["draft"]["tags"]], [tag])
+
 
 class ImportTests(QueueTestCase):
     def test_an_import_creates_the_work_from_the_draft_and_moves_the_key_to_its_asset(self) -> None:

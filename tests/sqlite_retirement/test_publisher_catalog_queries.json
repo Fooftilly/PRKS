@@ -1,0 +1,39 @@
+{
+  "module": "tests/test_publisher_catalog_queries.py",
+  "tests": {
+    "PublisherCatalogQueryTests.test_catalog_matches_per_publisher_implementation": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_names_and_aliases_count_each_work_once",
+        "tests/test_people_core_parity.py::PublisherParityTests.test_in_use_counts_works_by_name_and_alias"
+      ]
+    },
+    "PublisherCatalogQueryTests.test_name_repeated_as_alias_counts_each_work_once": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_names_and_aliases_count_each_work_once"
+      ],
+      "note": "PostgreSQL refuses an alias with the name's identity key, so a name cannot repeat as an alias; each Work has one label and counts once."
+    },
+    "PublisherCatalogQueryTests.test_alias_order_survives_interleaving_across_publishers": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_alias_order_survives_interleaving_across_publishers"
+      ]
+    },
+    "PublisherCatalogQueryTests.test_tab_and_blank_catalog_labels_match_legacy": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_the_catalog_name_is_trimmed",
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_names_and_aliases_count_each_work_once"
+      ],
+      "note": "The SQLite TRIM-versus-strip() mismatch is gone: PostgreSQL compares Work publishers to names and aliases by identity key, and a blank name is refused on create."
+    },
+    "PublisherCatalogQueryTests.test_empty_catalog_issues_one_statement": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_an_empty_catalog_issues_one_statement"
+      ]
+    },
+    "PublisherCatalogQueryTests.test_statement_count_is_bounded_as_publishers_grow": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::PublisherCatalogTests.test_the_statement_count_is_bounded_as_publishers_grow"
+      ]
+    }
+  }
+}

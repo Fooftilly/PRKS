@@ -1,0 +1,26 @@
+{
+  "module": "tests/test_person_group_catalog_counts.py",
+  "tests": {
+    "PersonGroupCatalogCountTests.test_catalog_matches_correlated_counts": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::GroupCatalogTests.test_the_catalog_matches_correlated_counts",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_a_group_with_a_new_parent_by_name"
+      ]
+    },
+    "PersonGroupCatalogCountTests.test_empty_catalog": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::GroupCatalogTests.test_an_empty_catalog"
+      ]
+    },
+    "PersonGroupCatalogCountTests.test_catalog_reads_each_relationship_once": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::GroupCatalogTests.test_the_catalog_reads_each_relationship_once_however_large"
+      ]
+    },
+    "PersonGroupCatalogCountTests.test_plan_stays_set_based_as_catalog_grows": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::GroupCatalogTests.test_the_catalog_reads_each_relationship_once_however_large"
+      ]
+    }
+  }
+}
