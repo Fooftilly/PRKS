@@ -7,7 +7,7 @@
  * On PostgreSQL every PDF write is stored under a fresh immutable key. When
  * the server confirms it stored exactly the bytes this viewer exported, the
  * open document is that object and the viewer stays mounted
- * (`prksStoredExportMatches`); the loaded path is not rewritten, and the new
+ * (`prksStoredExportMatches`, by SHA-256 even without Web Crypto); the loaded path is not rewritten, and the new
  * key is recorded for that viewer instance only
  * (`prksViewerBoundToManagedPath`). Anything else remounts.
  *
@@ -36,10 +36,11 @@ pdfSource = pdfSource.replace(
 pdfSource = pdfSource.replace('export function initPdfViewerForWork', 'function initPdfViewerForWork');
 const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prks-pdf-stored-export-'));
 const scriptFile = path.join(scriptDir, 'works-pdf.cjs');
-fs.writeFileSync(scriptFile, pdfSource + '\nmodule.exports = { prksStoredExportMatches, prksViewerBoundToManagedPath };\n');
+fs.writeFileSync(scriptFile, pdfSource + '\nmodule.exports = { prksStoredExportMatches, prksViewerBoundToManagedPath, prksSha256HexSync };\n');
 const {
     prksStoredExportMatches: matches,
     prksViewerBoundToManagedPath: bound,
+    prksSha256HexSync: sha256Sync,
 } = require(scriptFile);
 
 function bytes(text) {
@@ -86,17 +87,31 @@ async function storedExport() {
     assert.equal(await matches(null, exported), false);
     assert.equal(await matches({ content_sha256: sha256(exported) }, null), false);
 
-    // Without Web Crypto (plain-HTTP LAN origin) this request's own size stands in.
+    // Without Web Crypto (plain-HTTP LAN origin) the bytes are still hashed,
+    // in JavaScript: a size is never proof of the same document.
     await withoutWebCrypto(async () => {
         assert.equal(await matches({ content_sha256: sha256(exported), byte_size: exported.byteLength }, exported), true);
-        assert.equal(await matches({ content_sha256: sha256(exported), byte_size: exported.byteLength + 1 }, exported), false);
-        assert.equal(await matches({ content_sha256: sha256(exported) }, exported), false);
+        assert.equal(await matches({ content_sha256: sha256(other), byte_size: exported.byteLength }, exported), false,
+            'same size, other bytes');
+        assert.equal(await matches({ export_sha256: sha256(other), export_byte_size: exported.byteLength }, exported), false,
+            'an export of the same length with another hash is another document');
         assert.equal(await matches({ byte_size: exported.byteLength }, exported), false);
         assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
             export_byte_size: exported.byteLength }, linearized), exported), true);
-        assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
-            export_byte_size: exported.byteLength + 9 }, { byte_size: exported.byteLength }), exported), false);
+        assert.equal(await matches({ content_sha256: 'not-a-hash', byte_size: exported.byteLength }, exported), false);
     });
+}
+
+function plainHash() {
+    // The JavaScript SHA-256 agrees with Node's on every padding boundary.
+    const sizes = [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129, 1000, 4096, 65537, 1048583];
+    for (const size of sizes) {
+        const data = new Uint8Array(size);
+        for (let i = 0; i < size; i += 1) data[i] = (i * 31 + (i >>> 8) * 7 + 13) & 0xff;
+        assert.equal(sha256Sync(data.buffer), sha256(data.buffer), 'size ' + size);
+    }
+    assert.equal(sha256Sync(bytes('abc')),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 }
 
 function boundPath() {
@@ -126,6 +141,7 @@ function boundPath() {
 
 async function main() {
     await storedExport();
+    plainHash();
     boundPath();
     console.log(`PDF stored-export selftest: ${checks} checks passed`);
 }
