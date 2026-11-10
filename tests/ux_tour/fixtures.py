@@ -18,21 +18,14 @@ from __future__ import annotations
 import os
 import shutil
 
-from backend.db_manager import PRKSDatabase
-from backend.research_network import (
-    create_argument,
-    create_concept,
-    create_position,
-    replace_concept_parents,
-)
 from backend.storage.config import StorageConfig
 
 from tests.e2e.fixtures import (
     MINIMAL_PDF,
     PERSON_DISPLAY,
-    SCHEMA,
     WORK_A_TITLE,
     WORK_B_TITLE,
+    open_library,
     seed_graph_context_library,
 )
 
@@ -57,7 +50,7 @@ UX_PDF_NAME = "e2e-ux-tour.pdf"
 def seed_ux_tour_library(storage_root: str) -> dict:
     ids = seed_graph_context_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
-    db = PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    db = open_library(cfg)
 
     # --- Folder hierarchy: parent + child, each holding one of the two seed Works. ---
     parent_folder = db.add_folder("UX Tour Library")
@@ -114,8 +107,8 @@ def seed_ux_tour_library(storage_root: str) -> dict:
     ids["person2"] = person2
 
     # --- Person Group with a subgroup and cross-group memberships. ---
-    group_parent = db.add_person_group(GROUP_PARENT_NAME, description="Outer circle for the UX tour.")
-    group_child = db.add_person_group(GROUP_CHILD_NAME, parent_id=group_parent, description="Inner circle.")
+    group_parent = db.add_person_group_with_parent_options(GROUP_PARENT_NAME, description="Outer circle for the UX tour.")
+    group_child = db.add_person_group_with_parent_options(GROUP_CHILD_NAME, parent_id=group_parent, description="Inner circle.")
     db.add_person_to_group(ids["person"], group_parent)
     db.add_person_to_group(person2, group_child)
     ids["group_parent"] = group_parent
@@ -123,16 +116,15 @@ def seed_ux_tour_library(storage_root: str) -> dict:
 
     # --- Concept parent/child hierarchy (in addition to the graph fixture's
     # Culture/Philosophy mentions already on work_a). ---
-    concept_parent = create_concept(db, CONCEPT_PARENT_NAME, "Root concept exercised by the UX tour.")
-    concept_child = create_concept(db, CONCEPT_CHILD_NAME, "Child concept exercised by the UX tour.")
-    replace_concept_parents(db, concept_child["id"], [concept_parent["id"]])
+    concept_parent = db.create_concept(CONCEPT_PARENT_NAME, "Root concept exercised by the UX tour.")
+    concept_child = db.create_concept(CONCEPT_CHILD_NAME, "Child concept exercised by the UX tour.")
+    db.replace_concept_parents(concept_child["id"], [concept_parent["id"]])
     ids["concept_parent"] = concept_parent["id"]
     ids["concept_child"] = concept_child["id"]
 
     # --- A Position with a supporting Stance (a kind='stance' Argument targeting it). ---
-    tour_position = create_position(db, TOUR_POSITION_NAME, "Position exercised by the UX tour.")
-    tour_stance = create_argument(
-        db,
+    tour_position = db.create_position(TOUR_POSITION_NAME, "Position exercised by the UX tour.")
+    tour_stance = db.create_argument(
         name=TOUR_STANCE_NAME,
         kind="stance",
         main_text="A stance supporting the UX tour position.",
