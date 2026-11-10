@@ -62,8 +62,10 @@ from tests.e2e.test_app import (
     _open_work_from_home,
     _pdf_selection_geometry,
     _viewer_annotation_count,
+    _wait_pdf_materialized,
     _wait_pdf_viewer,
 )
+from tests.e2e.postgres_identity import postgres_library
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -1356,12 +1358,15 @@ class OfflineFoundationTests(unittest.TestCase):
         )
 
     def test_inplace_pdf_materialization_refreshes_whole_file_cache(self):
-        """In-place annotation materialization replaces the scoped PDF cache entry.
+        """Annotation materialization puts the accepted bytes in the scoped PDF cache.
 
         Opening a PDF primes the whole-file cache. A later exclusive POST /pdf
-        keeps the same /api/pdfs/ path (no COW). Range loads never rewrite that
-        entry, so the cache must take the bytes just accepted by the server.
-        Offline reopen then serves that generation, not the pre-edit file.
+        keeps the same /api/pdfs/ path on SQLite (no COW); on PostgreSQL the
+        bytes land under a fresh immutable key for the same document. Either
+        way the open viewer stays mounted, and the cache entry for the
+        canonical path holds the bytes just accepted by the server (range
+        loads never write it). Offline reopen then serves that generation,
+        not the pre-edit file.
         """
         server, page, context, collector = self._start()
         work_a = server.ids["work_a"]
@@ -1383,25 +1388,35 @@ class OfflineFoundationTests(unittest.TestCase):
         self.assertIsNotNone(before)
         self.assertGreater(before["length"], 0)
 
+        page.evaluate("() => { window.__prksViewerBeforeSave = (%s).viewer; }" % _FOCUSED_PDF)
+
         collector.reset_handshake()
         since = _sync_success_at(page)
         _commit_pdf_highlight(page)
         collector.wait_pdf_handshake(page, since_ms=since)
-        _wait_pdf_cache_replaced(page, pdf_path, before)
-        after = _pdf_cache_fingerprint(page, pdf_path)
+        _wait_pdf_materialized(page, work_a)
+        canonical = page.evaluate(
+            "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
+            % _FOCUSED_PDF
+        )
+        if postgres_library():
+            # A fresh immutable key for the same document, never the old one.
+            self.assertNotEqual(canonical, pdf_path)
+            self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
+        else:
+            # Exclusive file: materialization must not retarget the managed path.
+            self.assertEqual(canonical, pdf_path)
+        # The save kept the open viewer: no reload for an annotation-only save.
+        self.assertTrue(page.evaluate(
+            "() => (%s).viewer === window.__prksViewerBeforeSave" % _FOCUSED_PDF))
+        _wait_pdf_cache_replaced(page, canonical, before)
+        after = _pdf_cache_fingerprint(page, canonical)
         self.assertIsNotNone(after)
         self.assertNotEqual(
             (after["length"], after["hash"]),
             (before["length"], before["hash"]),
         )
-        # Exclusive file: materialization must not retarget the managed path.
-        self.assertEqual(
-            page.evaluate(
-                "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
-                % _FOCUSED_PDF
-            ),
-            pdf_path,
-        )
+        pdf_path = canonical
         # The PDF save drops the disposable Work snapshot. Re-read that JSON
         # while still online so an offline reload can mount the page. This
         # must not be a PDF GET: a whole-file network response would rewrite

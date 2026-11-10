@@ -56,6 +56,28 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_durable_write_does_not_wait_on_materialization_handoff(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_write_handoff_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
+    def test_same_document_under_a_new_key_keeps_the_viewer(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_stored_export_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_comment_save_selftests(self):
         """#401: every comment edit records an intent; failures are reported."""
         proc = subprocess.run(
