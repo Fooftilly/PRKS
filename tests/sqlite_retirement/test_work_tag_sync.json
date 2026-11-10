@@ -6,10 +6,11 @@
   },
   "WorkTagSyncTests.test_atomic_rollback_before_and_during_ledger_insert": {
    "replaced_by": [
+    "tests/pg/test_tags_sync.py::LinkTests.test_a_failure_finishing_the_ledger_rolls_the_link_back",
     "tests/pg/test_works_sync.py::LedgerTests.test_an_exception_rolls_the_claim_back",
     "tests/pg/test_works_sync.py::FailureTests.test_an_edit_that_fails_after_writing_leaves_nothing_and_retries"
    ],
-   "note": "On PostgreSQL the claim, the change and the ledger result are one library_command transaction, so a failure anywhere in it, including writing the result, rolls all of them back."
+   "note": "On PostgreSQL the claim, the change and the ledger result are one library_command transaction. LinkTests fails ADD_WORK_TAG after the link is written, once while building the ledgered result and once in the ledger UPDATE (protocol._FINISH): the link, its revision and the claim all roll back, and the same op then applies once."
   },
   "WorkTagSyncTests.test_conflict_matrix_and_future": {
    "replaced_by": [
