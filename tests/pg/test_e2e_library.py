@@ -148,6 +148,29 @@ class PostgresLibraryLegTests(unittest.TestCase):
         for name in ("prks_data.db", "prks_data_testing.db"):
             self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
 
+    def test_a_seeded_research_note_is_indexed_before_the_server_starts(self) -> None:
+        """The seed runs the note's reindex itself: no test waits on the worker for its mentions.
+
+        A Work is a Research Graph node only through mentions, so a graph or
+        mention count read before the queued job ran showed none (the Research
+        Graph E2E timeouts on the PostgreSQL leg).
+        """
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        ids = postgres_identity.seed_postgres_library(fixtures.seed_graph_context_library, self.root, library)
+        mentioned = self.rows(library.conninfo, "SELECT DISTINCT work_id FROM derived.concept_mentions")
+        self.assertEqual([row["work_id"] for row in mentioned], [ids["work_a"]])
+        states = self.rows(
+            library.conninfo,
+            "SELECT n.work_id, s.content_hash = encode(sha256(convert_to(n.body, 'UTF8')), 'hex') AS current "
+            "FROM prks.work_notes n LEFT JOIN derived.work_note_state s USING (library_id, work_id) "
+            "WHERE n.kind = 'research'",
+        )
+        current = {row["work_id"]: row["current"] for row in states}
+        self.assertIs(current.get(ids["work_a"]), True, "the index is the current note's")
+
     def test_the_seeds_call_only_ported_facade_methods(self) -> None:
         import ast
 

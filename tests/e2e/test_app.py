@@ -5715,22 +5715,36 @@ class TabContextHostRootTests(_BrowserE2E):
         self.assertEqual(page.evaluate("() => location.hash"), "#/folders")
 
     def test_processing_files_refresh_keeps_tab_root(self):
+        """Refreshing Files for Processing reloads it inside the same tab root.
+
+        The PostgreSQL server shows the managed upload queue on this route and
+        never the legacy inbox page (PG-C1, §11.5); SQLite shows the legacy
+        page. Each backend's page is checked with its own Refresh button.
+        """
         _server, page, _collector = self._start_app()
+        if postgres_library():
+            refresh = "[data-prks-processing-queue] [data-processing-refresh]"
+        else:
+            refresh = "#prks-processing-refresh"
         page.locator('#sidebar a.nav-link[href="#/processing-files"]').click()
         page.wait_for_function("() => location.hash === '#/processing-files'")
-        page.locator("#prks-processing-refresh").wait_for()
+        page.locator(refresh).wait_for()
         page.locator("h2.prks-page-title", has_text="Files for Processing").wait_for()
+        if postgres_library():
+            self.assertEqual(page.locator("#prks-processing-refresh").count(), 0,
+                             "the legacy inbox page is never shown on PostgreSQL")
         root_id = self._assert_single_mounted_root(page)
-        page.locator("#prks-processing-refresh").click()
+        page.locator(refresh).click()
         page.wait_for_function(
-            """() => {
-                const b = document.getElementById('prks-processing-refresh');
+            """(sel) => {
+                const b = document.querySelector(sel);
                 return !!(b && !b.disabled && b.textContent && b.textContent.indexOf('Refresh') !== -1);
-            }"""
+            }""",
+            arg=refresh,
         )
         self._assert_single_mounted_root(page, root_id)
         self.assertGreaterEqual(
-            page.locator(".prks-tab-root #prks-processing-refresh").count(),
+            page.locator(".prks-tab-root " + refresh).count(),
             1,
         )
 
