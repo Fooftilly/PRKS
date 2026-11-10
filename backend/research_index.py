@@ -17,6 +17,7 @@ from backend.db_manager import PRKSDatabase
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.research_markup import normalize_concept_key, parse_research_markup
 from backend.storage.config import StorageConfig
+from backend.domain.research.rules import note_snippet
 
 if TYPE_CHECKING:
     from backend.research_graph import GraphSnapshot
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger("prks.research_index")
 
 RESEARCH_INDEX_SCHEMA_VERSION = 1
-_SNIPPET_RADIUS = 80
 
 _CURRENT_TABLES = frozenset(
     {
@@ -528,20 +528,6 @@ class PRKSResearchIndex:
             summary["removed_orphans"],
         )
         return summary
-
-
-def note_snippet(text: str, start: int, end: int) -> str:
-    """The text around a mention, as a backlink shows it (shared with PostgreSQL)."""
-    if not text:
-        return ""
-    a = max(0, start - _SNIPPET_RADIUS)
-    b = min(len(text), end + _SNIPPET_RADIUS)
-    chunk = text[a:b].replace("\n", " ")
-    if a > 0:
-        chunk = "…" + chunk
-    if b < len(text):
-        chunk = chunk + "…"
-    return chunk
 
 
 _BOUND: PRKSResearchIndex | None = None

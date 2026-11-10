@@ -52,7 +52,7 @@ from backend.research_index import (
     replace_research_index,
     reset_research_index,
 )
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.jobs import JobDiagnostics

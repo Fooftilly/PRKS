@@ -12,7 +12,6 @@ import uuid
 from backend import concept_sync as concepts, entity_ids, sync_protocol
 from backend.db_manager import PRKSDatabase
 from backend.research_network import (
-    ResearchError,
     create_concept,
     delete_concept,
     get_concept,
@@ -20,6 +19,7 @@ from backend.research_network import (
     replace_concept_parents,
     update_concept,
 )
+from backend.domain.research.rules import ResearchError
 from backend.storage.config import StorageConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -193,7 +193,7 @@ class ConceptSyncTests(unittest.TestCase):
         """The durable path refuses it as a malformed ENVELOPE, so it is never
         ledgered as a domain outcome -- and never reported under a domain code
         that would tell the user something else entirely."""
-        from backend.research_network import CONCEPT_NAME_MAX
+        from backend.domain.research.rules import CONCEPT_NAME_MAX
         long_name = "x" * (CONCEPT_NAME_MAX + 1)
         with self.assertRaises(ResearchError) as caught:
             create_concept(self.db, long_name)
@@ -202,7 +202,7 @@ class ConceptSyncTests(unittest.TestCase):
         self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
 
     def test_an_identity_edit_refuses_a_malformed_name_as_an_envelope_error(self):
-        from backend.research_network import CONCEPT_NAME_MAX
+        from backend.domain.research.rules import CONCEPT_NAME_MAX
         cid, _, _ = self.create("Emergence")
         for bad in ("   ", "x" * (CONCEPT_NAME_MAX + 1), "Bell\x07 Curve"):
             with self.subTest(bad=bad):
@@ -241,7 +241,8 @@ class ConceptSyncTests(unittest.TestCase):
         rests on them.
         """
         from backend.research_markup import CONCEPT_REF_MAX
-        from backend.research_network import CONCEPT_NAME_MAX, save_work_notes
+        from backend.research_network import save_work_notes
+        from backend.domain.research.rules import CONCEPT_NAME_MAX
 
         # Control characters: refused for the whole note body, before any
         # Concept is resolved.

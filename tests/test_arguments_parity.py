@@ -25,7 +25,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 from tests.backend_parity import parametrize_backends
 from tests.test_concepts_parity import ConceptParityTestCase, ConceptSide
 from tests.test_tags_parity import both

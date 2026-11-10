@@ -21,9 +21,9 @@ target of an Argument before any server has heard of either.
 """
 import json
 
-from backend import research_network as network
+from backend.domain.research import rules as research_rules
 from backend.entity_ids import is_distributed
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 
 FIELDS = ("name", "description")
 FIELD_SET = frozenset(FIELDS)
@@ -42,8 +42,8 @@ def canonical_wire(field, value):
     would send `"  A  "`, read back `"A"`, and see a change it had not made.
     """
     if field == "name":
-        return network._plain_name(value, max_len=network.POSITION_NAME_MAX)
-    return network._optional_markdown(value, max_len=network.POSITION_DESCRIPTION_MAX)
+        return research_rules._plain_name(value, max_len=research_rules.POSITION_NAME_MAX)
+    return research_rules._optional_markdown(value, max_len=research_rules.POSITION_DESCRIPTION_MAX)
 
 
 def _revision(conn, scope_type, scope_id):

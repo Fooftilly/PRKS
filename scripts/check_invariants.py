@@ -56,6 +56,8 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/works/bibtex_format.py",
     "backend/domain/people/rules.py",
     "backend/etags.py",
+    "backend/domain/research/rules.py",
+    "backend/pdf_text.py",
     "backend/db/config.py",
     "backend/db/errors.py",
     "backend/db/database.py",

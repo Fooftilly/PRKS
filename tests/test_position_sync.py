@@ -12,13 +12,13 @@ import uuid
 from backend import entity_ids, position_sync as positions, sync_protocol
 from backend.db_manager import PRKSDatabase
 from backend.research_network import (
-    ResearchError,
     create_argument,
     create_position,
     delete_position,
     get_position,
     update_position,
 )
+from backend.domain.research.rules import ResearchError
 from backend.storage.config import StorageConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

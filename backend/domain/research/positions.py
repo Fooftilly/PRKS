@@ -25,10 +25,11 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
+import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import position_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 

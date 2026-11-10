@@ -148,8 +148,8 @@ def write_text(scope: LibraryScope, asset_id: str, sha256: str, status: str, tex
 
 
 def extract_pdf(path: str) -> tuple[str, bool]:
-    """``(text, truncated)`` of the PDF at ``path`` (``backend.text_index.extract_pdf``)."""
-    from backend.text_index import extract_pdf as extract
+    """``(text, truncated)`` of the PDF at ``path`` (``backend.pdf_text.extract_pdf``)."""
+    from backend.pdf_text import extract_pdf as extract
 
     found = extract(path, MAX_CHARS)
     return ("" if found.empty else found.text), found.truncated
@@ -162,7 +162,7 @@ def extract_asset(run: JobRun, storage: StorageBackend, asset_id: str,
     Raises the extractor's ``PDFTextExtractorUnavailable`` (the job is
     retried) and lets a storage error fail the job the same way.
     """
-    from backend.text_index import PDFTextExtractionError
+    from backend.pdf_text import PDFTextExtractionError
 
     asset = run.library_command(Capability.EDIT_LIBRARY, lambda scope: _read_asset(scope, asset_id))
     if asset is None or asset["done"] or not asset["storage_locator"] or not asset["content_sha256"]:

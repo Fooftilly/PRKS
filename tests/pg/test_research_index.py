@@ -26,7 +26,7 @@ from backend.domain.works import commands, notes
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
 from backend.pg_facade import context as facade_context
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_arguments_sync import ResearchSyncTestCase
 

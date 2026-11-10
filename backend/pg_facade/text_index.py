@@ -39,7 +39,7 @@ from backend.pg_facade.context import current_context
 if TYPE_CHECKING:
     from backend.db.database import Database
     from backend.domain.identity.library_scope import LibraryScope
-    from backend.text_index import TextIndexSyncResult
+    from backend.pdf_text import TextIndexSyncResult
 
 
 class PostgresTextIndex:
@@ -59,7 +59,7 @@ class PostgresTextIndex:
 
     def sync_work(self, work_id: str, file_path: str, **_options: Any) -> TextIndexSyncResult:
         """Nothing to do: the command that changed the PDF queued ``text.extract`` in its transaction."""
-        from backend.text_index import TextIndexSyncResult
+        from backend.pdf_text import TextIndexSyncResult
 
         return TextIndexSyncResult(action="queued")
 
@@ -73,7 +73,7 @@ class PostgresTextIndex:
         from backend.domain.identity.authorization import Capability
         from backend.domain.identity.library_scope import library_command
         from backend.domain.search import rebuild
-        from backend.text_index import _empty_summary
+        from backend.pdf_text import _empty_summary
 
         def enqueue(scope: LibraryScope) -> bool:
             return rebuild.enqueue(scope, ["text"]) is not None

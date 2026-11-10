@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Any, LiteralString
 
+import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend.domain.identity.library_scope import LibraryScope
 from backend.research_graph import (
     GraphSnapshot,

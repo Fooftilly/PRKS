@@ -12,6 +12,7 @@ markup processing.
 import json
 
 from backend import research_network
+from backend.domain.research import rules as research_rules
 
 RESEARCH_OPERATION = "SET_WORK_RESEARCH_NOTE"
 PRIVATE_OPERATION = "SET_WORK_PRIVATE_NOTE"
@@ -37,7 +38,7 @@ def validate_text(operation, value):
              if operation == RESEARCH_OPERATION else MAX_PRIVATE_NOTE_UTF8_BYTES)
     if _utf8_size(value) > limit:
         raise ValueError("INVALID_ENVELOPE")
-    if operation == RESEARCH_OPERATION and research_network._CONTROL_RE.search(value):
+    if operation == RESEARCH_OPERATION and research_rules._CONTROL_RE.search(value):
         raise ValueError("INVALID_ENVELOPE")
     return value
 
@@ -81,7 +82,7 @@ def set_research_note_on_conn(conn, db, work_id, text):
     validate_text(RESEARCH_OPERATION, text)
     before = current_text(conn, RESEARCH_OPERATION, work_id)
     if before is None:
-        raise research_network.ResearchError("not_found", "Work not found.", 404)
+        raise research_rules.ResearchError("not_found", "Work not found.", 404)
     if before == text:
         return False, _revision(conn, RESEARCH_OPERATION, work_id)
     research_network.save_work_notes_on_conn(conn, db, work_id, text)
@@ -93,7 +94,7 @@ def set_private_note_on_conn(conn, work_id, text):
     validate_text(PRIVATE_OPERATION, text)
     before = current_text(conn, PRIVATE_OPERATION, work_id)
     if before is None:
-        raise research_network.ResearchError("not_found", "Work not found.", 404)
+        raise research_rules.ResearchError("not_found", "Work not found.", 404)
     if before == text:
         return False, _revision(conn, PRIVATE_OPERATION, work_id)
     conn.execute(

@@ -26,12 +26,10 @@ picking one silently would lose a decision.
 import json
 
 from backend import research_network as network
+from backend.domain.research import rules as research_rules
 from backend.entity_ids import is_distributed
-from backend.research_network import (
-    ResearchError,
-    canonical_concept_name,
-    normalize_concept_key,
-)
+from backend.research_network import canonical_concept_name, normalize_concept_key
+from backend.domain.research.rules import ResearchError
 
 FIELDS = ("description",)
 FIELD_SET = frozenset(FIELDS)
@@ -110,7 +108,7 @@ def set_field_on_conn(conn, concept_id, field, value):
     """Write one Concept field and advance its revision together."""
     if field not in FIELD_SET:
         raise ResearchError("invalid_field", "Not an editable Concept field.")
-    desired = network._optional_markdown(value, max_len=network.CONCEPT_DEFINITION_MAX)
+    desired = research_rules._optional_markdown(value, max_len=research_rules.CONCEPT_DEFINITION_MAX)
     desired = "" if desired is None else desired
     current = current_field(conn, concept_id, field)
     if current is None:
@@ -138,8 +136,8 @@ def insert_concept_on_conn(conn, concept_id, name, description=""):
     and a definition has not "changed" twice, so no revision is advanced here --
     construction is not mutation.
     """
-    cname = network._concept_name(name)
-    desc = network._optional_markdown(description, max_len=network.CONCEPT_DEFINITION_MAX)
+    cname = research_rules._concept_name(name)
+    desc = research_rules._optional_markdown(description, max_len=research_rules.CONCEPT_DEFINITION_MAX)
     status, ids = network.resolve_concept_key(conn, cname)
     if status == "ok":
         raise ResearchError("concept_exists",
@@ -163,14 +161,14 @@ def set_identity_on_conn(conn, concept_id, name, aliases):
     if row is None:
         raise ResearchError("not_found", "Concept not found.", 404)
     old_name = str(row[0])
-    new_name = network._concept_name(name)
+    new_name = research_rules._concept_name(name)
     old_key = normalize_concept_key(old_name)
     new_key = normalize_concept_key(new_name)
 
     wanted = []
     seen = {new_key}
     for raw in aliases:
-        alias = network._concept_name(raw)
+        alias = research_rules._concept_name(raw)
         key = normalize_concept_key(alias)
         if key in seen:
             continue
@@ -349,9 +347,9 @@ def validate_create(op):
     # INVALID_ENVELOPE instead of being flattened into a domain code that says
     # something else entirely.
     try:
-        network._concept_name(payload["name"])
-        network._optional_markdown(payload["description"],
-                                   max_len=network.CONCEPT_DEFINITION_MAX)
+        research_rules._concept_name(payload["name"])
+        research_rules._optional_markdown(payload["description"],
+                                   max_len=research_rules.CONCEPT_DEFINITION_MAX)
     except ResearchError:
         raise ValueError("INVALID_ENVELOPE") from None
 
@@ -380,7 +378,7 @@ def validate_field(op):
         raise ValueError("INVALID_ENVELOPE")
     if payload["field"] not in FIELD_SET or not isinstance(payload["value"], str):
         raise ValueError("INVALID_ENVELOPE")
-    if len(payload["value"]) > network.CONCEPT_DEFINITION_MAX:
+    if len(payload["value"]) > research_rules.CONCEPT_DEFINITION_MAX:
         raise ValueError("INVALID_ENVELOPE")
     if op["base_revision"] is None:
         raise ValueError("INVALID_BASE_REVISION")
@@ -426,11 +424,11 @@ def validate_identity(op):
     if len(aliases) > MAX_ALIASES:
         raise ValueError("INVALID_ENVELOPE")
     try:
-        network._concept_name(name)
+        research_rules._concept_name(name)
         for alias in aliases:
             if not isinstance(alias, str):
                 raise ValueError("INVALID_ENVELOPE")
-            network._concept_name(alias)
+            research_rules._concept_name(alias)
     except ResearchError:
         raise ValueError("INVALID_ENVELOPE") from None
     if op["base_revision"] is None:
