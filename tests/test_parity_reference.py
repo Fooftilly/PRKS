@@ -102,6 +102,13 @@ class RecordAndReplayTests(unittest.TestCase):
         self.replay(steps, replayed)
         self.assertEqual(len(seen), 1)
 
+    def test_an_uppercase_uuid_opening_in_a_to_f_is_a_uuid_not_an_entity_id(self) -> None:
+        varying = parity_reference._Varying()
+        upper, lower = "ABCDEFAB-1234-4567-89AB-123456789ABC", "abcdefab-1234-4567-89ab-123456789abc"
+        self.assertEqual(varying.hide("%s %s %s" % (upper, lower, W)), "<~UUID#0> <~uuid#1> <W#2>")
+        minted = parity_reference._Varying().show("<~UUID#0> <W#1>").split()
+        self.assertEqual((len(minted[0]), minted[0], minted[1][:2]), (36, minted[0].upper(), "W-"))
+
     def test_a_replay_refuses_other_calls_and_leftover_steps(self) -> None:
         live = _Live()
         live.answers = [W, None]

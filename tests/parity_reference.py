@@ -70,8 +70,8 @@ class _Varying:
         def one(match: re.Match[str]) -> str:
             value = match.group(0)
             if value not in self.to_placeholder:
-                prefix = value.split("-", 1)[0]
-                if prefix.isalpha() and prefix.isupper():
+                prefix, _, rest = value.partition("-")
+                if "-" not in rest:  # an entity id; a UUID has five groups, even one that opens in A-F
                     kind = prefix
                 else:
                     kind = "~UUID" if any(c in "ABCDEF" for c in value) else "~uuid"
