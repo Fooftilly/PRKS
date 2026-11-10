@@ -1,0 +1,62 @@
+{
+  "module": "tests/test_pdf_annotation_adopt.py",
+  "tests": {
+    "PdfAnnotationAdoptTests.test_four_cases_metadata_byte_both_and_link": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_metadata_only_byte_only_both_and_a_link"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_adopt_refuses_when_materialization_stale": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_stale_bytes_are_never_adopted_even_from_an_empty_viewer"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_adopt_does_not_recreate_deleted_annotation_from_stale_bytes": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_stale_bytes_are_never_adopted_even_from_an_empty_viewer"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_adopt_does_not_resurrect_known_absent_when_materialization_current": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_a_known_absent_id_never_comes_back_from_current_bytes"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_adopt_bumps_canonical_only_not_materialized": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_adoption_advances_only_the_canonical_revision"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_noop_when_viewer_empty_and_current": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_an_empty_viewer_on_current_bytes_changes_nothing"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_empty_viewer_still_refused_when_stale": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_stale_bytes_are_never_adopted_even_from_an_empty_viewer"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_classifier_rejects_links": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::ClassifierTests.test_classifier_rejects_links"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_classifier_rejects_type1_and_flattened_links": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::ClassifierTests.test_classifier_rejects_type1_and_flattened_links",
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_links_are_skipped_and_managed_user_types_adopted"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_classifier_adopts_managed_user_types": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::ClassifierTests.test_classifier_adopts_managed_user_types",
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_links_are_skipped_and_managed_user_types_adopted"
+      ]
+    },
+    "PdfAnnotationAdoptTests.test_http_adopt_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_adoption_advances_only_the_canonical_revision"
+      ]
+    }
+  }
+}

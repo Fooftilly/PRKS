@@ -1,0 +1,101 @@
+{
+  "module": "tests/test_pdf_annotations.py",
+  "tests": {
+    "TestAnnotationNormalizer.test_parse_rejects_non_list_json": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_parse_rejects_non_list_json"
+      ]
+    },
+    "TestAnnotationNormalizer.test_parse_rejects_invalid_json_and_non_string": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_parse_rejects_invalid_json_and_non_string"
+      ]
+    },
+    "TestAnnotationNormalizer.test_normalize_strips_aliases_into_geometry": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_normalize_strips_aliases_into_geometry"
+      ]
+    },
+    "TestAnnotationNormalizer.test_missing_type_is_empty_not_highlight": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_missing_type_is_empty_not_highlight"
+      ]
+    },
+    "TestAnnotationNormalizer.test_missing_id_fails": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_missing_id_fails"
+      ]
+    },
+    "TestAnnotationNormalizer.test_malformed_page_fails": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_malformed_page_fails"
+      ]
+    },
+    "TestAnnotationNormalizer.test_reconstruct_canonical_wins_over_stale_geometry": {
+      "replaced_by": [
+        "tests/test_pdf_annotation_rules.py::TestAnnotationNormalizer.test_reconstruct_canonical_wins_over_stale_geometry"
+      ]
+    },
+    "TestCanonicalAnnotations.test_work_annotations_table_does_not_exist": {
+      "obsolete": "Guards that the SQLite migration dropped the pre-canonical work_annotations table; the PostgreSQL schema never had one (tests/pg/test_migrate.py pins its tables) and no SQLite data is migrated pre-1.0."
+    },
+    "TestCanonicalAnnotations.test_realistic_semantic_round_trip": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_realistic_annotation_is_columns_plus_geometry",
+        "tests/pg/test_annotations.py::PersistenceTests.test_geometry_appearance_and_comments_round_trip"
+      ]
+    },
+    "TestCanonicalAnnotations.test_replacement_updates_deletes_and_inserts": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_replace_updates_deletes_inserts_and_orders_by_page_then_id"
+      ]
+    },
+    "TestCanonicalAnnotations.test_empty_list_clears_canonical": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_replace_updates_deletes_inserts_and_orders_by_page_then_id"
+      ]
+    },
+    "TestCanonicalAnnotations.test_malformed_later_item_rolls_back": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_refused_replace_changes_nothing"
+      ]
+    },
+    "TestCanonicalAnnotations.test_duplicate_incoming_id_is_400_without_mutation": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_refused_replace_changes_nothing"
+      ]
+    },
+    "TestCanonicalAnnotations.test_cross_work_id_is_409_without_mutation": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::PersistenceTests.test_one_viewer_id_on_two_assets_is_two_annotations"
+      ],
+      "note": "PostgreSQL keys an annotation by its Asset, so SQLite's annotation_id_conflict across Works has no counterpart by design (L-A-1 #635)."
+    },
+    "TestCanonicalAnnotations.test_missing_work_is_404_including_empty_list": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_missing_work_is_404_even_for_an_empty_list"
+      ]
+    },
+    "TestCanonicalAnnotations.test_invalid_json_is_400_and_leaves_canonical_intact": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_refused_replace_changes_nothing"
+      ]
+    },
+    "TestCanonicalAnnotations.test_old_four_key_geometry_still_reconstructs": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_stored_geometry_reconstructs_with_the_columns_winning"
+      ],
+      "note": "No four-key SQLite rows reach PostgreSQL pre-1.0; the test stores that geometry directly and checks the columns still win."
+    },
+    "TestCanonicalAnnotations.test_get_order_is_page_then_id": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_replace_updates_deletes_inserts_and_orders_by_page_then_id"
+      ]
+    },
+    "TestCanonicalAnnotations.test_work_payload_uses_canonical_annotations": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_a_realistic_annotation_is_columns_plus_geometry"
+      ]
+    }
+  }
+}
