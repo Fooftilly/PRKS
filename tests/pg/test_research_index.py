@@ -160,6 +160,30 @@ class MentionTests(ResearchIndexTestCase):
         self.assertEqual(self.queued(), [])
         self.assertEqual(len(self.concept_ids()), 2)
 
+    def test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index(self) -> None:
+        work = self.library.add_work("W")
+        self.library.save_work_notes(work, "See [[concept:Culture Industry]].")
+        self.assertEqual(self.library.get_work_notes_state(work)["research_note_revision"], 1)
+        status, result = self.send(self.envelope("SET_WORK_RESEARCH_NOTE", work,
+                                                 {"text": "Also [[concept:Mass Culture]]."}, 1,
+                                                 entity_type="work"))
+        self.assertEqual((status, result["code"], result["changed"]), (200, "ACKNOWLEDGED", True))
+        concepts = self.concept_ids()
+        self.assertEqual(sorted(concepts), ["Culture Industry", "Mass Culture"])
+        self.run_jobs()
+        self.assertEqual([row[0] for row in self.mentions(work)["concepts"]], [concepts["Mass Culture"]])
+        self.assertEqual([row["id"] for row in self.refs(work)["concepts"]], [concepts["Mass Culture"]])
+
+    def test_a_private_note_creates_no_concept_and_no_mention(self) -> None:
+        work = self.library.add_work("W")
+        status, _ = self.send(self.envelope("SET_WORK_PRIVATE_NOTE", work,
+                                            {"text": "Remind me: [[concept:Should Not Exist]]."}, 0,
+                                            entity_type="work"))
+        self.assertEqual(status, 200)
+        self.run_jobs()
+        self.assertEqual((self.concept_ids(), self.mentions(work)["concepts"]), ({}, []))
+        self.assertEqual(self.library.get_work(work)["private_notes"], "Remind me: [[concept:Should Not Exist]].")
+
     def test_a_failed_note_write_rolls_back_its_concepts_and_job(self) -> None:
         work = self.library.add_work("W")
 

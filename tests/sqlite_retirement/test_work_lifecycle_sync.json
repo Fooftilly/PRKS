@@ -1,0 +1,69 @@
+{
+  "module": "tests/test_work_lifecycle_sync.py",
+  "tests": {
+    "WorkLifecycleSyncTests.test_registered": {
+      "replaced_by": [
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes",
+        "tests/pg/test_works_sync.py::ConcurrentOperationTests.test_a_delete_and_an_edit_of_one_work"
+      ]
+    },
+    "WorkLifecycleSyncTests.test_deleting_a_work_removes_it_and_cascades_links": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_delete_cascades_and_tombstones_every_scope",
+        "tests/pg/test_tags.py::LinkTests.test_a_work_delete_takes_its_links_and_tombstones_their_scopes",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes"
+      ]
+    },
+    "WorkLifecycleSyncTests.test_deleting_a_missing_work_is_convergence": {
+      "replaced_by": [
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes",
+        "tests/pg/test_works_sync.py::RecreatedWorkTests.test_deleting_an_absent_work_changes_no_revision"
+      ]
+    },
+    "WorkLifecycleSyncTests.test_destruction_carries_no_base_revision": {
+      "replaced_by": [
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes"
+      ]
+    },
+    "WorkLifecycleSyncTests.test_ordinary_delete_shares_the_row_boundary": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_delete_cascades_and_tombstones_every_scope",
+        "tests/pg/test_works_sync.py::DeleteAgainstPendingTests.test_a_delete_racing_each_kind_of_edit"
+      ]
+    },
+    "WorkLifecycleSyncTests.test_cleanup_helper_is_idempotent_after_sync_delete": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_work_delete_claims_its_file_and_settle_removes_it"
+      ],
+      "note": "On PostgreSQL a deleted Work's file is a managed object: the delete records an object_cleanup_claims row in its own transaction, and settling a claim re-checks live references, so a replay (answered from the ledger, with no path) can neither duplicate a claim nor remove a file another Work names. The SQLite pending_pdf_cleanup and cleanup_after_work_delete do not exist there."
+    },
+    "WorkLifecycleSyncTests.test_replay_cleanup_preserves_pdf_now_referenced_by_another_work": {
+      "replaced_by": [
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes",
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_held_referenced_and_staged_keys_are_never_deleted"
+      ],
+      "note": "On PostgreSQL a deleted Work's file is a managed object: the delete records an object_cleanup_claims row in its own transaction, and settling a claim re-checks live references, so a replay (answered from the ledger, with no path) can neither duplicate a claim nor remove a file another Work names. The SQLite pending_pdf_cleanup and cleanup_after_work_delete do not exist there."
+    },
+    "WorkLifecycleSyncTests.test_replayed_delete_creates_no_second_cleanup_claim": {
+      "replaced_by": [
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles"
+      ],
+      "note": "On PostgreSQL a deleted Work's file is a managed object: the delete records an object_cleanup_claims row in its own transaction, and settling a claim re-checks live references, so a replay (answered from the ledger, with no path) can neither duplicate a claim nor remove a file another Work names. The SQLite pending_pdf_cleanup and cleanup_after_work_delete do not exist there."
+    },
+    "WorkLifecycleSyncTests.test_replay_after_adoption_retires_the_claim_without_deleting": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept"
+      ],
+      "note": "On PostgreSQL a deleted Work's file is a managed object: the delete records an object_cleanup_claims row in its own transaction, and settling a claim re-checks live references, so a replay (answered from the ledger, with no path) can neither duplicate a claim nor remove a file another Work names. The SQLite pending_pdf_cleanup and cleanup_after_work_delete do not exist there."
+    },
+    "WorkLifecycleSyncTests.test_delete_work_ledger_omits_file_path": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::LedgerTests.test_the_ledger_row",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_deletes"
+      ]
+    }
+  }
+}

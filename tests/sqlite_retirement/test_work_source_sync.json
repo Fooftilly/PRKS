@@ -1,0 +1,227 @@
+{
+  "module": "tests/test_work_source_sync.py",
+  "tests": {
+    "WorkSourceSyncTests.test_one_parser_accepts_every_spelling_creation_accepts": {
+      "replaced_by": [
+        "tests/test_work_source_rules.py::SourceRuleTests.test_one_parser_accepts_every_spelling_and_refuses_lookalikes"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_payload_carries_intent_and_never_asserts_derived_values": {
+      "replaced_by": [
+        "tests/test_work_source_rules.py::SourceRuleTests.test_the_payload_carries_intent_never_derived_values",
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_refused_envelopes_write_nothing_and_are_never_ledgered"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_different_spelling_of_the_same_video_is_not_a_change": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_replacing_a_video",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_one_source_change_is_one_revision_and_one_atomic_write": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_replacing_a_video"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_stale_thumbnail_does_not_survive_the_identity_change": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_replacing_a_video"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_acknowledgement_states_the_stored_row": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_convergent_acknowledgement_reports_what_is_stored_not_what_was_asked": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_creation_derives_and_refuses_rather_than_repairing": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_contradictory_source_is_refused_on_both"
+      ]
+    },
+    "WorkSourceSyncTests.test_creation_refuses_an_identity_no_conflict_could_report": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_video_work_cannot_be_created_without_a_usable_source": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_contradictory_source_is_refused_on_both"
+      ]
+    },
+    "WorkSourceSyncTests.test_identity_columns_are_refused_on_a_work_that_is_not_a_video": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance"
+      ]
+    },
+    "WorkSourceSyncTests.test_creation_classifies_a_work_the_way_the_product_reads_it": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_url_without_a_kind_is_a_video"
+      ]
+    },
+    "WorkSourceSyncTests.test_an_inferred_pdf_keeps_its_url_as_provenance": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance"
+      ]
+    },
+    "WorkSourceSyncTests.test_source_kind_is_a_domain_not_free_text": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing"
+      ]
+    },
+    "WorkSourceSyncTests.test_every_new_work_with_a_source_states_its_kind": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance",
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_work_with_no_source_at_all_states_nothing": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_work_without_a_source"
+      ]
+    },
+    "WorkSourceSyncTests.test_creation_is_construction_and_advances_no_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_legacy_inferred_video_is_readable_and_mutable": {
+      "obsolete": "On PostgreSQL there are no legacy inferred-video rows: pre-1.0 policy migrates no SQLite data, every video Work is created as a stream Asset with its provider identity, and a stored identity that is broken is refused as INVALID_SOURCE_STATE (tests/pg/test_works_mutations.py::SourceDecisionTests.test_a_stream_with_a_broken_identity_is_refused)."
+    },
+    "WorkSourceSyncTests.test_a_convergent_write_upgrades_a_legacy_row_without_a_revision": {
+      "obsolete": "On PostgreSQL there are no legacy inferred-video rows: pre-1.0 policy migrates no SQLite data, every video Work is created as a stream Asset with its provider identity, and a stored identity that is broken is refused as INVALID_SOURCE_STATE (tests/pg/test_works_mutations.py::SourceDecisionTests.test_a_stream_with_a_broken_identity_is_refused)."
+    },
+    "WorkSourceSyncTests.test_a_legacy_row_with_an_unreadable_url_is_refused_not_guessed": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_a_stream_with_a_broken_identity_is_refused"
+      ],
+      "note": "On PostgreSQL there are no legacy inferred-video rows: pre-1.0 policy migrates no SQLite data, every video Work is created as a stream Asset with its provider identity, and a stored identity that is broken is refused as INVALID_SOURCE_STATE (tests/pg/test_works_mutations.py::SourceDecisionTests.test_a_stream_with_a_broken_identity_is_refused)."
+    },
+    "WorkSourceSyncTests.test_a_legacy_row_with_an_unreportable_stored_identity_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_a_stream_with_a_broken_identity_is_refused"
+      ],
+      "note": "On PostgreSQL there are no legacy inferred-video rows: pre-1.0 policy migrates no SQLite data, every video Work is created as a stream Asset with its provider identity, and a stored identity that is broken is refused as INVALID_SOURCE_STATE (tests/pg/test_works_mutations.py::SourceDecisionTests.test_a_stream_with_a_broken_identity_is_refused)."
+    },
+    "WorkSourceSyncTests.test_a_file_backed_legacy_row_stays_a_pdf": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced"
+      ]
+    },
+    "WorkSourceSyncTests.test_patch_cannot_write_source_identity_columns_independently": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_patch_never_writes_the_identity",
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_refused_patches_change_nothing"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_refusal_names_every_identity_column_at_once": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_patch_never_writes_the_identity"
+      ]
+    },
+    "WorkSourceSyncTests.test_fields_beside_the_identity_columns_still_patch": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_patch_never_writes_the_identity"
+      ]
+    },
+    "WorkSourceSyncTests.test_creation_still_establishes_the_whole_identity": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_video_is_a_stream"
+      ]
+    },
+    "WorkSourceSyncTests.test_two_devices_choosing_different_videos_is_ONE_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_conflict_reports_the_identity_exactly_within_the_durable_bound",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_largest_representable_conflict_still_fits_the_durable_bound": {
+      "replaced_by": [
+        "tests/test_work_source_rules.py::SourceRuleTests.test_the_largest_representable_conflict_fits_the_durable_bound"
+      ]
+    },
+    "WorkSourceSyncTests.test_an_identifier_too_large_to_report_is_never_stored": {
+      "replaced_by": [
+        "tests/test_work_source_rules.py::SourceRuleTests.test_an_identifier_too_large_or_strange_to_report_has_no_identity",
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_refused_envelopes_write_nothing_and_are_never_ledgered"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_largest_legal_identifier_is_accepted": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row",
+        "tests/test_work_source_rules.py::SourceRuleTests.test_an_identifier_too_large_or_strange_to_report_has_no_identity"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_conflict_reports_the_identity_even_when_the_preview_is_truncated": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_conflict_reports_the_identity_exactly_within_the_durable_bound"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_stale_but_convergent_choice_is_not_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_future_base_revision_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_replacing_a_video",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_conflict_with_enormous_urls_still_fits_the_durable_bound": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_conflict_reports_the_identity_exactly_within_the_durable_bound"
+      ]
+    },
+    "WorkSourceSyncTests.test_changing_the_source_of_a_non_video_work_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_missing_work_is_terminal": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_replay_is_exact_and_op_id_reuse_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_replay_answers_from_the_ledger_and_a_reuse_is_refused"
+      ]
+    },
+    "WorkSourceSyncTests.test_a_null_base_revision_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_refused_envelopes_write_nothing_and_are_never_ledgered",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_sources"
+      ]
+    },
+    "WorkSourceSyncTests.test_the_source_scope_is_its_own_and_does_not_touch_field_revisions": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row"
+      ]
+    },
+    "WorkSourceSyncTests.test_creation_does_not_manufacture_a_source_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_the_source_state"
+      ]
+    }
+  }
+}
