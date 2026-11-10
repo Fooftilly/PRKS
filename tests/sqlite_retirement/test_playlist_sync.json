@@ -1,0 +1,287 @@
+{
+ "module": "tests/test_playlist_sync.py",
+ "tests": {
+  "PlaylistSyncTests.test_a_base_from_the_future_is_refused": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_a_field_operation_must_carry_a_base": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_a_long_order_is_not_echoed_back": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::OrderTests.test_an_echo_is_bounded"
+   ]
+  },
+  "PlaylistSyncTests.test_a_playlist_is_created_under_the_id_the_client_minted": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::CreateTests.test_creation_acknowledges_replays_and_converges",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_create_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_a_reorder_is_not_a_membership_change": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::OrderTests.test_a_reorder_keeps_membership_and_rewrites_positions",
+    "tests/pg/test_playlists_sync.py::OrderTests.test_a_stale_reorder_never_overwrites_a_membership_change"
+   ]
+  },
+  "PlaylistSyncTests.test_a_reorder_that_already_holds_is_not_a_second_change": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::OrderTests.test_a_reorder_keeps_membership_and_rewrites_positions"
+   ]
+  },
+  "PlaylistSyncTests.test_a_repeated_id_in_an_order_is_counted_once": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::OrderTests.test_a_reorder_keeps_membership_and_rewrites_positions"
+   ]
+  },
+  "PlaylistSyncTests.test_a_second_device_minting_the_same_id_is_not_an_error": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::CreateTests.test_creation_acknowledges_replays_and_converges",
+    "tests/pg/test_playlists_sync.py::CreateTests.test_two_creates_of_one_id_make_one_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_a_stale_base_against_a_different_value_conflicts": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_a_stale_base_that_agrees_converges": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_a_stale_membership_base_against_a_different_playlist_conflicts": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists_sync.py::WorkPlaylistTests.test_two_moves_of_one_work_advance_it_in_turn"
+   ]
+  },
+  "PlaylistSyncTests.test_a_stale_order_base_conflicts_rather_than_merging": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists_sync.py::OrderTests.test_a_stale_reorder_never_overwrites_a_membership_change"
+   ]
+  },
+  "PlaylistSyncTests.test_a_stale_order_base_that_agrees_converges": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_a_title_may_repeat": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_a_title_may_repeat"
+   ]
+  },
+  "PlaylistSyncTests.test_an_empty_title_becomes_the_placeholder_on_both_paths": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_create_playlist",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_create_read_update_and_list",
+    "tests/pg/test_playlists.py::FieldTests.test_only_a_change_advances_a_field"
+   ]
+  },
+  "PlaylistSyncTests.test_an_empty_url_is_stored_as_null_on_both_paths": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::FieldTests.test_only_a_change_advances_a_field",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_an_explicit_position_on_the_ordinary_add_is_honoured": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::MembershipTests.test_an_add_at_a_position_is_two_changes",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_membership_order_and_the_work_projection"
+   ]
+  },
+  "PlaylistSyncTests.test_an_order_base_from_the_future_is_refused": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_an_order_conflict_carries_counts_rather_than_the_ids": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_an_order_payload_must_be_a_list_of_ids": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_an_oversized_field_is_refused_before_it_is_stored": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields",
+    "tests/pg/test_playlists.py::FieldTests.test_what_postgresql_cannot_hold_or_the_schema_bounds_is_refused_before_any_write"
+   ]
+  },
+  "PlaylistSyncTests.test_an_unknown_playlist_is_a_domain_answer": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields",
+    "tests/pg/test_playlists.py::RaceTests.test_a_field_edit_of_a_missing_playlist_is_refused"
+   ]
+  },
+  "PlaylistSyncTests.test_an_unknown_playlist_refuses_the_filing": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_an_unknown_work_is_a_domain_answer": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_creation_requires_a_collision_resistant_id": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_create_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_deleting_a_playlist_takes_its_memberships_with_it": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::DeleteTests.test_a_delete_releases_its_works_and_tombstones_every_scope",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_delete_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_deleting_a_playlist_twice_is_idempotent": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_delete_playlist",
+    "tests/pg/test_playlists.py::DeleteTests.test_a_delete_releases_its_works_and_tombstones_every_scope"
+   ]
+  },
+  "PlaylistSyncTests.test_deletion_carries_no_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_delete_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_deletion_takes_no_payload": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_delete_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_each_field_carries_its_own_revision": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields",
+    "tests/pg/test_playlists.py::FieldTests.test_only_a_change_advances_a_field"
+   ]
+  },
+  "PlaylistSyncTests.test_filing_a_video_where_it_already_is_changes_nothing": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders"
+   ]
+  },
+  "PlaylistSyncTests.test_membership_is_a_scalar_on_the_work": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders"
+   ]
+  },
+  "PlaylistSyncTests.test_moving_a_video_between_playlists_advances_both_orders": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_only_the_three_editable_columns_are_fields": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::EnvelopeTests.test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_removing_a_video_from_a_playlist_it_is_not_in_does_nothing": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_membership_order_and_the_work_projection"
+   ]
+  },
+  "PlaylistSyncTests.test_removing_a_video_is_the_same_scalar_with_an_empty_value": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders"
+   ]
+  },
+  "PlaylistSyncTests.test_replaying_a_creation_changes_nothing_twice": {
+   "replaced_by": [
+    "tests/pg/test_playlists_sync.py::CreateTests.test_creation_acknowledges_replays_and_converges",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_create_playlist"
+   ]
+  },
+  "PlaylistSyncTests.test_the_order_is_one_aggregate_under_one_revision": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order",
+    "tests/pg/test_playlists.py::OrderTests.test_a_reorder_keeps_membership_and_rewrites_positions"
+   ]
+  },
+  "PlaylistSyncTests.test_the_ordinary_delete_advances_the_same_revisions": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::DeleteTests.test_a_delete_releases_its_works_and_tombstones_every_scope",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_delete"
+   ]
+  },
+  "PlaylistSyncTests.test_the_ordinary_endpoint_advances_the_same_revision": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::FieldTests.test_only_a_change_advances_a_field",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_create_read_update_and_list",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ],
+   "note": "The endpoint and SET_PLAYLIST_FIELD advance one field revision in prks.entity_revisions; a base older than it conflicts, as the parity decision table asserts."
+  },
+  "PlaylistSyncTests.test_the_ordinary_membership_endpoints_advance_the_same_revision": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_membership_order_and_the_work_projection"
+   ]
+  },
+  "PlaylistSyncTests.test_the_ordinary_reorder_advances_the_same_revision": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::OrderTests.test_a_reorder_keeps_membership_and_rewrites_positions",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_membership_order_and_the_work_projection",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_the_ordinary_reorder_keeps_omitted_videos_in_their_relative_order": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::OrderTests.test_a_reorder_keeps_membership_and_rewrites_positions",
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_membership_order_and_the_work_projection"
+   ]
+  },
+  "PlaylistSyncTests.test_the_sync_state_of_an_unknown_playlist_is_none": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_create_read_update_and_list",
+    "tests/pg/test_playlists.py::MembershipTests.test_the_states_of_a_missing_work_or_playlist_are_none"
+   ]
+  },
+  "PlaylistSyncTests.test_the_sync_state_reports_revisions_only": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_create_read_update_and_list",
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_work_playlist_and_order"
+   ]
+  },
+  "PlaylistSyncTests.test_the_value_is_not_echoed_back": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistSyncParityTests.test_playlist_fields"
+   ]
+  },
+  "PlaylistSyncTests.test_the_work_playlist_state_names_the_playlist_and_its_revision": {
+   "replaced_by": [
+    "tests/test_playlists_parity.py::PlaylistFacadeParityTests.test_membership_order_and_the_work_projection",
+    "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders"
+   ]
+  },
+  "PlaylistSyncTests.test_the_work_playlist_state_of_an_unknown_work_is_none": {
+   "replaced_by": [
+    "tests/pg/test_playlists.py::MembershipTests.test_the_states_of_a_missing_work_or_playlist_are_none"
+   ]
+  }
+ }
+}

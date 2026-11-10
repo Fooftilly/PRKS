@@ -128,6 +128,13 @@ class MembershipTests(PlaylistTestCase):
         self.assertEqual((self.items(playlist_id), self.revisions("work-playlist"),
                           self.revisions("playlist-order")), ([], {}, {}))
 
+    def test_the_states_of_a_missing_work_or_playlist_are_none(self) -> None:
+        work_id = self.library.add_work("W")
+        self.assertEqual(self.library.get_work_playlist_state(work_id),
+                         {"work_id": work_id, "playlist_id": "", "revision": 0})
+        self.assertIsNone(self.library.get_work_playlist_state(generate("W")))
+        self.assertIsNone(self.library.get_playlist_sync_state(generate("PL")))
+
     def test_an_add_at_a_position_is_two_changes(self) -> None:
         playlist_id = self.add("A")
         first, second, third = self.works("1", "2", "3")

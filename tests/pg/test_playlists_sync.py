@@ -119,6 +119,38 @@ class CreateTests(PlaylistSyncTestCase):
         self.assertEqual(self.count("playlists"), 1)
 
 
+class EnvelopeTests(PlaylistSyncTestCase):
+    """What the envelope and payload decide before any write (retired ``tests/test_playlist_sync.py``)."""
+
+    def test_ids_fields_payloads_and_base_revisions_are_refused_before_the_ledger(self) -> None:
+        playlist_id = self.create_playlist("Lectures")
+        before = self.ledger()
+        refused: list[tuple[str, dict[str, Any], str]] = []
+        for bad in ("PL-ABCD1234", "lectures", "F-" + "A" * 32):
+            refused.append(("id " + bad, self.create("X", bad), "INVALID_ENVELOPE"))
+        for name in ("item_count", "created_at", "updated_at", "id"):
+            refused.append(("field " + name, self.field(playlist_id, name, "x", 0), "INVALID_ENVELOPE"))
+        refused.append(("oversized", self.field(playlist_id, "description", "x" * 5000, 0), "INVALID_ENVELOPE"))
+        for index, payload in enumerate(({"work_ids": "abc"}, {"work_ids": [""]}, {"work_ids": [1]},
+                                         {"work_ids": ["a"], "extra": 1}, {})):
+            refused.append(("order %d" % index, self.envelope("REORDER_PLAYLIST_ITEMS", playlist_id, payload, 0),
+                            "INVALID_ENVELOPE"))
+        refused.append(("delete payload", self.envelope("DELETE_PLAYLIST", playlist_id, {"cascade": True}),
+                        "INVALID_ENVELOPE"))
+        refused.append(("delete base", self.envelope("DELETE_PLAYLIST", playlist_id, {}, 0), "INVALID_BASE_REVISION"))
+        refused.append(("field base", self.envelope("SET_PLAYLIST_FIELD", playlist_id,
+                                                    {"field": "title", "value": "X"}), "INVALID_BASE_REVISION"))
+        for label, data, code in refused:
+            with self.subTest(label):
+                self.assertEqual(self.send(data), (400, {"code": code}))
+        self.assertEqual((self.ledger(), self.library.get_playlist(playlist_id)["description"]), (before, ""))
+
+    def test_a_title_may_repeat(self) -> None:
+        self.create_playlist("Lectures")
+        self.create_playlist("Lectures")
+        self.assertEqual([row["title"] for row in self.library.get_all_playlists()], ["Lectures", "Lectures"])
+
+
 class WorkPlaylistTests(PlaylistSyncTestCase):
     def test_two_moves_of_one_work_advance_it_in_turn(self) -> None:
         a, b = self.create_playlist("A"), self.create_playlist("B")
