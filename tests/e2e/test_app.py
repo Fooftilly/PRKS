@@ -3951,23 +3951,33 @@ class PdfAnnotationCommentEditTests(_BrowserE2E):
         """Save ``text_value`` from the popup while the local durable write
         fails once; return the still-open popup and its text field once the
         rollback has settled."""
-        # The local durable write fails once (quota, blocked IndexedDB, ...).
+        # The local durable write of this edit fails once (quota, blocked
+        # IndexedDB, ...). Only that write: a late commit echo of another
+        # annotation's earlier save also writes durably, and must neither
+        # take the failure nor count as this edit's events.
         page.evaluate(
-            """() => {
+            """([annId, comment]) => {
                 const pdf = window.prksGetFocusedTabContext().getResource('pdf');
                 window.__prksCommittedUpdates = 0;
                 pdf.viewer.onAnnotationEvent((evt) => {
-                    if (evt && evt.kind === 'update' && evt.committed === true) {
+                    if (evt && evt.kind === 'update' && evt.committed === true &&
+                        String(evt.annotationId) === annId) {
                         window.__prksCommittedUpdates += 1;
                     }
                 });
                 const store = window.prksSync.store;
                 const real = store.savePdfAnnotation;
-                store.savePdfAnnotation = function () {
+                store.savePdfAnnotation = function (workId, desired) {
+                    const ann = desired && desired.annotation;
+                    const text = ann && ((ann.custom && ann.custom.prksComment) || ann.contents);
+                    if (!desired || String(desired.annotation_id) !== annId || text !== comment) {
+                        return real.apply(this, arguments);
+                    }
                     store.savePdfAnnotation = real;
                     return Promise.reject(Object.assign(new Error('disk full'), { code: 'write_failed' }));
                 };
-            }"""
+            }""",
+            [str(ann_id), text_value],
         )
         _wait_pdf_annotation_durable(page)
         popup = _open_annotation_popup(page, ann_id)
