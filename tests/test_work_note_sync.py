@@ -6,7 +6,8 @@ import uuid
 
 from backend import research_index, research_network, sync_protocol, work_note_sync as notes
 from backend.db_manager import PRKSDatabase
-from backend.research_network import ResearchError, list_concepts, save_work_notes
+from backend.research_network import list_concepts, save_work_notes
+from backend.domain.research.rules import ResearchError
 from backend.storage.config import StorageConfig
 
 

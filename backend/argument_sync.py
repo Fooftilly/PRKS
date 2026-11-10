@@ -42,8 +42,9 @@ list is one judgement.
 import json
 
 from backend import research_network as network
+from backend.domain.research import rules as research_rules
 from backend.entity_ids import is_distributed
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 
 FIELDS = ("name", "kind", "main_text")
 FIELD_SET = frozenset(FIELDS)
@@ -72,10 +73,10 @@ def canonical_wire(field, value):
     would send `"  A  "`, read back `"A"`, and see a change it had not made.
     """
     if field == "name":
-        return network._plain_name(value, max_len=network.ARGUMENT_NAME_MAX)
+        return research_rules._plain_name(value, max_len=research_rules.ARGUMENT_NAME_MAX)
     if field == "kind":
         return network._validate_kind(value)
-    return network._optional_markdown(value, max_len=network.ARGUMENT_TEXT_MAX)
+    return research_rules._optional_markdown(value, max_len=research_rules.ARGUMENT_TEXT_MAX)
 
 
 def _revision(conn, scope_type, scope_id):
@@ -332,7 +333,7 @@ def _check_sources_shape(sources):
         if not isinstance(pages, str):
             raise ValueError("INVALID_ENVELOPE")
         try:
-            network._pages(pages)
+            research_rules._pages(pages)
         except ResearchError:
             raise ValueError("INVALID_ENVELOPE") from None
 

@@ -27,7 +27,7 @@ from backend.api_contract.errors import (
 T = TypeVar("T", bound=BaseModel)
 
 # Domain messages for type refusals — keep in lockstep with
-# research_network._plain_name / _optional_markdown.
+# backend.domain.research.rules._plain_name / _optional_markdown.
 _NAME_MUST_BE_STRING = "Name must be a string."
 _TEXT_MUST_BE_STRING = "Text must be a string."
 

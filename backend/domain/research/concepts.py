@@ -45,12 +45,13 @@ from __future__ import annotations
 from typing import Any, LiteralString, Optional, Sequence
 
 from backend import concept_sync as rules
-from backend import research_network as network
+from backend.domain.research import rules as research_rules
+from backend.research_markup import canonical_concept_name
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
 from backend.entity_ids import generate as generate_id
 from backend.research_markup import parse_research_markup
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 IDENTITY_SCOPE_TYPE = rules.IDENTITY_SCOPE_TYPE
@@ -316,8 +317,8 @@ def resolve(scope: LibraryScope, name: str) -> Optional[str]:
     ``resolve_concept_key``'s ``ok`` answer; a name that is not a legal
     reference (blank, over the length bound) resolves to nothing.
     """
-    clean = network.canonical_concept_name(name)
-    if not clean or len(clean) > network.CONCEPT_NAME_MAX or "\x00" in clean:
+    clean = canonical_concept_name(name)
+    if not clean or len(clean) > research_rules.CONCEPT_NAME_MAX or "\x00" in clean:
         return None
     found = scope.execute(_RESOLVE_SQL, {"name": clean}).fetchone()
     return None if found is None else str(found["concept_id"])
@@ -377,8 +378,8 @@ def insert(scope: LibraryScope, concept_id: str, name: Any, description: Any = "
     holds as name or alias, with nothing inserted, and
     :class:`ForeignConceptId` for an id of another Library.
     """
-    clean = network._concept_name(name)
-    text = network._optional_markdown(description, max_len=network.CONCEPT_DEFINITION_MAX)
+    clean = research_rules._concept_name(name)
+    text = research_rules._optional_markdown(description, max_len=research_rules.CONCEPT_DEFINITION_MAX)
     values = {"concept_id": concept_id, "name": clean, "description": text}
     # The id is decided before the name: an id of another Library is refused
     # as such (unledgered), never answered with this Library's name. Twice:
@@ -430,7 +431,7 @@ def set_field(scope: LibraryScope, concept_id: str, field: str, value: Any) -> t
     """``set_field_on_conn``: write one field and advance its revision together."""
     if field not in rules.FIELD_SET:
         raise ResearchError("invalid_field", "Not an editable Concept field.")
-    desired = network._optional_markdown(value, max_len=network.CONCEPT_DEFINITION_MAX)
+    desired = research_rules._optional_markdown(value, max_len=research_rules.CONCEPT_DEFINITION_MAX)
     if lock(scope, concept_id) is None:
         raise _refuse(_NOT_FOUND)
     scope_id = rules.scope_key(concept_id, field)
@@ -489,8 +490,8 @@ def set_identity(scope: LibraryScope, concept_id: str, name: Any, aliases: Seque
     old_name = lock(scope, concept_id)
     if old_name is None:
         raise _refuse(_NOT_FOUND)
-    new_name = network._concept_name(name)
-    cleaned = [network._concept_name(raw) for raw in aliases]
+    new_name = research_rules._concept_name(name)
+    cleaned = [research_rules._concept_name(raw) for raw in aliases]
     # Before the owners are read: the check and the writes are one step for
     # every other identity write of this Library.
     lock_keys(scope)
@@ -667,9 +668,9 @@ def ensure_referenced(scope: LibraryScope, text: str) -> None:
     created once more.
     """
     first: dict[str, str] = {}
-    names = [network.canonical_concept_name(ref.name) for ref in parse_research_markup(text).concept_refs]
+    names = [canonical_concept_name(ref.name) for ref in parse_research_markup(text).concept_refs]
     for name in names:
-        if not name or len(name) > network.CONCEPT_NAME_MAX:
+        if not name or len(name) > research_rules.CONCEPT_NAME_MAX:
             raise ResearchError("invalid_concept", "Concept reference is invalid.")
     for name, key in zip(names, _keys(scope, names) if names else []):
         first.setdefault(key, name)

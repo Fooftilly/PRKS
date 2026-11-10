@@ -20,7 +20,7 @@ from backend.domain.research import concepts
 from backend.domain.works import notes
 from backend.entity_ids import generate
 from backend.pg_facade import context as facade_context
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 from tests.pg.test_tags import OrganizationTestCase
 
 

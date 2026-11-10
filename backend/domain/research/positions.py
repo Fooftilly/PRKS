@@ -28,7 +28,7 @@ from typing import Any, LiteralString, Optional
 from backend import position_sync as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 

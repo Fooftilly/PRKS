@@ -13,7 +13,6 @@ import uuid
 from backend import argument_sync as arguments, entity_ids, sync_protocol
 from backend.db_manager import PRKSDatabase
 from backend.research_network import (
-    ResearchError,
     create_argument,
     create_position,
     delete_argument,
@@ -22,6 +21,7 @@ from backend.research_network import (
     replace_argument_targets,
     update_argument,
 )
+from backend.domain.research.rules import ResearchError
 from backend.storage.config import StorageConfig
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]

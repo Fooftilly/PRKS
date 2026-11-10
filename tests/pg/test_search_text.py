@@ -21,7 +21,7 @@ from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.runner import Outcome, run_job
 from backend.storage.objects import LocalFilesystemStorage
-from backend.text_index import PDFTextExtractorUnavailable
+from backend.pdf_text import PDFTextExtractorUnavailable
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_search_refresh import SearchTestCase
 

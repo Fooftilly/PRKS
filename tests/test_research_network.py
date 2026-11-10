@@ -16,7 +16,6 @@ apply_isolated_test_env(_PROJECT_DIR)
 from backend.db_manager import PRKSDatabase
 from backend.research_index import PRKSResearchIndex
 from backend.research_network import (
-    ResearchError,
     create_argument,
     create_concept,
     create_position,
@@ -31,6 +30,7 @@ from backend.research_network import (
     save_work_notes,
     update_concept,
 )
+from backend.domain.research.rules import ResearchError
 from backend.storage.config import StorageConfig
 
 _SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")

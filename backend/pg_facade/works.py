@@ -578,7 +578,7 @@ def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],
     """One PATCH, in one transaction, in SQLite's order: guards, plain, notes, fields."""
     from backend import work_metadata_sync as rules
     from backend.domain.works import metadata, notes
-    from backend.research_network import ResearchError
+    from backend.domain.research.rules import ResearchError
 
     row = metadata.target(scope, work_id, for_update=True)
     if row is None:

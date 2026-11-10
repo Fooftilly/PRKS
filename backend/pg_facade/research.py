@@ -273,7 +273,7 @@ class ResearchMixin(FacadeMixin):
         the note names; the change enqueues ``research.reindex_work``.
         """
         from backend.domain.works import notes
-        from backend.research_network import ResearchError, research_note_refusal
+        from backend.domain.research.rules import ResearchError, research_note_refusal
 
         try:
             notes.validate(notes.RESEARCH, text_content)

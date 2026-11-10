@@ -52,13 +52,14 @@ from __future__ import annotations
 import hashlib
 from typing import Any, LiteralString, Optional
 
-from backend import research_network as network
+from backend.domain.research import rules as research_rules
+from backend.research_markup import canonical_concept_name
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope
 from backend.jobs import queue
 from backend.jobs.handlers import handler
 from backend.jobs.runner import JobRun
-from backend.research_index import note_snippet
+from backend.domain.research.rules import note_snippet
 from backend.research_markup import parse_research_markup
 
 KIND = "research.reindex_work"
@@ -201,7 +202,7 @@ def content_hash(text: str) -> str:
 def _concept_ids(scope: LibraryScope, names: list[str]) -> dict[str, str]:
     """Canonical reference name -> Concept id, by the key index (``resolve_concept_key``'s ``ok``)."""
     legal = sorted({name for name in names
-                    if name and len(name) <= network.CONCEPT_NAME_MAX and "\x00" not in name})
+                    if name and len(name) <= research_rules.CONCEPT_NAME_MAX and "\x00" not in name})
     if not legal:
         return {}
     rows = scope.execute(_RESOLVE_SQL, {"names": legal}).fetchall()
@@ -232,7 +233,7 @@ def reindex_work(scope: LibraryScope, work_id: str) -> bool:
     note = scope.execute(_NOTE_SQL, params).fetchone()
     text = "" if note is None else str(note["body"])
     markup = parse_research_markup(text)
-    names = [network.canonical_concept_name(ref.name) for ref in markup.concept_refs]
+    names = [canonical_concept_name(ref.name) for ref in markup.concept_refs]
     resolved = _concept_ids(scope, names)
     concepts = [(resolved[name], ref.start, ref.end)
                 for name, ref in zip(names, markup.concept_refs) if name in resolved]
