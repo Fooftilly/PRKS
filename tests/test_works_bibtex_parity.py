@@ -77,6 +77,9 @@ class BibtexParityTests(PeopleParityTestCase):
             values = {**params, "library_id": current_context().library_id}
             side.db.parity_library.database.command(lambda tx: tx.execute(pg_sql, values))
             return
+        if side is self.ref:
+            side.db.sql(sqlite_sql, params)
+            return
         with side.db.connection() as conn:
             conn.execute(sqlite_sql, params)
 
@@ -335,8 +338,12 @@ class BibtexParityTests(PeopleParityTestCase):
                 for index, side in enumerate(self.sides()):
                     if side is self.leg and self.parity_backend == POSTGRES:
                         continue
+                    statement = "UPDATE works SET source_kind = ? WHERE id = ?", (stored, video[index])
+                    if side is self.ref:
+                        side.db.sql(*statement)
+                        continue
                     with side.db.connection() as conn:
-                        conn.execute("UPDATE works SET source_kind = ? WHERE id = ?", (stored, video[index]))
+                        conn.execute(*statement)
                 entry = self.bibtex(video)
                 self.assertTrue(entry.startswith("@online{Numberphile2010,\n"))
                 self.assertIn("  author = {{Numberphile; Brady Haran}},\n", entry)

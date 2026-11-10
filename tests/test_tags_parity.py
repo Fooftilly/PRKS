@@ -215,7 +215,9 @@ class SyncParityTestCase(TagParityTestCase):
                 else "folder" if operation in _FOLDER_OPERATIONS else "work")
 
     def send(self, side: TagSide, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        if side is self.ref or self.parity_backend == SQLITE:
+        if side is self.ref:
+            return side.db.process_operation(data)
+        if self.parity_backend == SQLITE:
             from backend import sync_protocol
 
             return sync_protocol.process_operation(side.db, data)

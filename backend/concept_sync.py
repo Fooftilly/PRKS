@@ -28,7 +28,7 @@ import json
 from backend import research_network as network
 from backend.domain.research import rules as research_rules
 from backend.entity_ids import is_distributed
-from backend.research_network import canonical_concept_name, normalize_concept_key
+from backend.research_network import normalize_concept_key
 from backend.domain.research.rules import ResearchError
 
 FIELDS = ("description",)

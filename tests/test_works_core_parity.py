@@ -114,10 +114,11 @@ class WorksCoreParityTests(WorksParityTestCase):
                                  sorted(map(self.ref.normal, theirs), key=str))
                 if call == "get_recently_added_works":
                     continue  # SQLite gives this list no tie-break
-                for rows in (mine, theirs):
-                    expected = sorted(rows, key=lambda row: row["id"])
-                    expected.sort(key=lambda row: row["created_at"], reverse=True)
-                    self.assertEqual(rows, expected)
+                # The rule is this leg's: the recorded reference replays its
+                # rows under ids minted for this run, which keep no order.
+                expected = sorted(mine, key=lambda row: row["id"])
+                expected.sort(key=lambda row: row["created_at"], reverse=True)
+                self.assertEqual(mine, expected)
 
     def test_the_browse_catalog_is_ordered_by_title(self) -> None:
         self._catalog()

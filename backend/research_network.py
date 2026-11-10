@@ -13,7 +13,6 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from backend.db_manager import PRKSDatabase
 from backend.domain.research.rules import (
-    _clean_text,
     _concept_name,
     _CONTROL_RE,
     _optional_markdown,
