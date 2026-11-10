@@ -19,8 +19,8 @@ from backend.db_manager import (
     prune_orphan_pdf_thumbnails,
     prune_empty_processing_parent_dirs,
 )
-from backend.derived_caches import prks_thumb_cache_safe_wid, prks_thumb_cache_stem
-from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
+from backend.derived_caches import prks_thumb_cache_stem
+from backend.domain.saved_views.rules import SavedViewError
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.domain.works.rules import PRKS_BULK_WORK_MAX, BulkWorkError
 from backend.managed_pdf_names import safe_pdf_path_under_dir

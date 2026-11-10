@@ -8,6 +8,7 @@ PostgreSQL Library uses them without importing the SQLite one.
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import os
@@ -345,14 +346,13 @@ def finish_work_summary_rows(rows: Optional[List[dict]], pdfs_dir: str) -> None:
             except OSError:
                 row["file_size_bytes"] = None
     finally:
-        try:
+        # Telemetry never fails the read it measures.
+        with contextlib.suppress(Exception):
             record_span("pdf_file_stats", clock_ns() - t0)
             if examined:
                 record_counter("pdf_file_stat_rows", examined)
             if stated:
                 record_counter("pdf_file_stat_files", stated)
-        except Exception:
-            pass
 
 
 @dataclass(frozen=True)
