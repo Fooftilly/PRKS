@@ -50,9 +50,26 @@ def open_library(cfg: StorageConfig):
 
 
 def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
-    """Index a seeded Research Note on SQLite; PostgreSQL queues its own reindex job."""
+    """Index a seeded Research Note before any test reads it, on either store.
+
+    SQLite indexes it here. PostgreSQL's note save queued
+    ``research.reindex_work``, which the server's worker runs at some point
+    after start; a test that opened the Research Graph or a mention count
+    before then saw no mentions (a Work is a graph node only through them).
+    So the seed runs that job's transaction itself, as the Library's owner:
+    the Library a test opens already holds the note's mentions, as on SQLite,
+    and the queued job later rebuilds the same rows.
+    """
     if isinstance(db, PRKSDatabase):
         PRKSResearchIndex(storage=cfg).sync_work(work_id, notes, db)
+        return
+    from backend.domain.identity.authorization import Capability
+    from backend.domain.identity.library_scope import library_command
+    from backend.domain.research import reindex
+    from backend.pg_facade.context import current_context
+
+    library_command(db._database, current_context(), Capability.EDIT_LIBRARY,
+                    lambda scope: reindex.reindex_work(scope, work_id))
 
 
 def _managed_pdf(cfg: StorageConfig, name: str) -> str:
