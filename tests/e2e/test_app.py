@@ -3383,68 +3383,6 @@ class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
         self._assert_viewer_kept(page, page_number)
         self.assertIsNotNone(_server_annotation(page, work_id, ann_id))
 
-    @unittest.skipUnless(
-        postgres_library(),
-        "only PostgreSQL stores a write under a new key and reports its SHA-256; "
-        "a SQLite write keeps the path, so there is no document to compare",
-    )
-    def test_stored_bytes_that_are_not_this_export_remount_on_the_same_page(self):
-        server, page, work_id = self._open()
-        _commit_pdf_highlight(page)
-        ann_id = _only_viewer_annotation_id(page)
-        _wait_pdf_annotation_ops_drained(page, work_id)
-        _wait_pdf_materialized(page, work_id)
-        page_number = page.evaluate(_MARK_MOUNTED_VIEWER_JS)
-        tampered = []
-
-        def report_other_bytes(route):
-            # The server answers for different bytes than the viewer sent:
-            # the open document is no longer what that key holds.
-            if route.request.method != "POST" or tampered:
-                route.fallback()
-                return
-            response = route.fetch()
-            body = response.json()
-            self.assertIn("export_sha256", body)
-            body["export_sha256"] = "0" * 64
-            tampered.append(body["file_path"])
-            route.fulfill(response=response, json=body)
-
-        pattern = "**/api/works/%s/pdf" % work_id
-        page.route(pattern, report_other_bytes)
-        try:
-            _wait_pdf_annotation_durable(page)
-            _save_annotation_comment(page, ann_id, "after replacement")
-            _wait_server_comment(page, work_id, ann_id, "after replacement")
-            page.wait_for_function(
-                """() => {
-                    const pdf = window.prksGetFocusedTabContext().getResource('pdf');
-                    const was = window.__prksMountedViewer;
-                    return !!(pdf && pdf.viewer && was && pdf.viewer !== was.viewer);
-                }""",
-                timeout=30000,
-            )
-        finally:
-            page.unroute(pattern, report_other_bytes)
-        self.assertEqual(len(tampered), 1)
-        _wait_pdf_viewer(page)
-        _wait_pdf_annotation_durable(page)
-        state = page.evaluate(
-            """() => {
-                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
-                return {
-                    page: pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null,
-                    filePath: String(pdf.filePath || '').split('?')[0],
-                    viewerFilePath: String(pdf.viewerFilePath || '').split('?')[0],
-                };
-            }"""
-        )
-        # The remount loaded the stored bytes from their key and kept the page.
-        self.assertEqual(state["viewerFilePath"], tampered[0])
-        self.assertEqual(state["filePath"], tampered[0])
-        self.assertEqual(state["page"], page_number)
-        self.assertEqual(_popup_comment(page, ann_id), "after replacement")
-
 
 class PdfAnnotationCommentEditTests(_BrowserE2E):
     """#401: every comment edit reaches the server, the PDF and a reload."""

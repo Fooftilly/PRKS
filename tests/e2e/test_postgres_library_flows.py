@@ -13,6 +13,8 @@ embedded worker. They are deterministic: each waits on an observable state
 - Processing queue: upload by the picker and by drop, a duplicate warning,
   the preview frame, a draft edit at its revision, a single import that
   opens its Work, a batch import, and remove.
+- PDF replacement: bytes that are not the viewer's own export remount the
+  viewer from their key on the same page (ordinary saves keep it mounted).
 - Research-ACK fence: a Research Note's ACK carries ``research_refs`` and
   fences the cached Research Graph; the Concept the note now names lists the
   Work once the worker's ``research.reindex_work`` has run.
@@ -25,6 +27,7 @@ import unittest
 
 import psycopg
 
+from tests.e2e import test_app as a
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
     CONCEPT_UNVISITED_NAME,
@@ -413,3 +416,78 @@ class ResearchAckFenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PdfReplacedBytesTests(unittest.TestCase):
+    """Annotation saves keep the viewer; bytes that are not its export remount it.
+
+    PostgreSQL stores every PDF write under a new key and names the uploaded
+    export's SHA-256 (``export_sha256``). Only bytes that are not this
+    viewer's export are a different document, so only those remount, on the
+    same page.
+    """
+
+    def _open(self):
+        server, page, _context = _start(self, seed_library)
+        work_id = server.ids["work_a"]
+        a._open_work_from_home(page, WORK_A_TITLE)
+        a._wait_pdf_viewer(page)
+        a._wait_pdf_annotation_durable(page)
+        return server, page, work_id
+
+    def test_stored_bytes_that_are_not_this_export_remount_on_the_same_page(self):
+        server, page, work_id = self._open()
+        a._commit_pdf_highlight(page)
+        ann_id = a._only_viewer_annotation_id(page)
+        a._wait_pdf_annotation_ops_drained(page, work_id)
+        a._wait_pdf_materialized(page, work_id)
+        page_number = page.evaluate(a._MARK_MOUNTED_VIEWER_JS)
+        tampered = []
+
+        def report_other_bytes(route):
+            # The server answers for different bytes than the viewer sent:
+            # the open document is no longer what that key holds.
+            if route.request.method != "POST" or tampered:
+                route.fallback()
+                return
+            response = route.fetch()
+            body = response.json()
+            self.assertIn("export_sha256", body)
+            body["export_sha256"] = "0" * 64
+            tampered.append(body["file_path"])
+            route.fulfill(response=response, json=body)
+
+        pattern = "**/api/works/%s/pdf" % work_id
+        page.route(pattern, report_other_bytes)
+        try:
+            a._wait_pdf_annotation_durable(page)
+            a._save_annotation_comment(page, ann_id, "after replacement")
+            a._wait_server_comment(page, work_id, ann_id, "after replacement")
+            page.wait_for_function(
+                """() => {
+                    const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                    const was = window.__prksMountedViewer;
+                    return !!(pdf && pdf.viewer && was && pdf.viewer !== was.viewer);
+                }""",
+                timeout=30000,
+            )
+        finally:
+            page.unroute(pattern, report_other_bytes)
+        self.assertEqual(len(tampered), 1)
+        a._wait_pdf_viewer(page)
+        a._wait_pdf_annotation_durable(page)
+        state = page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return {
+                    page: pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null,
+                    filePath: String(pdf.filePath || '').split('?')[0],
+                    viewerFilePath: String(pdf.viewerFilePath || '').split('?')[0],
+                };
+            }"""
+        )
+        # The remount loaded the stored bytes from their key and kept the page.
+        self.assertEqual(state["viewerFilePath"], tampered[0])
+        self.assertEqual(state["filePath"], tampered[0])
+        self.assertEqual(state["page"], page_number)
+        self.assertEqual(a._popup_comment(page, ann_id), "after replacement")
