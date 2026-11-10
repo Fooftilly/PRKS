@@ -6,7 +6,9 @@ SQLite, and the parity tests must keep proving that PostgreSQL answers as
 SQLite did (``docs/postgresql-architecture.md`` §13.4: a guarantee is retired
 only with a replacement). So the reference side is a :class:`Reference`: a
 recording of every call the reference made, with its result or its error,
-replayed in the same order.
+replayed in the same order. A test with more than one reference (a library and
+its research index) replays them in one order: each step records its place
+among all the test's calls, so swapping two references' calls fails.
 
 ``PRKS_PARITY_RECORD=1`` runs the real ``PRKSDatabase`` (and the SQLite sync
 protocol for ``process_operation``) and writes the recording of each test to
@@ -32,7 +34,7 @@ import os
 import re
 import threading
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 RECORD_ENV = "PRKS_PARITY_RECORD"
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parity_reference")
@@ -179,6 +181,17 @@ def _rebuild_error(record: dict[str, Any], text: Callable[[str], str]) -> BaseEx
     return exc
 
 
+class _Turns:
+    """The order of every call of one test, across its references."""
+
+    def __init__(self) -> None:
+        self.next = 0
+
+    def take(self) -> int:
+        turn, self.next = self.next, self.next + 1
+        return turn
+
+
 # --- the reference -------------------------------------------------------------------------
 
 
@@ -197,12 +210,13 @@ class Reference:
     """
 
     def __init__(self, test_id: str, name: str, module_file: str, open_live: Callable[[], Any],
-                 varying: _Varying) -> None:
+                 varying: _Varying, turns: Optional[_Turns] = None) -> None:
         object.__setattr__(self, "_test_id", test_id)
         object.__setattr__(self, "_name", name)
         object.__setattr__(self, "_module", os.path.basename(module_file).rsplit(".", 1)[0])
         object.__setattr__(self, "_varying", varying)
         object.__setattr__(self, "_position", 0)
+        object.__setattr__(self, "_turns", turns or _Turns())
         if recording():
             object.__setattr__(self, "_live", open_live())
             object.__setattr__(self, "_steps", [])
@@ -214,6 +228,10 @@ class Reference:
             if self._steps is None:
                 raise AssertionError(
                     "no parity reference recorded for %s; run it with %s=1" % (test_id, RECORD_ENV))
+            siblings = [key for key in _load(self._module) if key.split("#", 1)[0] == test_id]
+            if len(siblings) > 1 and any("at" not in step for step in self._steps):
+                raise AssertionError("%s has %d references but its recording does not order them; run it with "
+                                     "%s=1" % (test_id, len(siblings), RECORD_ENV))
 
     @property
     def _key(self) -> str:
@@ -242,6 +260,7 @@ class Reference:
         steps: list[dict[str, Any]] = object.__getattribute__(self, "_steps")
         position: int = object.__getattribute__(self, "_position")
         object.__setattr__(self, "_position", position + 1)
+        turn = object.__getattribute__(self, "_turns").take()
         if live is not None:
             args = tuple(_live_of(arg) for arg in args)
             kwargs = {key: _live_of(arg) for key, arg in kwargs.items()}
@@ -259,13 +278,18 @@ class Reference:
                 else:
                     result = getattr(live, name)(*args, **kwargs)
             except Exception as exc:
-                steps.append(call | {"raises": _error_record(exc, hide)})
+                steps.append(call | {"at": turn, "raises": _error_record(exc, hide)})
                 raise
-            steps.append(call | {"result": _encode(result, hide)})
+            steps.append(call | {"at": turn, "result": _encode(result, hide)})
             return result
         if position >= len(steps):
             raise AssertionError("%s: call %d (%s) was never recorded" % (self._test_id, position, name))
         step = steps[position]
+        if "at" in step and step["at"] != turn:
+            raise AssertionError("%s: call %d (%s) of the %s reference was recorded as call %d of the test, "
+                                 "not %d: its references ran in another order"
+                                 % (self._test_id, position, name, object.__getattribute__(self, "_name"),
+                                    step["at"], turn))
         recorded = {key: step[key] for key in ("call", "args", "kwargs")}
         if _moments(recorded) != _moments(call):
             raise AssertionError("%s: call %d differs from the recording:\n  recorded %s\n  now      %s"
@@ -342,11 +366,13 @@ def reference_for(test: Any, open_live: Callable[[], Any], *, name: str = "libra
     """The reference ``name`` of ``test`` (a ``unittest.TestCase``); replay is checked at cleanup.
 
     The references of one test share their placeholders, so an id one of
-    them returned means the same thing passed to another.
+    them returned means the same thing passed to another, and one order of
+    calls, so a replay runs them interleaved as the recording did.
     """
     test_id = "%s.%s" % (type(test).__name__.removesuffix("_postgres"), test._testMethodName)
     varying = test.__dict__.setdefault("_parity_reference_varying", _Varying())
+    turns = test.__dict__.setdefault("_parity_reference_turns", _Turns())
     module_file = importlib.import_module(type(test).__module__).__file__
-    ref = Reference(test_id, name, module_file or "", open_live, varying)
+    ref = Reference(test_id, name, module_file or "", open_live, varying, turns)
     test.addCleanup(ref.close)
     return ref

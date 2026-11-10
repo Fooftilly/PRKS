@@ -126,6 +126,68 @@ class RecordAndReplayTests(unittest.TestCase):
             self.replay(steps, lambda ref: (both(ref), ref.get_work(W)))
 
 
+class CrossReferenceOrderTests(unittest.TestCase):
+    """A library and its index replay in the order they were recorded (the review on #1187)."""
+
+    def setUp(self) -> None:
+        self.recorded: dict[str, dict[str, list[dict[str, object]]]] = {}
+        patcher = mock.patch.object(parity_reference, "_recorded", self.recorded)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.module = __name__.rsplit(".", 1)[-1]
+
+    def record(self, script) -> dict[str, list[dict[str, object]]]:
+        library, index = _Live(), _Live()
+        library.answers, index.answers = ["C-" + "B" * 32], [None]
+        case = _Case("test_x")
+        with mock.patch.dict(os.environ, {RECORD_ENV: "1"}):
+            script(reference_for(case, lambda: library), reference_for(case, lambda: index, name="index"))
+        case.doCleanups()
+        return dict(self.recorded[self.module])
+
+    def replay(self, recording: dict[str, list[dict[str, object]]], script) -> None:
+        case = _Case("test_x")
+        with mock.patch.dict(os.environ, {RECORD_ENV: ""}), \
+                mock.patch.object(parity_reference, "_cache", {self.module: recording}):
+            library = reference_for(case, lambda: self.fail("a replay opens no SQLite library"))
+            index = reference_for(case, lambda: self.fail("a replay opens no SQLite index"), name="index")
+            script(library, index)
+            library.close()
+            index.close()
+
+    @staticmethod
+    def create_then_sync(library, index) -> None:
+        library.create_concept("Virtue")
+        index.sync_work(W)
+
+    @staticmethod
+    def sync_then_create(library, index) -> None:
+        index.sync_work(W)
+        library.create_concept("Virtue")
+
+    def test_swapping_two_references_calls_is_a_mismatch(self) -> None:
+        recording = self.record(self.create_then_sync)
+        self.assertEqual(sorted(recording), ["_Case.test_x", "_Case.test_x#index"])
+        self.assertEqual([step["at"] for steps in recording.values() for step in steps], [0, 1])
+        self.replay(recording, self.create_then_sync)
+        with self.assertRaisesRegex(AssertionError, "ran in another order"):
+            self.replay(recording, self.sync_then_create)
+
+    def test_a_recording_of_two_references_without_their_order_is_refused(self) -> None:
+        recording = self.record(self.create_then_sync)
+        unordered = {key: [{name: value for name, value in step.items() if name != "at"} for step in steps]
+                     for key, steps in recording.items()}
+        with self.assertRaisesRegex(AssertionError, "does not order them"):
+            self.replay(unordered, self.create_then_sync)
+        # One reference needs no order: recordings made before it still replay.
+        single = {"_Case.test_x": unordered["_Case.test_x"]}
+        case = _Case("test_x")
+        with mock.patch.dict(os.environ, {RECORD_ENV: ""}), \
+                mock.patch.object(parity_reference, "_cache", {self.module: single}):
+            reference_for(case, lambda: None).create_concept("Virtue")
+        case.doCleanups()
+
+
 class RecordingsTests(unittest.TestCase):
     def test_every_recording_belongs_to_a_test_that_exists(self) -> None:
         directory = os.path.join(_PROJECT_DIR, "tests", "parity_reference")
