@@ -12,12 +12,12 @@ from tests.e2e.fixtures import (
     PLAYLIST_CHANNEL,
     PLAYLIST_VIDEO_ONE_TITLE,
     PLAYLIST_VIDEO_TWO_TITLE,
-    PRKSDatabase,
-    SCHEMA,
     StorageConfig,
     seed_playlists_library,
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
+from tests.e2e.fixtures import open_library
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -144,8 +144,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertIn(title, [w.get('title') for w in playlist['value']['items']])
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root),
-                            schema_path=str(SCHEMA))
+        return library_for(server)
 
     def offline(self, page, context):
         context.set_offline(True)
@@ -239,7 +238,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def test_legitimately_empty_index_renders_its_empty_state(self):
         def empty(root):
             ids = seed_playlists_library(root)
-            db = PRKSDatabase(storage=StorageConfig.for_testing(root), schema_path=str(SCHEMA))
+            db = open_library(StorageConfig.for_testing(root))
             db.delete_playlist(ids['playlist_a'])
             db.delete_playlist(ids['playlist_b'])
             return ids

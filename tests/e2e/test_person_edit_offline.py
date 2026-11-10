@@ -11,11 +11,11 @@ import os
 import time
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -138,13 +138,14 @@ class OfflinePersonEditTests(unittest.TestCase):
         """
         existing = getattr(self, '_db', None)
         if existing is None:
-            existing = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            existing = library_for(server)
             self._db = existing
         return existing
 
     def stored(self, server, person_id, field):
-        rows = self.db_for(server).execute_query(
-            'SELECT %s FROM persons WHERE id = ?' % field, (person_id,))
+        rows = self.db_for(server).query(
+            sqlite='SELECT %s FROM persons WHERE id = ?' % field,
+            postgres='SELECT %s FROM prks.persons WHERE id = %%s' % field, params=(person_id,))
         return rows[0][field] if rows else None
 
     # ---- editing an existing Person -----------------------------------------
@@ -549,8 +550,10 @@ class OfflinePersonEditTests(unittest.TestCase):
             created = [p for p in db.get_all_persons() if p['id'] == person]
             self.assertEqual(len(created), 1)
             self.assertEqual(created[0]['about'], 'Third in the chain')
-            roles = db.execute_query(
-                'SELECT role_type FROM roles WHERE person_id = ? AND work_id = ?', (person, work))
+            roles = db.query(
+                sqlite='SELECT role_type FROM roles WHERE person_id = ? AND work_id = ?',
+                postgres='SELECT role_type FROM prks.roles WHERE person_id = %s AND work_id = %s',
+                params=(person, work))
             self.assertEqual([r['role_type'] for r in roles], ['Author'])
 
     def test_a_failed_prerequisite_blocks_the_edit_instead_of_stranding_it(self):

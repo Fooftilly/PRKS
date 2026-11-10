@@ -12,8 +12,6 @@ than faked here.
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
-from backend.research_network import get_position, update_position
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
@@ -22,6 +20,7 @@ from tests.e2e.fixtures import (
     seed_positions_library,
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -104,13 +103,14 @@ class DurablePositionTests(unittest.TestCase):
     def db_for(self, server):
         existing = getattr(self, '_db', None)
         if existing is None:
-            existing = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            existing = library_for(server)
             self._db = existing
         return existing
 
     def positions_in_db(self, server):
         return {row['name']: row for row in
-                self.db_for(server).execute_query('SELECT * FROM positions')}
+                self.db_for(server).query(
+                    sqlite='SELECT * FROM positions', postgres='SELECT * FROM prks.positions')}
 
     # ---- creation -----------------------------------------------------------
 
@@ -167,8 +167,9 @@ class DurablePositionTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page, 'a repeated name is not a refusal')
-        rows = self.db_for(server).execute_query(
-            'SELECT id FROM positions WHERE name = ?', (POSITION_A_NAME,))
+        rows = self.db_for(server).query(
+            sqlite='SELECT id FROM positions WHERE name = ?',
+            postgres='SELECT id FROM prks.positions WHERE name = %s', params=(POSITION_A_NAME,))
         self.assertEqual(len(rows), 2)
 
     # ---- fields -------------------------------------------------------------
@@ -186,7 +187,7 @@ class DurablePositionTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        self.assertEqual(get_position(self.db_for(server), position)['name'],
+        self.assertEqual(self.db_for(server).get_position(position)['name'],
                          'Renamed Offline')
 
     def test_a_description_is_edited_independently_of_the_name(self):
@@ -209,7 +210,7 @@ class DurablePositionTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = get_position(self.db_for(server), position)
+        stored = self.db_for(server).get_position(position)
         self.assertEqual(stored['name'], 'Renamed too')
         self.assertEqual(stored['description'], 'Edited offline.')
 
@@ -225,7 +226,7 @@ class DurablePositionTests(unittest.TestCase):
         # back, through the ORDINARY endpoint, so the name's revision actually
         # advances. A raw UPDATE would bypass the shared boundary and prove
         # nothing -- which is precisely why that boundary exists.
-        update_position(self.db_for(server), position, name='Renamed by another device')
+        self.db_for(server).update_position(position, name='Renamed by another device')
         self.offline(page, context)
         page.evaluate("id => updatePosition(id, { name: 'Renamed offline' })", position)
         self.wait_for_family(page, 'SET_POSITION_FIELD')
@@ -251,7 +252,7 @@ class DurablePositionTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => !rows.some("
             "  o => o.payload && o.payload.field === 'description'))",
             timeout=40000, message='the description operation never retired')
-        self.assertEqual(get_position(self.db_for(server), position)['description'],
+        self.assertEqual(self.db_for(server).get_position(position)['description'],
                          'Still savable.')
 
     def test_a_pending_rename_reaches_an_argument_that_targets_it(self):

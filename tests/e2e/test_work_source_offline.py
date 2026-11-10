@@ -20,11 +20,11 @@ import os
 import unittest
 
 from backend import work_source_sync
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PLAYLIST_VIDEO_ONE_TITLE, WORK_A_TITLE, seed_playlists_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.library_store import library_for
 
 # Three videos, each in both spellings PRKS accepts. The pairs exist so a
 # re-spelling can be told apart from a different video: SHORT_TWO and WATCH_TWO
@@ -203,7 +203,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
 
     def other_device_sets_source(self, server, work_id, url):
         """What a second device's acknowledged operation leaves behind.
@@ -363,9 +363,10 @@ class OfflineWorkSourceTests(unittest.TestCase):
         -- a lie the user can see, in the one place they are looking."""
         server, page, _context = self.start()
         work = server.ids['playlist_video_one']
-        self.db_for(server).execute_query(
-            "UPDATE works SET thumb_url = ? WHERE id = ?",
-            ('https://img.example/e2e0000001.jpg', work))
+        self.db_for(server).execute(
+            sqlite="UPDATE works SET thumb_url = ? WHERE id = ?",
+            postgres="UPDATE prks.works SET thumb_url = %s WHERE id = %s",
+            params=('https://img.example/e2e0000001.jpg', work))
         page.reload()
         page.wait_for_selector('#sidebar')
         o._open_work_from_home(page, PLAYLIST_VIDEO_ONE_TITLE)

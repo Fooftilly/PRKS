@@ -14,11 +14,11 @@ import time
 import unittest
 
 from backend import work_lifecycle_sync, work_note_sync
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -87,7 +87,7 @@ class _WorkNotesPage:
         page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
 
     def set_notes(self, page, text):
         page.evaluate(
@@ -136,8 +136,8 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
         self.assertEqual(self.db_for(server).get_work(work)['text_content'],
                          'See [[concept:Culture Industry]].')
-        names = {row['name'] for row in self.db_for(server).execute_query(
-            'SELECT name FROM concepts')}
+        names = {row['name'] for row in self.db_for(server).query(
+            sqlite='SELECT name FROM concepts', postgres='SELECT name FROM prks.concepts')}
         self.assertIn('Culture Industry', names)
         cached = self.cached_work(page, work)
         self.assertEqual(cached['text_content'], 'See [[concept:Culture Industry]].')
@@ -172,7 +172,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual(db.get_work(work)['text_content'], 'Research B')
         self.assertEqual(db.get_work(work)['private_notes'],
                          'Remind me: [[concept:Should Not Exist]].')
-        names = {row['name'] for row in db.execute_query('SELECT name FROM concepts')}
+        names = {row['name'] for row in db.query(sqlite='SELECT name FROM concepts', postgres='SELECT name FROM prks.concepts')}
         self.assertNotIn('Should Not Exist', names)
 
     def test_text_typed_behind_a_failed_save_is_saved_after_recovery(self):

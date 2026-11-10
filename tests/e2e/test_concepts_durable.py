@@ -14,8 +14,6 @@ import os
 import unittest
 import urllib.request
 
-from backend.db_manager import PRKSDatabase
-from backend.research_network import get_concept
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
@@ -30,6 +28,7 @@ from tests.e2e.harness import (
     require_chromium,
     wait_for_async,
 )
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -112,13 +111,14 @@ class DurableConceptTests(unittest.TestCase):
     def db_for(self, server):
         existing = getattr(self, '_db', None)
         if existing is None:
-            existing = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            existing = library_for(server)
             self._db = existing
         return existing
 
     def concepts_in_db(self, server):
         return {row['name']: row for row in
-                self.db_for(server).execute_query('SELECT * FROM concepts')}
+                self.db_for(server).query(
+                    sqlite='SELECT * FROM concepts', postgres='SELECT * FROM prks.concepts')}
 
     # ---- creation -----------------------------------------------------------
 
@@ -201,7 +201,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = get_concept(self.db_for(server), child)
+        stored = self.db_for(server).get_concept(child)
         self.assertEqual([p['name'] for p in stored['parents']], ['Offline Parent'])
 
     # ---- the definition -----------------------------------------------------
@@ -219,7 +219,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        self.assertEqual(get_concept(self.db_for(server), child)['description'],
+        self.assertEqual(self.db_for(server).get_concept(child)['description'],
                          'Edited offline.')
 
     # Definition A→B→A cancel is owned by Node
@@ -244,7 +244,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = get_concept(self.db_for(server), child)
+        stored = self.db_for(server).get_concept(child)
         self.assertEqual(stored['name'], 'Renamed Offline')
         self.assertIn(CONCEPT_CHILD_NAME, stored['aliases'],
                       'the old name stays reachable, so existing notes still resolve')
@@ -266,7 +266,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        self.assertEqual(get_concept(self.db_for(server), child)['aliases'],
+        self.assertEqual(self.db_for(server).get_concept(child)['aliases'],
                          ['Offline Alias'])
 
     def test_a_rename_and_an_alias_edit_are_one_conflict_unit(self):
@@ -309,7 +309,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = get_concept(self.db_for(server), child)
+        stored = self.db_for(server).get_concept(child)
         self.assertEqual([p['id'] for p in stored['parents']], [unvisited])
 
     # Parent-set equality (order-insensitive) and A→B→A cancel are owned by
@@ -361,7 +361,7 @@ class DurableConceptTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => (rows.find("
             "  o => o.operation === 'SET_CONCEPT_PARENTS') || {}).server_result)")
         self.assertEqual(state['code'], 'CONCEPT_CYCLE')
-        self.assertEqual(get_concept(self.db_for(server), parent)['parents'], [])
+        self.assertEqual(self.db_for(server).get_concept(parent)['parents'], [])
 
     # ---- deletion -----------------------------------------------------------
 

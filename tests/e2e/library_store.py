@@ -20,6 +20,14 @@ from backend.storage.config import StorageConfig
 from tests.e2e.postgres_identity import owner_facade, postgres_library
 
 
+# Research Network reads and writes: methods on the PostgreSQL facade, module
+# functions taking the store on SQLite (backend.research_network).
+_SQLITE_RESEARCH_FUNCTIONS = frozenset({
+    "get_concept", "get_position", "update_position", "get_argument", "update_argument",
+    "replace_argument_sources", "replace_argument_targets",
+})
+
+
 class LibraryStore:
     """Public Library methods, and dialect-explicit reads, for one running server."""
 
@@ -49,6 +57,11 @@ class LibraryStore:
         if name.startswith("_"):
             raise AttributeError(name)
         if self._sqlite is not None:
+            if name in _SQLITE_RESEARCH_FUNCTIONS:
+                from backend import research_network
+
+                function = getattr(research_network, name)
+                return lambda *args, **kwargs: function(self._sqlite, *args, **kwargs)
             return getattr(self._sqlite, name)
         method = getattr(self._facade, name)
         if not callable(method):
@@ -78,6 +91,16 @@ class LibraryStore:
 
         with psycopg.connect(self._server.library.conninfo, row_factory=dict_row) as conn:
             return [dict(row) for row in conn.execute(postgres, params).fetchall()]
+
+    def execute(self, *, sqlite: str, postgres: str, params: tuple = ()) -> None:
+        """One write in this store's dialect, committed (a test arranging state the UI cannot)."""
+        if self._sqlite is not None:
+            self._sqlite.execute_query(sqlite, params)
+            return
+        import psycopg
+
+        with psycopg.connect(self._server.library.conninfo) as conn:
+            conn.execute(postgres, params)
 
     def close(self) -> None:
         self._stack.close()

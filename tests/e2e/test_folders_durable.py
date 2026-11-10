@@ -12,11 +12,12 @@ doomed request fail before the cache answers.
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
+from tests.e2e.fixtures import open_library
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -34,7 +35,7 @@ def tearDownModule():
 
 def seed(root):
     ids = seed_library(root)
-    db = PRKSDatabase(storage=StorageConfig.for_testing(root))
+    db = open_library(StorageConfig.for_testing(root))
     ids['folder'] = db.add_folder('Durable Folder', 'Seeded description')
     db.move_work_to_folder(ids['work_a'], ids['folder'])
     return ids
@@ -114,7 +115,7 @@ class DurableFolderTests(unittest.TestCase):
     def db_for(self, server):
         existing = getattr(self, '_db', None)
         if existing is None:
-            existing = PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+            existing = library_for(server)
             self._db = existing
         return existing
 
@@ -347,8 +348,10 @@ class DurableFolderTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.settled(page)
-        rows = self.db_for(server).execute_query(
-            'SELECT folder_id FROM folder_files WHERE work_id = ?', (server.ids['work_a'],))
+        rows = self.db_for(server).query(
+            sqlite='SELECT folder_id FROM folder_files WHERE work_id = ?',
+            postgres='SELECT folder_id FROM prks.folder_files WHERE work_id = %s',
+            params=(server.ids['work_a'],))
         self.assertEqual([r['folder_id'] for r in rows], [destination])
 
     def test_filing_a_file_back_where_it_started_leaves_no_intent(self):
