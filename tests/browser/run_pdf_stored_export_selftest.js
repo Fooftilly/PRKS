@@ -192,6 +192,24 @@ async function cachedBytesAreTheKeys() {
     }
     await assert.rejects(storedBytes({ content_sha256: 'abc' }, path, exported, '', noFetch), /PDF cache update failed/, 'malformed hash');
 
+    // By default the read goes through the request coordinator, uncached.
+    const viaCoordinator = [];
+    global.prksRequest = async (url, init, policy) => {
+        viaCoordinator.push({ url, init, policy });
+        return { status: 200, arrayBuffer: async () => linearized };
+    };
+    try {
+        const routed = await storedBytes(lin, path, exported, sha256(exported));
+        assert.equal(sha256(routed), sha256(linearized));
+        assert.equal(viaCoordinator.length, 1);
+        assert.equal(viaCoordinator[0].url, path);
+        assert.equal(viaCoordinator[0].init.cache, 'no-store');
+        assert.deepEqual(viaCoordinator[0].policy, { dedupe: false, freshForMs: 0 });
+    } finally {
+        delete global.prksRequest;
+    }
+    await assert.rejects(storedBytes(lin, path, exported, sha256(exported)), /PDF cache update failed/, 'no transport');
+
     // A response without a stored hash (the SQLite adapter writes in place)
     // seeds the export, as before.
     assert.equal(await storedBytes({ file_path: path }, path, exported, '', noFetch), exported);

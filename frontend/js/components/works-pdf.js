@@ -138,7 +138,8 @@ async function prksStoredExportMatches(body, buffer, bufferSha) {
  * (`content_sha256`) and it is not `buffer` (linearization rewrote it, or the
  * stored document is another one), the stored bytes are read from the
  * network and must hash to `content_sha256`. Anything else throws, which
- * keeps the materialization claim for a retry. A response that names no
+ * keeps the materialization claim for a retry. The read goes through
+ * `prksRequest` (`fetchImpl` replaces it in tests). A response that names no
  * stored hash (the SQLite adapter writes in place) seeds `buffer`, as before.
  * `bufferSha` is the caller's hash of `buffer`, when it has one.
  */
@@ -149,7 +150,11 @@ async function prksStoredPdfBytes(body, path, buffer, bufferSha, fetchImpl) {
     if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('PDF cache update failed');
     const have = typeof bufferSha === 'string' && bufferSha ? bufferSha : await prksSha256Hex(buffer);
     if (have === want) return buffer;
-    const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : null);
+    // A first-party read: through the request coordinator (bounded reads,
+    // safe GET retry on network errors and 502/503/504), never cached.
+    const doFetch = fetchImpl || (typeof prksRequest === 'function'
+        ? (url, init) => prksRequest(url, init, { dedupe: false, freshForMs: 0 })
+        : null);
     if (!doFetch || !path) throw new Error('PDF cache update failed');
     let stored = null;
     try {
