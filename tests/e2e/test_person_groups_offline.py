@@ -29,11 +29,11 @@ def tearDownModule():
 def seed_groups(root):
     ids = seed_people_library(root)
     db = open_library(StorageConfig.for_testing(root))
-    parent = db.add_person_group('Parent Branch', description='Parent description')
+    parent = db.add_person_group_with_parent_options('Parent Branch', description='Parent description')
     group = ids['person_group']
     db.update_person_group(group, {'parent_id': parent, 'description': 'Group description'})
-    child = db.add_person_group('Child Branch', group, 'Child description')
-    unseen = db.add_person_group('Unvisited Branch', parent)
+    child = db.add_person_group_with_parent_options('Child Branch', parent_id=group, description='Child description')
+    unseen = db.add_person_group_with_parent_options('Unvisited Branch', parent_id=parent)
     db.add_person_to_group(ids['person_unvisited'], group)
     ids.update(group_parent=parent, group_child=child, group_unvisited=unseen)
     return ids

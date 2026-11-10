@@ -213,10 +213,13 @@ class OfflineWorkSourceTests(unittest.TestCase):
         them -- a hand-written UPDATE would be testing a state the product can
         never actually be in.
         """
-        db = self.db_for(server)
-        with db.connection() as conn:
-            work_source_sync.set_source_on_conn(
-                conn, work_id, work_source_sync.canonical_source({'kind': 'video', 'url': url}))
+        from backend.domain.works import source
+
+        desired = work_source_sync.canonical_source({'kind': 'video', 'url': url})
+        self.db_for(server).command(
+            sqlite=lambda conn, _db: work_source_sync.set_source_on_conn(conn, work_id, desired),
+            postgres=lambda scope: source.set_source(
+                scope, source._target(scope, work_id, for_update=True), desired))
 
     def columns(self, server, work_id):
         row = self.db_for(server).get_work(work_id)
@@ -365,7 +368,10 @@ class OfflineWorkSourceTests(unittest.TestCase):
         work = server.ids['playlist_video_one']
         self.db_for(server).execute(
             sqlite="UPDATE works SET thumb_url = ? WHERE id = ?",
-            postgres="UPDATE prks.works SET thumb_url = %s WHERE id = %s",
+            postgres="UPDATE prks.assets a SET thumb_url = %s FROM prks.works w"
+                     " JOIN prks.manifestations m ON m.library_id = w.library_id"
+                     " AND m.id = w.primary_manifestation_id"
+                     " WHERE w.id = %s AND a.library_id = m.library_id AND a.id = m.primary_asset_id",
             params=('https://img.example/e2e0000001.jpg', work))
         page.reload()
         page.wait_for_selector('#sidebar')

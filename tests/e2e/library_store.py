@@ -102,6 +102,23 @@ class LibraryStore:
         with psycopg.connect(self._server.library.conninfo) as conn:
             conn.execute(postgres, params)
 
+    def command(self, *, sqlite, postgres):
+        """One write through the store's own domain code, in its own transaction.
+
+        For a test standing in for another device: ``sqlite(conn, db)`` runs
+        the SQLite sync helper inside ``BEGIN IMMEDIATE``; ``postgres(scope)``
+        runs the PostgreSQL domain function inside the facade's
+        ``library_command`` transaction, as the owner.
+        """
+        if self._sqlite is not None:
+            with self._sqlite.connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                return sqlite(conn, self._sqlite)
+        from backend.pg_facade.context import acting_as
+
+        with acting_as(self._ctx):
+            return self._facade._command(postgres)
+
     def close(self) -> None:
         self._stack.close()
 
