@@ -23,7 +23,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import PRKS_BIBTEX_EXPORT_FIELD_IDS
+from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase
 

@@ -18,7 +18,7 @@ import unicodedata
 from typing import Any, Callable
 from unittest import mock
 
-from backend.db_manager import PRKS_SAVED_VIEW_MAX, SavedViewError
+from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
 from backend.entity_ids import generate

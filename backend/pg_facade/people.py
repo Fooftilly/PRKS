@@ -101,9 +101,9 @@ def _pdfs_dir(library: FacadeMixin) -> str:
 
 
 def _etag(label: str, rows: List[dict]) -> str:
-    from backend.db_manager import PRKSDatabase
+    from backend.etags import etag_for_representation
 
-    return PRKSDatabase.etag_for_representation(label, rows)
+    return etag_for_representation(label, rows)
 
 
 class PeopleMixin(FacadeMixin):
@@ -152,7 +152,7 @@ class PeopleMixin(FacadeMixin):
 
     @ported
     def get_person(self, person_id: str) -> Optional[dict]:
-        from backend.db_manager import finish_work_summary_rows
+        from backend.domain.works.rules import finish_work_summary_rows
         from backend.domain.people import queries
 
         person = _read(self, lambda scope: queries.person_detail(scope, person_id))
@@ -381,19 +381,19 @@ class PeopleMixin(FacadeMixin):
 
     @ported
     def missing_initial_role_person_ids(self, roles) -> List[str]:
-        from backend.db_manager import PRKSDatabase
+        from backend.domain.people.rules import eligible_initial_roles
 
-        eligible = PRKSDatabase._eligible_initial_roles(roles)
+        eligible = eligible_initial_roles(roles)
         return self.missing_person_ids(p for _i, p, _t, _c in eligible)
 
     @ported
     def insert_initial_roles(self, work_id: str, roles) -> int:
         """All the relationships a new Work is born with, in one transaction."""
-        from backend.db_manager import PRKSDatabase
         from backend.domain.people import roles as role_domain
+        from backend.domain.people.rules import eligible_initial_roles
 
         wanted = [role_domain.InitialRole(p, t, i, c)
-                  for i, p, t, c in PRKSDatabase._eligible_initial_roles(roles)]
+                  for i, p, t, c in eligible_initial_roles(roles)]
         if not wanted:
             return 0
         return _command(self, lambda scope: role_domain.insert_initial_roles(

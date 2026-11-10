@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.db_manager import managed_pdf_filename, safe_pdf_path_under_dir
+from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.performance import span as perf_span
 from backend.startup_profile import phase as startup_phase

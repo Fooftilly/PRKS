@@ -1,26 +1,70 @@
-import sqlite3
+import json
+import logging
 import os
 import posixpath
 import re
-import unicodedata
-import uuid
-import json
-import hashlib
-import html
-import logging
-from collections import Counter, defaultdict
+import sqlite3
+from collections import defaultdict
 from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-from datetime import datetime
-from dataclasses import dataclass
-from typing import Callable, Dict, Iterator, List, Any, Optional, Tuple
 from pathlib import Path
-from backend import (folder_sync, folder_tag_sync, person_group_sync, person_metadata_sync,
-                     person_sync, playlist_sync, tag_sync, work_metadata_sync, work_open_sync,
-                     work_role_sync, work_source_sync, work_tag_sync)
+from typing import Any, Dict, List, Optional, Tuple
+
+from backend import (
+    folder_sync,
+    folder_tag_sync,
+    pdf_annotation_sync,
+    person_group_sync,
+    person_metadata_sync,
+    person_sync,
+    playlist_sync,
+    tag_sync,
+    work_identity,
+    work_metadata_sync,
+    work_open_sync,
+    work_projection,
+    work_role_sync,
+    work_source_sync,
+    work_tag_sync,
+)
 from backend.db_migrations import LATEST_SCHEMA_VERSION, ensure_database_schema
-from backend.entity_ids import generate as generate_entity_id, is_distributed
-from backend.log_safety import safe_error_type, safe_log_label
+from backend.derived_caches import (
+    _PRKS_THUMB_CACHE_FINAL_RE,
+    _PRKS_THUMB_CACHE_LEGACY_FINAL_RE,
+    _PRKS_THUMB_CACHE_LEGACY_TMP_RE,
+    _PRKS_THUMB_CACHE_TMP_RE,
+    prks_delete_person_image_cache,
+    prks_thumb_cache_stem,
+)
+from backend.domain.people.errors import MissingPersonError
+from backend.domain.people.rules import eligible_initial_roles
+from backend.domain.saved_views.rules import (
+    PRKS_SAVED_VIEW_MAX,
+    SavedViewError,
+    normalize_saved_view_name,
+    normalize_saved_view_search,
+    saved_view_api_row,
+)
+from backend.domain.settings.rules import (
+    _prks_merge_bibtex_export_fields_patch,
+    _prks_parse_bibtex_export_fields_json,
+)
+from backend.domain.works.bibtex_format import format_bibtex
+from backend.domain.works.rules import (
+    BULK_FOLDER_MISSING,
+    BULK_TAGS_MISSING,
+    BULK_WORKS_MISSING,
+    BulkWorkError,
+    DeletedWorkRecord,
+    _canonical_new_source,
+    finish_work_summary_rows,
+    normalize_doc_type,
+    parse_bulk_work_request,
+    render_wiki_links,
+)
+from backend.entity_ids import generate as generate_entity_id
+from backend.entity_ids import is_distributed
+from backend.etags import etag_for_representation
+from backend.managed_pdf_names import safe_pdf_path_under_dir
 from backend.pdf_annotations import (
     WorkAnnotationError,
     annotations_semantically_equal,
@@ -29,13 +73,12 @@ from backend.pdf_annotations import (
     reconstruct_annotation,
     round_trip_annotation,
 )
-from backend import pdf_annotation_sync, work_identity, work_projection
 from backend.performance import (
     classify_sql_write,
     clock_ns,
-    record_counter,
     record_db_call,
-    record_span,
+)
+from backend.performance import (
     span as perf_span,
 )
 from backend.storage import paths
@@ -49,262 +92,12 @@ PRKS_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 # One definition, in the module that decides whether a field value is valid.
 PRKS_BIBTEX_DOC_TYPES = work_metadata_sync.DOC_TYPE_SET
 
-# Optional BibTeX/BibLaTeX lines (title + entry shell always exported).
-PRKS_BIBTEX_EXPORT_FIELD_IDS: Tuple[str, ...] = (
-    "author",
-    "editor",
-    "translator",
-    "introduction",
-    "foreword",
-    "afterword",
-    "year",
-    "publisher",
-    "location",
-    "edition",
-    "journal",
-    "volume",
-    "number",
-    "pages",
-    "isbn",
-    "doi",
-    "url",
-    "abstract",
-)
-PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT: Dict[str, bool] = {k: True for k in PRKS_BIBTEX_EXPORT_FIELD_IDS}
 
 # One definition, in the module that decides whether a field value is valid at
 # all. PATCH, the bulk action and the synchronization handler all answer the
 # same question, so they must consult the same list.
 PRKS_WORK_STATUSES: Tuple[str, ...] = work_metadata_sync.WORK_STATUSES
 PRKS_WORK_STATUS_SET = work_metadata_sync.WORK_STATUS_SET
-PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "remove_tags"})
-PRKS_BULK_WORK_MAX = 500
-
-
-class MissingPersonError(ValueError):
-    """A role names a Person that does not exist (deleted, or never synced)."""
-
-
-class BulkWorkError(ValueError):
-    """Controlled bulk-organization failure. http_status is 400 or 404."""
-
-    def __init__(self, message: str, http_status: int = 400):
-        super().__init__(message)
-        self.http_status = http_status
-
-
-BULK_WORKS_MISSING = "One or more selected files no longer exist."
-BULK_FOLDER_MISSING = "Folder not found."
-BULK_TAGS_MISSING = "One or more selected tags no longer exist."
-
-
-@dataclass(frozen=True)
-class BulkWorkRequest:
-    """A validated ``POST /api/works/bulk`` body: ids stripped, deduplicated, in request order."""
-
-    action: str
-    work_ids: List[str]
-    status: Optional[str] = None
-    folder_id: Optional[str] = None  # None or "" clears the Folder (move_folder only)
-    tag_ids: Tuple[str, ...] = ()
-
-    def result(self) -> Dict[str, Any]:
-        return {
-            "status": "updated",
-            "action": self.action,
-            "requested": len(self.work_ids),
-            "updated": len(self.work_ids),
-            "target_count": len(self.tag_ids) if self.tag_ids else 1,
-        }
-
-
-def _normalize_bulk_ids(raw, *, kind: str) -> List[str]:
-    if not isinstance(raw, list):
-        raise BulkWorkError(f"{kind}_ids must be a JSON array.")
-    if not raw:
-        raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
-    if len(raw) > PRKS_BULK_WORK_MAX:
-        raise BulkWorkError(
-            "Too many files selected." if kind == "work" else "Too many tags selected."
-        )
-    out: List[str] = []
-    seen = set()
-    for item in raw:
-        if not isinstance(item, str):
-            raise BulkWorkError(f"{kind} IDs must be strings.")
-        nid = item.strip()
-        if not nid:
-            raise BulkWorkError(f"{kind} IDs must be non-empty.")
-        if nid in seen:
-            continue
-        seen.add(nid)
-        out.append(nid)
-    if not out:
-        raise BulkWorkError("No files selected." if kind == "work" else "No tags selected.")
-    return out
-
-
-def parse_bulk_work_request(data: Any) -> BulkWorkRequest:
-    """Validate a bulk body before any database is touched (both backends).
-
-    Raises ``BulkWorkError`` (400) with the message the API returns.
-    """
-    if not isinstance(data, dict):
-        raise BulkWorkError("JSON object body required")
-    action = data.get("action")
-    if not isinstance(action, str) or action not in PRKS_BULK_WORK_ACTIONS:
-        raise BulkWorkError("Unknown bulk action.")
-    work_ids = _normalize_bulk_ids(data.get("work_ids"), kind="work")
-
-    if action == "set_status":
-        raw_status = data.get("status")
-        if not isinstance(raw_status, str) or \
-                not work_metadata_sync.is_valid_field_value("status", raw_status):
-            raise BulkWorkError("Invalid status.")
-        return BulkWorkRequest(action, work_ids, status=raw_status)
-    if action == "move_folder":
-        if "folder_id" not in data:
-            raise BulkWorkError("folder_id is required.")
-        raw_folder = data.get("folder_id")
-        if raw_folder is None:
-            return BulkWorkRequest(action, work_ids, folder_id=None)
-        if not isinstance(raw_folder, str):
-            raise BulkWorkError("folder_id must be a string or null.")
-        stripped = raw_folder.strip()
-        if not stripped:
-            raise BulkWorkError("folder_id is invalid.")
-        return BulkWorkRequest(action, work_ids, folder_id=stripped)
-    tag_ids = _normalize_bulk_ids(data.get("tag_ids"), kind="tag")
-    return BulkWorkRequest(action, work_ids, tag_ids=tuple(tag_ids))
-
-
-class SavedViewError(ValueError):
-    """Controlled Saved View failure. http_status is 400, 404, or 409."""
-
-    def __init__(self, message: str, http_status: int = 400):
-        super().__init__(message)
-        self.http_status = http_status
-
-
-PRKS_SAVED_VIEW_MAX = 100
-PRKS_SAVED_VIEW_NAME_MAX = 80
-PRKS_SAVED_VIEW_Q_MAX = 500
-PRKS_SAVED_VIEW_FIELD_MAX = 200
-_SAVED_VIEW_MODES = frozenset({"all", "advanced", "tag"})
-_SAVED_VIEW_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
-
-def _saved_view_has_controls(value: str) -> bool:
-    return bool(_SAVED_VIEW_CONTROL_RE.search(value))
-
-
-def normalize_saved_view_name(raw) -> str:
-    if not isinstance(raw, str):
-        raise SavedViewError("Name must be a string.")
-    name = raw.strip()
-    if not name:
-        raise SavedViewError("Name is required.")
-    if _saved_view_has_controls(name):
-        raise SavedViewError("Name contains invalid characters.")
-    if len(name) > PRKS_SAVED_VIEW_NAME_MAX:
-        raise SavedViewError("Name is too long.")
-    return name
-
-
-def normalize_saved_view_search(search) -> Dict[str, str]:
-    if not isinstance(search, dict):
-        raise SavedViewError("Search definition is required.")
-    for key in ("mode", "q", "tag", "author", "publisher"):
-        if key not in search:
-            raise SavedViewError("Search definition is incomplete.")
-    mode_raw = search.get("mode")
-    if not isinstance(mode_raw, str):
-        raise SavedViewError("Invalid search mode.")
-    mode = mode_raw.strip()
-    if mode not in _SAVED_VIEW_MODES:
-        raise SavedViewError("Invalid search mode.")
-
-    def _field(key: str, max_len: int) -> str:
-        value = search.get(key)
-        if not isinstance(value, str):
-            raise SavedViewError("Search fields must be strings.")
-        text = value.strip()
-        if _saved_view_has_controls(text):
-            raise SavedViewError("Search definition contains invalid characters.")
-        if len(text) > max_len:
-            raise SavedViewError("Search field is too long.")
-        return text
-
-    q = _field("q", PRKS_SAVED_VIEW_Q_MAX)
-    tag = _field("tag", PRKS_SAVED_VIEW_FIELD_MAX)
-    author = _field("author", PRKS_SAVED_VIEW_FIELD_MAX)
-    publisher = _field("publisher", PRKS_SAVED_VIEW_FIELD_MAX)
-    if mode == "all":
-        if not q or tag or author or publisher:
-            raise SavedViewError("All-fields views require a query and no other filters.")
-    elif mode == "advanced":
-        if tag:
-            raise SavedViewError("Advanced views cannot include a tag.")
-        if not (q or author or publisher):
-            raise SavedViewError("Advanced views require keywords, author, or publisher.")
-    else:
-        if not tag or q:
-            raise SavedViewError("Tag views require a tag and no keyword query.")
-    return {
-        "mode": mode,
-        "q": q,
-        "tag": tag,
-        "author": author,
-        "publisher": publisher,
-    }
-
-
-def saved_view_api_row(row: dict) -> Dict[str, Any]:
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "search": {
-            "mode": row["mode"],
-            "q": row["search_q"],
-            "tag": row["search_tag"],
-            "author": row["search_author"],
-            "publisher": row["search_publisher"],
-        },
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-def _prks_parse_bibtex_export_fields_json(raw: str) -> Dict[str, bool]:
-    """Load stored JSON; invalid or missing → all True. Unknown keys ignored."""
-    out = dict(PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT)
-    if not raw or not str(raw).strip():
-        return out
-    try:
-        obj = json.loads(raw)
-    except json.JSONDecodeError:
-        return out
-    if not isinstance(obj, dict):
-        return out
-    for k, v in obj.items():
-        if k not in PRKS_BIBTEX_EXPORT_FIELD_IDS:
-            continue
-        if isinstance(v, bool):
-            out[k] = v
-    return out
-
-
-def _prks_merge_bibtex_export_fields_patch(
-    current: Dict[str, bool], patch: Dict[str, Any]
-) -> Dict[str, bool]:
-    merged = dict(current)
-    for k, v in patch.items():
-        if k not in PRKS_BIBTEX_EXPORT_FIELD_IDS:
-            raise ValueError(f"unknown bibtex_export_fields key: {k}")
-        if not isinstance(v, bool):
-            raise ValueError(f"bibtex_export_fields.{k} must be boolean")
-        merged[k] = v
-    return merged
 
 
 # List/search/tag/recent/folder APIs: omit text_content and private_notes (full row via get_work).
@@ -524,321 +317,7 @@ def _prks_fts_prefix_clause(tokens: List[str]) -> str:
     return " ".join(parts)
 
 
-# Characters a BibTeX entry key may keep: Unicode word characters, "-", "."
-# and ":". Everything else either ends the key or is read as entry structure.
-_CITE_KEY_UNSAFE_RE = re.compile(r"[^\w\-.:]")
-
-
-def wiki_link_spans(text: str) -> Iterator[Tuple[int, int, str]]:
-    r"""``(start, end, inner)`` of each ``[[inner]]``, left to right.
-
-    Exactly the matches of ``re.finditer(r'\[\[(.*?)\]\]', text)``: a marker
-    opens at the first ``[[``, closes at the first ``]]`` after it, and holds
-    no newline. That pattern retries from every ``[[`` it cannot close, so a
-    note of many unclosed ``[[`` took quadratic time on every Work detail
-    read; this scan finds the same spans in one pass.
-    """
-    pos = 0
-    close = -1
-    while True:
-        start = text.find("[[", pos)
-        if start < 0:
-            return
-        if close < start + 2:
-            close = text.find("]]", start + 2)
-            if close < 0:
-                return
-        newline = text.find("\n", start + 2, close)
-        if newline >= 0:
-            # No ``[[`` before this newline closes either.
-            pos = newline + 1
-            continue
-        yield start, close + 2, text[start + 2:close]
-        pos = close + 2
-
-
-def render_wiki_links(
-    text: str,
-    resolve: Callable[[List[str]], Dict[str, Tuple[str, Any, Any]]],
-) -> str:
-    """``text`` with each ``[[target]]`` rendered as a link or an unresolved marker.
-
-    Shared by both backends. ``resolve`` maps the distinct, trimmed targets
-    (in first-occurrence order) to ``(kind, id, name)`` for those it found,
-    ``kind`` being ``"works"`` or ``"people"``; it is not called when the
-    text has no marker. Each distinct target is looked up once, so the cost
-    follows the number of different targets, not of markers.
-    """
-    if not text:
-        return ""
-    spans = list(wiki_link_spans(text))
-    targets = list(dict.fromkeys(inner.strip() for _, _, inner in spans))
-    if not targets:
-        return text
-    resolved = resolve(targets)
-
-    def replacement(inner: str) -> str:
-        raw = inner.strip()
-        hit = resolved.get(raw)
-        if hit:
-            kind, target_id, name = hit
-            safe_name = html.escape(str(name or ""), quote=True)
-            safe_id = html.escape(str(target_id or ""), quote=True)
-            return f'<a href="#/{kind}/{safe_id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{safe_name}</a>'
-        safe_raw = html.escape(raw, quote=True)
-        return f'<span class="wiki-link-unresolved" style="color:#ef4444;">[[{safe_raw}]]</span>'
-
-    out: List[str] = []
-    last = 0
-    for start, end, inner in spans:
-        out.append(text[last:start])
-        out.append(replacement(inner))
-        last = end
-    out.append(text[last:])
-    return "".join(out)
-
-
-# The source kinds a Work may be created with. `source_kind` is not free text:
-# the schema, the viewer and the source aggregate all describe exactly these
-# two, and anything else falls through the runtime inference below into a
-# branch it was never classified as. "web" with a YouTube URL reached the video
-# viewer while the creation boundary treated it as not-a-video.
-NEW_WORK_SOURCE_KINDS = ("pdf", "video")
-
-
-def effective_source_kind(source_kind, source_url, file_path):
-    """What a Work IS, by the same rule the runtime uses.
-
-    Mirrors `prksInferWorkSourceKind()` in frontend/js/api.js. An explicit kind
-    wins; otherwise a file makes it a PDF and a URL makes it a video. Creation
-    has to classify a row the same way the product later reads it, or the two
-    disagree about the same row -- which is how a Work with no kind, no file
-    and a YouTube URL came to be shown as a Video, offered the Video source
-    editor, and then refused by `SET_WORK_SOURCE` as
-    UNSUPPORTED_SOURCE_TRANSITION because its stored `source_kind` was NULL.
-    """
-    kind = (source_kind or "").strip().lower()
-    if kind in ("video", "pdf"):
-        return kind
-    if (file_path or "").strip():
-        return "pdf"
-    if (source_url or "").strip():
-        return "video"
-    return kind
-
-
-def _canonical_new_source(source_kind, source_url, provider, provider_id, file_path):
-    """The source columns a NEW Work may be created with, or a refusal.
-
-    Creation is the other point where a source identity comes into existence.
-    Bounding it only in the synchronization parser left the whole invariant
-    bypassable: a Work could be created with `provider_id` naming video A while
-    `source_url` named video B -- so the viewer, which reads `provider_id`
-    first, played a video the row did not claim -- or with a 3000-character
-    `provider_id` that no later conflict could report back, because
-    `fit_terminal_result` cannot shorten an identity. The row would be accepted
-    happily and become unresolvable months later.
-
-    So the same canonical parser decides here, for every Work the product will
-    treat as a video -- not only those whose caller said so. `provider` and
-    `provider_id` are DERIVED from the URL, exactly as on the synchronization
-    path, and `source_kind` is PERSISTED as "video" rather than left NULL: a
-    row the UI calls a video and the aggregate calls something else is the
-    disagreement this whole boundary exists to remove.
-
-    A contradictory pair is REFUSED rather than repaired. A caller passing
-    video B's URL with video A's id has a bug, and silently rewriting it to B
-    would hide the bug while making the next one harder to find -- the caller
-    would go on believing it had asserted an identity.
-
-    Nothing here creates a source revision: construction is not mutation, and a
-    Work begins at revision 0 like every other scope.
-    """
-    declared = (source_kind or "").strip().lower()
-    if declared and declared not in NEW_WORK_SOURCE_KINDS:
-        raise ValueError(
-            "%s is not a source kind; use one of %s"
-            % (declared, ", ".join(NEW_WORK_SOURCE_KINDS)))
-    url = (source_url or "").strip()
-    supplied_provider = (provider or "").strip().lower()
-    supplied_id = (provider_id or "").strip()
-    kind = effective_source_kind(declared, url, file_path)
-
-    if kind != "video":
-        # These columns ARE video identity. On anything else they would be a
-        # claim about a video this Work is not. A PDF's `source_url` is
-        # PROVENANCE -- where the file came from -- and stays untouched even
-        # when it happens to be YouTube-shaped.
-        if supplied_provider or supplied_id:
-            raise ValueError(
-                "provider and provider_id belong to a video source; this Work is "
-                "not one")
-        # The EFFECTIVE kind, canonically spelled -- so a new row always states
-        # what it is rather than leaving every reader to infer it. Storing
-        # "PDF", or NULL for a file-backed Work, means the canonical
-        # representation lives in each reader instead of in the column, and a
-        # reader that forgets sees a kind matching nothing.
-        #
-        # `kind` is "" only when there is no source at all: no declared kind, no
-        # file and no URL. That Work genuinely has no source classification, and
-        # inventing one would be a claim about a file it does not have.
-        return (kind or None), source_url, provider, provider_id
-
-    canonical = work_source_sync.canonical_source({"kind": "video", "url": url})
-    if canonical is None:
-        raise ValueError(
-            "a video Work needs a supported video URL: %s is not one"
-            % (url[:120] or "(empty)"))
-    if supplied_provider and supplied_provider != canonical["provider"]:
-        raise ValueError(
-            "provider %s contradicts the source URL, which is %s"
-            % (supplied_provider, canonical["provider"]))
-    if supplied_id and supplied_id != canonical["provider_id"]:
-        raise ValueError(
-            "provider_id does not identify the video this source URL names")
-    return (canonical["source_kind"], canonical["source_url"],
-            canonical["provider"], canonical["provider_id"])
-
-
-def normalize_doc_type(value: Any) -> str:
-    """Map user/API input to a whitelisted BibLaTeX entry type; unknown → misc."""
-    return work_metadata_sync.normalize_doc_type(value)
-
-
-def prks_thumb_cache_safe_wid(work_id: str) -> str:
-    """Sanitize work id for thumbnail filenames (must match server thumbnail handler)."""
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(work_id))
-
-
-def prks_thumb_cache_safe_asset_id(asset_id: Optional[str]) -> str:
-    """Sanitize Asset id for thumbnail filenames (must match server thumbnail handler)."""
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(asset_id or ""))
-
-
-# Bump when thumbnail encode format changes (invalidates on-disk cache by filename).
-PRKS_THUMB_CACHE_REV = 2
-
-
-def prks_thumb_cache_stem(
-    work_id: str, page: int, asset_id: Optional[str] = None
-) -> str:
-    """Cache filename stem for one PDF page thumbnail (no extension).
-
-    Includes the selected primary Asset id when known so switching the primary
-    PDF cannot reuse a cache file generated from a previous Asset (mtime alone
-    is insufficient when the new PDF is older than an existing thumb).
-    """
-    safe = prks_thumb_cache_safe_wid(work_id)
-    p = int(page) if page is not None else 1
-    if p < 1:
-        p = 1
-    asset = prks_thumb_cache_safe_asset_id(asset_id)
-    if asset:
-        return f"{safe}_p{p}_a{asset}_v{PRKS_THUMB_CACHE_REV}"
-    return f"{safe}_p{p}_v{PRKS_THUMB_CACHE_REV}"
-
-
-def prks_person_image_cache_safe_id(person_id: str) -> str:
-    """Sanitize person id for on-disk profile image cache filenames."""
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(person_id))
-
-
-# Bump when portrait encode format changes (invalidates on-disk cache by filename).
-PRKS_PERSON_IMAGE_CACHE_REV = 1
-
-
-def prks_person_image_url_hash(image_url: str) -> str:
-    """Stable short hash of normalized image_url for cache filenames."""
-    norm = (image_url or "").strip()
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:12]
-
-
-def prks_person_image_cache_path(person_id: str, image_url: str, people_dir: str) -> str:
-    """On-disk path for one person's compressed portrait (WebP)."""
-    d = people_dir
-    safe = prks_person_image_cache_safe_id(person_id)
-    h = prks_person_image_url_hash(image_url)
-    return os.path.join(
-        d, f"{safe}_{h}_v{PRKS_PERSON_IMAGE_CACHE_REV}.webp"
-    )
-
-
-def prks_person_image_legacy_bin_path(person_id: str, people_dir: str) -> str:
-    """Pre-compression cache file (raw bytes); migrated lazily to WebP."""
-    d = people_dir
-    safe = prks_person_image_cache_safe_id(person_id)
-    return os.path.join(d, safe + ".bin")
-
-
-def prks_delete_person_image_cache(person_id: str, people_dir: str) -> None:
-    """Remove all cached portrait files for one person (best-effort)."""
-    d = people_dir
-    safe = prks_person_image_cache_safe_id(person_id)
-    if not os.path.isdir(d):
-        return
-    legacy_bin = safe + ".bin"
-    prefix = safe + "_"
-    try:
-        names = os.listdir(d)
-    except OSError:
-        return
-    for fname in names:
-        if fname != legacy_bin and not fname.startswith(prefix):
-            continue
-        try:
-            os.remove(os.path.join(d, fname))
-        except OSError:
-            pass
-
-
 _PRKS_UNCATEGORIZED_FOLDER_TITLE = "Uncategorized"
-
-
-_PRKS_THUMB_CACHE_FINAL_RE = re.compile(
-    r"^(.+)_p(\d+)(?:_a([A-Za-z0-9_-]+))?_v(\d+)\.(webp|png|jpg|jpeg)$",
-    re.IGNORECASE,
-)
-_PRKS_THUMB_CACHE_TMP_RE = re.compile(
-    r"^(.+)_p(\d+)(?:_a([A-Za-z0-9_-]+))?_v(\d+)\.(webp|png|jpg|jpeg)\.tmp$",
-    re.IGNORECASE,
-)
-# Pre-rev-2 filenames (no _vN suffix); pruned when not in allowed v2 stems.
-_PRKS_THUMB_CACHE_LEGACY_FINAL_RE = re.compile(
-    r"^(.+)_p(\d+)\.(webp|png)$", re.IGNORECASE
-)
-_PRKS_THUMB_CACHE_LEGACY_TMP_RE = re.compile(
-    r"^(.+)_p(\d+)\.(webp|png)\.tmp$", re.IGNORECASE
-)
-
-
-def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> tuple[str, ...]:
-    """Remove cached PDF thumbnails for one work (best-effort). Returns paths that could not be removed."""
-    safe = prks_thumb_cache_safe_wid(work_id)
-    td = thumbs_dir
-    if not os.path.isdir(td):
-        return ()
-    pat_final = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
-        re.IGNORECASE,
-    )
-    pat_tmp = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
-        re.IGNORECASE,
-    )
-    try:
-        names = os.listdir(td)
-    except OSError:
-        return (td,)
-    failed: list[str] = []
-    for fname in names:
-        if not pat_final.match(fname) and not pat_tmp.match(fname):
-            continue
-        path = os.path.join(td, fname)
-        try:
-            os.remove(path)
-        except OSError:
-            failed.append(path)
-    return tuple(failed)
 
 
 def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
@@ -923,217 +402,6 @@ def prune_orphan_pdf_thumbnails(db: "PRKSDatabase") -> int:
     return removed
 
 
-def safe_pdf_path_under_dir(
-    pdfs_dir: str,
-    url_last_segment: str,
-    *,
-    windows_semantics: Optional[bool] = None,
-) -> Optional[str]:
-    """Resolve exactly one decoded PDF filename beneath pdfs_dir.
-
-    Path-shaped input is rejected rather than normalized to a different
-    filename. ``resolved_child_path()`` remains the final filesystem boundary
-    and also refuses a drive-qualified name, which on Windows would otherwise
-    re-anchor onto a different managed PDF.
-
-    ``windows_semantics`` defaults to this platform and exists so the Windows
-    branch is exercised by the suite on any host; callers must not set it.
-    """
-    if url_last_segment is None:
-        return None
-    raw_name = str(url_last_segment)
-    if not raw_name or raw_name != raw_name.strip():
-        return None
-    try:
-        name = unquote(raw_name)
-    except (TypeError, ValueError):
-        return None
-    if (
-        not name
-        or name != name.strip()
-        or name in (".", "..")
-        or "/" in name
-        or "\\" in name
-        or "\x00" in name
-    ):
-        return None
-    return paths.resolved_child_path(
-        pdfs_dir, name, windows_semantics=windows_semantics
-    )
-
-
-def _managed_pdf_basename_from_path(
-    file_path: str, *, allow_url_delimiters: bool
-) -> Optional[str]:
-    """Exact ``/api/pdfs/<basename>`` extract, optionally allowing ``?;#``.
-
-    Route-addressable ownership (`managed_pdf_filename`) refuses URL
-    delimiters because ``urlparse`` strips them before the HTTP PDF route
-    sees the path. Physical cleanup ownership (`owned_managed_pdf_basename`)
-    still accepts them so a library that already stored
-    ``/api/pdfs/legacy.pdf?x`` (and the matching on-disk name) can claim and
-    unlink those bytes after upgrade.
-    """
-    prefix = "/api/pdfs/"
-    if not file_path.startswith(prefix):
-        return None
-    remainder = file_path[len(prefix):]
-    if not remainder or remainder != remainder.strip():
-        return None
-    if "/" in remainder or "\\" in remainder:
-        return None
-    if not allow_url_delimiters and any(ch in remainder for ch in "?;#"):
-        return None
-    if remainder in (".", ".."):
-        return None
-    if "\x00" in remainder:
-        return None
-    if unquote(remainder) != remainder:
-        return None
-    if prefix + remainder != file_path:
-        return None
-    return remainder
-
-
-def managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Return the filename for a route-addressable ``/api/pdfs/<filename>`` path.
-
-    The basename must round-trip through the HTTP PDF route. ``urlparse`` strips
-    ``?`` (query), ``;`` (params), and ``#`` (fragment) before
-    ``_safe_pdf_path_for_route`` sees the path, so adopting
-    ``/api/pdfs/foo.pdf?x`` would lock/persist ``foo.pdf?x`` while GET resolved
-    ``foo.pdf``. Mint sanitizes these characters away; new adoption must
-    refuse them. Legacy rows that already used delimiter-bearing names are
-    cleaned up via ``owned_managed_pdf_basename``, not this helper.
-    """
-    return _managed_pdf_basename_from_path(file_path, allow_url_delimiters=False)
-
-
-def owned_managed_pdf_basename(file_path: str) -> Optional[str]:
-    """Physical cleanup ownership basename, including legacy ``?;#`` names.
-
-    Used when deleting a Work or retrying ``pending_pdf_cleanup``: the claim
-    must name the on-disk basename even when that spelling is not
-    route-addressable. Never used for adoption.
-    """
-    return _managed_pdf_basename_from_path(file_path, allow_url_delimiters=True)
-
-
-def referenced_managed_pdf_filename(file_path: str) -> Optional[str]:
-    """Fail-closed over-approximation of a stored path's serving identity.
-
-    Deliberately looser than ``managed_pdf_filename()``. That helper answers
-    "may this path be *adopted* as route-addressable ownership?" and must be
-    exact. This one answers "could this row *might* still be pointing at
-    managed PDF X?" and is only ever used to refuse deleting bytes, so it
-    must over-approximate: a malformed or legacy spelling that fails to
-    resolve here would let cleanup delete a PDF another row still
-    references.
-
-    Outer whitespace is tolerated. ``urlparse`` strips query/params/fragment
-    before the last segment is taken, matching ``GET /api/pdfs/...`` so a
-    surviving ``/api/pdfs/foo.pdf?q`` row protects ``foo.pdf``. Physical
-    delimiter-bearing ownership (``legacy.pdf?x`` on disk) is checked
-    separately via ``owned_managed_pdf_basename`` /
-    ``row_references_managed_pdf``.
-
-    Never use this output as positive deletion authority: traversal, nested,
-    and encoded-slash aliases map here but the HTTP route cannot serve them,
-    so they must not mint ``pending_pdf_cleanup`` claims.
-    """
-    fp = str(file_path or "").strip()
-    if not fp.startswith("/api/pdfs/"):
-        return None
-    # Match HTTP serving: urlparse drops query/params/fragment from .path.
-    path = urlparse(fp).path
-    if not path.startswith("/api/pdfs/"):
-        return None
-    segment = path.split("/")[-1]
-    name = os.path.basename(unquote(segment))
-    if not name or name in (".", ".."):
-        return None
-    return name
-
-
-def row_references_managed_pdf(file_path: str, filename: str) -> bool:
-    """True when a stored path fail-closed-protects managed basename ``filename``.
-
-    Checks the loose serving over-approximation
-    (``referenced_managed_pdf_filename``) and physical ownership
-    (``owned_managed_pdf_basename``) so cleanup refuses to unlink while any
-    such row exists. This is a *blocker*, not ownership proof — see
-    ``row_strongly_references_managed_pdf`` / ``managed_basenames_protected_by``
-    for identities that may retire or mint cleanup claims.
-    """
-    name = str(filename or "")
-    if not name:
-        return False
-    if referenced_managed_pdf_filename(file_path) == name:
-        return True
-    if owned_managed_pdf_basename(file_path) == name:
-        return True
-    return False
-
-
-def row_strongly_references_managed_pdf(file_path: str, filename: str) -> bool:
-    """True when a stored path strongly owns or serves ``filename``.
-
-    Strong identities are ones the HTTP PDF route / physical cleanup can
-    actually resolve: exact ``owned_managed_pdf_basename`` (including legacy
-    ``?;#`` on-disk names) and the urlparse-stripped path when that path is
-    itself an exact route-addressable ``/api/pdfs/<name>`` spelling (so
-    ``/api/pdfs/foo.pdf?q`` strongly serves ``foo.pdf``). Traversal, nested,
-    and encoded-slash aliases are intentionally excluded — they only
-    fail-closed-block unlink via ``row_references_managed_pdf``.
-    """
-    name = str(filename or "")
-    if not name:
-        return False
-    if owned_managed_pdf_basename(file_path) == name:
-        return True
-    fp = str(file_path or "").strip()
-    if not fp.startswith("/api/pdfs/"):
-        return False
-    serving = managed_pdf_filename(urlparse(fp).path)
-    return serving == name
-
-
-def managed_basenames_protected_by(file_path: str) -> Tuple[str, ...]:
-    """Distinct *strong* managed basenames a stored path may claim on delete.
-
-    Only strong ownership / serving identities mint ``pending_pdf_cleanup``
-    claims. A delimiter legacy path such as ``/api/pdfs/foo.pdf?x`` strongly
-    protects both physical ``foo.pdf?x`` and serving stem ``foo.pdf``, so
-    deleting that survivor reclaims a stem claim it previously superseded.
-
-    Weak fail-closed aliases (``/api/pdfs/../x.pdf``, nested segments,
-    ``%2F``) are deliberately excluded: ``referenced_managed_pdf_filename``
-    may map them to a containable stem, but the route cannot resolve those
-    spellings, so using them as positive deletion authority would unlink
-    bytes the row never owned. Those aliases keep an *existing* stem claim
-    pending (settle refuses to retire it; unlink is blocked) until they
-    disappear — they never create a new claim.
-    """
-    names: List[str] = []
-    seen = set()
-
-    def _add(name: Optional[str]) -> None:
-        if not name or name in seen:
-            return
-        # Containable managed basenames only.
-        if owned_managed_pdf_basename(f"/api/pdfs/{name}") != name:
-            return
-        seen.add(name)
-        names.append(name)
-
-    _add(owned_managed_pdf_basename(file_path))
-    fp = str(file_path or "").strip()
-    if fp.startswith("/api/pdfs/"):
-        # Strong serving stem: urlparse-stripped path must be exact ownership.
-        _add(managed_pdf_filename(urlparse(fp).path))
-    return tuple(names)
-
-
 def safe_processing_path_under_dir(
     processing_dir: str,
     relative_path: str,
@@ -1201,121 +469,6 @@ def prune_empty_processing_parent_dirs(processing_root: str, removed_inbox_file_
             cur = parent
         except OSError:
             break
-
-
-def _processing_safe_dest_name(filename: str) -> str:
-    safe = "".join(c for c in str(filename or "") if c.isalnum() or c in ".-_")
-    safe = safe.strip("._")
-    if not safe:
-        safe = "file"
-    if not safe.lower().endswith(".pdf"):
-        safe += ".pdf"
-    return safe
-
-
-# Most filesystems cap a single name component at 255 bytes, and a name that
-# overruns it fails at open() rather than at validation.
-_MANAGED_PDF_NAME_MAX_BYTES = 255
-
-
-def mint_managed_pdf_filename(original_name: str) -> str:
-    """Mint a fresh managed PDF basename: ``<unix-seconds>_<8 hex>_<name>.pdf``.
-
-    The random component is load-bearing, not decoration. A timestamp alone
-    collides for two uploads of the same filename within one second, and the
-    second write then replaced the first Work's bytes while both rows still
-    pointed at that one path.
-
-    ``original_name`` is advisory. It is sanitized for readability and never
-    trusted for placement: callers still resolve the result through
-    ``safe_pdf_path_under_dir()`` before touching the filesystem.
-    """
-    safe = _processing_safe_dest_name(os.path.basename(str(original_name or "")))
-    prefix = f"{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_"
-    return bound_managed_pdf_basename(prefix, safe)
-
-
-def bound_managed_pdf_basename(prefix: str, stem: str) -> str:
-    """Join ``prefix`` and ``stem`` into a ``.pdf`` basename a filesystem holds.
-
-    Every managed name is bounded here rather than at each caller, because the
-    copy-on-write path re-prefixes a name that was already minted: a stem sized
-    to the limit plus a second timestamp, Work id and uuid overruns it, and the
-    replace then fails with ENAMETOOLONG. Bounding the joined result keeps that
-    composition safe however many times a name is re-minted, including for names
-    already stored before this existed.
-    """
-    if stem.lower().endswith(".pdf"):
-        stem = stem[: -len(".pdf")]
-    budget = _MANAGED_PDF_NAME_MAX_BYTES - len(prefix.encode("utf-8")) - len(".pdf")
-    # Truncating bytes can split a multi-byte character; drop the partial tail.
-    stem = stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore") if budget > 0 else ""
-    return f"{prefix}{stem.strip('._') or 'file'}.pdf"
-
-
-def _decode_linked_people(rows: Optional[List[dict]]) -> None:
-    for row in rows or ():
-        raw = row.get("linked_people")
-        if isinstance(raw, str):
-            try:
-                row["linked_people"] = json.loads(raw)
-            except (ValueError, TypeError):
-                row["linked_people"] = []
-        elif raw is None and "linked_people" in row:
-            row["linked_people"] = []
-
-
-def finish_work_summary_rows(rows: Optional[List[dict]], pdfs_dir: str) -> None:
-    """Complete a work-summary row: on-disk PDF size, and structured links.
-
-    `linked_people` arrives from SQLite as JSON TEXT. Decoded here rather than
-    left for the client: a nested JSON string would make every consumer parse
-    it again per row per render, and a row validator would have to accept a
-    string where the shape is actually a list.
-    """
-    _decode_linked_people(rows)
-    if not rows:
-        return
-    t0 = clock_ns()
-    examined = 0
-    stated = 0
-    try:
-        for row in rows:
-            if not row or not isinstance(row, dict):
-                continue
-            examined += 1
-            # Ownership identity, not the last '/'-separated piece: reporting
-            # the size of some other managed PDF for a malformed stored path is
-            # the same silent redirect the serving route now refuses.
-            filename = managed_pdf_filename(str(row.get("file_path") or ""))
-            if not filename:
-                row["file_size_bytes"] = None
-                continue
-            path = safe_pdf_path_under_dir(pdfs_dir, filename)
-            if not path or not os.path.isfile(path):
-                row["file_size_bytes"] = None
-                continue
-            try:
-                row["file_size_bytes"] = os.path.getsize(path)
-                stated += 1
-            except OSError:
-                row["file_size_bytes"] = None
-    finally:
-        try:
-            record_span("pdf_file_stats", clock_ns() - t0)
-            if examined:
-                record_counter("pdf_file_stat_rows", examined)
-            if stated:
-                record_counter("pdf_file_stat_files", stated)
-        except Exception:
-            pass
-
-
-@dataclass(frozen=True)
-class DeletedWorkRecord:
-    work_id: str
-    file_path: str
-    managed_pdf_still_referenced: bool
 
 
 def _person_wire(value):
@@ -2507,20 +1660,7 @@ class PRKSDatabase:
             (limit,),
         )
 
-    @staticmethod
-    def etag_for_representation(label: str, rows: List[dict]) -> str:
-        """Weak ETag derived from the serialized response itself.
-
-        The invariant is absolute: if the body can change, the ETag must
-        change. Hand-maintained table-count/MAX(updated_at) probes have already
-        shipped two classes of defect here -- a count that a *move* leaves
-        identical, and `CURRENT_TIMESTAMP`'s one-second granularity hiding a
-        same-second edit. Hashing the representation makes the invariant true
-        by construction and cannot drift when a projection gains a field.
-        """
-        blob = json.dumps(rows, sort_keys=True, default=str, separators=(",", ":"))
-        digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
-        return f'W/"prks-{label}-{len(rows)}-{digest}"'
+    etag_for_representation = staticmethod(etag_for_representation)
 
     def etag_folders_catalog(self, rows: Optional[List[dict]] = None) -> str:
         """Weak ETag derived from the serialized catalog itself.
@@ -4887,25 +4027,7 @@ class PRKSDatabase:
                 raise MissingPersonError("A person on this file no longer exists.") from exc
             raise
 
-    @staticmethod
-    def _eligible_initial_roles(roles) -> list:
-        """The requested roles a new Work would actually be born with.
-
-        One definition for the pre-create check and the insert, so a role that
-        creation skips (no Person, no or unknown role type) cannot block it.
-        Returns (order_index, person_id, role_type, credit_name) tuples.
-        """
-        wanted = []
-        for idx, r in enumerate(roles if isinstance(roles, list) else []):
-            if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
-                continue
-            if r['role_type'] not in work_role_sync.ROLE_TYPE_SET:
-                continue
-            credit = r.get('credit_name', '')
-            if credit is not None and not isinstance(credit, str):
-                credit = ''
-            wanted.append((idx, str(r['person_id']), r['role_type'], credit or ''))
-        return wanted
+    _eligible_initial_roles = staticmethod(eligible_initial_roles)
 
     def missing_initial_role_person_ids(self, roles) -> List[str]:
         """Persons named by roles a new Work would be born with that have no row."""
@@ -5478,120 +4600,7 @@ class PRKSDatabase:
         return self.execute_query(query, (folder_id,))
 
     # --- BibLaTeX Generation ---
-    @staticmethod
-    def _format_biblatex_location(raw: Any) -> Optional[str]:
-        """Join place names for BibLaTeX list field (; separated → ' and ')."""
-        if raw is None:
-            return None
-        s = str(raw).strip()
-        if not s:
-            return None
-        parts: List[str] = []
-        # Plain str.split: the per-segment strip below already absorbs the
-        # whitespace a r"\s*;\s*" pattern would have consumed, without its
-        # super-linear backtracking on long whitespace runs.
-        for seg in s.split(";"):
-            seg = re.sub(r"\s+", " ", seg.strip())
-            if seg:
-                parts.append(seg)
-        if not parts:
-            return None
-        return " and ".join(parts)
 
-    @staticmethod
-    def _format_biblatex_person_name(last_name: Any, first_name: Any) -> Optional[str]:
-        """BibTeX/BibLaTeX author fragment: 'Family, Given' when both exist; else single name, no stray comma."""
-        ln = str(last_name or "").strip()
-        fn = str(first_name or "").strip()
-        if ln and fn:
-            return f"{ln}, {fn}"
-        if ln:
-            return ln
-        if fn:
-            return fn
-        return None
-
-    @staticmethod
-    def _bibtex_cite_key_part(text: Any) -> str:
-        """``text`` with every character an entry key cannot safely hold removed.
-
-        A key ends at whitespace or a comma, braces and quotes delimit the
-        entry, and ``\\ # % ' ( ) = @ ~`` are read as structure by BibTeX,
-        Biber or ``\\cite``. Unicode letters and digits (NFC, so a
-        decomposed accent is kept), ``_``, ``-``, ``.`` and ``:`` remain.
-        """
-        return _CITE_KEY_UNSAFE_RE.sub("", unicodedata.normalize("NFC", str(text or "")))
-
-    @classmethod
-    def _cite_key_part_from_credit(cls, credit: str) -> str:
-        """Key part of one free-text Person credit: the family name of
-        ``Family, Given``, else the last word of ``Given Family``; "" for none."""
-        if "," in credit:
-            words = credit.split(",", 1)[0].split()
-            return cls._bibtex_cite_key_part(words[0]) if words else ""
-        words = credit.split()
-        return cls._bibtex_cite_key_part(words[-1]) if words else ""
-
-    @classmethod
-    def _biblatex_cite_key_part_from_person(cls, p: dict) -> str:
-        """First segment for cite key: prefer family name, else given / mononym, else
-        the credit name the role exports under; "" when none is usable."""
-        for name in (p.get("last_name"), p.get("first_name")):
-            words = str(name or "").split()
-            part = cls._bibtex_cite_key_part(words[0]) if words else ""
-            if part:
-                return part
-        return cls._cite_key_part_from_credit(str(p.get("credit_name") or "").strip())
-
-    @classmethod
-    def _biblatex_role_name(cls, p: dict) -> str:
-        """The name a role row exports: its credit name, else the Person's; "" for none."""
-        credit = (p.get("credit_name") or "").strip()
-        if credit:
-            return credit
-        return cls._format_biblatex_person_name(p.get("last_name"), p.get("first_name")) or ""
-
-    @classmethod
-    def _biblatex_names_for_role(cls, roles: List[dict], role_type: str) -> List[str]:
-        out: List[str] = []
-        for p in roles:
-            if p.get("role_type") != role_type:
-                continue
-            nm = cls._biblatex_role_name(p)
-            if nm:
-                out.append(nm)
-        return out
-
-    @staticmethod
-    def _bibtex_escape_field(value: Any) -> str:
-        """Escape characters that have special meaning inside BibTeX braces."""
-        s = str(value) if value is not None else ""
-        # Percent signs introduce BibTeX comments inside fields; braces must be balanced.
-        s = s.replace('%', r'\%')
-        # BibTeX counts a brace whatever precedes it, so \{ and \} are only
-        # safe in pairs: a lone "}" would end the field and a lone "{" swallow
-        # the rest of the entry. A brace without its partner is written as the
-        # LaTeX symbol, whose own braces balance.
-        opened: List[int] = []
-        unpaired: set[int] = set()
-        for index, char in enumerate(s):
-            if char == "{":
-                opened.append(index)
-            elif char == "}":
-                if opened:
-                    opened.pop()
-                else:
-                    unpaired.add(index)
-        unpaired.update(opened)
-        out: List[str] = []
-        for index, char in enumerate(s):
-            if char not in "{}":
-                out.append(char)
-            elif index in unpaired:
-                out.append(r"{\textbraceleft}" if char == "{" else r"{\textbraceright}")
-            else:
-                out.append("\\" + char)
-        return "".join(out)
 
     def generate_bibtex(self, work_id: str) -> str:
         with self.connection() as conn:
@@ -5605,143 +4614,4 @@ class PRKSDatabase:
             video = work_projection.citation_is_stream(conn, target)
         return self.format_bibtex(work, roles, self._get_bibtex_export_profile(), video=video)
 
-    @classmethod
-    def format_bibtex(cls, work: dict, roles: List[dict], export_fields: Dict[str, bool],
-                      *, video: bool) -> str:
-        """One BibLaTeX entry from a citation record, its credits and the export profile.
-
-        Database-independent, so both backends export byte-identical text:
-        ``work`` is the Work-shaped citation record (``citation_record``),
-        ``roles`` the citation Manifestation's credits as Person rows with
-        ``role_type`` and ``credit_name``, in role order, and
-        ``export_fields`` the Library's ``bibtex_export_fields`` profile.
-
-        ``video`` is True when the citation Manifestation's primary Asset is
-        an external stream: the stored source identity, not an inference from
-        ``source_kind``, ``source_url`` or ``file_path``. A PDF's
-        ``source_url`` is provenance, and a fileless PDF reads back on
-        PostgreSQL with no ``source_kind`` at all, so neither may make a Work
-        a video here (#690).
-        """
-        # Roles sorted by order_index, then rowid (stable order when order_index ties).
-        linked_authors = cls._biblatex_names_for_role(roles, "Author")
-        editors = cls._biblatex_names_for_role(roles, "Editor")
-        translators = cls._biblatex_names_for_role(roles, "Translator")
-        introductions = cls._biblatex_names_for_role(roles, "Introduction")
-        forewords = cls._biblatex_names_for_role(roles, "Foreword")
-        afterwords = cls._biblatex_names_for_role(roles, "Afterword")
-
-        # The visible Work credit line falls back to Author (text) when no
-        # linked Author exists. Preserve that credit in copied citations too.
-        text_credit = str(work.get("author_text") or "").strip()
-        # On a video, Author (text) is a channel/organization name, not
-        # semicolon-delimited Person names. BibLaTeX needs it braced as one.
-        corporate_credit = bool(text_credit) and not linked_authors and video
-        text_authors = (
-            [text_credit] if corporate_credit
-            else [name.strip() for name in text_credit.split(";") if name.strip()]
-        )
-        author_names = linked_authors or text_authors
-
-        # Year: prefer dedicated year field, fall back to published_date prefix
-        year = work.get('year') or (work.get('published_date', '')[:4] if work.get('published_date') else None)
-
-        # The key follows the first credit the author field shows: an Author
-        # row that renders no name is skipped there, so it is skipped here,
-        # and with none left both fall back to Author (text).
-        first_author_person = next(
-            (p for p in roles if p["role_type"] == "Author" and cls._biblatex_role_name(p)), None)
-        if first_author_person:
-            first_author_last = cls._biblatex_cite_key_part_from_person(first_author_person) or "Unknown"
-        elif text_authors:
-            first_author_last = (
-                cls._bibtex_cite_key_part(text_authors[0].split()[0]) if corporate_credit
-                else cls._cite_key_part_from_credit(text_authors[0])
-            ) or "Unknown"
-        else:
-            first_author_last = "Unknown"
-        cite_key = first_author_last + (cls._bibtex_cite_key_part(year) or "UnknownYear")
-
-        raw_dt = work.get("doc_type")
-        if raw_dt is not None and str(raw_dt).strip() != "":
-            entry_type = normalize_doc_type(raw_dt)
-        else:
-            entry_type = (
-                "article"
-                if work.get("journal")
-                else "book"
-                if work.get("publisher")
-                else "misc"
-            )
-
-        esc = cls._bibtex_escape_field
-
-        def names(people: List[str]) -> str:
-            # Each name on its own, so a brace in one cannot pair with a brace
-            # in the next and hide the "and" between them.
-            return " and ".join(esc(name) for name in people)
-        bf = export_fields
-
-        def _export(key: str) -> bool:
-            return bool(bf.get(key, True))
-
-        bibtex = f"@{entry_type}{{{cite_key},\n"
-        bibtex += f"  title = {{{esc(work['title'])}}},\n"
-        if author_names and _export("author"):
-            author_value = names(author_names)
-            if corporate_credit:
-                author_value = "{" + author_value + "}"  # BibLaTeX corporate name
-            bibtex += f"  author = {{{author_value}}},\n"
-        if editors and _export("editor"):
-            bibtex += f"  editor = {{{names(editors)}}},\n"
-        if translators and _export("translator"):
-            bibtex += f"  translator = {{{names(translators)}}},\n"
-        if introductions and _export("introduction"):
-            bibtex += f"  introduction = {{{names(introductions)}}},\n"
-        if forewords and _export("foreword"):
-            bibtex += f"  foreword = {{{names(forewords)}}},\n"
-        if afterwords and _export("afterword"):
-            bibtex += f"  afterword = {{{names(afterwords)}}},\n"
-        if year and _export("year"):
-            bibtex += f"  year = {{{esc(year)}}},\n"
-        if work.get('publisher') and _export("publisher"):
-            bibtex += f"  publisher = {{{esc(work['publisher'])}}},\n"
-        loc_fmt = cls._format_biblatex_location(work.get("location"))
-        if loc_fmt and _export("location"):
-            bibtex += f"  location = {{{esc(loc_fmt)}}},\n"
-        if work.get('edition') and _export("edition"):
-            bibtex += f"  edition = {{{esc(work['edition'])}}},\n"
-        if work.get('journal') and _export("journal"):
-            bibtex += f"  journal = {{{esc(work['journal'])}}},\n"
-        if work.get('volume') and _export("volume"):
-            bibtex += f"  volume = {{{esc(work['volume'])}}},\n"
-        if work.get('issue') and _export("number"):
-            bibtex += f"  number = {{{esc(work['issue'])}}},\n"
-        if work.get('pages') and _export("pages"):
-            bibtex += f"  pages = {{{esc(work['pages'])}}},\n"
-        if work.get('isbn') and _export("isbn"):
-            bibtex += f"  isbn = {{{esc(work['isbn'])}}},\n"
-        if work.get('doi') and _export("doi"):
-            bibtex += f"  doi = {{{esc(work['doi'])}}},\n"
-        # BibLaTeX: url + urldate for @online; optional url for other types (e.g. PDF saved from web).
-        url = (work.get("source_url") or "").strip()
-        if _export("url"):
-            if entry_type == "online":
-                if url:
-                    bibtex += f"  url = {{{esc(url)}}},\n"
-                # Accessed date should always match last edit time on the work.
-                # `updated_at` is maintained by update_work_metadata().
-                ua = (work.get("updated_at") or "").strip()
-                urld = ua[:10] if len(ua) >= 10 else ""
-                if urld:
-                    bibtex += f"  urldate = {{{urld}}},\n"
-            elif url:
-                bibtex += f"  url = {{{esc(url)}}},\n"
-                ua = (work.get("updated_at") or "").strip()
-                urld = ua[:10] if len(ua) >= 10 else ""
-                if urld:
-                    bibtex += f"  urldate = {{{urld}}},\n"
-        if work.get('abstract') and _export("abstract"):
-            bibtex += f"  abstract = {{{esc(work['abstract'])}}},\n"
-        bibtex += "}"
-        return bibtex
+    format_bibtex = staticmethod(format_bibtex)

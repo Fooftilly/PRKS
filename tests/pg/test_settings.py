@@ -15,7 +15,7 @@ from typing import Any
 from unittest import mock
 
 from backend.db import Database, DatabaseConfig
-from backend.db_manager import PRKS_BIBTEX_EXPORT_FIELD_IDS
+from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.settings import app_settings

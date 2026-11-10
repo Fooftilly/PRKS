@@ -337,7 +337,7 @@ class WorkMetadataSyncTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.db.update_work_metadata(self.work, {"status": bad})
                 # 3. the bulk action
-                from backend.db_manager import BulkWorkError
+                from backend.domain.works.rules import BulkWorkError
                 with self.assertRaises(BulkWorkError):
                     self.db.bulk_update_works({"work_ids": [self.work],
                                                "action": "set_status", "status": bad})

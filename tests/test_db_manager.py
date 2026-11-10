@@ -15,18 +15,15 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import (
     PRKSDatabase,
-    PRKS_BIBTEX_EXPORT_FIELD_IDS,
-    PRKS_BULK_WORK_MAX,
-    PRKS_SAVED_VIEW_MAX,
-    BulkWorkError,
-    SavedViewError,
-    safe_pdf_path_under_dir,
     safe_processing_path_under_dir,
-    prks_thumb_cache_safe_wid,
-    prks_thumb_cache_stem,
     prune_orphan_pdf_thumbnails,
     prune_empty_processing_parent_dirs,
 )
+from backend.derived_caches import prks_thumb_cache_safe_wid, prks_thumb_cache_stem
+from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
+from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
+from backend.domain.works.rules import PRKS_BULK_WORK_MAX, BulkWorkError
+from backend.managed_pdf_names import safe_pdf_path_under_dir
 from backend.storage import paths as storage_paths
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex

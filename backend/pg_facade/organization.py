@@ -123,7 +123,7 @@ def _saved_view_command(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -
     SQLite's 409.
     """
     from backend.db.errors import ConstraintViolationError
-    from backend.db_manager import SavedViewError
+    from backend.domain.saved_views.rules import SavedViewError
     from backend.domain.saved_views import views
 
     try:
@@ -218,9 +218,9 @@ class OrganizationMixin(FacadeMixin):
 
     @ported
     def etag_tags_all(self) -> str:
-        from backend.db_manager import PRKSDatabase
+        from backend.etags import etag_for_representation
 
-        return PRKSDatabase.etag_for_representation("tags", self.get_all_tags())
+        return etag_for_representation("tags", self.get_all_tags())
 
     # -- Work and Folder tags ---------------------------------------------------
 
@@ -306,10 +306,10 @@ class OrganizationMixin(FacadeMixin):
 
     @ported
     def etag_folders_catalog(self, rows: Optional[List[dict]] = None) -> str:
-        from backend.db_manager import PRKSDatabase
+        from backend.etags import etag_for_representation
 
         data = self.get_all_folders() if rows is None else rows
-        return PRKSDatabase.etag_for_representation("folders", data)
+        return etag_for_representation("folders", data)
 
     @ported
     def get_folder(self, folder_id: str) -> Optional[dict]:
@@ -501,9 +501,9 @@ class OrganizationMixin(FacadeMixin):
 
     @ported
     def etag_playlists_catalog(self, rows: List[dict]) -> str:
-        from backend.db_manager import PRKSDatabase
+        from backend.etags import etag_for_representation
 
-        return PRKSDatabase.etag_for_representation("playlists", rows)
+        return etag_for_representation("playlists", rows)
 
     @ported
     def get_playlist(self, playlist_id: str) -> Optional[dict]:
@@ -622,7 +622,7 @@ class OrganizationMixin(FacadeMixin):
 
     @ported
     def update_saved_view(self, view_id: str, *, name=None, search=None) -> dict:
-        from backend.db_manager import SavedViewError
+        from backend.domain.saved_views.rules import SavedViewError
         from backend.domain.saved_views import views
 
         vid = (view_id or "").strip()
@@ -632,7 +632,7 @@ class OrganizationMixin(FacadeMixin):
 
     @ported
     def delete_saved_view(self, view_id: str) -> None:
-        from backend.db_manager import SavedViewError
+        from backend.domain.saved_views.rules import SavedViewError
         from backend.domain.saved_views import views
 
         vid = (view_id or "").strip()

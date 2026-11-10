@@ -14,13 +14,12 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import (
-    PRKSDatabase,
+from backend.db_manager import PRKSDatabase
+from backend.derived_caches import prks_delete_pdf_thumbnails_for_work_id, prks_thumb_cache_stem
+from backend.managed_pdf_names import (
     managed_basenames_protected_by,
     managed_pdf_filename,
     owned_managed_pdf_basename,
-    prks_delete_pdf_thumbnails_for_work_id,
-    prks_thumb_cache_stem,
     referenced_managed_pdf_filename,
     row_references_managed_pdf,
     row_strongly_references_managed_pdf,
@@ -158,7 +157,7 @@ class TestWorkDeletion(unittest.TestCase):
             return real_remove(path, *args, **kwargs)
 
         with self.assertLogs("prks.work_deletion", level="WARNING") as logs:
-            with patch("backend.db_manager.os.remove", side_effect=thumb_remove):
+            with patch("backend.derived_caches.os.remove", side_effect=thumb_remove):
                 result = delete_work(self.db, self.index, w_id)
         self.assertTrue(result.existed)
         self.assertEqual(result.cleanup_failures, ("thumbnails",))
@@ -214,7 +213,7 @@ class TestWorkDeletion(unittest.TestCase):
 
     def test_thumbnail_helper_listdir_failure_is_reported(self):
         w_id, pdf_abs, thumb = self._add_managed_work("ListFail")
-        with patch("backend.db_manager.os.listdir", side_effect=OSError("cannot list")):
+        with patch("backend.derived_caches.os.listdir", side_effect=OSError("cannot list")):
             failed = prks_delete_pdf_thumbnails_for_work_id(w_id, self.storage.thumbs_dir)
         self.assertEqual(failed, (self.storage.thumbs_dir,))
         self.assertTrue(os.path.isfile(thumb))

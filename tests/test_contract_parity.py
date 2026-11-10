@@ -12,7 +12,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from backend.db_manager import PRKSDatabase, PRKS_BIBTEX_EXPORT_FIELD_IDS
+from backend.db_manager import PRKSDatabase
+from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import WORK_STATUSES
 from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE_TYPES
 

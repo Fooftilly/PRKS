@@ -117,7 +117,7 @@ rewrite them.
 
 | Primitive | Where | Why it stays |
 | --- | --- | --- |
-| Containment with drive-qualified-segment refusal | `paths.resolved_child_path`, `db_manager.safe_pdf_path_under_dir` | This is the only thing that turns a key name into a path. It becomes the local backend's key-to-path function. |
+| Containment with drive-qualified-segment refusal | `paths.resolved_child_path`, `managed_pdf_names.safe_pdf_path_under_dir` | This is the only thing that turns a key name into a path. It becomes the local backend's key-to-path function. |
 | Crash-durable publication | `backend/fs_durability.py`, `atomic_replace_managed_pdf_bytes`, `_exclusive_create_write_and_fsync` | These are the local backend's `replace` and `put_new`. |
 | Exclusive creation of freshly minted names | `store_new_managed_pdf_bytes`, `mint_managed_pdf_filename` | This is the mandatory `put_new` semantics (§10.2). |
 | Cleanup claims that store a **basename, never a path** | `pending_pdf_cleanup`, `work_deletion.py` | They already survive a restore into a different root, and they survive relocation unchanged. |

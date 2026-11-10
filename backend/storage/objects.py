@@ -250,7 +250,7 @@ def mint_name(namespace: str, hint: str) -> str:
     cached portrait gets a fresh name from ``backend.domain.objects.portraits``.
     """
     if namespace == NAMESPACE_ASSET_OBJECTS:
-        from backend.db_manager import mint_managed_pdf_filename
+        from backend.managed_pdf_names import mint_managed_pdf_filename
 
         return validate_key_name(mint_managed_pdf_filename(hint))
     if namespace in NAMESPACES:

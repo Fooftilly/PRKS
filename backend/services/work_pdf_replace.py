@@ -41,11 +41,11 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Optional
 
-from backend.db_manager import (
+from backend.derived_caches import prks_thumb_cache_safe_wid
+from backend.managed_pdf_names import (
     bound_managed_pdf_basename,
     managed_pdf_filename,
     mint_managed_pdf_filename,
-    prks_thumb_cache_safe_wid,
     referenced_managed_pdf_filename,
     row_references_managed_pdf,
     safe_pdf_path_under_dir,

@@ -204,14 +204,14 @@ def current_source(conn, work_id):
     URL the row already has -- the one canonical parser, the same answer every
     other reader of that row reaches.
     """
-    from backend import db_manager
+    from backend.domain.works.rules import effective_source_kind
     row = conn.execute(
         "SELECT source_kind, provider, provider_id, source_url, file_path "
         "FROM works WHERE id = ?", (work_id,)).fetchone()
     if row is None:
         return None
     stored_url = row[3] or ""
-    kind = db_manager.effective_source_kind(row[0], stored_url, row[4])
+    kind = effective_source_kind(row[0], stored_url, row[4])
     source = {
         "source_kind": kind,
         "provider": (row[1] or "").strip().lower(),

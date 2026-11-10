@@ -47,6 +47,15 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/library_backend.py",
     "backend/log_safety.py",
     "backend/person_image.py",
+    "backend/derived_caches.py",
+    "backend/managed_pdf_names.py",
+    "backend/domain/works/rules.py",
+    "backend/domain/saved_views/rules.py",
+    "backend/domain/settings/rules.py",
+    "backend/domain/people/errors.py",
+    "backend/domain/works/bibtex_format.py",
+    "backend/domain/people/rules.py",
+    "backend/etags.py",
     "backend/db/config.py",
     "backend/db/errors.py",
     "backend/db/database.py",
@@ -353,7 +362,7 @@ _CAPABILITY_HELPER_HOMES = {
     "allocate_exclusive_managed_filename": "backend/services/work_pdf_replace.py",
     "store_new_managed_pdf_bytes": "backend/services/work_pdf_replace.py",
     "store_new_managed_pdf_from_path": "backend/services/work_pdf_replace.py",
-    "mint_managed_pdf_filename": "backend/db_manager.py",
+    "mint_managed_pdf_filename": "backend/managed_pdf_names.py",
 }
 
 # INV-STORAGE-002: a raw removal of a managed-PDF path is survivor-aware

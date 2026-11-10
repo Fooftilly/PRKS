@@ -23,7 +23,8 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import PRKSDatabase, prks_thumb_cache_stem
+from backend.db_manager import PRKSDatabase
+from backend.derived_caches import prks_thumb_cache_stem
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex
 from backend.services.work_pdf_replace import managed_pdf_path_lock
@@ -330,7 +331,7 @@ class PendingPdfCleanupTests(unittest.TestCase):
             title="Legacy delimiter",
             file_path=f"/api/pdfs/{name}",
         )
-        from backend.db_manager import managed_pdf_filename, owned_managed_pdf_basename
+        from backend.managed_pdf_names import managed_pdf_filename, owned_managed_pdf_basename
 
         self.assertIsNone(managed_pdf_filename(f"/api/pdfs/{name}"))
         self.assertEqual(owned_managed_pdf_basename(f"/api/pdfs/{name}"), name)
@@ -679,7 +680,7 @@ class PendingPdfCleanupTests(unittest.TestCase):
                 raise OSError("forced thumbnail cleanup failure")
             return real_remove(path, *args, **kwargs)
 
-        with patch("backend.db_manager.os.remove", side_effect=thumb_fails):
+        with patch("backend.derived_caches.os.remove", side_effect=thumb_fails):
             result = delete_work(self.db, self.index, work_id)
         self.assertEqual(result.cleanup_failures, ("thumbnails",))
         self.assertFalse(result.pending_pdf_cleanup)

@@ -1,7 +1,7 @@
 """``[[wiki link]]`` resolution on PostgreSQL (L-W-2 #631).
 
 ``PRKSDatabase.resolve_wiki_links`` by the same rules, rendered by the shared
-``backend.db_manager.render_wiki_links``, in the caller's one ``library_query``
+``backend.domain.works.rules.render_wiki_links``, in the caller's one ``library_query``
 snapshot:
 
 - each distinct target, trimmed at its ends and matched exactly
@@ -93,6 +93,6 @@ def resolve_targets(scope: LibraryScope, targets: list[str]) -> dict[str, tuple[
 
 def render(scope: LibraryScope, text: str) -> str:
     """``resolve_wiki_links(text)`` read in ``scope``'s snapshot."""
-    from backend.db_manager import render_wiki_links
+    from backend.domain.works.rules import render_wiki_links
 
     return render_wiki_links(text, lambda targets: resolve_targets(scope, targets))
