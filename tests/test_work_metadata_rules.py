@@ -42,7 +42,9 @@ _UPDATE = re.compile(r"""\bUPDATE\s+(?:ONLY\s+)?(?:"?(?P<schema>\w+)"?\s*\.\s*)?
 _UPDATE_WORD = re.compile(r"\bUPDATE\b", re.IGNORECASE)
 _NOT_A_STATEMENT_BEFORE = re.compile(r"\b(?:FOR|DO|OR|ON|BEFORE|AFTER|KEY|INSTEAD\s+OF)\s*$", re.IGNORECASE)
 _NOT_A_STATEMENT_AFTER = re.compile(r"\s+(?:OF|NOTHING|CASCADE|RESTRICT|NO\s+ACTION|SET\s+(?:NULL|DEFAULT))\b"
-                                    r"""|\s*(?:[^\s\w"{%]|$)""", re.IGNORECASE)  # or prose: "UPDATE … SET"
+                                    r"""|\s*[^\s\w"{%]""", re.IGNORECASE)  # or prose: "UPDATE … SET"
+# SQL comments, which PostgreSQL treats as whitespace anywhere in a statement.
+_SQL_COMMENT = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
 _CLAUSE_END = re.compile(r"(?:FROM|WHERE|RETURNING)\b", re.IGNORECASE)
 _SINGLE_TARGET = re.compile(r'\s*"?(\w+)"?\s*=', re.DOTALL)
 _COMPOSED_COLUMN = re.compile(r"\s*(?:\{\w*\}|%s|%\(\w+\)s)\s*(?:=|$)")  # a column or a whole list
@@ -89,8 +91,15 @@ def _updates(sql: str) -> list[tuple[str, set[str]]]:
     read, so the audit fails closed.
     """
     found = []
+    sql = _SQL_COMMENT.sub(" ", sql)
     for word in _UPDATE_WORD.finditer(sql):
-        if _NOT_A_STATEMENT_BEFORE.search(sql, 0, word.start()) or _NOT_A_STATEMENT_AFTER.match(sql, word.end()):
+        if _NOT_A_STATEMENT_BEFORE.search(sql, 0, word.start()):
+            continue
+        if not sql[word.end():].strip():  # a fragment: the statement is assembled elsewhere
+            if word.group(0) == "UPDATE":
+                raise ValueError("unresolved UPDATE fragment: %r" % sql[max(0, word.start() - 40):])
+            continue
+        if _NOT_A_STATEMENT_AFTER.match(sql, word.end()):
             continue
         update = _UPDATE.match(sql, word.start())
         if update is None and word.group(0) != "UPDATE":
@@ -221,8 +230,21 @@ class ResultBoundTests(unittest.TestCase):
         self.assertLessEqual(meta.serialized_result_bytes(result), meta.MAX_DURABLE_RESULT_BYTES)
 
 
+_PSYCOPG_SQL = {"SQL", "Identifier", "Literal", "Placeholder", "Composed"}
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    return func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+
+
 def _render(node: ast.expr) -> str:
-    """A string expression's text, with each value Python fills in as ``{}``."""
+    """A SQL expression's text, with each value Python fills in as ``{}``.
+
+    Strings and ``psycopg.sql`` objects compose the same way: an f-string, a
+    ``+`` chain, a ``%`` template, ``.format``, ``sql.SQL``, ``sql.Identifier``
+    (rendered quoted, as PostgreSQL would see it) and ``sql.Composed``.
+    """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
@@ -231,6 +253,19 @@ def _render(node: ast.expr) -> str:
         return _render(node.left) + _render(node.right)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
         return _render(node.left)  # its %s placeholders stay visible
+    if isinstance(node, ast.Call):
+        name = _call_name(node)
+        if name == "format" and isinstance(node.func, ast.Attribute) and _is_text(node.func.value):
+            return _render(node.func.value)  # its {} placeholders stay visible
+        if name == "SQL" and len(node.args) == 1:
+            return _render(node.args[0])
+        if name == "Identifier":
+            parts = [arg.value for arg in node.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str)]
+            return ".".join('"%s"' % part for part in parts) if parts and len(parts) == len(node.args) else "{}"
+        if name in ("Literal", "Placeholder"):
+            return "%s"
+        if name == "Composed" and len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple)):
+            return "".join(_render(part) for part in node.args[0].elts)
     return "{}"
 
 
@@ -239,16 +274,37 @@ def _is_text(node: ast.AST) -> bool:
         return isinstance(node.value, str)
     if isinstance(node, ast.JoinedStr):
         return True
+    if isinstance(node, ast.Call):
+        name = _call_name(node)
+        return name in _PSYCOPG_SQL or (name in ("format", "join") and isinstance(node.func, ast.Attribute)
+                                        and _is_text(node.func.value))
     return isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)) \
         and (_is_text(node.left) or _is_text(node.right))
+
+
+def _consumed(node: ast.AST) -> list[ast.AST]:
+    """The sub-expressions ``_render`` folds into ``node``'s text.
+
+    Anything else inside it (a ``.format`` or ``.join`` argument) is read
+    as an expression of its own, so a statement passed there is still seen.
+    """
+    if not isinstance(node, ast.Call):
+        return list(ast.iter_child_nodes(node))
+    name = _call_name(node)
+    if name in ("format", "join"):
+        return [node.func.value] if isinstance(node.func, ast.Attribute) else []
+    if name == "Composed" and node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
+        return list(node.args[0].elts)
+    return list(node.args)
 
 
 def _sql_literals(source: str) -> list[str]:
     """Every string expression of a module, assembled as far as the source shows.
 
-    An f-string, a ``+`` chain and a ``%`` template are rendered whole, with
-    each value Python supplies as ``{}``, so a target composed in Python
-    reads as composed instead of as unrelated fragments. Docstrings are prose.
+    An f-string, a ``+`` chain, a ``%`` template and ``psycopg.sql``
+    composition are rendered whole, with each value Python supplies as
+    ``{}``, so a target composed in Python reads as composed instead of as
+    unrelated fragments. Docstrings are prose.
     """
     tree = ast.parse(source)
     inner: set[int] = set()
@@ -257,8 +313,7 @@ def _sql_literals(source: str) -> list[str]:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             docstrings.add(id(node.value))
         if _is_text(node):
-            for child in ast.iter_child_nodes(node):
-                inner.add(id(child))
+            inner.update(id(part) for part in _consumed(node))
     return [_render(node) for node in ast.walk(tree)
             if _is_text(node) and id(node) not in inner and id(node) not in docstrings]
 
@@ -345,6 +400,18 @@ class WriterAuditTests(unittest.TestCase):
             'sql = "uPdAtE ONLY works AS w sEt author_text = %s"',
             'sql = f"update {table} set status = %s"',
             'sql = "update works set " + column + " = %s"',
+            'sql = "update /* change status */ works set status = %s"',
+            'sql = "update works /* comment */ set status = %s"',
+            'sql = "UPDATE /* comment */ prks.works SET status = %s"',
+            'sql = "UPDATE works -- the status\\n SET status = %s"',
+            'sql = "UPDATE works SET /* x */ author_text /* y */ = %s"',
+            'stmt = sql.SQL("UPDATE ") + sql.Identifier("works") + sql.SQL(" SET status = %s")',
+            'stmt = sql.SQL("UPDATE {} SET status = %s").format(sql.Identifier("works"))',
+            'stmt = SQL("UPDATE prks.works SET {} = %s").format(Identifier(column))',
+            'stmt = sql.Composed([sql.SQL("UPDATE "), sql.Identifier("prks", "manifestations"), sql.SQL(" SET doi = %s")])',
+            'stmt = sql.SQL("UPDATE ") + table + sql.SQL(" SET status = %s")',
+            'parts = ["UPDATE "]',
+            'stmt = sql.SQL(", ").join([sql.SQL("UPDATE prks.works SET status = %s")])',
         ):
             with self.subTest(source=source):
                 _read, offenders = self.module_offences(rogue, source)
