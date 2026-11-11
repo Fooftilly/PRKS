@@ -36,7 +36,10 @@ _UPDATE = re.compile(r"""\bUPDATE\s+(?:ONLY\s+)?(?:"?(?P<schema>\w+)"?\s*\.\s*)?
                      r"""(?:\s*\*)?(?:\s+(?:AS\s+)?(?!SET\b)\w+)?\s+SET\b\s*""", re.IGNORECASE)
 # Every UPDATE that is not part of FOR UPDATE, ON CONFLICT DO UPDATE, a
 # trigger event or a foreign key action must be a statement _UPDATE reads.
-_UPDATE_WORD = re.compile(r"\bUPDATE\b|(?i:\bupdate\s+(?=(?:only\s+)?\"?prks\"?\s*\.))")
+# Any case: PostgreSQL keywords are case-insensitive. An upper-case UPDATE
+# the parser cannot read fails the audit; in another case it may be prose
+# ("Update the fields"), so it counts only when it reads as a statement.
+_UPDATE_WORD = re.compile(r"\bUPDATE\b", re.IGNORECASE)
 _NOT_A_STATEMENT_BEFORE = re.compile(r"\b(?:FOR|DO|OR|ON|BEFORE|AFTER|KEY|INSTEAD\s+OF)\s*$", re.IGNORECASE)
 _NOT_A_STATEMENT_AFTER = re.compile(r"\s+(?:OF|NOTHING|CASCADE|RESTRICT|NO\s+ACTION|SET\s+(?:NULL|DEFAULT))\b"
                                     r"""|\s*(?:[^\s\w"{%]|$)""", re.IGNORECASE)  # or prose: "UPDATE … SET"
@@ -90,6 +93,8 @@ def _updates(sql: str) -> list[tuple[str, set[str]]]:
         if _NOT_A_STATEMENT_BEFORE.search(sql, 0, word.start()) or _NOT_A_STATEMENT_AFTER.match(sql, word.end()):
             continue
         update = _UPDATE.match(sql, word.start())
+        if update is None and word.group(0) != "UPDATE":
+            continue
         if update is None:
             raise ValueError("unresolved UPDATE: %r" % sql[word.start(): word.start() + 80])
         if update.group("composed") or update.group("table") is None:
@@ -345,12 +350,19 @@ class WriterAuditTests(unittest.TestCase):
             'sql = "UPDATE prks.works AS w SET " + ", ".join(parts)',
             'sql = (\n    "UPDATE prks.works w "\n    f"SET author_text = {value!r}"\n)',
             'run(f"UPDATE prks.manifestations SET doi = %s WHERE id = {work_id}")',
+            'sql = "update works set status = %s"',
+            'sql = "Update manifestations set doi = %s"',
+            'sql = "uPdAtE ONLY works AS w sEt author_text = %s"',
+            'sql = f"update {table} set status = %s"',
+            'sql = "update works set " + column + " = %s"',
         ):
             with self.subTest(source=source):
                 _read, offenders = self.module_offences(rogue, source)
                 self.assertTrue(offenders, source)
         for source in ('"""Merges re-point rows (UPDATE … SET work_id)."""',
                        'NOTE = "re-pointed by the merge (UPDATE … SET work_id)"',
+                       'LABEL = "Update Position fields"',
+                       'HELP = "update the abstract, then save"',
                        'sql = f"UPDATE prks.jobs SET status = %s WHERE id = {job}"',
                        'sql = "SELECT 1 FROM prks.works FOR UPDATE"'):
             with self.subTest(source=source):
