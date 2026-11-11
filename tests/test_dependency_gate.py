@@ -1327,7 +1327,7 @@ class RepoGateLiveTests(unittest.TestCase):
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl", "requests")
         })
-        expected_pg = dict(runtime)
+        expected_pg = dict(runtime, **{"openapi-core": dev["openapi-core"]})
 
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
