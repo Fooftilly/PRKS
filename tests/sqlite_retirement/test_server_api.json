@@ -562,7 +562,7 @@
     },
     "TestServerAPI.test_group_http_failure_does_not_create_typed_parent": {
       "replaced_by": [
-        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_group_edit_naming_a_missing_parent_creates_nothing"
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_refused_group_edit_leaves_its_typed_parent_uncreated"
       ]
     },
     "TestServerAPI.test_index_sync_failure_keeps_note": {
