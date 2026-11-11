@@ -1,0 +1,80 @@
+{
+  "module": "tests/test_work_projection.py",
+  "tests": {
+    "WorkProjectionTests.test_origin_projection_preserves_every_legacy_work_column": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_work_without_a_source",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_managed_pdf_records_its_file",
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_the_projection_follows_the_primary_manifestation_and_its_asset"
+      ]
+    },
+    "WorkProjectionTests.test_reader_families_use_the_same_identity_projection": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_every_reader_family_carries_the_same_identity"
+      ]
+    },
+    "WorkProjectionTests.test_projection_follows_non_origin_primary_version_and_file": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_the_projection_follows_the_primary_manifestation_and_its_asset"
+      ],
+      "note": "A stream's file_path is \"\" on PostgreSQL, as for every stream Work (backend/domain/works/projection.py); SQLite's legacy fallback gave None only after a primary swap."
+    },
+    "WorkProjectionTests.test_bibtex_is_byte_identical_for_origin_manifestation": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors",
+        "tests/pg/test_works_bibtex.py::CitationTargetTests.test_the_target_is_the_citation_manifestation_else_the_primary"
+      ]
+    },
+    "WorkProjectionTests.test_bibtex_uses_explicit_citation_manifestation": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_the_citation_manifestation_and_its_credits",
+        "tests/pg/test_works_bibtex.py::CitationTargetTests.test_the_target_is_the_citation_manifestation_else_the_primary"
+      ]
+    },
+    "WorkProjectionTests.test_projected_credits_exclude_other_manifestation_roles": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_credits_of_a_manifestation_that_is_no_longer_primary_reach_no_reader",
+        "tests/pg/test_people_roles.py::ManifestationScopeTests.test_the_work_shows_credits_of_its_primary_manifestation_only"
+      ]
+    },
+    "WorkProjectionTests.test_bibtex_credits_follow_citation_manifestation": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_the_citation_manifestation_and_its_credits"
+      ]
+    },
+    "WorkProjectionTests.test_primary_thumbnail_fields_follow_primary_asset": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_the_thumbnail_fields_follow_the_primary_asset"
+      ]
+    },
+    "WorkProjectionTests.test_get_person_excludes_non_primary_manifestation_roles": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_credits_of_a_manifestation_that_is_no_longer_primary_reach_no_reader",
+        "tests/pg/test_people_roles.py::ManifestationScopeTests.test_the_work_shows_credits_of_its_primary_manifestation_only"
+      ]
+    },
+    "WorkProjectionTests.test_author_search_excludes_non_primary_manifestation_roles": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_credits_of_a_manifestation_that_is_no_longer_primary_reach_no_reader"
+      ],
+      "note": "SQLite's private FTS/LIKE/linked-person helpers have no PostgreSQL counterpart; the public author filter, work_ids_matching_author and keyword search are checked instead."
+    },
+    "WorkProjectionTests.test_publisher_filter_ignores_hidden_legacy_when_primary_null": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_a_primary_without_a_publisher_hides_the_one_before_it"
+      ]
+    },
+    "WorkProjectionTests.test_search_uses_displayed_primary_metadata": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_search_finds_the_displayed_metadata_and_not_the_hidden",
+        "tests/pg/test_search_refresh.py::RefreshTests.test_the_primary_manifestation_overrides_title_and_abstract"
+      ],
+      "note": "SQLite's private _search_works_fts_tokens/_search_works_like_tokens paths are gone; PostgreSQL searches one derived row built from the primary Manifestation."
+    },
+    "WorkProjectionTests.test_browse_orders_by_effective_displayed_title": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_the_browse_catalog_orders_by_the_displayed_title"
+      ]
+    }
+  }
+}

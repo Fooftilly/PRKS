@@ -311,12 +311,22 @@ def work_summary(core: Mapping[str, Any], *, with_folder: bool = True) -> dict[s
     return _with_extras(out, core)
 
 
+def abstract_excerpt(abstract: Any) -> str:
+    """The first ``ABSTRACT_EXCERPT_LEN`` code points of the abstract.
+
+    Code points, not UTF-16 units: the client's ``prksAbstractExcerpt``
+    (``frontend/js/work-metadata-state.js``) cuts the same way, so a pending
+    Abstract shows the excerpt the server will send back.
+    """
+    return str(abstract or "")[:ABSTRACT_EXCERPT_LEN]
+
+
 def work_browse(core: Mapping[str, Any], *, excerpt: bool = True,
                 extra: tuple[str, ...] = ()) -> dict[str, Any]:
     """The compact browse row, with the abstract excerpt or the named extras."""
     out = _pick(core, WORK_BROWSE_COLUMNS)
     if excerpt:
-        out["abstract_excerpt"] = str(core["abstract"] or "")[:ABSTRACT_EXCERPT_LEN]
+        out["abstract_excerpt"] = abstract_excerpt(core["abstract"])
     for column in extra:
         out[column] = core[column]
     return _with_extras(out, core)
