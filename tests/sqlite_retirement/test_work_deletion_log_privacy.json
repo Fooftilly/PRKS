@@ -1,0 +1,16 @@
+{
+  "module": "tests/test_work_deletion_log_privacy.py",
+  "tests": {
+    "TestCleanupPrivacy.test_pdf_cleanup_logs_error_type_not_path": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_logs_its_error_type_and_never_the_path_or_name"
+      ],
+      "note": "On PostgreSQL a deleted Work's managed PDF is removed by the object cleanup claim, not in the request; its failure log carries the namespace and error type only."
+    },
+    "TestCleanupPrivacy.test_thumbnail_cleanup_logs_failed_count_not_paths": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_thumbnail_that_cannot_be_removed_is_logged_and_the_delete_still_succeeds"
+      ]
+    }
+  }
+}

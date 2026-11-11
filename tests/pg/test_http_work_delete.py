@@ -97,8 +97,11 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         self.assertFalse(self.work_exists(work_id))
         self.assertTrue(os.path.isfile(stuck))
         self.assertFalse(os.path.isfile(removed))
-        self.assertIn("work_delete_thumbnails_cleanup_failed", self.logs.getvalue())
-        self.assertNotIn("forced thumbnail cleanup failure", self.logs.getvalue())
+        logged = self.logs.getvalue()
+        self.assertIn("work_delete_thumbnails_cleanup_failed", logged)
+        self.assertIn("failed_count=1", logged)
+        for private in ("forced thumbnail cleanup failure", stuck, os.path.basename(stuck), "Thumb fails"):
+            self.assertNotIn(private, logged)
 
     def test_a_failed_delete_keeps_the_work_its_thumbnails_its_file_and_its_text(self) -> None:
         work_id = self.pdf_work("Kept whole", "kept-whole.pdf")
