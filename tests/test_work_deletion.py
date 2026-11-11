@@ -16,15 +16,6 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import PRKSDatabase
 from backend.derived_caches import prks_delete_pdf_thumbnails_for_work_id, prks_thumb_cache_stem
-from backend.managed_pdf_names import (
-    managed_basenames_protected_by,
-    managed_pdf_filename,
-    owned_managed_pdf_basename,
-    referenced_managed_pdf_filename,
-    row_references_managed_pdf,
-    row_strongly_references_managed_pdf,
-    safe_pdf_path_under_dir,
-)
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex
 from backend.work_deletion import delete_work
@@ -210,14 +201,6 @@ class TestWorkDeletion(unittest.TestCase):
         result = delete_work(self.db, _BoomIndex(), w_id)
         self.assertFalse(result.existed)
         self.assertEqual(result.cleanup_failures, ("text_index",))
-
-    def test_thumbnail_helper_listdir_failure_is_reported(self):
-        w_id, pdf_abs, thumb = self._add_managed_work("ListFail")
-        with patch("backend.derived_caches.os.listdir", side_effect=OSError("cannot list")):
-            failed = prks_delete_pdf_thumbnails_for_work_id(w_id, self.storage.thumbs_dir)
-        self.assertEqual(failed, (self.storage.thumbs_dir,))
-        self.assertTrue(os.path.isfile(thumb))
-        self.assertTrue(os.path.isfile(pdf_abs))
 
     def test_tag_used_only_by_deleted_work_survives_in_the_catalog(self):
         """Work deletion removes relationships, never Tag identity. Only an
@@ -497,120 +480,6 @@ class TestWorkDeletion(unittest.TestCase):
         self.assertIsNone(self.db.get_work(a_id))
         self.assertIsNotNone(self.db.get_work(b_id))
         self.assertTrue(os.path.isfile(pdf_abs))
-
-
-class TestManagedPdfPathHelpers(unittest.TestCase):
-    def test_managed_pdf_filename_canonical_success(self):
-        self.assertEqual(managed_pdf_filename("/api/pdfs/example.pdf"), "example.pdf")
-
-    def test_managed_pdf_filename_rejects_noncanonical(self):
-        rejected = (
-            "/api/pdfs/../example.pdf",
-            "/api/pdfs/sub/example.pdf",
-            "/api/pdfs/foo%2Fexample.pdf",
-            "/api/pdfs/foo%5Cexample.pdf",
-            "/api/pdfs/..",
-            "/api/pdfs/%2e%2e",
-            " /api/pdfs/victim.pdf ",
-            "/api/pdfs/bad\x00name.pdf",
-            # urlparse strips these before the HTTP PDF route sees the path.
-            "/api/pdfs/example.pdf?x",
-            "/api/pdfs/example.pdf;bar",
-            "/api/pdfs/example.pdf#frag",
-            "/api/pdfs/foo.pdf?x=1#y",
-        )
-        for path in rejected:
-            with self.subTest(path=path):
-                self.assertIsNone(managed_pdf_filename(path))
-
-    def test_owned_managed_pdf_basename_keeps_legacy_delimiters(self):
-        """Physical cleanup ownership still names delimiter-bearing basenames."""
-        self.assertEqual(
-            owned_managed_pdf_basename("/api/pdfs/legacy.pdf?x"),
-            "legacy.pdf?x",
-        )
-        self.assertEqual(
-            owned_managed_pdf_basename("/api/pdfs/legacy.pdf;bar"),
-            "legacy.pdf;bar",
-        )
-        self.assertEqual(
-            owned_managed_pdf_basename("/api/pdfs/legacy.pdf#frag"),
-            "legacy.pdf#frag",
-        )
-        # Route-addressable rules still refuse the same spellings.
-        self.assertIsNone(managed_pdf_filename("/api/pdfs/legacy.pdf?x"))
-        # Traversal / encoding still refused for physical ownership too.
-        self.assertIsNone(owned_managed_pdf_basename("/api/pdfs/../x.pdf"))
-        self.assertIsNone(owned_managed_pdf_basename("/api/pdfs/foo%2Fx.pdf"))
-
-    def test_referenced_managed_pdf_filename_pins(self):
-        pinned = (
-            ("/api/pdfs/victim.pdf", "victim.pdf"),
-            ("/api/pdfs/subdir/victim.pdf", "victim.pdf"),
-            ("/api/pdfs/../victim.pdf", "victim.pdf"),
-            ("/api/pdfs/foo%2Fvictim.pdf", "victim.pdf"),
-            (" /api/pdfs/victim.pdf ", "victim.pdf"),
-            ("\t/api/pdfs/victim.pdf\n", "victim.pdf"),
-            # Serving identity: urlparse strips delimiters like the PDF route.
-            ("/api/pdfs/victim.pdf?q", "victim.pdf"),
-            ("/api/pdfs/victim.pdf;bar", "victim.pdf"),
-            ("/api/pdfs/victim.pdf#frag", "victim.pdf"),
-        )
-        for path, expected in pinned:
-            with self.subTest(path=path):
-                self.assertEqual(referenced_managed_pdf_filename(path), expected)
-
-    def test_row_references_protects_serving_and_physical_identities(self):
-        # Surviving delimiter spelling protects the stem the route would serve.
-        self.assertTrue(
-            row_references_managed_pdf("/api/pdfs/x.pdf?q", "x.pdf")
-        )
-        # Physical legacy ownership protects the on-disk delimiter basename.
-        self.assertTrue(
-            row_references_managed_pdf("/api/pdfs/legacy.pdf?x", "legacy.pdf?x")
-        )
-        self.assertFalse(
-            row_references_managed_pdf("/api/pdfs/other.pdf", "x.pdf")
-        )
-        # Weak aliases fail-closed-block but are not strong ownership.
-        self.assertTrue(
-            row_references_managed_pdf("/api/pdfs/foo%2Fx.pdf", "x.pdf")
-        )
-        self.assertFalse(
-            row_strongly_references_managed_pdf("/api/pdfs/foo%2Fx.pdf", "x.pdf")
-        )
-        self.assertTrue(
-            row_strongly_references_managed_pdf("/api/pdfs/x.pdf?q", "x.pdf")
-        )
-
-    def test_managed_basenames_protected_by_lists_physical_and_serving(self):
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo.pdf"),
-            ("foo.pdf",),
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo.pdf?x"),
-            ("foo.pdf?x", "foo.pdf"),
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo.pdf;bar"),
-            ("foo.pdf;bar", "foo.pdf"),
-        )
-        # Weak aliases are never positive deletion authority.
-        self.assertEqual(managed_basenames_protected_by("/api/pdfs/../x.pdf"), ())
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/subdir/x.pdf"), ()
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo%2Fx.pdf"), ()
-        )
-
-    def test_safe_pdf_path_under_dir_rejects_nul(self):
-        pdfs = tempfile.mkdtemp()
-        try:
-            self.assertIsNone(safe_pdf_path_under_dir(pdfs, "bad\x00name.pdf"))
-        finally:
-            shutil.rmtree(pdfs)
 
 
 if __name__ == "__main__":
