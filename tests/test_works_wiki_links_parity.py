@@ -25,6 +25,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import PRKSDatabase
+from backend.domain.works import wiki_links
 from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase
 
@@ -158,7 +159,8 @@ class WikiLinkParityTests(PeopleParityTestCase):
         self.assertEqual(expected.count("wiki-link-unresolved"), 120)
         # Batches of any size render the same entry on both sides.
         for chunk in (1, 7, 400):
-            with self.subTest(chunk=chunk), mock.patch.object(PRKSDatabase, "_WIKI_LINK_LOOKUP_CHUNK", chunk):
+            with self.subTest(chunk=chunk), mock.patch.object(PRKSDatabase, "_WIKI_LINK_LOOKUP_CHUNK", chunk), \
+                    mock.patch.object(wiki_links, "LOOKUP_CHUNK", chunk):
                 self.assertEqual(self.render(template), expected)
 
     # -- Work detail

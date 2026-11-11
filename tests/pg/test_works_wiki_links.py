@@ -14,7 +14,6 @@ import uuid
 from typing import Any
 from unittest import mock
 
-from backend.db_manager import PRKSDatabase
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import queries, wiki_links
@@ -123,6 +122,29 @@ class OrderingTests(WikiLinkTestCase):
         self.assertEqual(seen, ["works"])
 
 
+    def test_the_first_row_wins_whatever_batch_its_targets_fall_in(self) -> None:
+        """A row matching targets in different batches claims each independently."""
+        one = self.library.add_work("SharedTitle")
+        two = self.library.add_work(one)  # its title is the first Work's id
+        alpha = self.library.add_work("Alpha")
+        self.library.add_work("Alpha")
+        kant = self.library.add_person("Immanuel", "Kant")
+        self.library.add_person("Other", "Kant")
+        self.library.add_person("Pat", "SharedTitle")
+        self.library.add_person("", "Solo")
+        text = f"[[{one}]] [[SharedTitle]] [[Alpha]] [[{two}]] [[Kant]] [[Solo]] [[nobody]] [[{alpha}]]"
+        expected = self.library.resolve_wiki_links(text)
+        self.assertIn(link("works", one, "SharedTitle"), expected)
+        self.assertEqual(expected.count(link("works", alpha, "Alpha")), 2)
+        self.assertIn(link("people", kant, "Immanuel Kant"), expected)
+        reversed_text = " ".join(reversed(text.split(" ")))
+        reversed_expected = self.library.resolve_wiki_links(reversed_text)
+        for chunk in (1, 2, 3, 5):
+            with self.subTest(chunk=chunk), mock.patch.object(wiki_links, "LOOKUP_CHUNK", chunk):
+                self.assertEqual(self.library.resolve_wiki_links(text), expected)
+                self.assertEqual(self.library.resolve_wiki_links(reversed_text), reversed_expected)
+
+
 class SnapshotTests(WikiLinkTestCase):
     def test_the_work_detail_and_its_links_are_one_snapshot(self) -> None:
         target = self.library.add_work("Target")
@@ -166,8 +188,18 @@ class BatchingTests(WikiLinkTestCase):
         _, seen = self.lookups(lambda: self.library.resolve_wiki_links("[[Alpha]] " * 100))
         self.assertEqual(seen, ["works"])
 
+    def test_more_occurrences_of_the_same_markers_add_no_lookups(self) -> None:
+        self.library.add_work("Alpha")
+        self.library.add_person("Immanuel", "Kant")
+        for repeat in (1, 10, 500):
+            with self.subTest(repeat=repeat):
+                out, seen = self.lookups(
+                    lambda r=repeat: self.library.resolve_wiki_links("[[Alpha]] [[Kant]] [[nobody]] " * r))
+                self.assertEqual(seen, ["works", "persons"])
+                self.assertEqual(out.count("wiki-link-unresolved"), repeat)
+
     def test_hundreds_of_distinct_targets_use_bounded_batches(self) -> None:
-        chunk = PRKSDatabase._WIKI_LINK_LOOKUP_CHUNK
+        chunk = wiki_links.LOOKUP_CHUNK
         rows = ", ".join(
             f"('{self.actor.library_id}', 'P-{uuid.uuid4().hex.upper()}', '', 'Person {i}')" for i in range(300))
         self.sql(f"INSERT INTO prks.persons (library_id, id, first_name, last_name) VALUES {rows}")
