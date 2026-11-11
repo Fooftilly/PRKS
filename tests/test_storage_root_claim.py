@@ -18,7 +18,6 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-from backend.backup_restore import backup_storage_inventory
 from backend.storage import root_binding, root_marker
 from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootInUse, StorageRootRefused
@@ -494,10 +493,6 @@ class TestClaimLockInventory(RootClaimTestCase):
         root = os.path.join(self.tmp, "odd")
         os.makedirs(os.path.join(root, MAINT, root_marker.CLAIM_LOCK_NAME))
         self.assertFalse(root_binding._maintenance_is_scaffold(os.path.join(root, MAINT)))
-
-    def test_claim_lock_is_operational_state_never_backup_payload(self):
-        inv = backup_storage_inventory()
-        self.assertIn(".prks-maintenance/root.claim", inv.operational_root_entries)
 
     def test_log_file_cannot_be_the_claim_lock(self):
         root = os.path.join(self.tmp, "logged")

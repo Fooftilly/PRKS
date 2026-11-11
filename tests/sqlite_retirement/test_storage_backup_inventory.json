@@ -1,23 +1,11 @@
 {
   "module": "tests/test_storage_backup_inventory.py",
   "tests": {
-    "TestInventoryClassification.test_marker_lease_and_bootstrap_config_are_operational": {
+    "TestInventoryClassification.test_claim_lock_is_operational_state_never_backup_payload": {
       "replaced_by": [
-        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_every_content_table_and_identity_is_a_member_listed_with_its_hash",
-        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused"
+        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_the_roots_own_files_never_enter_the_archive"
       ],
-      "note": "A PostgreSQL archive is made of table members and objects only, so no root file can be a member, and restore refuses any member outside that layout."
-    },
-    "TestInventoryClassification.test_operational_entries_can_never_be_payload_paths": {
-      "replaced_by": [
-        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused",
-        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
-      ]
-    },
-    "TestInventoryClassification.test_one_maintenance_directory_name": {
-      "replaced_by": [
-        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_every_directory_is_inside_the_one_maintenance_directory"
-      ]
+      "note": "Moved here from tests/test_storage_root_claim.py, since it reads the SQLite backup inventory. A PostgreSQL archive holds only its manifest, identities, table members and catalogued objects, so the claim lock is never a member."
     },
     "TestInventoryClassification.test_inventory_still_covers_every_storage_config_path_field": {
       "replaced_by": [
@@ -25,13 +13,32 @@
       ],
       "note": "The PostgreSQL archive is classified per table, not per StorageConfig path."
     },
-    "TestMarkerAcrossBackupAndRestore.test_backup_never_archives_the_marker_or_lease": {
+    "TestInventoryClassification.test_marker_lease_and_bootstrap_config_are_operational": {
       "replaced_by": [
-        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_every_content_table_and_identity_is_a_member_listed_with_its_hash"
+        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_every_content_table_and_identity_is_a_member_listed_with_its_hash",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused"
+      ],
+      "note": "A PostgreSQL archive is made of table members and objects only, so no root file can be a member, and restore refuses any member outside that layout."
+    },
+    "TestInventoryClassification.test_one_maintenance_directory_name": {
+      "replaced_by": [
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_every_directory_is_inside_the_one_maintenance_directory"
+      ]
+    },
+    "TestInventoryClassification.test_operational_entries_can_never_be_payload_paths": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
       ]
     },
     "TestMarkerAcrossBackupAndRestore.test_an_inbox_aliasing_the_root_or_maintenance_never_archives_them": {
       "obsolete": "The legacy processing inbox directory is gone (#636); Processing items are rows and objects that round trip with the Library."
+    },
+    "TestMarkerAcrossBackupAndRestore.test_backup_never_archives_the_marker_or_lease": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_the_roots_own_files_never_enter_the_archive",
+        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_every_content_table_and_identity_is_a_member_listed_with_its_hash"
+      ]
     },
     "TestMarkerAcrossBackupAndRestore.test_restore_keeps_the_target_roots_identity_and_lease": {
       "replaced_by": [
