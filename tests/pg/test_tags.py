@@ -233,6 +233,79 @@ class DeleteTests(OrganizationTestCase):
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
         self.assert_integrity()
 
+class TagIdentityTests(OrganizationTestCase):
+    """Only an explicit Delete Tag or Merge Tag destroys a Tag (the retired SQLite folder atomicity tests).
+
+    With ``forbid_tag_deletion`` installed, a path that still tried to collect an
+    "unused" Tag would raise instead of quietly succeeding.
+    """
+
+    def forbid_tag_deletion(self) -> None:
+        self.sql("""
+            CREATE FUNCTION prks.test_forbid_tag_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'this path must not delete a tag'; END $$""")
+        self.sql("CREATE TRIGGER test_forbid_tag_delete BEFORE DELETE ON prks.tags "
+                 "FOR EACH ROW EXECUTE FUNCTION prks.test_forbid_tag_delete()")
+        self.addCleanup(self.sql, "DROP FUNCTION IF EXISTS prks.test_forbid_tag_delete() CASCADE")
+
+    def test_the_guard_refuses_a_tag_delete(self) -> None:
+        tag = self.tag("Guarded")
+        self.forbid_tag_deletion()
+        with self.assertRaises(Exception):
+            self.library.delete_tag(tag)
+        self.assertEqual(self.count("tags"), 1)
+
+    def test_deleting_a_folder_keeps_its_tags(self) -> None:
+        folder, tag = self.folder("Doomed"), self.tag("OnlyOnThisFolder")
+        self.library.add_tag_to_folder(folder, tag)
+        self.forbid_tag_deletion()
+        self.library.delete_empty_folder(folder)
+        self.assertEqual((self.count("folders"), self.count("folder_tags"), self.count("tags")), (0, 0, 1))
+        self.assertEqual(self.lifecycle_of(tag), {"state": lifecycle.ACTIVE})
+
+    def test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag(self) -> None:
+        folder, work, tag = self.folder("Tagged"), self.library.add_work("Tagged work"), self.tag("SoleUse")
+        self.library.add_tag_to_folder(folder, tag)
+        self.library.add_tag_to_work(work, tag)
+        self.forbid_tag_deletion()
+        self.library.remove_tag_from_folder(folder, tag)
+        self.library.remove_tag_from_work(work, tag)
+        self.assertEqual((self.library.get_folder_tags(folder), self.library.get_work_tags(work)), ([], []))
+        self.assertEqual(self.count("tags"), 1)
+
+    def test_bulk_tag_removal_keeps_the_tags(self) -> None:
+        tag = self.tag("BulkTag")
+        works = [self.library.add_work("Bulk %d" % i) for i in range(3)]
+        for work in works:
+            self.library.add_tag_to_work(work, tag)
+        self.forbid_tag_deletion()
+        self.library.bulk_update_works({"action": "remove_tags", "work_ids": works, "tag_ids": [tag]})
+        self.assertEqual([self.library.get_work_tags(work) for work in works], [[], [], []])
+        self.assertEqual(self.count("tags"), 1)
+
+    def test_deleting_a_work_keeps_its_tags(self) -> None:
+        work, tag = self.library.add_work("Doomed work"), self.tag("OnlyOnThisWork")
+        self.library.add_tag_to_work(work, tag)
+        self.forbid_tag_deletion()
+        self.run_command(lambda scope: commands.delete_work(scope, work), serializable=True)
+        self.assertEqual((self.count("works"), self.count("work_tags"), self.count("tags")), (0, 0, 1))
+
+    def test_an_explicit_delete_destroys_the_tag_and_all_its_links(self) -> None:
+        work, folder, tag = self.library.add_work("Explicit"), self.folder("Explicit"), self.tag("Doomed")
+        self.library.add_tag_to_work(work, tag)
+        self.library.add_tag_to_folder(folder, tag)
+        self.library.delete_tag(tag)
+        self.assertEqual((self.count("tags"), self.library.get_work_tags(work), self.library.get_folder_tags(folder)),
+                         (0, [], []))
+
+    def test_a_merge_destroys_only_the_source_tag(self) -> None:
+        work, source, target = self.library.add_work("Merged"), self.tag("Source"), self.tag("Target")
+        self.library.add_tag_to_work(work, source)
+        self.library.merge_tags_into(source, target)
+        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [target])
+        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [target])
+
+
 class MergeTests(OrganizationTestCase):
     def test_a_merge_moves_links_aliases_and_the_name(self) -> None:
         source, target = self.tag("Moral philosophy"), self.tag("Ethics")

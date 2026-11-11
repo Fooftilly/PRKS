@@ -10,18 +10,20 @@ is waiting on it).
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import unicodedata
 from collections.abc import Callable
 from typing import Any
+from unittest import mock
 
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend import person_group_sync as group_rules
 from backend import person_metadata_sync as person_rules
-from backend.domain.people import groups, persons, publishers
+from backend.domain.people import groups, persons, publishers, queries
 from backend.pg_facade import context as facade_context
 from backend.person_group_sync import GroupRuleError
 from tests.pg.test_works_facade import WorksFacadeTestCase
@@ -572,3 +574,137 @@ class ConcurrencyTests(PeopleFacadeTestCase):
         self.assertIsNone(contender)
         self.assertEqual(self.count("person_group_members"), 0)
         self.assertEqual(self.revisions("person-group-member"), {groups.member_scope(group, person): 2})
+
+
+class CatalogTestCase(PeopleFacadeTestCase):
+    def statements(self, call: Callable[[], Any]) -> tuple[Any, list[str]]:
+        """Run ``call``; returns its result and the scoped statements it issued."""
+        seen: list[str] = []
+        real = LibraryScope.execute
+
+        def record(scope: LibraryScope, query: Any, params: Any = None) -> Any:
+            seen.append(str(query))
+            return real(scope, query, params)
+
+        with mock.patch.object(LibraryScope, "execute", autospec=True, side_effect=record):
+            return call(), seen
+
+    def plan(self, sql: str) -> str:
+        rows = self.db.command(lambda tx: tx.execute("EXPLAIN " + sql, {"library_id": self.actor.library_id})
+                               .fetchall())
+        return "\n".join(str(next(iter(row.values()))) for row in rows)
+
+
+class GroupCatalogTests(CatalogTestCase):
+    """The set-based catalog counts (#153), read in one statement."""
+
+    _CORRELATED = """
+    SELECT g.id,
+           (SELECT count(*) FROM prks.person_group_members m
+             WHERE m.library_id = g.library_id AND m.group_id = g.id) AS member_count,
+           (SELECT count(*) FROM prks.person_groups c
+             WHERE c.library_id = g.library_id AND c.parent_id = g.id) AS child_count
+    FROM prks.person_groups g WHERE g.library_id = %s
+    """
+
+    def seed(self, groups_: int = 6, people: int = 8, prefix: str = "Group") -> list[str]:
+        ids: list[str] = []
+        for i in range(groups_):
+            parent = ids[i // 2] if i else None
+            ids.append(self.library.add_person_group_with_parent_options(f"{prefix} {i:03d}", parent_id=parent))
+        for i in range(people):
+            person = self.library.add_person("P", f"{prefix} person {i}")
+            for group in ids[: i % len(ids)]:
+                self.library.add_person_to_group(person, group)
+        return ids
+
+    def correlated(self) -> dict[str, tuple[int, int]]:
+        rows = self.sql(self._CORRELATED, (self.actor.library_id,))
+        return {row["id"]: (int(row["member_count"]), int(row["child_count"])) for row in rows}
+
+    def test_the_catalog_matches_correlated_counts(self) -> None:
+        ids = self.seed()
+        empty_parent = self.library.add_person_group_with_parent_options("aa empty parent")
+        self.library.add_person_group_with_parent_options("AB leaf", parent_id=empty_parent)
+        rows = self.library.get_all_person_groups()
+        self.assertEqual({row["id"]: (row["member_count"], row["child_count"]) for row in rows}, self.correlated())
+        self.assertEqual([row["name"] for row in rows][:2], ["aa empty parent", "AB leaf"])
+        by_id = {row["id"]: row for row in rows}
+        self.assertEqual((by_id[empty_parent]["member_count"], by_id[empty_parent]["child_count"]), (0, 1))
+        self.assertEqual(by_id[ids[-1]]["child_count"], 0)
+        self.assertTrue(all(type(row["member_count"]) is int and type(row["child_count"]) is int for row in rows))
+
+    def test_an_empty_catalog(self) -> None:
+        self.assertEqual(self.statements(self.library.get_all_person_groups), ([], [queries._GROUP_CATALOG_SQL]))
+
+    def test_the_catalog_reads_each_relationship_once_however_large(self) -> None:
+        self.seed(groups_=4, people=4)
+        small = self.statements(self.library.get_all_person_groups)[1]
+        self.seed(groups_=120, people=60, prefix="Bulk")
+        rows, large = self.statements(self.library.get_all_person_groups)
+        self.assertEqual((len(small), len(large)), (1, 1))
+        self.assertEqual({row["id"]: (row["member_count"], row["child_count"]) for row in rows}, self.correlated())
+        plan = self.plan(queries._GROUP_CATALOG_SQL)
+        self.assertNotIn("SubPlan", plan)  # no per-group correlated count
+        # One scan of the memberships, whichever way the planner reads them.
+        self.assertEqual(len(re.findall(r" on (?:prks\.)?person_group_members\b", plan)), 1, plan)
+
+
+class PublisherCatalogTests(CatalogTestCase):
+    """The publisher catalog in a bounded number of statements (#186)."""
+
+    def publisher(self, name: str, *aliases: str) -> str:
+        publisher_id = self.library.add_publisher(name)["id"]
+        for alias in aliases:
+            self.library.add_publisher_alias(publisher_id, alias)
+        return publisher_id
+
+    def works(self, *labels: str) -> None:
+        for i, label in enumerate(labels):
+            self.library.add_work(f"Work {label!r} {i}", publisher=label)
+
+    def by_id(self) -> dict[str, dict[str, Any]]:
+        return {row["id"]: row for row in self.library.get_publishers_in_use()}
+
+    def test_names_and_aliases_count_each_work_once(self) -> None:
+        oup = self.publisher("Oxford University Press", "OUP", "Oxford UP")
+        mit = self.publisher("MIT Press")
+        verso = self.publisher("Verso", "Verso Books")
+        nobody = self.publisher("Nobody Prints")
+        eds = self.publisher("Éditions Lumière")
+        self.works("Oxford University Press", "oxford university press", "  OUP ", "oup", "Oxford UP",
+                   "MIT Press", "mit press", "Verso", "verso", "Verso Books",
+                   "ÉDITIONS LUMIÈRE", "Éditions Lumière", "Editions Lumiere", "Unknown Publisher", "", "   ")
+        rows = self.by_id()
+        self.assertEqual({key: rows[key]["work_count"] for key in (oup, mit, verso, nobody, eds)},
+                         {oup: 5, mit: 2, verso: 3, nobody: 0, eds: 2})  # case folds; diacritics do not
+        self.assertEqual(rows[nobody], {"id": nobody, "name": "Nobody Prints", "aliases": [], "work_count": 0})
+        self.assertEqual([row["name"] for row in self.library.get_publishers_in_use()],
+                         ["MIT Press", "Nobody Prints", "Oxford University Press", "Verso", "Éditions Lumière"])
+
+    def test_alias_order_survives_interleaving_across_publishers(self) -> None:
+        alpha = self.publisher("Alpha Press", "foxtrot", "bravo", "Delta")
+        beta = self.publisher("Beta Press", "Echo", "Alpha", "charlie")
+        rows = self.by_id()
+        self.assertEqual(rows[alpha]["aliases"], ["bravo", "Delta", "foxtrot"])
+        self.assertEqual(rows[beta]["aliases"], ["Alpha", "charlie", "Echo"])
+
+    def test_the_catalog_name_is_trimmed(self) -> None:
+        spaced = self.publisher("  Spaced Press  ")
+        self.works("Spaced Press", " spaced press ")
+        self.assertEqual((self.by_id()[spaced]["name"], self.by_id()[spaced]["work_count"]), ("Spaced Press", 2))
+
+    def test_an_empty_catalog_issues_one_statement(self) -> None:
+        rows, seen = self.statements(self.library.get_publishers_in_use)
+        self.assertEqual((rows, len(seen)), ([], 1))
+
+    def test_the_statement_count_is_bounded_as_publishers_grow(self) -> None:
+        self.publisher("Verso", "Verso Books")
+        self.works("Verso")
+        small = self.statements(self.library.get_publishers_in_use)[1]
+        for i in range(80):
+            self.publisher(f"Bulk Press {i}", f"Bulk {i}")
+            self.works(f"Bulk Press {i}", f"bulk {i}")
+        rows, large = self.statements(self.library.get_publishers_in_use)
+        self.assertEqual((len(small), len(large)), (3, 3))
+        self.assertTrue(all(row["work_count"] == 2 for row in rows if row["name"].startswith("Bulk Press")))
