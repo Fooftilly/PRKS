@@ -348,3 +348,149 @@ class AccessTests(AnnotationTestCase):
             self.send(dict(self.op("DELETE_PDF_ANNOTATION", work_id, HIGHLIGHT, 0),
                            device_id=str(reader.device_id)), reader)
         self.assertEqual((len(self.listed(work_id)), len(self.ledger())), (1, 1))
+
+
+class DecisionTableTests(AnnotationTestCase):
+    """Each answer of the three families and the full-list replace (the retired ``tests/test_pdf_annotation_sync.py``)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.work = self.add_pdf_work()
+        self.asset = self.asset_of(self.work)
+
+    def put(self, operation: str, item: dict[str, Any], base: Optional[int] = None,
+            work_id: Optional[str] = None) -> tuple[int, dict[str, Any]]:
+        return self.send(self.op(operation, work_id or self.work, item, base))
+
+    def revision(self, annotation_id: str = "ann-1") -> int:
+        """A scope with no row is at revision 0, as on SQLite."""
+        return self.scopes(self.asset).get(store.scope_id(self.asset, annotation_id), 0)
+
+    def stored(self, annotation_id: str = "ann-1") -> list[dict[str, Any]]:
+        return self.sql("SELECT content, geometry FROM prks.annotations WHERE asset_id = %s AND id = %s",
+                        (self.asset, annotation_id))
+
+    def save(self, items: list[dict[str, Any]], base: Optional[int] = None) -> int:
+        return self.library.save_work_annotations(self.work, json.dumps(items), base_set_revision=base)
+
+    def assert_scalar_conflict(self, result: dict[str, Any]) -> None:
+        self.assertNotIn("current_annotation", result)
+        self.assertNotIn("requested_annotation", result)
+        for key, value in result.items():
+            if key not in ("work_id", "annotation_id", "code"):
+                self.assertNotIsInstance(value, (dict, list), key)
+
+    def test_create(self) -> None:
+        status, result = self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
+        self.assertEqual((status, result["code"], result["changed"], result["server_revision"]),
+                         (200, "ACKNOWLEDGED", True, 0))
+        self.assertEqual((self.revision(), len(self.stored())), (0, 1))
+        self.assertEqual(result["annotation"]["custom"]["prksComment"], "A comment")
+        # An identical create converges; a different one is named.
+        status, result = self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
+        self.assertEqual((status, result["changed"], self.revision()), (200, False, 0))
+        status, result = self.put("CREATE_PDF_ANNOTATION", annotation(contents="Different"))
+        self.assertEqual((status, result["code"]), (409, "ANNOTATION_EXISTS"))
+        status, result = self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT, 0)
+        self.assertEqual((status, result["code"]), (400, "INVALID_BASE_REVISION"))
+        status, result = self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT, work_id="W-" + "E" * 32)
+        self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
+
+    def test_set(self) -> None:
+        status, result = self.put("SET_PDF_ANNOTATION", HIGHLIGHT, 0)
+        self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
+        self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
+        self.assertEqual(self.put("SET_PDF_ANNOTATION", HIGHLIGHT)[1]["code"], "INVALID_BASE_REVISION")
+        self.assertEqual(self.put("SET_PDF_ANNOTATION", HIGHLIGHT, 5)[1]["code"], "FUTURE_REVISION")
+        status, result = self.put("SET_PDF_ANNOTATION", HIGHLIGHT, 0)
+        self.assertEqual((status, result["changed"], self.revision()), (200, False, 0))
+        edited = annotation(contents="Edited")
+        status, result = self.put("SET_PDF_ANNOTATION", edited, 0)
+        self.assertEqual((status, result["changed"], result["server_revision"]), (200, True, 1))
+        # A stale base that agrees converges at the real revision.
+        status, result = self.put("SET_PDF_ANNOTATION", edited, 0)
+        self.assertEqual((status, result["changed"], result["server_revision"]), (200, False, 1))
+        self.put("SET_PDF_ANNOTATION", HIGHLIGHT, 1)
+        self.put("SET_PDF_ANNOTATION", annotation(contents="Mid"), 2)
+        self.put("SET_PDF_ANNOTATION", HIGHLIGHT, 3)
+        status, result = self.put("SET_PDF_ANNOTATION", HIGHLIGHT, 2)
+        self.assertEqual((status, result["changed"], result["server_revision"]), (200, False, 4))
+        # A stale base that disagrees conflicts with scalars only.
+        status, result = self.put("SET_PDF_ANNOTATION", annotation(contents="Client"), 2)
+        self.assertEqual((status, result["code"], result["current_revision"]), (409, "REVISION_CONFLICT", 4))
+        self.assertIs(result.get("current_state"), True)
+        self.assertIs(result.get("requested_state"), True)
+        self.assertTrue(isinstance(result.get("current_value"), str) or isinstance(result.get("current_preview"), str))
+        self.assert_scalar_conflict(result)
+
+    def test_an_ink_list_change_is_detected_and_stored(self) -> None:
+        ink = annotation(id="ann-ink", type=15, contents="", inkList=[[[0, 0], [10, 10], [20, 5]]],
+                         segmentRects=[], custom={})
+        self.put("CREATE_PDF_ANNOTATION", ink)
+        edited = dict(ink, inkList=[[[0, 0], [12, 12], [24, 8]]])
+        status, result = self.put("SET_PDF_ANNOTATION", edited, 0)
+        self.assertEqual((status, result["changed"], result["server_revision"]), (200, True, 1))
+        (row,) = self.stored("ann-ink")
+        self.assertEqual(row["geometry"]["inkList"], [[[0, 0], [12, 12], [24, 8]]])
+
+    def test_delete(self) -> None:
+        self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
+        self.put("SET_PDF_ANNOTATION", annotation(contents="Moved"), 0)
+        status, result = self.put("DELETE_PDF_ANNOTATION", HIGHLIGHT, 0)
+        self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"))
+        self.assertIs(result.get("current_state"), True)
+        self.assertIs(result.get("requested_state"), False)
+        self.assert_scalar_conflict(result)
+        status, result = self.put("DELETE_PDF_ANNOTATION", HIGHLIGHT, 1)
+        self.assertEqual((status, result["changed"], result["server_revision"]), (200, True, 2))
+        self.assertEqual((self.stored(), self.revision()), ([], 2))
+        status, result = self.put("DELETE_PDF_ANNOTATION", HIGHLIGHT, 2)
+        self.assertEqual((status, result["code"], result["changed"]), (200, "ACKNOWLEDGED", False))
+        # A deleted id is never created again.
+        status, result = self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
+        self.assertEqual((status, result["code"], result["current_revision"]), (409, "ANNOTATION_ID_REUSED", 2))
+
+    def test_an_exact_replay_answers_the_first_result(self) -> None:
+        data = self.op("CREATE_PDF_ANNOTATION", self.work, HIGHLIGHT)
+        first = self.send(data)
+        self.assertTrue(first[1]["changed"])
+        self.assertEqual(self.send(data), first)
+
+    def test_the_state_and_the_snapshot_read_one_transaction(self) -> None:
+        self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
+        state = self.library.get_work_annotations_state(self.work)
+        self.assertEqual((state["work_id"], state["annotations"]),
+                         (self.work, [{"annotation_id": "ann-1", "revision": 0}]))
+        snapshot = self.library.get_work_annotations_snapshot(self.work)
+        self.assertEqual((snapshot["work_id"], [item["id"] for item in snapshot["items"]]), (self.work, ["ann-1"]))
+        self.assertEqual(snapshot["annotations"], state["annotations"])
+        self.assertEqual(snapshot["known_absent"], state["known_absent"])
+        self.assertGreaterEqual(snapshot["canonical_annotation_set_revision"], 1)
+        self.assertIn("materialized_pdf_annotation_revision", snapshot)
+
+    def test_the_full_list_replace_advances_the_same_revisions(self) -> None:
+        self.save([HIGHLIGHT])
+        self.assertEqual(self.revision(), 0)
+        self.save([HIGHLIGHT])
+        self.assertEqual(self.revision(), 0, "an identical replace advances nothing")
+        self.save([annotation(contents="Via HTTP")])
+        self.assertEqual(self.revision(), 1)
+        self.save([])
+        self.assertEqual((self.revision(), self.stored()), (2, []))
+        self.assertEqual(self.library.get_work_annotations_state(self.work)["known_absent"], {"ann-1": 2})
+        with self.assertRaises(WorkAnnotationError) as caught:
+            self.save([HIGHLIGHT])
+        self.assertEqual(caught.exception.code, "ANNOTATION_ID_REUSED")
+        self.assertEqual((self.revision(), self.stored()), (2, []))
+
+    def test_a_stale_full_list_replace_is_refused(self) -> None:
+        tip0 = self.save([annotation(id="ann-a", contents="A")])
+        both = [annotation(id="ann-a", contents="A2"), annotation(id="ann-b", contents="B")]
+        tip1 = self.save(both, base=tip0)
+        self.assertGreater(tip1, tip0)
+        with self.assertRaises(WorkAnnotationError) as caught:
+            self.save([annotation(id="ann-a", contents="stale")], base=tip0)
+        self.assertEqual(caught.exception.code, "ANNOTATION_SET_STALE")
+        rows = self.sql("SELECT id, content FROM prks.annotations WHERE asset_id = %s ORDER BY id", (self.asset,))
+        self.assertEqual(rows, [{"id": "ann-a", "content": "A2"}, {"id": "ann-b", "content": "B"}])
+        self.assertEqual(self.save(both, base=tip1), tip1)
