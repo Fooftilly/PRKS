@@ -31,11 +31,18 @@ _TABLES = {"work": "prks.works", "manifestation": "prks.manifestations", "asset"
 # a trailing ``*``, quoted names, an alias with or without AS, a composed
 # ``{t}`` target. The SET list is read item by item, so FROM, WHERE and
 # RETURNING are all optional.
-_UPDATE = re.compile(r"""\bUPDATE\s+(?:ONLY\s+)?"""
-                     r"""(?P<target>(?:"?(?P<schema>\w+)"?\s*\.\s*)?"?(?P<table>\w+)"?|\{\w*\})"""
+_UPDATE = re.compile(r"""\bUPDATE\s+(?:ONLY\s+)?(?:"?(?P<schema>\w+)"?\s*\.\s*)?"""
+                     r"""(?:"?(?P<table>\w+)"?|(?P<composed>\{\w*\}|%s|%\(\w+\)s))"""
                      r"""(?:\s*\*)?(?:\s+(?:AS\s+)?(?!SET\b)\w+)?\s+SET\b\s*""", re.IGNORECASE)
+# Every UPDATE that is not part of FOR UPDATE, ON CONFLICT DO UPDATE, a
+# trigger event or a foreign key action must be a statement _UPDATE reads.
+_UPDATE_WORD = re.compile(r"\bUPDATE\b|(?i:\bupdate\s+(?=(?:only\s+)?\"?prks\"?\s*\.))")
+_NOT_A_STATEMENT_BEFORE = re.compile(r"\b(?:FOR|DO|OR|ON|BEFORE|AFTER|KEY|INSTEAD\s+OF)\s*$", re.IGNORECASE)
+_NOT_A_STATEMENT_AFTER = re.compile(r"\s+(?:OF|NOTHING|CASCADE|RESTRICT|NO\s+ACTION|SET\s+(?:NULL|DEFAULT))\b"
+                                    r"""|\s*(?:[^\s\w"{%]|$)""", re.IGNORECASE)  # or prose: "UPDATE … SET"
 _CLAUSE_END = re.compile(r"(?:FROM|WHERE|RETURNING)\b", re.IGNORECASE)
 _SINGLE_TARGET = re.compile(r'\s*"?(\w+)"?\s*=', re.DOTALL)
+_COMPOSED_COLUMN = re.compile(r"\s*(?:\{\w*\}|%s|%\(\w+\)s)\s*(?:=|$)")  # a column or a whole list
 _TUPLE_TARGET = re.compile(r'\s*\(([^()]*)\)\s*=', re.DOTALL)
 _SQLITE_BIND = re.compile(r"[=(,]\s*\?(?![\w?|&])")
 DYNAMIC = "*"  # a SET list the code appends at run time: it may write any column
@@ -79,9 +86,14 @@ def _updates(sql: str) -> list[tuple[str, set[str]]]:
     read, so the audit fails closed.
     """
     found = []
-    for update in _UPDATE.finditer(sql):
-        if update.group("table") is None:
-            found.append((update.group("target"), set()))  # composed: the columns are placeholders as well
+    for word in _UPDATE_WORD.finditer(sql):
+        if _NOT_A_STATEMENT_BEFORE.search(sql, 0, word.start()) or _NOT_A_STATEMENT_AFTER.match(sql, word.end()):
+            continue
+        update = _UPDATE.match(sql, word.start())
+        if update is None:
+            raise ValueError("unresolved UPDATE: %r" % sql[word.start(): word.start() + 80])
+        if update.group("composed") or update.group("table") is None:
+            found.append(("{composed: %s}" % update.group(0).strip(), set()))  # its columns may be too
             continue
         table = "%s.%s" % ((update.group("schema") or "prks").lower(), update.group("table").lower())
         columns: set[str] = set()
@@ -91,7 +103,9 @@ def _updates(sql: str) -> list[tuple[str, set[str]]]:
             continue
         for item in items:
             single, many = _SINGLE_TARGET.match(item), _TUPLE_TARGET.match(item)
-            if single:
+            if _COMPOSED_COLUMN.match(item):
+                columns.add(DYNAMIC)  # the column is chosen at run time
+            elif single:
                 columns.add(single.group(1).lower())
             elif many:
                 columns.update(part.strip().strip('"').lower() for part in many.group(1).split(","))
@@ -212,17 +226,46 @@ class ResultBoundTests(unittest.TestCase):
         self.assertLessEqual(meta.serialized_result_bytes(result), meta.MAX_DURABLE_RESULT_BYTES)
 
 
-def _sql_literals(path: pathlib.Path) -> list[str]:
-    """Every string literal of a module, with literal concatenations joined."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    found = []
+def _render(node: ast.expr) -> str:
+    """A string expression's text, with each value Python fills in as ``{}``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(_render(part) if isinstance(part, ast.Constant) else "{}" for part in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _render(node.left) + _render(node.right)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _render(node.left)  # its %s placeholders stay visible
+    return "{}"
+
+
+def _is_text(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str)
+    if isinstance(node, ast.JoinedStr):
+        return True
+    return isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)) \
+        and (_is_text(node.left) or _is_text(node.right))
+
+
+def _sql_literals(source: str) -> list[str]:
+    """Every string expression of a module, assembled as far as the source shows.
+
+    An f-string, a ``+`` chain and a ``%`` template are rendered whole, with
+    each value Python supplies as ``{}``, so a target composed in Python
+    reads as composed instead of as unrelated fragments. Docstrings are prose.
+    """
+    tree = ast.parse(source)
+    inner: set[int] = set()
+    docstrings: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            found.append(node.value)
-        elif isinstance(node, ast.JoinedStr):
-            found.append("".join(part.value for part in node.values
-                                 if isinstance(part, ast.Constant) and isinstance(part.value, str)))
-    return found
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            docstrings.add(id(node.value))
+        if _is_text(node):
+            for child in ast.iter_child_nodes(node):
+                inner.add(id(child))
+    return [_render(node) for node in ast.walk(tree)
+            if _is_text(node) and id(node) not in inner and id(node) not in docstrings]
 
 
 # The SQLite runtime PG-C2 deletes; its statements never reach PostgreSQL.
@@ -261,6 +304,20 @@ class WriterAuditTests(unittest.TestCase):
                 offenders.append("%s: %s %s" % (name, table, sorted(hits)))
         return offenders
 
+    def module_offences(self, name: str, source: str) -> tuple[int, list[str]]:
+        """``(UPDATE statements read, offences)`` for one module's source."""
+        offenders: list[str] = []
+        statements = 0
+        for literal in _sql_literals(source):
+            if _SQLITE_BIND.search(literal):
+                continue  # psycopg cannot bind ``?``: SQLite runtime SQL
+            try:
+                statements += len(_updates(literal))
+                offenders.extend(self.offences(name, literal))
+            except ValueError as error:
+                offenders.append("%s: %s" % (name, error))
+        return statements, offenders
+
     def test_only_the_field_writer_and_the_source_aggregate_update_a_synchronized_column(self) -> None:
         offenders = []
         statements = 0
@@ -268,15 +325,38 @@ class WriterAuditTests(unittest.TestCase):
             name = path.relative_to(_ROOT).as_posix()
             if name in SQLITE_RUNTIME:
                 continue
-            for literal in _sql_literals(path):
-                if _SQLITE_BIND.search(literal):
-                    continue  # psycopg cannot bind ``?``: SQLite runtime SQL
-                try:
-                    statements += len(_updates(literal))
-                    offenders.extend(self.offences(name, literal))
-                except ValueError as error:
-                    offenders.append("%s: %s" % (name, error))
+            read, found = self.module_offences(name, path.read_text(encoding="utf-8"))
+            statements += read
+            offenders.extend(found)
         self.assertGreater(statements, 10, "the scan reads the SQL it audits")
+        self.assertEqual(offenders, [])
+
+    def test_sql_composed_in_python_is_read_whole_or_refused(self) -> None:
+        rogue = "backend/domain/rogue.py"
+        for source in (
+            'sql = f"UPDATE prks.{table} SET status = %(value)s WHERE id = %(id)s"',
+            'sql = "UPDATE prks." + table + " SET status = %s"',
+            'sql = "UPDATE " + table + " SET author_text = %s"',
+            'sql = "UPDATE prks.%s SET status = %%s" % table',
+            'sql = "UPDATE {} SET status = %s".format(table)',
+            'sql = f"UPDATE prks.works SET {column} = %(value)s"',
+            'sql = "UPDATE prks.works SET " + column + " = %s"',
+            'sql = "UPDATE prks.works SET %s = %%s" % column',
+            'sql = "UPDATE prks.works AS w SET " + ", ".join(parts)',
+            'sql = (\n    "UPDATE prks.works w "\n    f"SET author_text = {value!r}"\n)',
+            'run(f"UPDATE prks.manifestations SET doi = %s WHERE id = {work_id}")',
+        ):
+            with self.subTest(source=source):
+                _read, offenders = self.module_offences(rogue, source)
+                self.assertTrue(offenders, source)
+        for source in ('"""Merges re-point rows (UPDATE … SET work_id)."""',
+                       'NOTE = "re-pointed by the merge (UPDATE … SET work_id)"',
+                       'sql = f"UPDATE prks.jobs SET status = %s WHERE id = {job}"',
+                       'sql = "SELECT 1 FROM prks.works FOR UPDATE"'):
+            with self.subTest(source=source):
+                self.assertEqual(self.module_offences(rogue, source)[1], [])
+        _read, offenders = self.module_offences(
+            "backend/domain/works/metadata.py", 'sql = f"UPDATE prks.works SET {column} = %(value)s"')
         self.assertEqual(offenders, [])
 
     def test_every_valid_update_form_of_a_synchronized_column_is_caught(self) -> None:
@@ -309,7 +389,7 @@ class WriterAuditTests(unittest.TestCase):
                 self.assertEqual(self.offences(rogue, sql), [])
         self.assertTrue(self.offences(rogue, "UPDATE {t} SET {c} = 1"))
         with self.assertRaises(ValueError):
-            _updates("UPDATE prks.works SET %s = 1")
+            _updates("UPDATE prks.works SET status + 1")
 
     def test_the_field_writer_builds_its_statements_from_the_field_registry_only(self) -> None:
         owned = {column for _owner, column in pg_metadata.FIELD_COLUMNS.values()} | {"url", "media_type"}
