@@ -1,0 +1,75 @@
+{
+  "module": "tests/test_performance.py",
+  "tests": {
+    "TestExecuteQueryInstrumentation.test_sql_params_never_enter_snapshot": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::TransactionTimingTests.test_each_transaction_is_one_call_and_no_sql_parameter_is_kept"
+      ],
+      "note": "SQLite counted one db call per execute_query; PostgreSQL counts one per Database.command or Database.query transaction."
+    },
+    "TestExecuteQueryInstrumentation.test_record_db_failure_does_not_break_query": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::TransactionTimingTests.test_a_failure_to_record_does_not_fail_the_transaction"
+      ]
+    },
+    "TestExecuteQueryInstrumentation.test_processing_scan_span_excludes_list_hydration": {
+      "obsolete": "It times PRKSDatabase.scan_processing_files, the scan of the legacy path-based Processing inbox. The PostgreSQL Processing queue holds uploaded items in prks.processing_items and has no inbox to scan, so there is no processing_scan span to time."
+    },
+    "TestPerformanceHTTP.test_snapshot_has_safe_route_fields": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_the_snapshot_has_safe_route_fields_and_counts_db_calls"
+      ]
+    },
+    "TestPerformanceHTTP.test_diagnostics_excluded_from_route_aggregates": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_the_diagnostics_routes_are_left_out_of_the_aggregates"
+      ]
+    },
+    "TestPerformanceHTTP.test_reset_clears_counts_and_window": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_reset_clears_the_counts_and_the_window"
+      ]
+    },
+    "TestPerformanceHTTP.test_reset_rejects_non_object_and_extra_fields": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_reset_refuses_anything_but_an_empty_object"
+      ]
+    },
+    "TestPerformanceHTTP.test_privacy_search_query_and_pdf_name": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_a_search_query_and_a_pdf_name_never_reach_the_snapshot"
+      ]
+    },
+    "TestPerformanceHTTP.test_privacy_post_body_not_retained": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_a_post_body_is_not_kept"
+      ]
+    },
+    "TestPerformanceHTTP.test_instrumentation_failure_does_not_break_request": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_an_instrumentation_failure_does_not_fail_the_request"
+      ]
+    },
+    "TestPerformanceHTTP.test_json_gzip_spans_and_bytes": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_json_and_gzip_spans_and_response_bytes"
+      ]
+    },
+    "TestPerformanceHTTP.test_server_timing_is_privacy_safe": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_server_timing_names_only_spans"
+      ],
+      "note": "The PostgreSQL test sends a search query and requires the header's names to be span names; the SQLite test skipped when the header was absent."
+    },
+    "TestPerformanceHTTP.test_thumbnail_cache_hit_and_miss": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_a_thumbnail_counts_its_cache_miss_hit_and_render"
+      ]
+    },
+    "TestPerformanceHTTP.test_no_performance_storage_file": {
+      "replaced_by": [
+        "tests/pg/test_http_performance.py::PerformanceHttpTests.test_nothing_is_written_under_the_storage_root"
+      ]
+    }
+  }
+}
