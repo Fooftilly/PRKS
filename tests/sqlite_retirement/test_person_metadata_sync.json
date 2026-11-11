@@ -1,0 +1,106 @@
+{
+ "module": "tests/test_person_metadata_sync.py",
+ "tests": {
+  "PersonMetadataSyncTests.test_a_base_ahead_of_the_server_is_refused": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_person_field_decisions"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_changed_envelope_under_a_used_op_id_never_executes": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::LedgerTests.test_a_replay_answers_as_the_first_time_and_a_reuse_is_refused"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_field_edit_applies_and_advances_only_its_own_revision": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_person_field_decisions"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_long_conflict_still_fits_what_the_client_can_store": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_long_value_is_never_echoed_and_a_long_conflict_still_fits"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_missing_person_is_terminal": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_person_field_decisions"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_no_op_write_advances_nothing": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/test_people_core_parity.py::PersonParityTests.test_profile_fields_advance_only_when_they_change"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_patch_that_changes_nothing_advances_nothing": {
+   "replaced_by": [
+    "tests/test_people_core_parity.py::PersonParityTests.test_profile_fields_advance_only_when_they_change"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_refused_portrait_url_is_refused_on_every_path": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_people_core_parity.py::PersonParityTests.test_an_invalid_portrait_is_refused_alike"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_replay_of_the_same_op_id_is_exact": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::LedgerTests.test_a_replay_answers_as_the_first_time_and_a_reuse_is_refused"
+   ]
+  },
+  "PersonMetadataSyncTests.test_a_stale_base_with_a_different_value_is_a_conflict": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_person_field_decisions"
+   ]
+  },
+  "PersonMetadataSyncTests.test_editing_requires_a_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table"
+   ]
+  },
+  "PersonMetadataSyncTests.test_only_editable_profile_columns_are_reachable": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table"
+   ]
+  },
+  "PersonMetadataSyncTests.test_the_acknowledgement_never_echoes_the_value_back": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_long_value_is_never_echoed_and_a_long_conflict_still_fits"
+   ]
+  },
+  "PersonMetadataSyncTests.test_the_field_vocabulary_is_the_creation_familys": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger"
+   ]
+  },
+  "PersonMetadataSyncTests.test_the_metadata_state_projection_reports_revisions_only": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person"
+   ]
+  },
+  "PersonMetadataSyncTests.test_the_online_patch_advances_the_same_revisions": {
+   "replaced_by": [
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_person_field_decisions",
+    "tests/test_people_core_parity.py::PersonParityTests.test_profile_fields_advance_only_when_they_change"
+   ]
+  },
+  "PersonMetadataSyncTests.test_the_profile_patch_advances_revisions_alongside_memberships": {
+   "replaced_by": [
+    "tests/test_people_core_parity.py::PersonParityTests.test_a_profile_and_its_groups_change_together"
+   ]
+  },
+  "PersonMetadataSyncTests.test_two_devices_that_typed_the_same_value_have_not_collided": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_metadata_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_person_field_decisions"
+   ]
+  }
+ }
+}
