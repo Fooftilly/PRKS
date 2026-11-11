@@ -1,0 +1,201 @@
+{
+  "module": "tests/test_restore_durability.py",
+  "tests": {
+    "TestJournalWriteOrdering.test_contents_are_synced_before_the_replace_and_the_directory_after": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestJournalWriteOrdering.test_a_same_directory_replace_costs_exactly_one_directory_sync": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestJournalWriteOrdering.test_the_phase_is_refused_when_the_journal_directory_cannot_be_synced": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestJournalWriteOrdering.test_the_journal_is_not_replaced_when_its_contents_cannot_be_synced": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestJournalWriteOrdering.test_a_directory_fsync_the_platform_lacks_still_counts_as_persisted": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestJournalWriteOrdering.test_a_directory_fsync_that_fails_is_refused": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestJournalWriteOrdering.test_staging_metadata_reports_the_weaker_guarantee_without_raising": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentMoveOrdering.test_the_rename_is_durable_before_the_journal_calls_the_move_complete": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentMoveOrdering.test_a_move_across_directories_syncs_the_source_and_the_destination": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentMoveOrdering.test_a_database_and_its_sidecars_share_one_sync_per_directory": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentMoveOrdering.test_a_refused_sync_stops_before_the_journal_claims_the_move_completed": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentMoveOrdering.test_the_rollback_directory_is_durable_before_anything_moves_into_it": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentInstallOrdering.test_the_install_is_durable_before_the_journal_calls_it_installed": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentInstallOrdering.test_a_refused_sync_stops_before_the_journal_claims_the_install": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentInstallOrdering.test_an_empty_component_directory_is_durable_before_it_is_recorded": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestComponentInstallOrdering.test_a_refused_sync_leaves_an_empty_directory_unrecorded": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestRecoveryDurability.test_putting_the_previous_library_back_syncs_the_directories_it_changed": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestRecoveryDurability.test_a_refused_sync_keeps_the_journal_and_the_rollback_tree": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestRecoveryDurability.test_a_later_pass_finishes_recovery_once_the_sync_succeeds": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestRecoveryDurability.test_the_replay_confirms_the_entry_the_refused_pass_left_unsynced": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestRecoveryDurability.test_replaying_a_consumed_rollback_tree_still_keeps_the_live_library": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. Object bytes are durable before put_new publishes them, and the database commit is the restore's only switch."
+    },
+    "TestSyncContainment.test_a_directory_inside_the_root_is_synced": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    },
+    "TestSyncContainment.test_the_root_itself_is_synced": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    },
+    "TestSyncContainment.test_a_directory_outside_the_root_is_refused_and_never_opened": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    },
+    "TestSyncContainment.test_a_symlinked_storage_root_is_not_mistaken_for_an_escape": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    },
+    "TestSyncContainment.test_a_move_reaching_outside_the_root_is_refused_before_it_happens": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    },
+    "TestSyncContainment.test_a_move_that_fails_partway_still_syncs_what_already_moved": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    },
+    "TestSyncContainment.test_a_sibling_whose_name_merely_extends_the_root_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_archive_is_synced_only_once_its_zip_directory_is_written",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_an_unsynced_archive_directory_is_a_backup_failure"
+      ],
+      "note": "The format 1 restore synced directories named by a staging token and a journal id, so containment was checked on each; the PostgreSQL backup syncs only its own archive directory and the restore renames nothing."
+    }
+  }
+}

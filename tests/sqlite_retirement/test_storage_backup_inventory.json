@@ -1,0 +1,48 @@
+{
+  "module": "tests/test_storage_backup_inventory.py",
+  "tests": {
+    "TestInventoryClassification.test_marker_lease_and_bootstrap_config_are_operational": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_every_content_table_and_identity_is_a_member_listed_with_its_hash",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused"
+      ],
+      "note": "A PostgreSQL archive is made of table members and objects only, so no root file can be a member, and restore refuses any member outside that layout."
+    },
+    "TestInventoryClassification.test_operational_entries_can_never_be_payload_paths": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
+      ]
+    },
+    "TestInventoryClassification.test_one_maintenance_directory_name": {
+      "replaced_by": [
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_every_directory_is_inside_the_one_maintenance_directory"
+      ]
+    },
+    "TestInventoryClassification.test_inventory_still_covers_every_storage_config_path_field": {
+      "replaced_by": [
+        "tests/pg/test_backup_tables.py::BackupTableClassificationTests.test_every_library_scoped_table_is_on_exactly_one_list"
+      ],
+      "note": "The PostgreSQL archive is classified per table, not per StorageConfig path."
+    },
+    "TestMarkerAcrossBackupAndRestore.test_backup_never_archives_the_marker_or_lease": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ArchiveLayoutTests.test_every_content_table_and_identity_is_a_member_listed_with_its_hash"
+      ]
+    },
+    "TestMarkerAcrossBackupAndRestore.test_an_inbox_aliasing_the_root_or_maintenance_never_archives_them": {
+      "obsolete": "The legacy processing inbox directory is gone (#636); Processing items are rows and objects that round trip with the Library."
+    },
+    "TestMarkerAcrossBackupAndRestore.test_restore_keeps_the_target_roots_identity_and_lease": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::AdminBackupRestoreTests.test_a_restore_never_touches_setup_the_root_claim_or_the_start_generation"
+      ]
+    },
+    "TestMarkerAcrossBackupAndRestore.test_startup_sweeps_leave_the_lease_file_alone": {
+      "replaced_by": [
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_the_sweeps_leave_the_root_files_and_unknown_entries_alone",
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives"
+      ]
+    }
+  }
+}
