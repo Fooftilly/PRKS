@@ -43,9 +43,10 @@ itself). :meth:`AnnotationsMixin._person_portrait` reads the cached
 portrait, :meth:`AnnotationsMixin._cache_person_portrait` fetches the
 Person's ``image_url`` and caches it, and
 :meth:`AnnotationsMixin._clear_person_portrait` drops it. Caching is a
-write and needs ``EDIT_LIBRARY`` (a reader never writes, §9.4); what the
-adapter does on a reader's miss (serve the fetched bytes uncached, or queue
-the fill as a job) is PG-C1's.
+write and needs ``EDIT_LIBRARY`` (a reader never writes, §9.4). The
+profile-image route (``backend.server``) serves the cached portrait, fills it
+on an editor's miss at the epoch admission read (``backend.api.session``),
+and serves a reader's miss, or a fill a restore fenced, uncached.
 """
 
 from __future__ import annotations

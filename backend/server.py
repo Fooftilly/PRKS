@@ -2127,6 +2127,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_person_profile_image(self, person_id: str) -> None:
+        if serves_postgres_library():
+            self._send_postgres_person_portrait(person_id)
+            return
         row = db.get_person(person_id)
         if not row:
             self.send_error(404, "Person not found")
@@ -2195,6 +2198,55 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self._send_person_profile_image_bytes(
             prepared.body, prepared.subtype, max_age=3600
         )
+
+    def _send_postgres_person_portrait(self, person_id: str) -> None:
+        """Serve the Person's portrait from the PostgreSQL Library's ``portraits`` objects.
+
+        A cached portrait is the immutable object the Person row names
+        (``portrait_locator``), so it is backed up, restored and cleaned up
+        with the Library. On a miss an editor fetches ``image_url`` and makes
+        it the cached portrait in one command, at the epoch admission read
+        (``backend.api.session``: an ``<img>`` sends none). A reader never
+        writes (§9.4): its miss serves the fetched bytes uncached, as does a
+        fill a restore fenced. Nothing is read from or written to
+        ``people_dir``.
+        """
+        from backend.domain.identity.authorization import AccessRefused, Refusal
+
+        row = db.get_person(person_id)
+        if not row:
+            self.send_error(404, "Person not found")
+            return
+        url = (row.get("image_url") or "").strip()
+        if not url:
+            self.send_error(404, "Profile image not available")
+            return
+        try:
+            cached = db._person_portrait(person_id)
+            if cached is not None:
+                self._send_person_profile_image_bytes(cached["body"], cached["subtype"])
+                return
+            # ``fetch_and_prepare`` is looked up when called, so the module's
+            # binding is the one used.
+            fresh = db._cache_person_portrait(person_id, lambda source: fetch_and_prepare(source))
+        except LookupError:
+            self.send_error(404, "Person not found")
+            return
+        except AccessRefused as exc:
+            # A reader may not fill the cache, and a restore since admission
+            # fences the fill: either way the image is served uncached.
+            if exc.refusal not in (Refusal.FORBIDDEN, Refusal.LIBRARY_EPOCH_CHANGED):
+                raise
+            prepared = fetch_and_prepare(url)
+            fresh = None if prepared is None else {"body": prepared.body, "subtype": prepared.subtype}
+        if fresh is None:
+            LOGGER.info(
+                "portrait_fetch_failed request_id=%s",
+                safe_log_id(self._prks_request_id),
+            )
+            self.send_error(404, "Profile image not available")
+            return
+        self._send_person_profile_image_bytes(fresh["body"], fresh["subtype"], max_age=3600)
 
     def _handle_job_diagnostics(self):
         """Owner-only job diagnostics (§12.4); the route exists only with ``PRKS_AUTH``.
