@@ -39,7 +39,9 @@ class CIPinsTests(unittest.TestCase):
 
     def test_postgres_profile_uses_production_pins(self) -> None:
         runtime = pins_for_profile(self.root, "runtime")
-        self.assertEqual(pins_for_profile(self.root, "postgres"), runtime)
+        postgres = pins_for_profile(self.root, "postgres")
+        self.assertEqual(postgres[:-1], runtime)
+        self.assertTrue(postgres[-1].startswith("openapi-core=="), postgres[-1])
         for pin in (
             "psycopg==3.3.6", "psycopg-binary==3.3.6",
             "psycopg-pool==3.3.3", "argon2-cffi==25.1.0",
