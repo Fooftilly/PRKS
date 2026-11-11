@@ -278,7 +278,7 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "--env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1",
             # PostgreSQL is the only backend (PG-C2 #641): a private database,
             # an operator's first-run setup and a signed-in catalogue read.
-            '--env PRKS_DATABASE_URL="postgresql://prks:${db_password}@db:5432/prks"',
+            '--env PRKS_DATABASE_URL="postgresql://prks:${db_secret}@db:5432/prks"',
             "--tmpfs /var/lib/postgresql:rw,size=256m",
             'docker network rm "$network"',
             '"${admin[@]}" issue-token --root /data',
