@@ -80,6 +80,7 @@ jobs:
           html="$(mktemp)"
           asset="$(mktemp)"
           jar="$(mktemp)"
+          sign_in="$(mktemp)"
           cleanup() {
             rc=$?
             if [[ "$rc" -ne 0 ]]; then
@@ -90,7 +91,7 @@ jobs:
             docker rm -f "$container" >/dev/null 2>&1 || true
             docker rm -f "$database" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
-            rm -f "$response" "$html" "$asset" "$jar"
+            rm -f "$response" "$html" "$asset" "$jar" "$sign_in"
           }
           trap cleanup EXIT
 
@@ -147,6 +148,9 @@ jobs:
           "${admin[@]}" issue-token --root /data
           "${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password
 
+          # The sign-in body is built from the generated secret into an
+          # owner-only file, so the secret is never on a command line.
+          printf '%s' "$owner_password" | jq --raw-input --slurp '{login: "owner", password: .}' > "$sign_in"
           ready=0
           for attempt in $(seq 1 60); do
             if ! docker inspect --format '{{.State.Running}}' "$container" | grep -qx true; then
@@ -157,7 +161,7 @@ jobs:
               && curl --silent --show-error --fail --max-time 5 --output /dev/null \
                 --cookie-jar "$jar" --header 'Content-Type: application/json' \
                 --header 'Origin: http://127.0.0.1:18080' \
-                --data "{\"login\": \"owner\", \"password\": \"${owner_password}\"}" \
+                --data @"$sign_in" \
                 http://127.0.0.1:18080/api/login \
               && status=$(curl --silent --show-error --fail --max-time 2 --cookie "$jar" \
               --write-out '%{http_code}' --output "$response" \
