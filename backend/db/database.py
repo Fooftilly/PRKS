@@ -218,9 +218,11 @@ class Database:
         attempt: int,
         borrow_timeout: float | None = None,
     ) -> T:
-        started = clock_ns()
-        try:
-            with self._borrow(borrow_timeout) as conn:
+        with self._borrow(borrow_timeout) as conn:
+            # Counted only once a connection is held: a borrow that times out
+            # ran no SQL and records no ``db`` call.
+            started = clock_ns()
+            try:
                 with conn.transaction():
                     conn.execute(_begin_statement(isolation, read_only))
                     tx = Transaction(conn, isolation=isolation, read_only=read_only, attempt=attempt)
@@ -228,8 +230,8 @@ class Database:
                         return fn(tx)
                     finally:
                         tx.close()
-        finally:
-            _record_transaction(clock_ns() - started, write=not read_only)
+            finally:
+                _record_transaction(clock_ns() - started, write=not read_only)
 
     def command(
         self,
