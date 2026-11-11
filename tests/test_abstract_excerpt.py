@@ -1,20 +1,22 @@
 """The client's excerpt must equal the server's, character for character.
 
-Progress renders `abstract_excerpt`, which the server derives with SQLite's
-`SUBSTR(COALESCE(abstract, ''), 1, 100)`. A pending local Abstract has to
+Progress renders `abstract_excerpt`, which the server derives with
+`backend.domain.works.projection.abstract_excerpt` (the first 100 code points;
+until PG-C2 #641 it was SQLite's `SUBSTR(COALESCE(abstract, ''), 1, 100)`,
+which counts the same way). A pending local Abstract has to
 produce the same excerpt the server will send back once it acknowledges, or the
 card would visibly change at acknowledgement for no reason the user caused.
 
-SQLite counts CHARACTERS (code points). JavaScript's `slice`/`substring` count
+The server counts CHARACTERS (code points). JavaScript's `slice`/`substring` count
 UTF-16 code units, which differ for every astral character -- emoji, historic
-scripts, many maths symbols. This pins that the client helper matches SQLite
+scripts, many maths symbols. This pins that the client helper matches the server
 rather than matching JavaScript's default.
 """
 import json
 import pathlib
-import sqlite3
 import subprocess
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STATE_MODULE = ROOT / "frontend" / "js" / "work-metadata-state.js"
@@ -46,16 +48,11 @@ process.stdout.write(JSON.stringify(out));
 """
 
 
-def sqlite_excerpts(cases):
-    """Exactly the expression `_prks_work_browse_select()` emits."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE works (id TEXT, abstract TEXT)")
-    conn.executemany("INSERT INTO works VALUES (?, ?)", list(cases.items()))
-    rows = conn.execute(
-        "SELECT id, SUBSTR(COALESCE(abstract, ''), 1, %d) FROM works" % EXCERPT_LEN
-    ).fetchall()
-    conn.close()
-    return dict(rows)
+def server_excerpts(cases):
+    """Exactly what the Work browse projection sends (``work_browse``)."""
+    from backend.domain.works import projection
+
+    return {name: projection.abstract_excerpt(text) for name, text in cases.items()}
 
 
 def js_excerpts(cases):
@@ -71,7 +68,7 @@ def js_excerpts(cases):
 class AbstractExcerptContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.expected = sqlite_excerpts(CASES)
+        cls.expected = server_excerpts(CASES)
         cls.actual = js_excerpts(CASES)
 
     def test_client_excerpt_equals_the_server_projection(self):
@@ -89,7 +86,7 @@ class AbstractExcerptContractTests(unittest.TestCase):
 
     def test_utf16_slicing_would_have_been_wrong(self):
         """The reason this contract test exists: JavaScript's obvious
-        implementation disagrees with SQLite on every astral input.
+        implementation disagrees with the server on every astral input.
 
         Python slices by code point, so JS must be modelled explicitly --
         encode to UTF-16 and cut units, the way `String.prototype.slice` does.
@@ -114,10 +111,19 @@ class AbstractExcerptContractTests(unittest.TestCase):
                 self.assertFalse(0xD800 <= ord(value[-1]) <= 0xDBFF,
                                  "excerpt ends in a high surrogate")
 
+    def test_the_browse_projection_sends_this_excerpt(self):
+        from backend.domain.works import projection
+
+        for name, text in CASES.items():
+            core = dict.fromkeys(projection.WORK_BROWSE_COLUMNS + projection.PROJECTION_EXTRAS)
+            core["abstract"] = text
+            with self.subTest(case=name), mock.patch.object(projection, "_person_extras", return_value={}):
+                self.assertEqual(projection.work_browse(core)["abstract_excerpt"], self.expected[name])
+
     def test_the_server_length_constant_is_the_one_the_client_uses(self):
-        from backend.db_manager import _PRKS_ABSTRACT_EXCERPT_LEN
+        from backend.domain.works.projection import ABSTRACT_EXCERPT_LEN
         source = STATE_MODULE.read_text(encoding="utf-8")
-        self.assertEqual(_PRKS_ABSTRACT_EXCERPT_LEN, EXCERPT_LEN)
+        self.assertEqual(ABSTRACT_EXCERPT_LEN, EXCERPT_LEN)
         self.assertIn("const EXCERPT_CODE_POINTS = %d;" % EXCERPT_LEN, source)
 
     def test_progress_consumes_the_server_excerpt_without_re_truncating(self):

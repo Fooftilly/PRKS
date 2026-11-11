@@ -1,0 +1,23 @@
+{
+  "module": "tests/test_works_projection_shape.py",
+  "tests": {
+    "ProjectionShapeTests.test_key_lists_match_sqlite": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_the_catalog_lists",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_the_browse_catalog_is_ordered_by_title",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_summaries_follow_the_requested_order",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_work_without_a_source",
+        "tests/test_abstract_excerpt.py::AbstractExcerptContractTests.test_the_server_length_constant_is_the_one_the_client_uses"
+      ],
+      "note": "The copies existed to stay equal to db_manager's lists while both backends ran. The parity tests compare every key of the summary, browse and detail JSON against the recorded SQLite representation, and the excerpt length is pinned against the client's constant."
+    },
+    "ProjectionShapeTests.test_detail_columns_are_the_sqlite_works_columns": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_work_without_a_source",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_managed_pdf_records_its_file",
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_video_is_a_stream"
+      ],
+      "note": "get_work's full JSON, every detail and Manifestation field set, is compared with the recorded SQLite Work."
+    }
+  }
+}
