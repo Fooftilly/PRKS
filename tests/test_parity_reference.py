@@ -109,6 +109,29 @@ class RecordAndReplayTests(unittest.TestCase):
         minted = parity_reference._Varying().show("<~UUID#0> <W#1>").split()
         self.assertEqual((len(minted[0]), minted[0], minted[1][:2]), (36, minted[0].upper(), "W-"))
 
+    def test_the_recording_day_replays_as_the_replaying_day(self) -> None:
+        # The date of a timestamp, and a longer number, are not the day.
+        untouched = "2026-11-10 23:59:59 2026-11-10T01:02:03Z 2026-11-100 12026-11-10"
+        live = _Live()
+        live.answers = ["urldate = {2026-11-10},", untouched]
+
+        def script(ref) -> None:
+            ref.generate_bibtex(W)
+            ref.get_work(W)
+
+        with mock.patch.object(parity_reference, "_today", return_value="2026-11-10"):
+            steps = self.record(live, script)
+        self.assertEqual(steps[0]["result"], "urldate = {<~today>},")
+        self.assertEqual(steps[1]["result"], untouched)
+        answers: list[object] = []
+
+        def replayed(ref) -> None:
+            answers.extend((ref.generate_bibtex(W), ref.get_work(W)))
+
+        with mock.patch.object(parity_reference, "_today", return_value="2026-11-11"):
+            self.replay(steps, replayed)
+        self.assertEqual(answers, ["urldate = {2026-11-11},", untouched])
+
     def test_a_replay_refuses_other_calls_and_leftover_steps(self) -> None:
         live = _Live()
         live.answers = [W, None]
