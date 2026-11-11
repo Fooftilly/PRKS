@@ -494,3 +494,95 @@ class DecisionTableTests(AnnotationTestCase):
         rows = self.sql("SELECT id, content FROM prks.annotations WHERE asset_id = %s ORDER BY id", (self.asset,))
         self.assertEqual(rows, [{"id": "ann-a", "content": "A2"}, {"id": "ann-b", "content": "B"}])
         self.assertEqual(self.save(both, base=tip1), tip1)
+
+
+class ReplaceTests(AnnotationTestCase):
+    """The canonical rows behind the full-list replace (the retired ``tests/test_pdf_annotations.py``)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.work = self.add_pdf_work()
+
+    def rows(self, work_id: Optional[str] = None) -> list[dict[str, Any]]:
+        return self.sql("SELECT id, type, content, page_index, color, geometry FROM prks.annotations"
+                        " WHERE work_id = %s ORDER BY id", (work_id or self.work,))
+
+    def by_id(self, work_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
+        return {item["id"]: item for item in self.listed(work_id or self.work)}
+
+    def replace(self, items: list[dict[str, Any]], work_id: Optional[str] = None) -> int:
+        return self.library.sync_work_annotations(work_id or self.work, items)
+
+    def canonical(self) -> int:
+        return self.library.get_work_pdf_materialization(self.work)["canonical_annotation_set_revision"]
+
+    def test_a_realistic_annotation_is_columns_plus_geometry(self) -> None:
+        self.library.save_work_annotations(self.work, json.dumps([HIGHLIGHT]))
+        (row,) = self.rows()
+        self.assertEqual({k: row[k] for k in ("id", "type", "content", "page_index", "color")},
+                         {"id": "ann-1", "type": "9", "content": "A comment", "page_index": 3, "color": "#FFCD45"})
+        for kept in ("segmentRects", "rect", "custom", "opacity", "strokeColor", "blendMode"):
+            self.assertEqual(row["geometry"][kept], HIGHLIGHT[kept], kept)
+        for banned in ("id", "type", "contents", "pageIndex", "color", "work_id"):
+            self.assertNotIn(banned, row["geometry"])
+        got = self.by_id()["ann-1"]
+        got.pop("updated_at")
+        self.assertEqual(got, HIGHLIGHT)
+        self.assertNotIn("page", got)
+        self.assertEqual(json.loads(self.library.get_work(self.work)["annotations"])[0]["custom"]["prksComment"],
+                         "A comment")
+
+    def test_a_replace_updates_deletes_inserts_and_orders_by_page_then_id(self) -> None:
+        self.replace([{"id": "A", "contents": "a0", "pageIndex": 0}, {"id": "B", "contents": "b0", "pageIndex": 0},
+                      {"id": "C", "contents": "c0", "pageIndex": 1}])
+        self.replace([{"id": "b", "contents": "a1", "pageIndex": 1}, {"id": "C", "contents": "c0", "pageIndex": 1},
+                      {"id": "D", "contents": "d0", "pageIndex": 0}])
+        self.assertEqual([item["id"] for item in self.listed(self.work)], ["D", "C", "b"])
+        self.assertEqual([row["id"] for row in self.rows()], ["C", "D", "b"])
+        self.replace([])
+        self.assertEqual((self.listed(self.work), self.rows()), ([], []))
+
+    def test_an_identical_replace_does_not_advance_the_set(self) -> None:
+        items = [annotation(id="a")]
+        self.replace(items)
+        after_create = self.canonical()
+        self.replace(items)
+        self.assertEqual(self.canonical(), after_create)
+
+    def test_a_refused_replace_changes_nothing(self) -> None:
+        self.replace([{"id": "A", "contents": "keep", "pageIndex": 0}, {"id": "B", "contents": "also", "pageIndex": 0}])
+        before = self.rows()
+        for items, code in (
+                ([{"id": "A", "contents": "changed", "pageIndex": 0}, {"type": "note", "pageIndex": 0}],
+                 "malformed_annotation_payload"),
+                ([{"id": "A", "contents": "new", "pageIndex": 0}, {"id": "A", "contents": "other", "pageIndex": 1}],
+                 "malformed_annotation_payload")):
+            with self.subTest(code=code), self.assertRaises(WorkAnnotationError) as caught:
+                self.replace(items)
+            self.assertEqual((caught.exception.code, caught.exception.http_status), (code, 400))
+        for raw in ("{", json.dumps({"id": "A"})):
+            with self.subTest(raw=raw), self.assertRaises(WorkAnnotationError) as caught:
+                self.library.save_work_annotations(self.work, raw)
+            self.assertEqual(caught.exception.http_status, 400)
+        self.assertEqual(self.rows(), before)
+        self.assertEqual(self.by_id()["A"]["contents"], "keep")
+
+    def test_a_missing_work_is_404_even_for_an_empty_list(self) -> None:
+        for call in (lambda: self.replace([], "W-" + "E" * 32),
+                     lambda: self.library.save_work_annotations("W-" + "E" * 32, json.dumps([{"id": "A", "pageIndex": 0}]))):
+            with self.assertRaises(WorkAnnotationError) as caught:
+                call()
+            self.assertEqual((caught.exception.code, caught.exception.http_status), ("work_not_found", 404))
+
+    def test_stored_geometry_reconstructs_with_the_columns_winning(self) -> None:
+        self.replace([annotation(id="old-1")])
+        legacy = {"rects": [{"x": 1}], "quadPoints": None, "position": None, "id": "other", "type": "highlight",
+                  "contents": "stale", "pageIndex": 99, "color": "#000",
+                  "rect": {"origin": {"x": 1, "y": 2}, "size": {"width": 3, "height": 4}}}
+        self.sql("UPDATE prks.annotations SET geometry = %s::jsonb, type = 'highlight', content = 'note',"
+                 " page_index = 0, color = '#fff' WHERE id = 'old-1'", (json.dumps(legacy),))
+        got = self.by_id()["old-1"]
+        self.assertEqual((got["id"], got["type"], got["contents"], got["pageIndex"], got["color"]),
+                         ("old-1", "highlight", "note", 0, "#fff"))
+        self.assertEqual((got["rect"], got["rects"], got["quadPoints"], got["position"]),
+                         (legacy["rect"], [{"x": 1}], None, None))
