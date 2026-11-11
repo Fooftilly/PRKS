@@ -1,0 +1,285 @@
+{
+  "module": "tests/test_work_identity.py",
+  "tests": {
+    "SchemaParityTests.test_fresh_and_upgraded_schema_are_identical": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot",
+        "tests/pg/test_schema_snapshot.py::TemplateCloneMatchesSnapshotTests.test_harness_clone_is_the_migrated_schema"
+      ],
+      "note": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "SchemaParityTests.test_every_slice_a_object_is_validated_by_definition": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot",
+        "tests/pg/test_schema_snapshot.py::TypeDefinitionsTests.test_each_kind_records_its_definition"
+      ]
+    },
+    "BackfillTests.test_every_work_gets_exactly_one_deterministic_primary_manifestation": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "BackfillTests.test_asset_creation_predicate": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "BackfillTests.test_asset_values_are_preserved": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "BackfillTests.test_manifestation_fields_are_copied_and_url_follows_its_owner": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "BackfillTests.test_annotations_are_bound_to_the_origin_asset": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "BackfillTests.test_work_projection_keeps_legacy_fields_and_adds_identity": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "DeterminismTests.test_same_v16_library_always_migrates_to_the_same_ids": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "DeterminismTests.test_backfill_id_formula": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "DeterminismTests.test_failed_migration_rolls_back_to_v16_untouched": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "ArgumentSourcesMigrationTests.test_normal_list_keeps_order_revision_and_pins_pages": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "ArgumentSourcesMigrationTests.test_equal_order_index_rows_are_renumbered_in_canonical_order": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "ArgumentSourcesMigrationTests.test_orphan_citation_is_quarantined_and_advances_the_revision": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "RoleQuarantineTests.test_live_work_missing_person_becomes_a_newer_tombstone": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "PointerOwnershipTests.test_primary_and_citation_must_belong_to_the_work": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_pointer_to_another_works_manifestation_is_refused",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_citation_is_optional_and_owned"
+      ]
+    },
+    "PointerOwnershipTests.test_primary_cannot_be_cleared_and_pointers_start_null": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_the_primary_is_required",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_work_without_its_primary_fails_at_commit",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_work_and_first_manifestation_commit_together"
+      ],
+      "note": "PostgreSQL creates the Work and its primary Manifestation in one transaction with a deferred key, so a pointer need not start NULL."
+    },
+    "PointerOwnershipTests.test_pointer_target_cannot_be_deleted_or_moved_away": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_pointer_target_cannot_move_away",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_pointer_target_cannot_be_deleted"
+      ]
+    },
+    "PointerOwnershipTests.test_primary_asset_must_belong_to_the_manifestation": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_the_primary_asset_belongs_to_its_manifestation"
+      ]
+    },
+    "PointerOwnershipTests.test_origin_mapping_is_immutable": {
+      "obsolete": "origin_work_id was the SQLite backfill's mapping from a legacy Work to its rows; PostgreSQL has no origin column."
+    },
+    "PointerOwnershipTests.test_mirrored_columns_are_read_only": {
+      "obsolete": "The SQLite compatibility mirror (triggers that copy legacy works columns into Manifestation and Asset rows) has no PostgreSQL counterpart: PostgreSQL has no legacy source columns, and a Work's Asset is written by its create or source command."
+    },
+    "LeafOwnershipTests.test_roles_argument_sources_and_annotations_must_match_their_owner": {
+      "replaced_by": [
+        "tests/pg/test_people_schema.py::RoleTests.test_a_role_stays_in_its_library_and_its_work",
+        "tests/pg/test_research_schema.py::ArgumentSourceTests.test_a_pinned_version_is_one_of_the_cited_works_and_every_reference_stays_in_its_library",
+        "tests/pg/test_annotations.py::PersistenceTests.test_the_schema_keys",
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_an_assets_work_must_be_its_manifestations_work"
+      ]
+    },
+    "RelationTests.test_cross_work_and_self_relations_are_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::RelationTests.test_endpoints_must_be_distinct_manifestations_of_the_rows_work"
+      ]
+    },
+    "RelationTests.test_moving_one_endpoint_fails_and_moving_both_keeps_the_relation": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::RelationTests.test_moving_one_endpoint_fails_and_moving_both_carries_the_relation"
+      ]
+    },
+    "TransitionTests.test_move_only_primary_asset_out": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_moving_the_only_primary_asset_out_commits_in_either_order"
+      ]
+    },
+    "TransitionTests.test_moving_a_primary_asset_without_repointing_fails_at_commit": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_moving_the_primary_asset_without_the_pointer_fails_at_commit",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_failed_transition_changes_nothing"
+      ]
+    },
+    "TransitionTests.test_move_non_primary_asset_needs_no_pointer_change": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_a_non_primary_asset_moves_without_a_pointer_change"
+      ]
+    },
+    "TransitionTests.test_move_only_manifestation_out_and_delete_the_empty_work": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_moving_the_only_manifestation_out_with_delete_of_the_source",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_moving_the_only_manifestation_out_needs_the_emptied_work_retired",
+        "tests/pg/test_work_merge_foundations.py::OwnershipTests.test_a_moved_manifestation_carries_its_assets_and_scoped_roles"
+      ]
+    },
+    "TransitionTests.test_move_only_manifestation_out_and_merge_the_empty_work": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_moving_the_only_manifestation_out_needs_the_emptied_work_retired",
+        "tests/pg/test_works_schema.py::RecordTableTests.test_lifecycle_redirects",
+        "tests/pg/test_work_merge_foundations.py::OwnershipTests.test_a_moved_manifestation_carries_its_assets_and_scoped_roles"
+      ]
+    },
+    "TransitionTests.test_abandoned_retirement_marker_fails_commit_and_rolls_back": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_failed_transition_changes_nothing",
+        "tests/pg/test_works_schema.py::WorkPointerTests.test_a_work_without_its_primary_fails_at_commit"
+      ],
+      "note": "SQLite needed a work_retirement marker table to allow a primary-less Work inside a transaction; PostgreSQL's deferred NOT NULL pointer key does the same job, so there is no marker to abandon."
+    },
+    "TransitionTests.test_direct_bypasses_are_refused": {
+      "obsolete": "Guards of SQLite's work_retirement and work_retirement_guard tables, which exist only to emulate deferred keys; PostgreSQL uses deferred constraints (tests/pg/test_works_schema.py::WorkPointerTests)."
+    },
+    "TransitionTests.test_pinned_version_delete_is_refused_but_whole_work_delete_cascades": {
+      "replaced_by": [
+        "tests/pg/test_research_schema.py::ArgumentSourceTests.test_a_cited_work_and_a_pinned_version_refuse_their_delete",
+        "tests/pg/test_arguments.py::VersionAwareCitationTests.test_a_pinned_version_cannot_be_deleted_and_follows_a_move",
+        "tests/pg/test_arguments.py::CitationTests.test_a_work_delete_removes_its_citations_and_advances_each_list",
+        "tests/pg/test_works_schema.py::WorkDeleteTests.test_deleting_each_level_removes_the_work_and_keeps_its_lifecycle"
+      ]
+    },
+    "UpgradedIntegrityTests.test_whole_work_delete_with_pinned_citation_after_upgrade": {
+      "replaced_by": [
+        "tests/pg/test_arguments.py::CitationTests.test_a_work_delete_removes_its_citations_and_advances_each_list"
+      ],
+      "note": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "MirrorTests.test_metadata_only_work_gets_an_asset_only_when_it_gains_asset_state": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_the_source_decides_are_refused",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them"
+      ],
+      "note": "The SQLite compatibility mirror (triggers that copy legacy works columns into Manifestation and Asset rows) has no PostgreSQL counterpart: PostgreSQL has no legacy source columns, and a Work's Asset is written by its create or source command. A Work without a file gains no Asset from thumb_page: the field is refused (WRONG_OPERATION_FOR_SOURCE), and Manifestation fields such as doi land on the Manifestation."
+    },
+    "MirrorTests.test_annotation_on_a_file_less_work_creates_its_asset": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::PersistenceTests.test_a_work_without_a_managed_pdf"
+      ],
+      "note": "On PostgreSQL annotations belong to a managed PDF Asset; a Work without one refuses them instead of creating an Asset."
+    },
+    "MirrorTests.test_asset_bound_revision_alone_creates_the_asset": {
+      "obsolete": "The SQLite compatibility mirror (triggers that copy legacy works columns into Manifestation and Asset rows) has no PostgreSQL counterpart: PostgreSQL has no legacy source columns, and a Work's Asset is written by its create or source command. A revision row never creates an Asset on PostgreSQL."
+    },
+    "MirrorTests.test_video_and_pdf_urls_have_one_owner": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance",
+        "tests/pg/test_works_facade.py::CreateTests.test_a_video_is_a_stream_without_bytes",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them"
+      ]
+    },
+    "MirrorTests.test_legacy_argument_writes_are_pinned_like_the_backfill": {
+      "replaced_by": [
+        "tests/pg/test_arguments.py::CitationTests.test_a_pinpoint_pins_the_only_version_and_a_bare_entry_cites_the_work"
+      ]
+    },
+    "MirrorTests.test_work_delete_removes_every_identity_row": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_delete_cascades_and_tombstones_every_scope",
+        "tests/pg/test_works_schema.py::WorkDeleteTests.test_deleting_each_level_removes_the_work_and_keeps_its_lifecycle"
+      ]
+    },
+    "MirrorTests.test_deleting_a_verified_inferred_video_work": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_delete_cascades_and_tombstones_every_scope"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL. The legacy_inferred_video_urls verdict table has no counterpart."
+    },
+    "MirrorTests.test_get_work_exposes_slice_c_identity_fields": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_work_without_a_source",
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_the_projection_follows_the_primary_manifestation_and_its_asset"
+      ]
+    },
+    "MirrorTests.test_ensure_origin_asset_is_deterministic_and_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_works_facade.py::CreateTests.test_a_managed_pdf_is_catalogued_with_its_hash",
+        "tests/pg/test_works_facade.py::CreateTests.test_a_video_is_a_stream_without_bytes"
+      ],
+      "note": "The SQLite compatibility mirror (triggers that copy legacy works columns into Manifestation and Asset rows) has no PostgreSQL counterpart: PostgreSQL has no legacy source columns, and a Work's Asset is written by its create or source command. PostgreSQL writes the Asset with the Work instead of creating it lazily."
+    },
+    "InferredVideoAfterMigrationTests.test_patching_a_video_url_creates_the_deterministic_stream_asset": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL."
+    },
+    "InferredVideoAfterMigrationTests.test_the_durable_field_write_takes_the_same_path": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL."
+    },
+    "InferredVideoAfterMigrationTests.test_a_non_video_url_creates_no_asset_and_stays_on_the_manifestation": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL."
+    },
+    "InferredVideoAfterMigrationTests.test_removing_the_file_can_expose_an_inferred_video": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_creation_derives_or_refuses_and_advances_nothing",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them",
+        "tests/pg/test_works_mutations.py::SourceDecisionTests.test_only_a_video_may_be_replaced"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL."
+    },
+    "InferredVideoAfterMigrationTests.test_mirror_drift_reports_a_required_but_missing_asset": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_integrity_query_names_an_inactive_primary"
+      ],
+      "note": "The SQLite compatibility mirror (triggers that copy legacy works columns into Manifestation and Asset rows) has no PostgreSQL counterpart: PostgreSQL has no legacy source columns, and a Work's Asset is written by its create or source command. PostgreSQL's final-state integrity query (backend/domain/works/integrity.py) replaces the drift check."
+    },
+    "InferredUrlOwnershipTests.test_migration": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "InferredUrlOwnershipTests.test_fresh_writes": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_the_source_decides_are_refused",
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL."
+    },
+    "InferredUrlOwnershipTests.test_changing_the_url_moves_ownership_both_ways": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_land_in_the_row_that_owns_them",
+        "tests/pg/test_works_mutations.py::FieldDecisionTests.test_fields_the_source_decides_are_refused",
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_file_makes_a_pdf_and_its_url_stays_provenance"
+      ],
+      "note": "SQLite Works could lose their stored kind and be inferred as videos from a URL; on PostgreSQL the source is decided once at create and a URL patch never changes it, so a plain Work's URL is always its Manifestation's citation URL."
+    },
+    "StreamAssetTests.test_video_with_a_managed_path_projects_no_locator": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_kind_decides_which_storage_fields_are_allowed",
+        "tests/pg/test_works_sync.py::SourceSyncTests.test_a_patch_never_writes_the_identity"
+      ]
+    },
+    "StreamAssetTests.test_video_with_a_managed_path_after_migration": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    },
+    "RevisionScopeShapeTests.test_malformed_scopes_create_no_asset": {
+      "obsolete": "The SQLite compatibility mirror (triggers that copy legacy works columns into Manifestation and Asset rows) has no PostgreSQL counterpart: PostgreSQL has no legacy source columns, and a Work's Asset is written by its create or source command. No revision scope, well formed or not, creates an Asset on PostgreSQL."
+    },
+    "NoFilesystemTests.test_migration_reads_writes_lists_and_backs_up_nothing": {
+      "obsolete": "SQLite schema v16 to v17 upgrade (backfill of the Work identity rows). PostgreSQL starts from its own baseline schema and there is no SQLite to PostgreSQL migration before 1.0 (#613, R20); its migration runner is covered by tests/pg/test_migrate.py."
+    }
+  }
+}
