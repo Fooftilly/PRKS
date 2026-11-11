@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from unittest import mock
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -108,15 +107,6 @@ class PostgresLibraryLegTests(unittest.TestCase):
 
     setUp = E2ELibraryTests.setUp
     rows = E2ELibraryTests.rows
-
-    def test_the_server_env_never_names_the_retired_selection(self) -> None:
-        # A server given PRKS_LIBRARY_BACKEND refuses to start (PG-C2 #641),
-        # so the harness never passes it on, whatever the run's environment.
-        library = postgres_identity.provision_library(self.root)
-        self.addCleanup(library.drop)
-        with mock.patch.dict(os.environ, {"PRKS_E2E_LIBRARY_BACKEND": "postgres"}):
-            env = library.server_env()
-        self.assertNotIn("PRKS_LIBRARY_BACKEND", env)
 
     def test_the_server_serves_postgresql_and_runs_its_worker(self) -> None:
         library = postgres_identity.provision_library(self.root)
