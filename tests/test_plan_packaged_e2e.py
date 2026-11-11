@@ -47,8 +47,8 @@ BROWSE_CASE = (
     "test_progress_renders_offline_from_the_cached_catalog"
 )
 PROCESSING_CASE = (
-    "tests.e2e.test_processing_route_surface.ProcessingRouteSurfaceTests."
-    "test_processing_files_page_mounts_from_the_route"
+    "tests.e2e.test_app.TabContextHostRootTests."
+    "test_processing_files_refresh_keeps_tab_root"
 )
 
 

@@ -171,7 +171,8 @@ testing proof `--testing` requires before it writes (`backend/db/testing_guard.p
 `tests.e2e.test_postgres_library_flows` is a default module: restore through
 Settings, the Processing upload queue and the Research-ACK fence. The
 path-based inbox test (`test_processing_route_surface`) belonged to the SQLite
-Library, loads no tests, and is listed in `tests/sqlite_retirement/`.
+Library; it is deleted and its replacements are listed in
+`tests/sqlite_retirement/`.
 
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel. There is no Playwright retry loop in this runner;

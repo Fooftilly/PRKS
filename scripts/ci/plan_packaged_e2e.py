@@ -287,7 +287,7 @@ CRITICAL_BROWSER_OBLIGATIONS = (
     ("offline-person-membership-coherence",
      "tests.e2e.test_person_groups_offline.PersonGroupsOfflineTests.test_person_create_exclusion_and_delete_membership_coherence"),
     ("vue-processing-route-ready",
-     "tests.e2e.test_processing_route_surface.ProcessingRouteSurfaceTests.test_processing_files_page_mounts_from_the_route"),
+     "tests.e2e.test_app.TabContextHostRootTests.test_processing_files_refresh_keeps_tab_root"),
     ("research-notes-draft-recovery",
      "tests.e2e.test_work_notes_offline.ResearchNotesRecoveryTests.test_reload_within_500_ms_restores_the_exact_newest_text_and_saves_it"),
 )
