@@ -1,7 +1,7 @@
 """The SQLite startup reconcilers' cold-start phases (``backend/text_index.py``).
 
 The recorder, the harness profile and the entrypoint phases are
-tests/test_e2e_startup_profile.py.
+tests/test_e2e_cold_start_recorder.py.
 """
 from __future__ import annotations
 

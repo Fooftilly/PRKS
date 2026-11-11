@@ -9,7 +9,7 @@
     },
     "HarnessColdStartIntegrationTests.test_source_instruments_actual_reconcilers_and_entrypoint": {
       "replaced_by": [
-        "tests/test_e2e_startup_profile.py::EntrypointInstrumentationTests.test_the_entrypoint_records_its_startup_phases"
+        "tests/test_e2e_cold_start_recorder.py::EntrypointInstrumentationTests.test_the_entrypoint_records_its_startup_phases"
       ],
       "note": "The entrypoint phases keep their check. The server and text_index phases it also checked are the SQLite startup reconcilers, which PostgreSQL does not run."
     }
