@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import datetime
 import importlib
 import json
 import os
@@ -47,9 +48,20 @@ _VARYING = re.compile(
 # when they have the same format.
 _MOMENT = re.compile(r"\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?")
 _PLACEHOLDER = re.compile(r"<([A-Z]{1,4}|~uuid|~UUID)#(\d+)>")
+# Today's UTC date standing alone, as a run writes it: a source change sets the
+# Work's ``urldate`` to it and BibTeX takes it from the day of the last edit.
+# It is recorded as this placeholder and replayed as the replaying day, so a
+# reference recorded yesterday still holds "the day the reference ran". The
+# date inside a timestamp is left to ``_MOMENT``.
+_TODAY_PLACEHOLDER = "<~today>"
+_STANDALONE_DATE = r"(?<![\d-])%s(?![\d-]|[ T]\d\d:)"
 _lock = threading.Lock()
 # module file name -> {test id -> steps}; written once per module at exit.
 _recorded: dict[str, dict[str, list[dict[str, Any]]]] = {}
+
+
+def _today() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def recording() -> bool:
@@ -80,7 +92,8 @@ class _Varying:
                 self._bind(value, "<%s#%d>" % (kind, len(self.to_placeholder)))
             return self.to_placeholder[value]
 
-        return _VARYING.sub(one, text)
+        text = _VARYING.sub(one, text)
+        return re.sub(_STANDALONE_DATE % re.escape(_today()), _TODAY_PLACEHOLDER, text)
 
     def show(self, text: str) -> str:
         """``text`` with placeholders as this run's values (unbound ones minted)."""
@@ -97,7 +110,7 @@ class _Varying:
                 self._bind(minted, placeholder)
             return self.to_value[placeholder]
 
-        return _PLACEHOLDER.sub(one, text)
+        return _PLACEHOLDER.sub(one, text).replace(_TODAY_PLACEHOLDER, _today())
 
 
 # --- encoding -----------------------------------------------------------------------------
