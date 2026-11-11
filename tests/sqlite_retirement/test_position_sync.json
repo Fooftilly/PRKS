@@ -1,0 +1,196 @@
+{
+  "module": "tests/test_position_sync.py",
+  "tests": {
+    "PositionSyncTests.test_a_position_is_created_under_the_id_the_client_minted": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_creation_requires_a_collision_resistant_id": {
+      "replaced_by": [
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_a_position_shares_the_person_id_prefix_without_colliding": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "PositionSyncTests.test_a_repeated_name_is_accepted": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_a_repeated_name_is_accepted"
+      ]
+    },
+    "PositionSyncTests.test_an_empty_name_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_replaying_a_creation_changes_nothing_twice": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_a_second_delivery_of_the_same_creation_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_each_field_carries_its_own_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_the_value_is_not_echoed_back": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision"
+      ]
+    },
+    "PositionSyncTests.test_a_stale_base_against_a_different_value_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_a_stale_base_that_agrees_converges": {
+      "replaced_by": [
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_a_base_from_the_future_is_refused": {
+      "replaced_by": [
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_an_unknown_position_is_a_domain_answer": {
+      "replaced_by": [
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_only_the_two_editable_columns_are_fields": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_an_empty_name_is_refused_as_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "PositionSyncTests.test_both_paths_normalize_a_name_the_same_way": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_both_paths_normalize_identically_and_spacing_is_no_change"
+      ]
+    },
+    "PositionSyncTests.test_the_ordinary_endpoint_advances_the_same_revision": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision"
+      ]
+    },
+    "PositionSyncTests.test_the_ordinary_endpoint_moves_only_the_field_it_wrote": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/pg/test_arguments.py::PositionTests.test_create_read_update_and_list"
+      ]
+    },
+    "PositionSyncTests.test_both_construction_paths_share_one_boundary": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_both_paths_normalize_identically_and_spacing_is_no_change",
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/pg/test_arguments.py::PositionTests.test_a_targeted_position_refuses_its_delete_and_a_delete_moves_every_scope_on"
+      ],
+      "note": "The SQLite source check read research_network.py; on PostgreSQL the facade and the sync handler both call backend/domain/research/positions, and these tests prove the shared boundary by behaviour."
+    },
+    "PositionSyncTests.test_both_paths_normalize_identically": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_both_paths_normalize_identically_and_spacing_is_no_change"
+      ]
+    },
+    "PositionSyncTests.test_a_durable_edit_observes_an_ordinary_edit": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision"
+      ]
+    },
+    "PositionSyncTests.test_an_ordinary_name_edit_advances_only_the_name": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/pg/test_arguments.py::PositionTests.test_create_read_update_and_list"
+      ]
+    },
+    "PositionSyncTests.test_an_ordinary_description_edit_advances_only_the_description": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision"
+      ]
+    },
+    "PositionSyncTests.test_an_ordinary_edit_of_both_advances_both_separately": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision"
+      ]
+    },
+    "PositionSyncTests.test_an_ordinary_edit_to_the_same_value_advances_nothing": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/pg/test_arguments.py::PositionTests.test_create_read_update_and_list"
+      ]
+    },
+    "PositionSyncTests.test_the_sync_state_exposes_both_revisions_without_the_values": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/pg/test_arguments.py::PositionTests.test_create_read_update_and_list"
+      ]
+    },
+    "PositionSyncTests.test_deleting_a_position_works": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_a_position_an_argument_targets_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_deleting_twice_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionSyncTests.test_create_field_and_delete",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_deletion_carries_no_base_revision_and_no_payload": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_the_ordinary_delete_keeps_its_protection": {
+      "replaced_by": [
+        "tests/pg/test_arguments.py::PositionTests.test_a_targeted_position_refuses_its_delete_and_a_delete_moves_every_scope_on",
+        "tests/test_arguments_parity.py::ArgumentFacadeParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_the_sync_state_reports_revisions_only": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision",
+        "tests/test_arguments_parity.py::ArgumentSyncParityTests.test_positions"
+      ]
+    },
+    "PositionSyncTests.test_the_sync_state_of_an_unknown_position_is_none": {
+      "replaced_by": [
+        "tests/pg/test_arguments_sync.py::PositionEnvelopeTests.test_ordinary_edits_and_sync_share_each_fields_revision"
+      ]
+    },
+    "PositionSyncTests.test_the_detail_still_returns_what_the_route_serializes": {
+      "replaced_by": [
+        "tests/pg/test_arguments.py::PositionTests.test_create_read_update_and_list",
+        "tests/test_arguments_parity.py::ArgumentFacadeParityTests.test_positions"
+      ]
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+ "module": "tests/test_hypothesis_sync.py",
+ "tests": {
+  "TestWorkTagRevisionMachine.runTest": {
+   "replaced_by": [
+    "tests/pg/test_tags_properties.py::WorkTagPropertyTests.test_direct_edits_and_sync_requests_follow_the_model"
+   ],
+   "note": "The PostgreSQL test job installs only runtime requirements, so the model runs twelve seeded random sequences of eight steps instead of a Hypothesis state machine of the same size."
+  },
+  "WorkTagProperties.test_direct_revisions_advance_only_for_real_changes": {
+   "replaced_by": [
+    "tests/pg/test_tags_properties.py::WorkTagPropertyTests.test_direct_edits_advance_only_on_a_real_change"
+   ]
+  },
+  "WorkTagProperties.test_future_base_is_refused_without_mutating_state": {
+   "replaced_by": [
+    "tests/pg/test_tags_properties.py::WorkTagPropertyTests.test_a_stale_or_future_base_decides_without_writing"
+   ]
+  },
+  "WorkTagProperties.test_ledger_replays_without_reapplying_or_changing_revisions": {
+   "replaced_by": [
+    "tests/pg/test_tags_properties.py::WorkTagPropertyTests.test_a_replay_never_reapplies_and_a_reuse_never_executes"
+   ]
+  },
+  "WorkTagProperties.test_other_tag_scope_does_not_advance_on_unrelated_edit": {
+   "replaced_by": [
+    "tests/pg/test_tags_properties.py::WorkTagPropertyTests.test_another_tags_scope_never_moves"
+   ]
+  },
+  "WorkTagProperties.test_relation_scope_keys_are_structural_and_round_trip": {
+   "replaced_by": [
+    "tests/test_relationship_scope_keys.py::ScopeKeyProperties.test_relation_scope_keys_are_structural_and_round_trip"
+   ]
+  },
+  "WorkTagProperties.test_stale_revision_converges_only_if_state_already_matches": {
+   "replaced_by": [
+    "tests/pg/test_tags_properties.py::WorkTagPropertyTests.test_a_stale_or_future_base_decides_without_writing"
+   ]
+  }
+ }
+}

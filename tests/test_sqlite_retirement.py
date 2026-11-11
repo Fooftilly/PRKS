@@ -32,7 +32,7 @@ _DIRECTORY = os.path.join(_PROJECT_DIR, "tests", "sqlite_retirement")
 
 @lru_cache(maxsize=None)
 def _tests_in(path: str) -> frozenset[str]:
-    """``Class.method`` of every test method a module defines or inherits within itself."""
+    """``Class.method`` of every test a module defines, including methods inherited within it."""
     with open(os.path.join(_PROJECT_DIR, path), encoding="utf-8") as handle:
         tree = ast.parse(handle.read(), filename=path)
     classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
@@ -48,7 +48,13 @@ def _tests_in(path: str) -> frozenset[str]:
                 found |= methods(base.id, seen | {name})
         return found
 
-    return frozenset("%s.%s" % (name, method) for name in classes for method in methods(name))
+    found = {"%s.%s" % (name, method) for name in classes for method in methods(name)}
+    # ``Name = Machine.TestCase``: a Hypothesis state machine run as one test.
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "TestCase"):
+            found.update("%s.runTest" % target.id for target in node.targets if isinstance(target, ast.Name))
+    return frozenset(found)
 
 
 def _manifests() -> list[tuple[str, dict[str, object]]]:

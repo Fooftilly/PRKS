@@ -1,0 +1,313 @@
+{
+  "module": "tests/test_concept_sync.py",
+  "tests": {
+    "ConceptSyncTests.test_a_concept_is_created_under_the_id_the_client_minted": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_create"
+      ]
+    },
+    "ConceptSyncTests.test_creation_requires_a_collision_resistant_id": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/pg/test_concepts_sync.py::CreateTests.test_nul_and_malformed_payloads_are_invalid_envelopes",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_create"
+      ]
+    },
+    "ConceptSyncTests.test_a_taken_name_is_a_named_refusal": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_create"
+      ]
+    },
+    "ConceptSyncTests.test_a_taken_alias_is_the_same_refusal": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape",
+        "tests/pg/test_concepts.py::IdentityTests.test_names_and_aliases_share_one_namespace"
+      ]
+    },
+    "ConceptSyncTests.test_replaying_a_creation_changes_nothing_twice": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_create"
+      ]
+    },
+    "ConceptSyncTests.test_a_second_delivery_of_the_same_creation_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_create"
+      ]
+    },
+    "ConceptSyncTests.test_an_empty_name_is_refused_rather_than_placeheld": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::CreateTests.test_nul_and_malformed_payloads_are_invalid_envelopes",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_create"
+      ]
+    },
+    "ConceptSyncTests.test_both_construction_paths_share_one_boundary": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape",
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_a_note_never_carries_a_name_the_create_would_refuse",
+        "tests/pg/test_research_index.py::MentionTests.test_a_note_creates_the_concepts_it_names_once_each",
+        "tests/test_relationship_writers.py::RelationshipWriterTests.test_only_the_revision_aware_boundary_writes_each_relationship"
+      ],
+      "note": "The SQLite check read research_network.py; on PostgreSQL the facade, the sync handler and note auto-creation all call backend/domain/research/concepts, which these tests prove by behaviour and the writer audit proves from the source."
+    },
+    "ConceptSyncTests.test_both_paths_refuse_a_normalized_duplicate_name": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape"
+      ]
+    },
+    "ConceptSyncTests.test_both_paths_refuse_a_name_taken_by_an_alias": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape"
+      ]
+    },
+    "ConceptSyncTests.test_both_paths_normalize_the_name_the_same_way": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape",
+        "tests/pg/test_concepts_sync.py::CreateTests.test_creation_acknowledges_converges_and_refuses_a_taken_name"
+      ]
+    },
+    "ConceptSyncTests.test_both_paths_normalize_the_description_the_same_way": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape"
+      ]
+    },
+    "ConceptSyncTests.test_both_paths_refuse_a_name_that_is_too_long": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape",
+        "tests/pg/test_concepts_sync.py::CreateTests.test_nul_and_malformed_payloads_are_invalid_envelopes"
+      ]
+    },
+    "ConceptSyncTests.test_an_identity_edit_refuses_a_malformed_name_as_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_identity"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_path_mints_the_same_id_format": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_path_still_returns_the_full_concept": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_both_construction_paths_share_identity_normalization_and_shape",
+        "tests/test_concepts_parity.py::ConceptFacadeParityTests.test_create_read_and_list"
+      ]
+    },
+    "ConceptSyncTests.test_a_note_can_never_carry_a_name_the_primitive_would_refuse": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_a_note_never_carries_a_name_the_create_would_refuse",
+        "tests/test_concepts_parity.py::ConceptFacadeParityTests.test_research_note_save"
+      ]
+    },
+    "ConceptSyncTests.test_note_auto_creation_still_resolves_before_it_creates": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_a_note_never_carries_a_name_the_create_would_refuse",
+        "tests/pg/test_research_index.py::MentionTests.test_a_note_creates_the_concepts_it_names_once_each"
+      ]
+    },
+    "ConceptSyncTests.test_note_auto_creation_shares_the_uniqueness_rule": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_a_note_never_carries_a_name_the_create_would_refuse"
+      ]
+    },
+    "ConceptSyncTests.test_the_definition_is_a_scalar_with_its_own_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_definition_is_its_own_scope_shared_with_the_ordinary_edit",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_field"
+      ]
+    },
+    "ConceptSyncTests.test_a_stale_definition_base_against_a_different_value_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_definition_is_its_own_scope_shared_with_the_ordinary_edit",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_field"
+      ]
+    },
+    "ConceptSyncTests.test_a_stale_definition_base_that_agrees_converges": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_definition_is_its_own_scope_shared_with_the_ordinary_edit",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_field"
+      ]
+    },
+    "ConceptSyncTests.test_only_the_definition_is_a_field": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_field"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_endpoint_advances_the_same_definition_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_definition_is_its_own_scope_shared_with_the_ordinary_edit"
+      ]
+    },
+    "ConceptSyncTests.test_a_rename_keeps_the_old_name_reachable": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/pg/test_concepts.py::IdentityTests.test_a_rename_keeps_the_old_name_as_an_alias",
+        "tests/pg/test_concepts_sync.py::IdentityTests.test_a_stale_identity_always_conflicts"
+      ]
+    },
+    "ConceptSyncTests.test_an_alias_edit_shares_the_rename_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_identity"
+      ]
+    },
+    "ConceptSyncTests.test_an_identity_conflict_is_not_converged_by_an_equal_name": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/pg/test_concepts_sync.py::IdentityTests.test_a_stale_identity_always_conflicts"
+      ]
+    },
+    "ConceptSyncTests.test_an_identity_that_changes_nothing_is_not_a_second_change": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/pg/test_concepts.py::IdentityTests.test_only_a_change_advances_a_scope"
+      ]
+    },
+    "ConceptSyncTests.test_a_name_taken_by_another_concept_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_identity"
+      ]
+    },
+    "ConceptSyncTests.test_an_alias_taken_by_another_concept_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_identity"
+      ]
+    },
+    "ConceptSyncTests.test_an_alias_equal_to_the_name_is_dropped_not_stored": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/pg/test_concepts.py::IdentityTests.test_names_and_aliases_share_one_namespace"
+      ]
+    },
+    "ConceptSyncTests.test_a_rename_may_deliberately_drop_the_old_name": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/pg/test_concepts.py::IdentityTests.test_a_rename_keeps_the_old_name_as_an_alias"
+      ]
+    },
+    "ConceptSyncTests.test_identity_requires_a_base": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_identity"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_rename_advances_the_same_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_alias_replacement_advances_the_same_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity",
+        "tests/pg/test_concepts.py::IdentityTests.test_only_a_change_advances_a_scope"
+      ]
+    },
+    "ConceptSyncTests.test_parents_are_one_aggregate": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_parents"
+      ]
+    },
+    "ConceptSyncTests.test_a_parent_change_advances_the_parents_own_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/pg/test_concepts.py::HierarchyTests.test_both_ends_of_an_edge_advance",
+        "tests/pg/test_concepts_sync.py::ParentsTests.test_a_stale_base_with_the_same_set_converges"
+      ]
+    },
+    "ConceptSyncTests.test_the_same_parent_set_converges_even_after_the_revision_moved": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/pg/test_concepts_sync.py::ParentsTests.test_a_stale_base_with_the_same_set_converges"
+      ]
+    },
+    "ConceptSyncTests.test_a_different_parent_set_against_a_stale_base_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_parents"
+      ]
+    },
+    "ConceptSyncTests.test_an_unknown_parent_is_a_named_refusal": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_parents"
+      ]
+    },
+    "ConceptSyncTests.test_a_cycle_is_refused_and_stays_canonical": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/pg/test_concepts_sync.py::ParentsTests.test_two_parent_changes_that_together_close_a_cycle",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_parents"
+      ]
+    },
+    "ConceptSyncTests.test_a_concept_cannot_be_its_own_parent": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/pg/test_concepts.py::HierarchyTests.test_a_cycle_is_refused_at_any_depth"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_parent_replacement_advances_the_same_revision": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops"
+      ]
+    },
+    "ConceptSyncTests.test_an_oversized_parent_list_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_refused_envelopes_change_nothing_and_are_never_ledgered"
+      ]
+    },
+    "ConceptSyncTests.test_deleting_a_concept_advances_what_it_invalidates": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_parents_are_one_set_and_a_delete_advances_what_it_drops",
+        "tests/pg/test_concepts.py::DeleteTests.test_edges_go_and_every_scope_it_owned_moves_on"
+      ]
+    },
+    "ConceptSyncTests.test_a_concept_named_by_a_note_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::DeleteTests.test_in_use_refused_and_absence_converges",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_delete"
+      ]
+    },
+    "ConceptSyncTests.test_deleting_twice_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::DeleteTests.test_in_use_refused_and_absence_converges",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_delete"
+      ]
+    },
+    "ConceptSyncTests.test_deletion_carries_no_base_revision_and_no_payload": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_refused_envelopes_change_nothing_and_are_never_ledgered",
+        "tests/test_concepts_parity.py::ConceptSyncParityTests.test_delete"
+      ]
+    },
+    "ConceptSyncTests.test_the_ordinary_delete_keeps_its_protection": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::DeleteTests.test_a_concept_a_research_note_names_is_refused",
+        "tests/test_concepts_parity.py::ConceptFacadeParityTests.test_delete"
+      ]
+    },
+    "ConceptSyncTests.test_the_sync_state_carries_the_aggregates_and_the_revisions": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_sync_state_carries_each_aggregate_with_its_revision"
+      ]
+    },
+    "ConceptSyncTests.test_the_sync_state_of_an_unknown_concept_is_none": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_the_sync_state_carries_each_aggregate_with_its_revision",
+        "tests/test_concepts_parity.py::ConceptFacadeParityTests.test_create_read_and_list"
+      ]
+    },
+    "ConceptSyncTests.test_the_detail_and_the_state_agree_on_the_aliases": {
+      "replaced_by": [
+        "tests/pg/test_concepts_sync.py::RetiredSqliteCoverageTests.test_name_and_aliases_are_one_identity"
+      ]
+    }
+  }
+}
