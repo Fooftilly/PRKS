@@ -1,0 +1,42 @@
+{
+  "module": "tests/test_storage_bind.py",
+  "tests": {
+    "TestStorageBind.test_bind_freezes_paths_against_later_env": {
+      "replaced_by": [
+        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_the_binding_is_frozen_against_later_environment_changes"
+      ]
+    },
+    "TestStorageBind.test_processing_fallback_updates_returned_and_published_config": {
+      "obsolete": "The legacy processing inbox directory is not opened by the PostgreSQL binding (Processing redesign, #636: uploads are objects in the Processing queue), so there is no inbox directory to create or fall back from; tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_the_binding_opens_no_sqlite_file_and_no_inbox checks none is made."
+    },
+    "TestStorageBind.test_processing_fallback_stays_beneath_the_anchored_root": {
+      "obsolete": "The legacy processing inbox directory is not opened by the PostgreSQL binding (Processing redesign, #636: uploads are objects in the Processing queue), so there is no inbox directory to create or fall back from; tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_the_binding_opens_no_sqlite_file_and_no_inbox checks none is made."
+    },
+    "TestStorageBind.test_explicit_processing_override_does_not_fall_back": {
+      "obsolete": "The legacy processing inbox directory is not opened by the PostgreSQL binding (Processing redesign, #636: uploads are objects in the Processing queue), so there is no inbox directory to create or fall back from; tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_the_binding_opens_no_sqlite_file_and_no_inbox checks none is made."
+    },
+    "TestStorageBind.test_failed_rebind_keeps_previous_published_state": {
+      "replaced_by": [
+        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_a_failed_rebind_keeps_the_previous_binding"
+      ]
+    },
+    "TestStorageBind.test_successful_rebind_uses_new_index_path": {
+      "replaced_by": [
+        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_a_rebind_publishes_the_new_root_whole"
+      ]
+    },
+    "TestStorageBind.test_constructor_conflict_db": {
+      "obsolete": "PRKSDatabase and PRKSTextIndex are the SQLite stores under the root; the PostgreSQL facade takes its Database and the bound StorageConfig and has no second path to conflict with."
+    },
+    "TestStorageBind.test_constructor_conflict_text_index": {
+      "obsolete": "PRKSDatabase and PRKSTextIndex are the SQLite stores under the root; the PostgreSQL facade takes its Database and the bound StorageConfig and has no second path to conflict with."
+    },
+    "TestStorageBind.test_legacy_db_methods_do_not_reread_env": {
+      "replaced_by": [
+        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_the_binding_is_frozen_against_later_environment_changes",
+        "tests/pg/test_works_facade.py::CreateTests.test_a_managed_pdf_is_catalogued_with_its_hash"
+      ],
+      "note": "The facade reads files through the StorageConfig it was built with; the bind test changes the environment after binding and checks the facade's storage."
+    }
+  }
+}

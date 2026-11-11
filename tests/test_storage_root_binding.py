@@ -1356,14 +1356,14 @@ class TestRootSnapshot(RootTestCase):
         os.remove(link)
         os.symlink(target_b, link)
 
-        from backend.db_manager import PRKSDatabase
-
-        PRKSDatabase(storage=anchored, schema_path=os.path.join(_PROJECT_DIR, "backend", "db_schema.sql"))
-        os.makedirs(anchored.pdfs_dir, exist_ok=True)
-        with open(os.path.join(anchored.pdfs_dir, "x.pdf"), "wb") as handle:
-            handle.write(b"%PDF")
-        self.assertTrue(os.path.isfile(os.path.join(target_a, "prks_data.db")))
+        # Runtime IO goes through the anchored config's paths: managed
+        # objects and derived thumbnails land on the leased target.
+        for directory, name in ((anchored.pdfs_dir, "x.pdf"), (anchored.thumbs_dir, "x.webp")):
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, name), "wb") as handle:
+                handle.write(b"%PDF")
         self.assertTrue(os.path.isfile(os.path.join(target_a, "pdfs", "x.pdf")))
+        self.assertTrue(os.path.isfile(os.path.join(target_a, "thumbs", "x.webp")))
         self.assertEqual(os.listdir(target_b), [])
         self.assertEqual(anchored.configured_root, cfg.configured_root)
         root_binding.assert_config_matches_bound_root(anchored.root)

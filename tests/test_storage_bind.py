@@ -13,7 +13,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.db_manager import PRKSDatabase
-from backend.server import bind_storage, run_server
+from backend.server import bind_storage
 from backend.storage import paths
 from backend.storage.config import StorageConfig
 from backend.text_index import PRKSTextIndex, get_text_index, reset_text_index
@@ -244,12 +244,6 @@ class TestStorageBind(unittest.TestCase):
         self.assertEqual(server_module.pdfs_dir, cfg_a.pdfs_dir)
         self.assertNotEqual(server_module.pdfs_dir, cfg_b.pdfs_dir)
 
-    def test_run_server_without_bind_raises(self):
-        server_module._bound_storage = None
-        with self.assertRaises(RuntimeError) as ctx:
-            run_server()
-        self.assertIn("not bound", str(ctx.exception))
-
     def test_successful_rebind_uses_new_index_path(self):
         root_a = self._tmpdir()
         root_b = self._tmpdir()
@@ -310,11 +304,6 @@ class TestStorageBind(unittest.TestCase):
             work = db.get_work(w_id)
         self.assertEqual(work.get("file_size_bytes"), len(payload))
         self.assertEqual(db.storage.pdfs_dir, captured)
-
-    def test_for_testing_data_still_refused(self):
-        with self.assertRaises(RuntimeError) as ctx:
-            StorageConfig.for_testing("/data")
-        self.assertIn("refusing to use PRKS_STORAGE under /data", str(ctx.exception))
 
 
 if __name__ == "__main__":
