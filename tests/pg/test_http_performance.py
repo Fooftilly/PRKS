@@ -20,11 +20,10 @@ import os
 from typing import Any, Optional
 from unittest.mock import patch
 
+from psycopg_pool import PoolTimeout
+
 from backend import performance
-from backend.domain.identity import sessions
-from backend.domain.identity.request_context import RequestContext
 from backend.pg_facade import PostgresLibrary
-from backend.pg_facade import context as facade_context
 from backend.pg_facade.text_index import PostgresTextIndex
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_search_text import pdf_bytes
@@ -79,6 +78,17 @@ class TransactionTimingTests(HttpAuthTestCase):
         performance.clear_request()
         self.assertEqual(self.route("/api/works")["db_calls"], 1)
 
+    def test_a_borrow_that_times_out_records_no_call(self) -> None:
+        performance.begin_request("GET", "/api/tags")
+        with patch.object(self.db._pool, "connection", side_effect=PoolTimeout("busy")):
+            with self.assertRaises(Exception):
+                self.db.query(lambda tx: tx.execute("SELECT 1"))
+        performance.finish_request()
+        performance.clear_request()
+        snap = performance.snapshot()
+        self.assertEqual(self.route("/api/tags")["db_calls"], 0)
+        self.assertFalse(snap["counters"].get("db_read"))
+
 
 class PerformanceHttpTests(HttpAuthTestCase):
     def setUp(self) -> None:
@@ -97,11 +107,6 @@ class PerformanceHttpTests(HttpAuthTestCase):
 
     def _restore(self, previous: tuple[Any, Any]) -> None:
         self.server_module.db, self.server_module.text_index = previous
-
-    def acting(self) -> Any:
-        valid = sessions.resolve_session(self.db, self.cookies["prks_session"])
-        assert valid is not None
-        return facade_context.acting_as(RequestContext.for_session(valid, epoch=self.library_epoch()))
 
     def get(self, path: str, headers: Optional[list[tuple[str, str]]] = None) -> Response:
         return self.call("GET", path, cookies=self.cookies, headers=headers)
@@ -218,6 +223,7 @@ class PerformanceHttpTests(HttpAuthTestCase):
         res = self.get("/api/search?q=" + SECRET_QUERY)
         self.assertEqual(res.status, 200, res.raw)
         timing = ",".join(res.header("Server-Timing"))
+        self.assertTrue(timing, res.raw)
         self.assertNotIn(SECRET_QUERY, timing)
         self.assertNotIn("?", timing)
         for token in filter(None, timing.split(",")):
