@@ -1,0 +1,253 @@
+{
+  "module": "tests/test_work_role_sync.py",
+  "tests": {
+    "WorkRoleSyncTests.test_add_and_remove_each_advance_one_revision": {
+      "replaced_by": [
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table",
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_revision_outlives_the_relationship",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_same_desired_state_changes_and_advances_nothing": {
+      "replaced_by": [
+        "tests/pg/test_people_roles.py::RevisionTests.test_changes_advance_and_no_ops_write_nothing",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_stale_but_convergent_choice_is_not_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_genuine_disagreement_is_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_revision_outlives_the_relationship",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_future_base_revision_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_revision_outlives_the_relationship": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_revision_outlives_the_relationship",
+        "tests/pg/test_people_roles.py::RevisionTests.test_changes_advance_and_no_ops_write_nothing"
+      ]
+    },
+    "WorkRoleSyncTests.test_each_person_and_role_is_its_own_scope": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_each_person_and_role_is_its_own_scope_appended_in_arrival_order"
+      ]
+    },
+    "WorkRoleSyncTests.test_one_person_may_hold_several_roles_on_one_work": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_each_person_and_role_is_its_own_scope_appended_in_arrival_order"
+      ]
+    },
+    "WorkRoleSyncTests.test_links_are_appended_in_the_order_they_arrive": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_each_person_and_role_is_its_own_scope_appended_in_arrival_order",
+        "tests/pg/test_people_roles.py::ConcurrencyTests.test_two_links_on_one_work_append_in_turn"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_role_vocabulary_is_closed": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_every_write_path_agrees_about_the_role_domain": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_refusals"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_envelope_carries_exactly_the_relationship": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_null_base_revision_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_missing_work_or_person_is_not_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_boundary": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_stale_order_index_does_not_silently_remove_nothing": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_stale_order_index_still_updates_the_credit": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold"
+      ]
+    },
+    "WorkRoleSyncTests.test_credit_patch_on_a_missing_triple_does_not_create_it": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "WorkRoleSyncTests.test_relationships_a_work_is_born_with_are_revision_zero": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_construction_keeps_the_callers_order_and_mutation_moves_one_scope",
+        "tests/pg/test_people_roles.py::RevisionTests.test_constructed_roles_read_at_revision_0",
+        "tests/pg/test_people_sync.py::CreateWorkRoleFilingTests.test_a_new_work_is_born_with_its_roles"
+      ]
+    },
+    "WorkRoleSyncTests.test_construction_preserves_the_order_the_caller_states": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_construction_keeps_the_callers_order_and_mutation_moves_one_scope",
+        "tests/pg/test_people_roles.py::RevisionTests.test_constructed_roles_at_a_taken_index_keep_insertion_order"
+      ]
+    },
+    "WorkRoleSyncTests.test_mutation_appends_and_never_takes_a_callers_placement": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_link_carries_its_credit_override": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_credit_override_becomes_a_person_alias": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_promotable_credit_advances_person_aliases_revision_once": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_ack_omits_aliases_revision_when_promotion_is_a_no_op": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_which_credits_become_aliases",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_already_known_alias_does_not_bump_aliases_revision": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_which_credits_become_aliases"
+      ]
+    },
+    "WorkRoleSyncTests.test_comma_bearing_credit_is_preserved_on_role_not_split_into_aliases": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_which_credits_become_aliases",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credits_that_are_the_name_or_hold_a_comma_are_not_promoted"
+      ]
+    },
+    "WorkRoleSyncTests.test_existing_comma_delimited_aliases_remain_readable": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_which_credits_become_aliases"
+      ]
+    },
+    "WorkRoleSyncTests.test_construction_with_credit_advances_existing_person_aliases_revision": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_which_credits_become_aliases",
+        "tests/pg/test_people_sync.py::CreateWorkRoleFilingTests.test_a_new_work_is_born_with_its_roles"
+      ]
+    },
+    "WorkRoleSyncTests.test_ordinary_and_durable_role_writes_share_alias_side_effects": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold",
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias"
+      ]
+    },
+    "WorkRoleSyncTests.test_credit_derived_alias_makes_stale_offline_aliases_conflict": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias"
+      ]
+    },
+    "WorkRoleSyncTests.test_replaying_the_same_credit_does_not_keep_bumping_aliases": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_two_devices_choosing_different_credits_have_not_converged": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_two_devices_choosing_the_same_credit_have_converged": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_credit_can_be_edited_and_cleared_revision_aware": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_editing_the_credit_of_a_link_that_is_not_there_is_said_plainly": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias",
+        "tests/pg/test_people_roles.py::RevisionTests.test_the_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_credit_name_is_bounded": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path",
+        "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_role_decision_table"
+      ]
+    },
+    "WorkRoleSyncTests.test_ordinary_writes_also_bound_the_credit_name": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_refusals"
+      ]
+    },
+    "WorkRoleSyncTests.test_a_browse_row_carries_enough_to_undo_a_credit_override": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_structured_links_carry_the_order_the_flattened_columns_use": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_construction_keeps_the_callers_order_and_mutation_moves_one_scope"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_state_projection_reports_revisions_and_tombstones": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_the_revision_outlives_the_relationship",
+        "tests/pg/test_people_roles.py::RevisionTests.test_changes_advance_and_no_ops_write_nothing",
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_each_person_and_role_is_its_own_scope_appended_in_arrival_order"
+      ]
+    },
+    "WorkRoleSyncTests.test_the_state_projection_is_scoped_to_its_own_work": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_each_person_and_role_is_its_own_scope_appended_in_arrival_order"
+      ]
+    },
+    "WorkRoleSyncTests.test_scope_keys_are_structural": {
+      "replaced_by": [
+        "tests/test_relationship_scope_keys.py::ScopeKeyProperties.test_role_scope_keys_are_structural_and_round_trip"
+      ]
+    }
+  }
+}

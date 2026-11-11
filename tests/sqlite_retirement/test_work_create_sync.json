@@ -1,0 +1,50 @@
+{
+  "module": "tests/test_work_create_sync.py",
+  "tests": {
+    "WorkCreateSyncTests.test_promotable_credit_reports_aliases_revisions_on_create": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::CreateWorkRoleFilingTests.test_a_new_work_is_born_with_its_roles",
+        "tests/pg/test_people_sync.py::CreateWorkRoleFilingTests.test_a_comma_bearing_credit_stays_on_the_role_and_advances_no_alias",
+        "tests/pg/test_folders_sync.py::CreateWorkFilingTests.test_roles_are_filed_with_the_folder"
+      ]
+    },
+    "WorkCreateSyncTests.test_creates_video_work_and_files_uncategorized": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_a_created_work_matches_sqlite",
+        "tests/pg/test_folders_sync.py::CreateWorkFilingTests.test_a_work_with_no_folder_goes_to_one_uncategorized_root"
+      ]
+    },
+    "WorkCreateSyncTests.test_replay_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_a_second_create_of_one_id_converges",
+        "tests/pg/test_works_sync.py::LedgerTests.test_a_create_sent_concurrently_applies_once"
+      ]
+    },
+    "WorkCreateSyncTests.test_construction_carries_no_base_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_refusals"
+      ]
+    },
+    "WorkCreateSyncTests.test_pdf_source_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_refusals"
+      ]
+    },
+    "WorkCreateSyncTests.test_missing_folder_is_named_refusal": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_refusals"
+      ]
+    },
+    "WorkCreateSyncTests.test_roles_and_playlist_attach_at_construction": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::CreateWorkRoleFilingTests.test_a_new_work_is_born_with_its_roles",
+        "tests/pg/test_playlists_sync.py::CreateWorkFilingTests.test_a_work_created_into_a_playlist_is_appended_without_a_revision"
+      ]
+    },
+    "WorkCreateSyncTests.test_short_id_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_refusals"
+      ]
+    }
+  }
+}

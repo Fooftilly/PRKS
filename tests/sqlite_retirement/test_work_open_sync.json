@@ -1,0 +1,100 @@
+{
+  "module": "tests/test_work_open_sync.py",
+  "tests": {
+    "WorkOpenSyncTests.test_max_register_over_event_time": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_latest_event_wins_whatever_the_arrival_order_or_zone",
+        "tests/pg/test_works_mutations.py::OpenTests.test_concurrent_opens_keep_the_latest",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_open_events"
+      ]
+    },
+    "WorkOpenSyncTests.test_arrival_order_does_not_decide": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_latest_event_wins_whatever_the_arrival_order_or_zone",
+        "tests/pg/test_works_sync.py::ConcurrentOperationTests.test_opens_from_many_devices_keep_the_latest"
+      ]
+    },
+    "WorkOpenSyncTests.test_timezones_normalize_to_one_instant": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_latest_event_wins_whatever_the_arrival_order_or_zone",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_open_events"
+      ]
+    },
+    "WorkOpenSyncTests.test_old_events_are_legitimate": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_latest_event_wins_whatever_the_arrival_order_or_zone"
+      ]
+    },
+    "WorkOpenSyncTests.test_future_skew_is_clamped_to_arrival_not_discarded": {
+      "replaced_by": [
+        "tests/test_work_open_rules.py::OpenRuleTests.test_future_skew_is_clamped_to_arrival_not_discarded"
+      ]
+    },
+    "WorkOpenSyncTests.test_a_far_future_client_cannot_pin_recent": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_a_far_future_event_is_clamped_and_sub_second_events_do_not_tie",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_open_events"
+      ]
+    },
+    "WorkOpenSyncTests.test_mixed_precision_sorts_chronologically": {
+      "replaced_by": [
+        "tests/test_work_open_rules.py::OpenRuleTests.test_a_second_resolution_value_compares_as_milliseconds",
+        "tests/pg/test_works_facade.py::OrderAndPrecisionTests.test_recent_orders_at_millisecond_precision_then_by_id"
+      ]
+    },
+    "WorkOpenSyncTests.test_sub_second_events_do_not_tie": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_a_far_future_event_is_clamped_and_sub_second_events_do_not_tie",
+        "tests/pg/test_works_mutations.py::OpenTests.test_concurrent_opens_keep_the_latest"
+      ]
+    },
+    "WorkOpenSyncTests.test_envelope_rules": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_malformed_envelopes_are_refused_unledgered_and_a_missing_work_is_terminal",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_open_events"
+      ]
+    },
+    "WorkOpenSyncTests.test_missing_work_is_terminal": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_malformed_envelopes_are_refused_unledgered_and_a_missing_work_is_terminal",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_open_events"
+      ]
+    },
+    "WorkOpenSyncTests.test_acknowledgement_carries_the_canonical_recent_row": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_ack_carries_the_recent_row_and_a_replay_answers_from_the_ledger",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_open_events"
+      ]
+    },
+    "WorkOpenSyncTests.test_replay_is_exact_after_the_work_is_reopened": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_ack_carries_the_recent_row_and_a_replay_answers_from_the_ledger"
+      ]
+    },
+    "WorkOpenSyncTests.test_reused_op_id_with_a_new_envelope_never_executes": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_ack_carries_the_recent_row_and_a_replay_answers_from_the_ledger"
+      ]
+    },
+    "DirectOpenEndpointTests.test_direct_open_records_server_now_at_millisecond_precision": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_direct_open_shares_the_register_and_a_read_stays_pure"
+      ]
+    },
+    "DirectOpenEndpointTests.test_direct_open_uses_the_same_max_register": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_direct_open_shares_the_register_and_a_read_stays_pure"
+      ]
+    },
+    "DirectOpenEndpointTests.test_direct_open_reports_a_missing_work": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_direct_open_shares_the_register_and_a_read_stays_pure"
+      ]
+    },
+    "DirectOpenEndpointTests.test_work_read_stays_pure": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::OpenSyncTests.test_the_direct_open_shares_the_register_and_a_read_stays_pure"
+      ]
+    }
+  }
+}
