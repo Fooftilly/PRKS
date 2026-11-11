@@ -1,0 +1,176 @@
+{
+  "module": "tests/test_text_index.py",
+  "tests": {
+    "TextIndexTestCase.test_index_versions_pinned": {
+      "obsolete": "Pins the schema_version/extractor_version meta rows of the separate SQLite FTS5 file. PostgreSQL text rows live in the catalogue, whose schema is pinned by the migration snapshot, and each row carries its extractor version, which is tested by the replacements of test_extractor_version_mismatch_reextracts."
+    },
+    "TextIndexTestCase.test_fresh_index_has_current_schema": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot",
+        "tests/pg/test_schema_snapshot.py::TemplateCloneMatchesSnapshotTests.test_harness_clone_is_the_migrated_schema"
+      ]
+    },
+    "TextIndexTestCase.test_legacy_index_upgrade_preserves_text": {
+      "obsolete": "Upgrades a version-1 SQLite FTS file in place. PostgreSQL starts from its own migrations with no SQLite-to-PostgreSQL migration before 1.0 (§13 policy), so there is no legacy index to upgrade."
+    },
+    "TextIndexTestCase.test_malformed_schema_recreates_without_touching_canonical": {
+      "obsolete": "Recovers a separate SQLite index file whose schema is malformed while the catalogue stays intact. On PostgreSQL the text rows are tables of the one migrated catalogue, so there is no derived file whose schema can drift apart from it."
+    },
+    "TextIndexTestCase.test_corrupt_sqlite_recreates_derived_only": {
+      "obsolete": "Recreates a corrupt SQLite index file. PostgreSQL has no separate index file; a damaged derived table is rebuilt by the full rebuild job tested in tests/pg/test_search_rebuild.py::RebuildTests.test_a_full_rebuild_restores_a_fresh_recompute_and_a_second_changes_nothing."
+    },
+    "TextIndexTestCase.test_valid_empty_pdf_is_not_failure": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_an_empty_pdf_is_empty_and_an_unreadable_one_failed",
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_repeated_job_reads_nothing_again"
+      ]
+    },
+    "TextIndexTestCase.test_extraction_failure_clears_stale_text": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_an_empty_pdf_is_empty_and_an_unreadable_one_failed",
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new"
+      ]
+    },
+    "TextIndexTestCase.test_extractor_unavailable_clears_stale_changed_pdf": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new",
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_missing_extractor_records_no_outcome"
+      ]
+    },
+    "TextIndexTestCase.test_extractor_unavailable_preserves_existing_rows": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_missing_extractor_records_no_outcome",
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_missing_extractor_fails_the_run_which_resumes_from_its_cursor"
+      ]
+    },
+    "TextIndexTestCase.test_changed_pdf_is_redetected": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new"
+      ]
+    },
+    "TextIndexTestCase.test_file_path_hash_detects_identity_change_with_same_stat": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new",
+        "tests/pg/test_search_text.py::OrderingTests.test_a_job_that_read_old_bytes_writes_nothing_after_a_replace"
+      ],
+      "note": "PostgreSQL keys text by the Asset's immutable object, so a changed file is a new object, never a same-stat path."
+    },
+    "TextIndexTestCase.test_unchanged_pdf_skips_extraction": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_repeated_job_reads_nothing_again",
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_full_rebuild_restores_a_fresh_recompute_and_a_second_changes_nothing"
+      ]
+    },
+    "TextIndexTestCase.test_force_rebuild_reextracts_unchanged_pdf": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_text_extracts_what_is_missing_and_records_a_corrupt_pdf",
+        "tests/pg/test_http_search.py::SearchHttpTests.test_the_pdf_text_rebuild_route_queues_a_text_rebuild"
+      ]
+    },
+    "TextIndexTestCase.test_orphan_row_removed": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::CommandTests.test_a_deleted_work_leaves_no_text",
+        "tests/pg/test_search_rebuild.py::ConcurrencyTests.test_a_work_deleted_during_a_rebuild_leaves_no_row"
+      ]
+    },
+    "TextIndexTestCase.test_work_becoming_non_pdf_removes_index_row": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new",
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_work_without_a_pdf_queues_nothing"
+      ]
+    },
+    "TextIndexTestCase.test_missing_pdf_clears_text_and_keeps_work": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_text_extracts_what_is_missing_and_records_a_corrupt_pdf",
+        "tests/pg/test_search_text.py::CommandTests.test_a_job_for_a_deleted_asset_writes_nothing"
+      ]
+    },
+    "TextIndexTestCase.test_failed_status_is_retried": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_text_extracts_what_is_missing_and_records_a_corrupt_pdf",
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_work_whose_reindex_fails_fails_the_run_which_resumes_from_its_work"
+      ]
+    },
+    "TextIndexTestCase.test_truncation_is_recorded": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_text_too_long_for_a_tsvector_is_cut_and_marked"
+      ]
+    },
+    "TextIndexTestCase.test_extract_pdf_truncates_at_bound": {
+      "replaced_by": [
+        "tests/test_text_index_extract_pdf.py::ExtractPdfBehaviorParityTests.test_limit_exceeded_on_later_page",
+        "tests/test_text_index_extract_pdf.py::ExtractPdfBehaviorParityTests.test_limit_reached_exactly_on_single_page",
+        "tests/test_text_index_extract_pdf.py::ExtractPdfLinearBookkeepingTests.test_stops_iterating_once_limit_reached"
+      ]
+    },
+    "TextIndexTestCase.test_source_changed_during_extraction_retries_then_commits": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::OrderingTests.test_a_replace_waits_for_an_extraction_then_removes_its_row",
+        "tests/pg/test_search_text.py::OrderingTests.test_an_extraction_of_replaced_bytes_writes_nothing"
+      ],
+      "note": "Stored objects are immutable on PostgreSQL; a change under a reader is a replace, which the ordering tests cover."
+    },
+    "TextIndexTestCase.test_source_changed_twice_does_not_commit_text": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::OrderingTests.test_a_job_that_read_old_bytes_writes_nothing_after_a_replace",
+        "tests/pg/test_search_text.py::OrderingTests.test_an_extraction_of_replaced_bytes_writes_nothing"
+      ]
+    },
+    "TextIndexTestCase.test_fts_inconsistency_not_scanned_on_healthy_startup": {
+      "obsolete": "Checks that a healthy start skips SQLite FTS5 integrity-check scans of the external-content table. PostgreSQL text search uses a tsvector column of an ordinary table, which has no external-content consistency to verify."
+    },
+    "TextIndexTestCase.test_fts_suspect_reconcile_rebuilds_without_reextract": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_only_text_recomputes_doc_without_extracting_again",
+        "tests/pg/test_search_rebuild.py::RepairTests.test_a_gap_schedules_a_repair_that_closes_it"
+      ]
+    },
+    "TextIndexTestCase.test_rebuild_all_runs_strong_fts_verification": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_full_rebuild_restores_a_fresh_recompute_and_a_second_changes_nothing",
+        "tests/pg/test_admin_rebuild_derived.py::RebuildDerivedTests.test_queues_a_full_rebuild_once"
+      ]
+    },
+    "TextIndexTestCase.test_extractor_version_mismatch_reextracts": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_row_of_an_older_extractor_version_is_not_searched",
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_text_extracts_what_is_missing_and_records_a_corrupt_pdf"
+      ]
+    },
+    "TextIndexTestCase.test_unchanged_reconcile_constant_index_work": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_full_rebuild_restores_a_fresh_recompute_and_a_second_changes_nothing",
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_repeated_job_reads_nothing_again"
+      ],
+      "note": "PostgreSQL has no startup scan of every PDF; extraction is a queued job per Asset, so an unchanged library does no per-file work at start."
+    },
+    "TextIndexTestCase.test_unchanged_reconcile_omits_extract_and_fts_spans": {
+      "obsolete": "Pins the performance spans of the SQLite startup reconcile (text_index_reconcile, _load_state, _source_scan). PostgreSQL has no startup text reconcile; extraction runs as queued jobs."
+    },
+    "TextIndexTestCase.test_trigger_drift_recreates_derived_index": {
+      "obsolete": "Recovers the SQLite FTS file when its sync triggers drift. PostgreSQL keeps text rows with explicit commands, with no triggers to drift, and the schema is pinned by tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot."
+    },
+    "TextIndexTestCase.test_search_operational_error_is_fail_soft_and_logged_safely": {
+      "obsolete": "A broken SQLite FTS file failed soft without breaking keyword search. On PostgreSQL the text rows share the catalogue's transaction, so a database error fails the request through the mapped error path (tests/pg/test_db_errors.py) instead of a separate soft path."
+    },
+    "TextIndexTestCase.test_startup_reconciliation_repairs_stale_and_orphans": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RepairTests.test_a_gap_schedules_a_repair_that_closes_it",
+        "tests/pg/test_search_text.py::CommandTests.test_a_deleted_work_leaves_no_text",
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new"
+      ]
+    },
+    "TextIndexTestCase.test_startup_skips_unchanged": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_full_rebuild_restores_a_fresh_recompute_and_a_second_changes_nothing",
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_repeated_job_reads_nothing_again"
+      ]
+    },
+    "TextIndexTestCase.test_run_server_reconciles_before_serving": {
+      "obsolete": "Checks that the SQLite runtime reconciles its FTS file before serving. The PostgreSQL runtime does no startup text reconcile; the derived-state check at start queues a rebuild instead (tests/pg/test_search_rebuild.py::FoldingTests.test_the_idle_tick_checks_at_start_and_again_when_the_folding_changes)."
+    },
+    "TextIndexTestCase.test_upsert_text_is_not_treated_as_synchronized": {
+      "obsolete": "Guards the SQLite fixture helper upsert_text against being taken as synchronized state by the reconcile. PostgreSQL text rows are written only by the extraction job and carry their object identity, so no fixture path can impersonate one."
+    }
+  }
+}

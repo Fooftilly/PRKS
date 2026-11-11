@@ -1,0 +1,203 @@
+{
+  "module": "tests/test_pending_pdf_cleanup.py",
+  "tests": {
+    "PendingPdfCleanupTests.test_successful_delete_leaves_no_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_work_delete_claims_its_file_and_settle_removes_it",
+        "tests/pg/test_objects_jobs.py::WorkerTests.test_a_deleted_works_file_is_removed_by_the_running_worker"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_work_without_a_managed_pdf_never_records_a_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_undoing_a_create_that_adopted_existing_bytes_claims_nothing",
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_work_delete_claims_every_key_its_assets_name"
+      ]
+    },
+    "PendingPdfCleanupTests.test_failed_removal_keeps_the_work_deleted_and_the_claim_durable": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles"
+      ]
+    },
+    "PendingPdfCleanupTests.test_the_claim_is_written_before_any_filesystem_work": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_work_delete_claims_its_file_and_settle_removes_it",
+        "tests/pg/test_objects_jobs.py::SchedulingTests.test_a_release_enqueues_cleanup_in_its_command_once"
+      ]
+    },
+    "PendingPdfCleanupTests.test_claim_survives_a_fresh_database_instance_and_retry_removes_it": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::SchedulingTests.test_claims_left_by_a_restart_are_scheduled_and_an_idle_instance_schedules_nothing",
+        "tests/pg/test_objects_jobs.py::WorkerTests.test_claims_left_by_a_restart_are_settled_without_any_enqueue"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_later_deletion_drains_the_backlog_without_a_restart": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles",
+        "tests/pg/test_objects_jobs.py::SchedulingTests.test_a_running_cleanup_does_not_swallow_a_later_release"
+      ]
+    },
+    "PendingPdfCleanupTests.test_retry_refuses_a_filename_another_work_now_references": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_a_settle_meeting_an_adoption_in_flight_keeps_the_object",
+        "tests/pg/test_objects_lifecycle.py::SyncDeleteReplayTests.test_a_replay_after_another_work_adopts_the_object_deletes_nothing"
+      ]
+    },
+    "PendingPdfCleanupTests.test_an_unreadable_catalogue_is_reported_as_still_pending": {
+      "obsolete": "The SQLite retry read the live catalogue from a second connection that could fail on its own. On PostgreSQL a settle checks the references and deletes the claim in one transaction under the job lease, so a database failure fails the job and leaves the claim (tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles)."
+    },
+    "PendingPdfCleanupTests.test_retry_defers_when_the_live_catalogue_cannot_be_read": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_commit_that_fails_after_the_unlink_is_settled_again"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_shared_pdf_is_claimed_only_when_its_last_reference_goes": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_shared_file_stays_referenced_only_within_the_library"
+      ]
+    },
+    "PendingPdfCleanupTests.test_deleting_both_sharers_records_one_claim_not_two": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_two_deletes_dropping_a_shared_keys_last_names_leave_a_claim",
+        "tests/pg/test_objects_lifecycle.py::SyncDeleteReplayTests.test_a_replay_after_a_failed_cleanup_records_no_second_claim"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_missing_file_resolves_the_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_bytes_already_gone_settle_as_removed"
+      ]
+    },
+    "PendingPdfCleanupTests.test_repeated_passes_have_no_duplicate_destructive_effect": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::SyncDeleteReplayTests.test_a_replay_after_a_failed_cleanup_records_no_second_claim",
+        "tests/pg/test_objects_jobs.py::FencingTests.test_an_expired_and_reclaimed_run_deletes_nothing_and_the_new_run_does",
+        "tests/pg/test_objects_jobs.py::SchedulingTests.test_a_running_sweep_or_cleanup_suppresses_only_a_duplicate"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_retry_that_fails_again_keeps_the_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles"
+      ]
+    },
+    "PendingPdfCleanupTests.test_delete_legacy_delimiter_named_work_unlinks_bytes": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_retry_preexisting_delimiter_cleanup_claim": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_surviving_query_spelling_protects_stem_basename": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_delete_delimiter_survivor_reclaims_superseded_stem": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_delete_alias_survivor_defers_stem_claim_until_alias_gone": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_retarget_alone_claims_and_unlinks_old_pdf": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RewriteTests.test_a_rewrite_points_at_the_new_key_and_claims_the_old"
+      ]
+    },
+    "PendingPdfCleanupTests.test_retarget_with_shared_referrer_keeps_old_pdf": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_objects_lifecycle.py::RewriteTests.test_a_rewrite_points_at_the_new_key_and_claims_the_old"
+      ]
+    },
+    "PendingPdfCleanupTests.test_retarget_recreates_previously_superseded_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_release_takes_over_an_orphan_claim",
+        "tests/pg/test_objects_lifecycle.py::RewriteTests.test_a_rewrite_points_at_the_new_key_and_claims_the_old"
+      ]
+    },
+    "PendingPdfCleanupTests.test_retarget_claim_survives_missing_post_commit_cleanup": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RewriteTests.test_a_rewrite_points_at_the_new_key_and_claims_the_old",
+        "tests/pg/test_objects_jobs.py::WorkerTests.test_claims_left_by_a_restart_are_settled_without_any_enqueue"
+      ]
+    },
+    "PendingPdfCleanupTests.test_retarget_defers_when_only_weak_alias_survives": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_retarget_away_last_weak_alias_wakes_deferred_claim": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "PendingPdfCleanupTests.test_a_failed_delete_does_not_retry_itself_in_the_same_breath": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_an_invalid_claim_is_stamped_not_retried_at_once",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_thumbnail_failure_does_not_make_the_pdf_repeat": {
+      "obsolete": "On SQLite one post-delete pass removed thumbnails and the PDF together, so a thumbnail failure could re-run the PDF step. On PostgreSQL the PDF is removed only by the object cleanup job from its claim, which shares nothing with thumbnail cache removal."
+    },
+    "PendingPdfCleanupTests.test_a_claim_that_cannot_be_contained_is_never_resolved_to_a_path": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_an_invalid_claim_rotates_behind_valid_ones"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_pass_is_bounded_and_the_rest_is_kept_for_the_next_one": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_many_claims_are_settled_in_bounded_passes"
+      ]
+    },
+    "PendingPdfCleanupTests.test_the_default_limit_is_bounded": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_many_claims_are_settled_in_bounded_passes",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_full_batch_with_nothing_left_enqueues_nothing"
+      ]
+    },
+    "PendingPdfCleanupTests.test_a_stale_pass_cannot_erase_a_concurrent_deletions_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::FencingTests.test_an_expired_and_reclaimed_run_deletes_nothing_and_the_new_run_does",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_two_deletes_dropping_a_shared_keys_last_names_leave_a_claim"
+      ]
+    },
+    "PendingPdfCleanupTests.test_settling_a_referenced_claim_is_one_transaction": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_a_settle_meeting_an_adoption_in_flight_keeps_the_object",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_an_adoption_meeting_a_settle_in_flight_fails_cleanly"
+      ]
+    },
+    "PendingPdfCleanupTests.test_unsettleable_claims_rotate_so_later_ones_are_reached": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_an_invalid_claim_rotates_behind_valid_ones"
+      ]
+    },
+    "PendingPdfCleanupTests.test_claims_prks_cannot_act_on_rotate_like_any_other": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_an_invalid_claim_rotates_behind_valid_ones",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_an_invalid_claim_is_stamped_not_retried_at_once"
+      ]
+    },
+    "PendingPdfCleanupTests.test_an_attempted_claim_is_stamped_and_a_settled_one_is_gone": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_an_invalid_claim_is_stamped_not_retried_at_once",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_claim_is_settled_under_the_job_lease"
+      ]
+    },
+    "PendingPdfCleanupTests.test_cleanup_holds_the_shared_managed_pdf_lock": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::BackupLockTests.test_settle_waits_out_a_backup_of_the_claims_library",
+        "tests/pg/test_objects_jobs.py::WorkerTests.test_two_workers_never_run_two_cleanups_at_once",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_claim_is_settled_under_the_job_lease"
+      ]
+    },
+    "PendingPdfCleanupTests.test_startup_reports_what_it_could_not_clean": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::SchedulingTests.test_claims_left_by_a_restart_are_scheduled_and_an_idle_instance_schedules_nothing",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles"
+      ]
+    },
+    "PendingPdfCleanupTests.test_startup_never_fails_on_a_broken_claim_store": {
+      "obsolete": "The SQLite runtime kept claims in the catalogue file and had to start even when that table was unreadable. On PostgreSQL claims are rows of the migrated catalogue and cleanup is a background job, so start never reads them (tests/pg/test_objects_jobs.py::WorkerTests.test_claims_left_by_a_restart_are_settled_without_any_enqueue)."
+    }
+  }
+}
