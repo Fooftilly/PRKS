@@ -27,7 +27,78 @@ from backend.domain.works import metadata as pg_metadata
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _TABLES = {"work": "prks.works", "manifestation": "prks.manifestations", "asset": "prks.assets"}
-_UPDATE = re.compile(r"UPDATE\s+(prks\.\w+)\s+SET\s+(.*?)\s+WHERE\b", re.IGNORECASE | re.DOTALL)
+# An UPDATE statement up to its SET, in any form PostgreSQL accepts: ONLY,
+# a trailing ``*``, quoted names, an alias with or without AS, a composed
+# ``{t}`` target. The SET list is read item by item, so FROM, WHERE and
+# RETURNING are all optional.
+_UPDATE = re.compile(r"""\bUPDATE\s+(?:ONLY\s+)?"""
+                     r"""(?P<target>(?:"?(?P<schema>\w+)"?\s*\.\s*)?"?(?P<table>\w+)"?|\{\w*\})"""
+                     r"""(?:\s*\*)?(?:\s+(?:AS\s+)?(?!SET\b)\w+)?\s+SET\b\s*""", re.IGNORECASE)
+_CLAUSE_END = re.compile(r"(?:FROM|WHERE|RETURNING)\b", re.IGNORECASE)
+_SINGLE_TARGET = re.compile(r'\s*"?(\w+)"?\s*=', re.DOTALL)
+_TUPLE_TARGET = re.compile(r'\s*\(([^()]*)\)\s*=', re.DOTALL)
+_SQLITE_BIND = re.compile(r"[=(,]\s*\?(?![\w?|&])")
+DYNAMIC = "*"  # a SET list the code appends at run time: it may write any column
+
+
+def _set_items(sql: str, start: int) -> list[str]:
+    """The SET clause from ``start``, split on its top-level commas."""
+    items, depth, item_start, i, quote = [], 0, start, start, ""
+    while i < len(sql):
+        ch = sql[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif ch == ";" and depth == 0:
+            break
+        elif depth == 0 and ch == ",":
+            items.append(sql[item_start:i])
+            item_start = i + 1
+        elif depth == 0 and (i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] in "_.")) \
+                and _CLAUSE_END.match(sql, i):
+            break
+        i += 1
+    items.append(sql[item_start:i])
+    return items
+
+
+def _updates(sql: str) -> list[tuple[str, set[str]]]:
+    """``(target, assigned columns)`` for every UPDATE statement in ``sql``.
+
+    ``target`` is ``schema.table`` (an unqualified table resolves to
+    ``prks``) or the composed placeholder (``{t}``). A SET list built at run
+    time yields ``DYNAMIC``. Raises ``ValueError`` for a SET item it cannot
+    read, so the audit fails closed.
+    """
+    found = []
+    for update in _UPDATE.finditer(sql):
+        if update.group("table") is None:
+            found.append((update.group("target"), set()))  # composed: the columns are placeholders as well
+            continue
+        table = "%s.%s" % ((update.group("schema") or "prks").lower(), update.group("table").lower())
+        columns: set[str] = set()
+        items = _set_items(sql, update.end())
+        if items == [""] and not sql[update.end():].strip():
+            found.append((table, {DYNAMIC}))
+            continue
+        for item in items:
+            single, many = _SINGLE_TARGET.match(item), _TUPLE_TARGET.match(item)
+            if single:
+                columns.add(single.group(1).lower())
+            elif many:
+                columns.update(part.strip().strip('"').lower() for part in many.group(1).split(","))
+            else:
+                raise ValueError("unparsed SET item in %r: %r" % (sql[update.start(): update.start() + 80], item))
+        found.append((table, columns))
+    return found
 
 
 class RegistryTests(unittest.TestCase):
@@ -154,6 +225,10 @@ def _sql_literals(path: pathlib.Path) -> list[str]:
     return found
 
 
+# The SQLite runtime PG-C2 deletes; its statements never reach PostgreSQL.
+SQLITE_RUNTIME = {"backend/db_manager.py", "backend/db_migrations.py"}
+
+
 class WriterAuditTests(unittest.TestCase):
     SANCTIONED = {"backend/domain/works/metadata.py", "backend/domain/works/source.py"}
 
@@ -165,23 +240,76 @@ class WriterAuditTests(unittest.TestCase):
         columns["prks.assets"].add("url")  # a video's source_url is its stream's URL
         return columns
 
-    def test_only_the_field_writer_and_the_source_aggregate_update_a_synchronized_column(self) -> None:
+    # Modules whose UPDATE targets are composed (``UPDATE {t}``), with what
+    # those targets are. A new composed target must be read and added here.
+    COMPOSED = {
+        # restore renumbers key columns in its private staging schema
+        "backend/domain/maintenance/staging.py",
+    }
+
+    def offences(self, name: str, literal: str) -> list[str]:
         columns = self.synced_columns()
+        offenders = []
+        for table, written in _updates(literal):
+            if table.startswith("{"):
+                if name not in self.COMPOSED:
+                    offenders.append("%s: composed UPDATE %s" % (name, table))
+                continue
+            synced = columns.get(table, set())
+            hits = synced if DYNAMIC in written else written & synced
+            if hits and name not in self.SANCTIONED:
+                offenders.append("%s: %s %s" % (name, table, sorted(hits)))
+        return offenders
+
+    def test_only_the_field_writer_and_the_source_aggregate_update_a_synchronized_column(self) -> None:
         offenders = []
         statements = 0
         for path in sorted((_ROOT / "backend").rglob("*.py")):
             name = path.relative_to(_ROOT).as_posix()
-            if name == "backend/db_manager.py":  # the SQLite runtime PG-C2 deletes
+            if name in SQLITE_RUNTIME:
                 continue
             for literal in _sql_literals(path):
-                for table, assignments in _UPDATE.findall(literal):
-                    statements += 1
-                    written = set(re.findall(r"(?:^|,)\s*(\w+)\s*=", assignments))
-                    hits = written & columns.get(table.lower(), set())
-                    if hits and name not in self.SANCTIONED:
-                        offenders.append("%s: %s %s" % (name, table, sorted(hits)))
+                if _SQLITE_BIND.search(literal):
+                    continue  # psycopg cannot bind ``?``: SQLite runtime SQL
+                try:
+                    statements += len(_updates(literal))
+                    offenders.extend(self.offences(name, literal))
+                except ValueError as error:
+                    offenders.append("%s: %s" % (name, error))
         self.assertGreater(statements, 10, "the scan reads the SQL it audits")
         self.assertEqual(offenders, [])
+
+    def test_every_valid_update_form_of_a_synchronized_column_is_caught(self) -> None:
+        rogue = "backend/domain/rogue.py"
+        for sql in (
+            "UPDATE prks.works SET status = %s WHERE id = %s",
+            "UPDATE prks.works AS w SET status = %s WHERE w.id = %s",
+            "UPDATE prks.works w SET status = %s",
+            "UPDATE prks.works SET status = %s",
+            "UPDATE prks.works SET status = %s RETURNING id",
+            "update ONLY prks.works * set author_text = %s from prks.people p where true",
+            'UPDATE "prks"."works" SET "author_text" = %s',
+            "UPDATE prks.works SET revision = revision + 1, author_text = %s",
+            "UPDATE prks.works SET seen = (SELECT max(x) FROM t WHERE a = 1), status = %s",
+            "UPDATE prks.works SET (status, author_text) = (%s, %s) WHERE id = %s",
+            "UPDATE prks.manifestations m SET doi = %s",
+            "WITH x AS (SELECT 1) UPDATE prks.works SET status = 'read'",
+            "UPDATE works SET status = %s",  # the search_path resolves it to prks
+            "UPDATE prks.works SET ",  # a SET list appended at run time
+        ):
+            with self.subTest(sql=sql):
+                self.assertTrue(self.offences(rogue, sql), sql)
+                self.assertEqual(self.offences("backend/domain/works/metadata.py", sql), [])
+        for sql in ("UPDATE prks.works SET revision = revision + 1 WHERE id = %s",
+                    "UPDATE prks.jobs j SET status = 'done'",
+                    "UPDATE derived.work_search s SET doc = %s FROM prks.works w",
+                    "INSERT INTO prks.works (status) VALUES (%s) ON CONFLICT (id) DO UPDATE SET x = 1",
+                    "SELECT 1 FROM prks.works FOR UPDATE OF w"):
+            with self.subTest(sql=sql):
+                self.assertEqual(self.offences(rogue, sql), [])
+        self.assertTrue(self.offences(rogue, "UPDATE {t} SET {c} = 1"))
+        with self.assertRaises(ValueError):
+            _updates("UPDATE prks.works SET %s = 1")
 
     def test_the_field_writer_builds_its_statements_from_the_field_registry_only(self) -> None:
         owned = {column for _owner, column in pg_metadata.FIELD_COLUMNS.values()} | {"url", "media_type"}
