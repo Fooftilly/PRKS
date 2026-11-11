@@ -13,7 +13,6 @@ import os
 import time
 import unittest
 
-from backend import work_note_sync
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
@@ -94,8 +93,7 @@ class _WorkNotesPage:
         from backend.domain.works import notes
 
         self.db_for(server).command(
-            sqlite=lambda conn, db: work_note_sync.set_research_note_on_conn(conn, db, work, text),
-            postgres=lambda scope: notes.set_note(scope, work, notes.RESEARCH, text))
+            lambda scope: notes.set_note(scope, work, notes.RESEARCH, text))
 
     def set_notes(self, page, text):
         page.evaluate(
@@ -145,7 +143,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual(self.db_for(server).get_work(work)['text_content'],
                          'See [[concept:Culture Industry]].')
         names = {row['name'] for row in self.db_for(server).query(
-            sqlite='SELECT name FROM concepts', postgres='SELECT name FROM prks.concepts')}
+            postgres='SELECT name FROM prks.concepts')}
         self.assertIn('Culture Industry', names)
         cached = self.cached_work(page, work)
         self.assertEqual(cached['text_content'], 'See [[concept:Culture Industry]].')
@@ -180,7 +178,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual(db.get_work(work)['text_content'], 'Research B')
         self.assertEqual(db.get_work(work)['private_notes'],
                          'Remind me: [[concept:Should Not Exist]].')
-        names = {row['name'] for row in db.query(sqlite='SELECT name FROM concepts', postgres='SELECT name FROM prks.concepts')}
+        names = {row['name'] for row in db.query(postgres='SELECT name FROM prks.concepts')}
         self.assertNotIn('Should Not Exist', names)
 
     def test_text_typed_behind_a_failed_save_is_saved_after_recovery(self):
@@ -1010,8 +1008,7 @@ class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
         from backend.domain.works import notes
 
         self.db_for(server).command(
-            sqlite=lambda conn, _db: work_note_sync.set_private_note_on_conn(conn, work, text),
-            postgres=lambda scope: notes.set_note(scope, work, notes.PRIVATE, text))
+            lambda scope: notes.set_note(scope, work, notes.PRIVATE, text))
 
     def wait_server_reminder(self, page, work, text):
         wait_for_async(

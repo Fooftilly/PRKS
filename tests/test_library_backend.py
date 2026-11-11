@@ -1,24 +1,25 @@
-"""``PRKS_LIBRARY_BACKEND`` parsing (PG-C1 #640, ``backend.library_backend``)."""
+"""The retired ``PRKS_LIBRARY_BACKEND`` is refused, never ignored (PG-C2 #641, ``backend.library_backend``)."""
 
 from __future__ import annotations
 
 import unittest
 
-from backend.library_backend import LibraryBackendError, postgres_selected
+from backend.library_backend import LibraryBackendError, refuse_stale_selection
 
 
-class LibraryBackendTests(unittest.TestCase):
-    def test_unset_or_blank_keeps_the_sqlite_store(self) -> None:
-        self.assertFalse(postgres_selected({}))
-        self.assertFalse(postgres_selected({"PRKS_LIBRARY_BACKEND": "  "}))
+class StaleSelectionTests(unittest.TestCase):
+    def test_an_environment_without_it_starts(self) -> None:
+        refuse_stale_selection({})
+        refuse_stale_selection({"PRKS_DATABASE_URL": "postgresql://db/prks"})
 
-    def test_postgres_selects_the_postgresql_library(self) -> None:
-        self.assertTrue(postgres_selected({"PRKS_LIBRARY_BACKEND": " postgres "}))
-
-    def test_any_other_value_is_refused(self) -> None:
-        for value in ("sqlite", "Postgres", "pg", "1"):
-            with self.subTest(value=value), self.assertRaises(LibraryBackendError):
-                postgres_selected({"PRKS_LIBRARY_BACKEND": value})
+    def test_any_value_is_refused_with_the_fix(self) -> None:
+        for value in ("postgres", "sqlite", "", "  ", "Postgres"):
+            with self.subTest(value=value), self.assertRaises(LibraryBackendError) as caught:
+                refuse_stale_selection({"PRKS_LIBRARY_BACKEND": value})
+            message = str(caught.exception)
+            self.assertIn("PRKS_LIBRARY_BACKEND is no longer read", message)
+            self.assertIn("Remove PRKS_LIBRARY_BACKEND", message)
+            self.assertIn("PRKS_DATABASE_URL", message)
 
 
 if __name__ == "__main__":

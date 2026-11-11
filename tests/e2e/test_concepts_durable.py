@@ -118,7 +118,7 @@ class DurableConceptTests(unittest.TestCase):
     def concepts_in_db(self, server):
         return {row['name']: row for row in
                 self.db_for(server).query(
-                    sqlite='SELECT * FROM concepts', postgres='SELECT * FROM prks.concepts')}
+                    postgres='SELECT * FROM prks.concepts')}
 
     # ---- creation -----------------------------------------------------------
 

@@ -74,9 +74,12 @@ jobs:
         run: |
           set -euo pipefail
           container="prks-runtime-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          database="${container}-db"
+          network="${container}-net"
           response="$(mktemp)"
           html="$(mktemp)"
           asset="$(mktemp)"
+          jar="$(mktemp)"
           cleanup() {
             rc=$?
             if [[ "$rc" -ne 0 ]]; then
@@ -85,17 +88,64 @@ jobs:
               docker inspect --format 'Container status: {{.State.Status}}; exit code: {{.State.ExitCode}}' "$container" 2>&1 || true
             fi
             docker rm -f "$container" >/dev/null 2>&1 || true
-            rm -f "$response" "$html" "$asset"
+            docker rm -f "$database" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            rm -f "$response" "$html" "$asset" "$jar"
           }
           trap cleanup EXIT
 
+          # PostgreSQL is the only Library backend (PG-C2 #641): a volatile
+          # PostgreSQL 18 on a private network, reachable only by the image.
+          docker network create "$network" >/dev/null
+          db_password="$(openssl rand -hex 32)"
+          docker run -d --name "$database" --network "$network" --network-alias db \
+            --env POSTGRES_DB=prks --env POSTGRES_USER=prks --env POSTGRES_PASSWORD="$db_password" \
+            --env POSTGRES_INITDB_ARGS="--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST" \
+            --tmpfs /var/lib/postgresql:rw,size=256m \
+            postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336 >/dev/null
+          for attempt in $(seq 1 60); do
+            if docker exec "$database" pg_isready -h 127.0.0.1 -U prks -d prks >/dev/null 2>&1; then
+              break
+            fi
+            if [[ "$attempt" -eq 60 ]]; then
+              echo "::error::PostgreSQL did not become ready."
+              exit 1
+            fi
+            sleep 1
+          done
+
           # Volatile isolated data; no host-mounted database or persistent secrets.
           # Publish only to loopback on the isolated GitHub-hosted runner.
-          docker run -d --name "$container" --publish 127.0.0.1:18080:8080 \
+          docker run -d --name "$container" --network "$network" --publish 127.0.0.1:18080:8080 \
             --user 1000:1000 \
             --tmpfs /data:rw,size=128m,uid=1000,gid=1000 \
             --env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1 \
+            --env PRKS_DATABASE_URL="postgresql://prks:${db_password}@db:5432/prks" \
             prks-ci-runtime-smoke:latest
+
+          # First run: the web process applies the schema, binds the new root
+          # and waits for setup. Set up an owner as an operator would.
+          for attempt in $(seq 1 60); do
+            if ! docker inspect --format '{{.State.Running}}' "$container" | grep -qx true; then
+              echo "::error::Production container exited before binding its root (attempt ${attempt}/60)."
+              exit 1
+            fi
+            if docker exec "$container" test -f /data/prks-root.json; then
+              break
+            fi
+            if [[ "$attempt" -eq 60 ]]; then
+              echo "::error::Production container never bound its data root."
+              exit 1
+            fi
+            sleep 1
+          done
+          owner_password="owner-$(openssl rand -hex 16)"
+          openssl rand -hex 32 | docker exec -i "$container" sh -c 'umask 077; cat > /tmp/bootstrap-token'
+          printf '%s' "$owner_password" | docker exec -i "$container" sh -c 'umask 077; cat > /tmp/owner-password'
+          admin=(docker exec --env PRKS_BOOTSTRAP_TOKEN_FILE=/tmp/bootstrap-token "$container"
+                 python /app/prks_app.py admin bootstrap)
+          "${admin[@]}" issue-token --root /data
+          "${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password
 
           ready=0
           for attempt in $(seq 1 60); do
@@ -103,11 +153,17 @@ jobs:
               echo "::error::Production container exited before API readiness on attempt ${attempt}/60."
               exit 1
             fi
-            if status=$(curl --silent --show-error --fail --max-time 2 \
+            if curl --silent --fail --max-time 2 --output /dev/null http://127.0.0.1:18080/readyz \
+              && curl --silent --show-error --fail --max-time 5 --output /dev/null \
+                --cookie-jar "$jar" --header 'Content-Type: application/json' \
+                --header 'Origin: http://127.0.0.1:18080' \
+                --data "{\"login\": \"owner\", \"password\": \"${owner_password}\"}" \
+                http://127.0.0.1:18080/api/login \
+              && status=$(curl --silent --show-error --fail --max-time 2 --cookie "$jar" \
               --write-out '%{http_code}' --output "$response" \
               http://127.0.0.1:18080/api/works 2>/dev/null) \
               && [[ "$status" == "200" ]]; then
-              # Fresh temporary production storage must expose an empty works
+              # A fresh production Library must expose an empty works
               # catalogue. A static page or error JSON is NOT sufficient.
               python scripts/ci/check_runtime_smoke.py < "$response"
               ready=1

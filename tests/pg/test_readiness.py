@@ -146,24 +146,24 @@ class WebProcessTests(RootPairingTestCase):
         migrate(self.harness.conninfo(name))
         return name
 
-    def environment(self, name: str) -> dict[str, str]:
+    def environment(self, name: str, auth: str = "loopback-owner") -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("PRKS_") or k == "PRKS_TEST_DATABASE_URL"}
         env.update({
-            "PRKS_AUTH": "loopback-owner",
+            "PRKS_AUTH": auth,
             "PRKS_DATABASE_URL": self.harness.conninfo(name),
             "PRKS_EMBEDDED_WORKER": "0",
         })
         return env
 
-    def spawn(self, name: str, *args: str) -> subprocess.Popen[str]:
+    def spawn(self, name: str, *args: str, auth: str = "loopback-owner") -> subprocess.Popen[str]:
         return subprocess.Popen(
             [sys.executable, "prks_app.py", *args],
-            cwd=_PROJECT_DIR, env=self.environment(name),
+            cwd=_PROJECT_DIR, env=self.environment(name, auth),
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
 
-    def web(self, name: str, root: str, port: int) -> subprocess.Popen[str]:
-        return self.spawn(name, "--testing", "--storage-root", root, "--port", str(port))
+    def web(self, name: str, root: str, port: int, auth: str = "loopback-owner") -> subprocess.Popen[str]:
+        return self.spawn(name, "--testing", "--storage-root", root, "--port", str(port), auth=auth)
 
     def stop(self, proc: subprocess.Popen[str]) -> str:
         proc.send_signal(signal.SIGTERM)
@@ -227,10 +227,12 @@ class WebProcessTests(RootPairingTestCase):
             self.stop(web)
 
     def test_a_first_run_web_binds_the_root_and_waits_for_setup(self) -> None:
+        # Password sign-in waits for setup; a loopback-owner testing web sets
+        # itself up instead (test_a_first_loopback_owner_testing_web_sets_itself_up).
         name = self.migrated()
         root = os.path.join(self.tmp, "first-run")
         port = _free_port()
-        proc = self.web(name, root, port)
+        proc = self.web(name, root, port, auth="session")
         try:
             deadline = time.monotonic() + 60
             while not os.path.exists(root_marker.marker_path(root)):
@@ -249,10 +251,28 @@ class WebProcessTests(RootPairingTestCase):
             err = self.stop(proc)
         self.assertIn("waiting for setup", err)
 
+    def test_a_first_loopback_owner_testing_web_sets_itself_up(self) -> None:
+        name = self.migrated()
+        root = os.path.join(self.tmp, "first-testing-run")
+        port = _free_port()
+        proc = self.web(name, root, port)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            with psycopg.connect(self.harness.conninfo(name)) as conn:
+                instance_id, testing = conn.execute("SELECT id, testing FROM prks.instance").fetchone()
+            self.assertTrue(testing)
+            self.assertEqual(self.marker(root).instance_id, instance_id)
+            # Bootstrap's root claim is this start's one bump.
+            self.assertEqual(self.db_state(name).generation, 1)
+            self.assertEqual(self.db_state(name), self.marker(root).start_state)
+        finally:
+            err = self.stop(proc)
+        self.assertNotIn("waiting for setup", err)
+
     def test_a_stop_while_waiting_for_setup_exits_0(self) -> None:
         name = self.migrated()
         root = self.new_root()
-        proc = self.web(name, root, _free_port())
+        proc = self.web(name, root, _free_port(), auth="session")
         assert proc.stderr is not None
         line = proc.stderr.readline()
         self.assertIn("waiting for setup", line)

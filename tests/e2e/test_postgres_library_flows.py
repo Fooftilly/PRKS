@@ -1,8 +1,7 @@
 """PG-C1 (#640) browser flows on the PostgreSQL Library.
 
-These run only on the PostgreSQL leg (``PRKS_E2E_LIBRARY_BACKEND=postgres``),
-where every server serves its Library through the facade and runs its
-embedded worker. They are deterministic: each waits on an observable state
+Every server serves its Library through the facade and runs its embedded
+worker. They are deterministic: each waits on an observable state
 (an answer, a stored row, a rendered element), never on a sleep.
 
 - Restore recovery: Settings backs the Library up (the worker writes the
@@ -41,16 +40,13 @@ from tests.e2e.fixtures import (
     seed_library,
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
-from tests.e2e.postgres_identity import postgres_library
 from backend.storage.config import StorageConfig
 
 GRAPH_CORE = "research-graph-core"
 
 
 def load_tests(loader, standard_tests, pattern):
-    # Opt-in (tests/e2e/run.py POSTGRES_LIBRARY_MODULE): the runner lists this
-    # module only on the PostgreSQL leg, so it never reports a skip.
-    if os.environ.get("PRKS_E2E") != "1" or not postgres_library():
+    if os.environ.get("PRKS_E2E") != "1":
         return unittest.TestSuite()
     return standard_tests
 

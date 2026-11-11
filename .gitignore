@@ -17,7 +17,7 @@ venv/
 ENV/
 env/
 .env/
-# Compose variables (docker-compose.postgres.yml); .env.example is the template.
+# Compose variables (docker-compose.yml); .env.example is the template.
 /.env
 
 # --- PDF viewer maintainer Node island ---

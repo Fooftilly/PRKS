@@ -134,7 +134,7 @@ class HarnessColdStartIntegrationTests(unittest.TestCase):
 
         self.assertTrue({
             "startup_dependency_gate", "startup_identity", "startup_jobs",
-            "startup_storage_open", "startup_restore", "startup_bind",
+            "startup_storage_open", "startup_bind",
         }.issubset(phases(app)))
         self.assertTrue({
             "startup_text_reconcile", "startup_research_reconcile",

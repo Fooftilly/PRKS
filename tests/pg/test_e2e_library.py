@@ -49,15 +49,10 @@ class E2ELibraryTests(unittest.TestCase):
         )
         instance = self.rows(library.conninfo, "SELECT id FROM prks.instance")
         self.assertEqual([row["id"] for row in instance], [library.instance_id])
-        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: ""}):
-            self.assertEqual(
-                library.server_env(),
-                {
-                    "PRKS_AUTH": "loopback-owner",
-                    "PRKS_DATABASE_URL": library.conninfo,
-                    "PRKS_EMBEDDED_WORKER": "0",
-                },
-            )
+        self.assertEqual(
+            library.server_env(),
+            {"PRKS_AUTH": "loopback-owner", "PRKS_DATABASE_URL": library.conninfo},
+        )
 
     def test_session_mode_adds_editors_who_sign_in_with_the_e2e_password(self) -> None:
         library = postgres_identity.provision_library(self.root, auth="session", members=("reader",))
@@ -109,26 +104,27 @@ if __name__ == "__main__":
 
 
 class PostgresLibraryLegTests(unittest.TestCase):
-    """``PRKS_E2E_LIBRARY_BACKEND=postgres``: the seed and the server on PostgreSQL (PG-C1 #640)."""
+    """The seed and the server on PostgreSQL, the only backend (PG-C1 #640, PG-C2 #641)."""
 
     setUp = E2ELibraryTests.setUp
     rows = E2ELibraryTests.rows
 
-    def test_the_selection_is_read_from_the_environment(self) -> None:
-        self.assertFalse(postgres_identity.postgres_library({}))
-        self.assertTrue(postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}))
-        with self.assertRaises(ValueError):
-            postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "sqlite"})
+    def test_the_server_env_never_names_the_retired_selection(self) -> None:
+        # A server given PRKS_LIBRARY_BACKEND refuses to start (PG-C2 #641),
+        # so the harness never passes it on, whatever the run's environment.
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        with mock.patch.dict(os.environ, {"PRKS_E2E_LIBRARY_BACKEND": "postgres"}):
+            env = library.server_env()
+        self.assertNotIn("PRKS_LIBRARY_BACKEND", env)
 
     def test_the_server_serves_postgresql_and_runs_its_worker(self) -> None:
         library = postgres_identity.provision_library(self.root)
         self.addCleanup(library.drop)
-        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}):
-            env = library.server_env()
-        self.assertEqual(env, {
+        # No PRKS_EMBEDDED_WORKER=0: the worker runs the seed's jobs.
+        self.assertEqual(library.server_env(), {
             "PRKS_AUTH": "loopback-owner",
             "PRKS_DATABASE_URL": library.conninfo,
-            "PRKS_LIBRARY_BACKEND": "postgres",
         })
 
     def test_the_seed_writes_the_library_through_the_facade(self) -> None:

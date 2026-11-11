@@ -349,7 +349,6 @@ class DurableFolderTests(unittest.TestCase):
         self.reconnect(page, context)
         self.settled(page)
         rows = self.db_for(server).query(
-            sqlite='SELECT folder_id FROM folder_files WHERE work_id = ?',
             postgres='SELECT folder_id FROM prks.folder_files WHERE work_id = %s',
             params=(server.ids['work_a'],))
         self.assertEqual([r['folder_id'] for r in rows], [destination])

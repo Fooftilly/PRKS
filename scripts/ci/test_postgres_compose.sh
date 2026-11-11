@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PostgreSQL Compose acceptance (docs/postgresql-architecture.md §12.3, §11.1; L-D-1 #630).
 #
-# Runs docker-compose.postgres.yml as an operator would: db, migrate, web and
+# Runs docker-compose.yml as an operator would: db, migrate, web and
 # worker on a fresh data root, first-run setup with `prks_app.py admin`, then
 # restarts (web and worker alone too), an upgrade-style migrate beside a running
 # stack, database copies refused after the original moved on (by migrate, web
@@ -31,10 +31,7 @@ export UID
 GID="$(id -g)"
 export GID
 
-# The SQLite Compose file still needs no PostgreSQL secret.
-env -u PRKS_DB_PASSWORD_FILE -u PRKS_DB_URL_FILE docker compose --file "$root/docker-compose.yml" config --quiet
-
-compose=(docker compose --project-name "$project" --file "$root/docker-compose.postgres.yml")
+compose=(docker compose --project-name "$project" --file "$root/docker-compose.yml")
 if [[ -n "${PRKS_COMPOSE_EXTRA_FILE:-}" ]]; then
   compose+=(--file "$PRKS_COMPOSE_EXTRA_FILE")
 fi

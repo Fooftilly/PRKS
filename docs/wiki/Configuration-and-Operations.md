@@ -26,9 +26,9 @@ If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`**
 
 Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `image_url` must be a direct public HTTP/HTTPS URL (HTTPS preferred) that itself returns HTTP 200. PRKS does not follow redirects, and private/local/link-local targets are refused. Only static JPEG/PNG/WebP/GIF rasters are accepted. The download is size- and time-bounded; the image is decoded and transcoded (max 512px edge, usually WebP) before anything is cached. Original remote bytes are not kept. Local portrait upload is not part of this feature. Updating a valid `image_url` clears that person’s cached portraits.
 
-## PostgreSQL deployment (preview)
+## PostgreSQL settings
 
-These settings apply only to the PostgreSQL deployment preview, `docker-compose.postgres.yml` (README, "PostgreSQL deployment (preview)"; `docs/postgresql-architecture.md` §4.3, §9.3, §11.1, §12.3). PostgreSQL is not the production backend until the cutover. Without `PRKS_AUTH`, `serve` runs the SQLite application and ignores the `serve` settings below. `migrate`, `worker` and `admin` are PostgreSQL commands whatever `PRKS_AUTH` says: they always need the database URL. A setting that is set but unusable stops the process with exit status 2. PRKS never falls back to a default.
+These settings configure every PRKS process: PostgreSQL is the only Library backend (README, "Docker" and "Quick start"; `docs/postgresql-architecture.md` §4.3, §9.3, §11.1, §12.3). `serve`, `migrate`, `worker` and `admin` all need the database URL (`--testing` defaults it to the `scripts/dev-postgres` server). A setting that is set but unusable stops the process with exit status 2. PRKS never falls back to a default.
 
 ### Process roles
 
@@ -53,7 +53,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_DB_POOL_MAX` | `serve`, `migrate` | Largest connection pool of the web process (and of `migrate`, which opens the same pool), at least 1. Default `10`. The worker's pool stays at `4`. |
 | `PRKS_MIGRATE_ON_START` | `serve` | `1` (default) applies the schema at start. `0` leaves that to `migrate` and only verifies it: the web process still refuses a schema other than its code's. `worker` never applies the schema and always verifies it. Compose sets `0`. |
 | `PRKS_EMBEDDED_WORKER` | `serve` | `1` (default) runs a job worker inside the web process. `0` runs none, for a separate `worker`. Compose sets `0`. |
-| `PRKS_LIBRARY_BACKEND` | `serve` | Unset keeps the Library in the SQLite store under the root. `postgres` (with `PRKS_AUTH`) serves it from PostgreSQL instead; the root must hold no SQLite catalogue. Transitional: PG-C2 removes it when PostgreSQL becomes the only backend. |
+| `PRKS_LIBRARY_BACKEND` | every role | Retired (PG-C2 #641): PostgreSQL is the only Library backend. A process that finds it set, to any value, refuses to start with exit status 2; remove it. |
 | `PRKS_PUBLIC_ORIGIN` | `serve` | The origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org`: scheme, host and optional port only. Sign-in checks `Origin` against it, and its host is accepted as a `Host`. |
 | `PRKS_TRUSTED_PROXIES` | `serve` | Comma-separated proxy addresses or networks whose `X-Forwarded-For` is believed for sign-in rate limiting. Name only your proxy, and make the web port reachable only by it. Anyone who reaches the port from a trusted address can spread sign-in attempts over invented addresses. |
 | `PRKS_SESSION_IDLE_DAYS` | `serve` | Days a session stays valid without use, 1 to 365. Default `30`. |

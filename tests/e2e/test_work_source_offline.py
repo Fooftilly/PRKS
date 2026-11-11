@@ -217,8 +217,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
 
         desired = work_source_sync.canonical_source({'kind': 'video', 'url': url})
         self.db_for(server).command(
-            sqlite=lambda conn, _db: work_source_sync.set_source_on_conn(conn, work_id, desired),
-            postgres=lambda scope: source.set_source(
+            lambda scope: source.set_source(
                 scope, source._target(scope, work_id, for_update=True), desired))
 
     def columns(self, server, work_id):
@@ -367,7 +366,6 @@ class OfflineWorkSourceTests(unittest.TestCase):
         server, page, _context = self.start()
         work = server.ids['playlist_video_one']
         self.db_for(server).execute(
-            sqlite="UPDATE works SET thumb_url = ? WHERE id = ?",
             postgres="UPDATE prks.assets a SET thumb_url = %s FROM prks.works w"
                      " JOIN prks.manifestations m ON m.library_id = w.library_id"
                      " AND m.id = w.primary_manifestation_id"

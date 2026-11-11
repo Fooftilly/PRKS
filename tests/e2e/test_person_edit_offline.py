@@ -144,7 +144,6 @@ class OfflinePersonEditTests(unittest.TestCase):
 
     def stored(self, server, person_id, field):
         rows = self.db_for(server).query(
-            sqlite='SELECT %s FROM persons WHERE id = ?' % field,
             postgres='SELECT %s FROM prks.persons WHERE id = %%s' % field, params=(person_id,))
         return rows[0][field] if rows else None
 
@@ -551,7 +550,6 @@ class OfflinePersonEditTests(unittest.TestCase):
             self.assertEqual(len(created), 1)
             self.assertEqual(created[0]['about'], 'Third in the chain')
             roles = db.query(
-                sqlite='SELECT role_type FROM roles WHERE person_id = ? AND work_id = ?',
                 postgres='SELECT role_type FROM prks.roles WHERE person_id = %s AND work_id = %s',
                 params=(person, work))
             self.assertEqual([r['role_type'] for r in roles], ['Author'])

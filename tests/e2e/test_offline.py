@@ -65,7 +65,6 @@ from tests.e2e.test_app import (
     _wait_pdf_materialized,
     _wait_pdf_viewer,
 )
-from tests.e2e.postgres_identity import postgres_library
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -1399,13 +1398,9 @@ class OfflineFoundationTests(unittest.TestCase):
             "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
             % _FOCUSED_PDF
         )
-        if postgres_library():
-            # A fresh immutable key for the same document, never the old one.
-            self.assertNotEqual(canonical, pdf_path)
-            self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
-        else:
-            # Exclusive file: materialization must not retarget the managed path.
-            self.assertEqual(canonical, pdf_path)
+        # A fresh immutable key for the same document, never the old one.
+        self.assertNotEqual(canonical, pdf_path)
+        self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
         # The save kept the open viewer: no reload for an annotation-only save.
         self.assertTrue(page.evaluate(
             "() => (%s).viewer === window.__prksViewerBeforeSave" % _FOCUSED_PDF))

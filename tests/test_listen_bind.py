@@ -153,17 +153,24 @@ class TestListenServerBind(unittest.TestCase):
 
 class TestListenDockerConfig(unittest.TestCase):
     def test_entrypoint_binds_all_container_interfaces(self):
+        # The entrypoint runs the role it is given; the image's default
+        # command is serve on every container interface (PG-C2 #641).
         path = os.path.join(_PROJECT_DIR, "docker-entrypoint.sh")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        self.assertIn("python /app/prks_app.py --host 0.0.0.0", text)
-        self.assertNotIn('"$@"', text)
+        self.assertIn('exec python /app/prks_app.py "$@"', text)
+        with open(os.path.join(_PROJECT_DIR, "Dockerfile"), encoding="utf-8") as fh:
+            dockerfile = fh.read()
+        self.assertIn('CMD ["serve", "--host", "0.0.0.0"]', dockerfile)
+        with open(os.path.join(_PROJECT_DIR, "docker-compose.yml"), encoding="utf-8") as fh:
+            compose = fh.read()
+        self.assertIn('command: ["serve", "--host", "0.0.0.0"]', compose)
 
     def test_compose_publishes_host_loopback_by_default(self):
         path = os.path.join(_PROJECT_DIR, "docker-compose.yml")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        self.assertIn("${PRKS_PUBLISH_HOST:-127.0.0.1}:8080:8080", text)
+        self.assertIn("${PRKS_PUBLISH_HOST:-127.0.0.1}:${PRKS_PUBLISH_PORT:-8080}:8080", text)
         self.assertIn('PRKS_TRUSTED_HOSTS: "${PRKS_TRUSTED_HOSTS:-}"', text)
 
 

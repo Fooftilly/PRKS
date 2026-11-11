@@ -1,34 +1,35 @@
 """Identity for the web process: settings, start check and loopback owner (§9.3, §11.1; L-ID-1 #626).
 
-Authentication is off unless ``PRKS_AUTH`` asks for it, so the SQLite
-application keeps running exactly as before until the PostgreSQL cutover.
-``PRKS_AUTH`` takes two values:
+Every web process authenticates (PG-C2 #641). ``PRKS_AUTH`` takes two values:
 
-- ``session``: password sign-in and ``prks_session`` cookies
+- ``session`` (the default): password sign-in and ``prks_session`` cookies
   (:mod:`backend.api.session`).
-- ``loopback-owner``: every request acts as the bootstrap owner, through a
-  real server-side session of the owner's Library, so authorization and the
-  Library epoch fence work exactly as for a signed-in browser. Only a testing
-  instance (``--testing``) bound to a loopback address may use it; anything
-  else refuses to start. It is never a default.
+- ``loopback-owner`` (the default of ``--testing``): every request acts as
+  the bootstrap owner, through a real server-side session of the owner's
+  Library, so authorization and the Library epoch fence work exactly as for
+  a signed-in browser. Only a testing instance (``--testing``) bound to a
+  loopback address may use it; anything else refuses to start.
 
-Either value needs ``PRKS_DATABASE_URL`` (or ``PRKS_DATABASE_URL_FILE``).
+Both need ``PRKS_DATABASE_URL`` (or ``PRKS_DATABASE_URL_FILE``); a testing
+process without either uses ``TESTING_DEFAULT_DATABASE_URL``
+(:mod:`backend.db.config`).
 
 :func:`start_web_identity` runs once the process has opened its storage
 root paired (``open_storage_root(paired=True)``): it holds the root's
 ``root.lock`` **shared** for its whole run, beside ``worker`` and
-``migrate``, and the interim content lock exclusive, because until the
-cutover the Library's content is the SQLite store under the root (L-D-1
-#630). Under that lease it runs the start check and start-generation bump of
-:mod:`~backend.domain.identity.root_pairing` (§11.1). While setup is not
-``ready`` it waits, when the caller lets it, and checks again; a refused
-pairing or a failed reconcile stops the process before it serves anything.
-Loopback-owner mode runs the same check.
+``migrate`` (L-D-1 #630). Under that lease it runs the start check and
+start-generation bump of :mod:`~backend.domain.identity.root_pairing`
+(§11.1). While setup is not ``ready`` it waits, when the caller lets it, and
+checks again; a refused pairing or a failed reconcile stops the process
+before it serves anything. A loopback-owner testing process that finds no
+instance at all bootstraps one itself (:func:`bootstrap_testing_instance`),
+so ``python prks_app.py --testing`` starts on a fresh database and root.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import secrets
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -40,7 +41,8 @@ from argon2 import PasswordHasher
 
 from backend.db.database import Database, Transaction
 from backend.db.errors import DatabaseError
-from backend.domain.identity import root_pairing, sessions
+from backend.db.testing_guard import TestingDatabaseRefused, prove_testing_database
+from backend.domain.identity import bootstrap_tokens, passwords, root_pairing, sessions
 from backend.domain.identity.errors import RootPairingRefused
 from backend.domain.identity.login import warm_dummy_hash
 from backend.domain.identity.login_limiter import LoginLimits, TrustedProxies
@@ -104,17 +106,18 @@ def _public_origin(environ: Mapping[str, str], parse_origin: OriginParser) -> Op
 
 def settings_from_env(
     environ: Mapping[str, str], *, testing: bool, host: str, parse_origin: OriginParser
-) -> Optional[WebAuthSettings]:
-    """The authentication settings, or ``None`` when ``PRKS_AUTH`` is not set.
+) -> WebAuthSettings:
+    """The authentication settings.
 
-    Raises :class:`WebAuthConfigError` (or the limiter's and sessions' own
-    config errors) for anything unusable, never falling back to a default.
+    ``PRKS_AUTH`` unset is ``session``, or ``loopback-owner`` for a testing
+    process. Raises :class:`WebAuthConfigError` (or the limiter's and
+    sessions' own config errors) for anything unusable.
     """
-    raw = environ.get(AUTH_ENV)
-    if raw is None or not raw.strip():
-        return None
+    raw = (environ.get(AUTH_ENV) or "").strip()
+    if not raw:
+        raw = AuthMode.LOOPBACK_OWNER.value if testing else AuthMode.SESSION.value
     try:
-        mode = AuthMode(raw.strip())
+        mode = AuthMode(raw)
     except ValueError:
         raise WebAuthConfigError(f"{AUTH_ENV} must be 'session' or 'loopback-owner'.") from None
     if mode is AuthMode.LOOPBACK_OWNER:
@@ -125,7 +128,7 @@ def settings_from_env(
         if not _is_loopback_literal(host):
             raise WebAuthConfigError(
                 f"{AUTH_ENV}=loopback-owner needs the server bound to a loopback address "
-                "(--host 127.0.0.1 or --host ::1)."
+                f"(--host 127.0.0.1 or --host ::1); set {AUTH_ENV}=session to serve another address."
             )
     return WebAuthSettings(
         mode=mode,
@@ -164,16 +167,15 @@ class WebAuth:
     db: Database
     settings: WebAuthSettings
     instance_id: str
-    # The one Library this process serves: the SQLite store under the root holds
-    # one Library's content, so a session for any other Library is nobody here.
+    # The one Library this process serves (0.8 has exactly one per instance),
+    # so a session for any other Library is nobody here.
     library_id: str
     # The Argon2id hasher logins use; ``None`` is ``passwords.default_hasher()``.
     hasher: Optional[PasswordHasher] = field(default=None, repr=False)
-    # Where this process keeps the Library's content: ``"sqlite"`` (the store
-    # under the root) or ``"postgres"`` (``PRKS_LIBRARY_BACKEND``, PG-C1 #640).
-    # ``GET /api/session`` names it, so the browser shows the pages that
-    # backend serves (the Processing queue, §11.5). PG-C2 removes it.
-    library_content: str = "sqlite"
+    # Where the Library's content lives; always PostgreSQL. ``GET /api/session``
+    # still names it until the browser drops the legacy Processing page that
+    # read it (PG-C2 #641, its next PR removes both).
+    library_content: str = "postgres"
     _owner_cookie: Optional[str] = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -211,6 +213,41 @@ class WebAuth:
 
 SetupWait = Callable[[], bool]
 
+# The owner and Library a fresh ``--testing`` instance is bootstrapped with.
+TESTING_OWNER_LOGIN = "owner"
+TESTING_OWNER_DISPLAY_NAME = "Testing Owner"
+TESTING_LIBRARY_NAME = "Testing Library"
+
+
+def bootstrap_testing_instance(
+    db: Database, *, root: str, lease: SharedFileLock, hasher: Optional[PasswordHasher] = None
+) -> None:
+    """Bootstrap the owner and Library of a fresh testing instance (§9.2, §9.3).
+
+    The first start of ``python prks_app.py --testing`` on a database with no
+    instance row runs the ordinary three-step bootstrap with a token it
+    issues itself, so a developer needs no ``admin bootstrap`` step. The
+    owner's password is random and never shown: loopback-owner mode never
+    signs in. It first proves the database is marked for testing
+    (:mod:`backend.db.testing_guard`). Everything else is the normal bootstrap, so a non-empty root, a
+    database paired with another root or an interrupted bootstrap of another
+    kind is refused exactly as there.
+    """
+    # The proof prks_app.py ran before the schema step, again right before
+    # the only writes a process makes on its own initiative.
+    try:
+        prove_testing_database(db.config.conninfo)
+    except TestingDatabaseRefused as exc:
+        raise RootPairingRefused(exc.reason, exc.message) from None
+    owner = root_pairing.OwnerSpec(
+        login_name=TESTING_OWNER_LOGIN,
+        display_name=TESTING_OWNER_DISPLAY_NAME,
+        library_name=TESTING_LIBRARY_NAME,
+        password_hash=passwords.hash_password(secrets.token_urlsafe(32), hasher=hasher),
+    )
+    token = bootstrap_tokens.issue_token(db).token
+    root_pairing.bootstrap(db, owner, token=token, root=root, lease=lease, testing=True)
+
 
 def start_web_identity(
     db: Database,
@@ -228,13 +265,21 @@ def start_web_identity(
     ``lease`` its held, shared ``root.lock``. While setup is not ``ready``,
     ``wait_for_setup`` is called and the check runs again as long as it
     returns true (it waits between checks); without it, or once it returns
-    false, the process is refused with ``setup_pending``. Raises
+    false, the process is refused with ``setup_pending``. A loopback-owner
+    testing process bootstraps an instance that does not exist yet
+    (:func:`bootstrap_testing_instance`) instead of waiting. Raises
     :class:`RootPairingRefused` when the process must not serve.
     """
+    bump = True
     while True:
-        started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=True)
+        started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=bump)
         if started.status is root_pairing.StartStatus.READY and started.instance_id is not None:
             break
+        if bump and testing and settings.mode is AuthMode.LOOPBACK_OWNER and not _has_instance(db):
+            bootstrap_testing_instance(db, root=root, lease=lease, hasher=hasher)
+            # Bootstrap's root claim counted as this process's bump (§11.1).
+            bump = False
+            continue
         if wait_for_setup is None or not wait_for_setup():
             raise RootPairingRefused(
                 "setup_pending",
@@ -243,8 +288,8 @@ def start_web_identity(
             )
     libraries = db.query(lambda tx: tx.execute("SELECT id FROM prks.libraries LIMIT 2").fetchall())
     if len(libraries) != 1:
-        # Until the cutover the Library's content is the one SQLite store under
-        # the root; a second Library would share it.
+        # 0.8 serves one Library per instance; the data root's objects and the
+        # process-wide routes are not partitioned by Library yet.
         raise RootPairingRefused(
             "library_not_unique", "This web process serves exactly one Library; the database has several."
         )
@@ -262,3 +307,7 @@ def start_web_identity(
             "loopback-owner mode needs exactly one enabled owner; this database has none or several.",
         )
     return auth
+
+
+def _has_instance(db: Database) -> bool:
+    return db.query(lambda tx: tx.execute("SELECT 1 FROM prks.instance").fetchone()) is not None

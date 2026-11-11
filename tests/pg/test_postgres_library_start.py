@@ -1,10 +1,10 @@
-"""A web process that serves its Library from PostgreSQL (PG-C1 #640, ``backend.library_backend``).
+"""A web process serves its Library from PostgreSQL, the only backend (PG-C1 #640, PG-C2 #641).
 
-``python prks_app.py --testing`` with ``PRKS_AUTH`` and
-``PRKS_LIBRARY_BACKEND=postgres`` runs as a real process: it binds the
+``python prks_app.py --testing`` runs as a real process: it binds the
 PostgreSQL facade, never opens or creates a SQLite catalogue, and its routes
-read and write ``prks.*``. The selection is refused without ``PRKS_AUTH``,
-with an unknown value, and on a root that still holds a SQLite catalogue.
+read and write ``prks.*``. The retired ``PRKS_LIBRARY_BACKEND`` is refused
+whatever its value (``backend.library_backend``), and so is a root that
+still holds a pre-0.8 SQLite catalogue.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         root = self.new_root()
         self.bootstrapped(name, root)
         port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres", **extra), root, port)
+        proc = self.web(self.environment(name, **extra), root, port)
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
             _status, session, _headers = self.call(port, "GET", "/api/session")
@@ -114,7 +114,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         root = self.new_root()
         self.bootstrapped(name, root)
         port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        proc = self.web(self.environment(name), root, port)
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
             status, session, _headers = self.call(port, "GET", "/api/session")
@@ -247,7 +247,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         root = self.new_root()
         self.bootstrapped(name, root)
         port = _free_port()
-        proc = self.web(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root, port)
+        proc = self.web(self.environment(name), root, port)
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
             _status, session, _headers = self.call(port, "GET", "/api/session")
@@ -382,14 +382,38 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         finally:
             conn.close()
 
-    def test_the_selection_needs_prks_auth(self) -> None:
-        err = self.refused(self.environment(None, PRKS_LIBRARY_BACKEND="postgres"), self.new_root())
-        self.assertIn("PRKS_LIBRARY_BACKEND=postgres needs PRKS_AUTH", err)
-
-    def test_an_unknown_selection_is_refused(self) -> None:
+    def test_the_retired_selection_is_refused_whatever_its_value(self) -> None:
         name = self.migrated()
-        err = self.refused(self.environment(name, PRKS_LIBRARY_BACKEND="sqlite"), self.new_root())
-        self.assertIn("PRKS_LIBRARY_BACKEND must be unset or 'postgres'", err)
+        for value in ("postgres", "sqlite", ""):
+            with self.subTest(value=value):
+                root = os.path.join(self.tmp, f"never-opened-{value or 'blank'}")
+                err = self.refused(self.environment(name, PRKS_LIBRARY_BACKEND=value), root)
+                self.assertIn("PRKS_LIBRARY_BACKEND is no longer read", err)
+                self.assertIn("Remove PRKS_LIBRARY_BACKEND", err)
+                # Refused before the root was selected, let alone created.
+                self.assertFalse(os.path.exists(root))
+
+    def test_refused_root_exits_cleanly_before_touching_storage(self) -> None:
+        # Moved from tests/test_storage_root_binding.py: the database is
+        # checked before the root is opened, so the run needs one.
+        name = self.migrated()
+        foreign = os.path.join(self.tmp, "foreign")
+        os.mkdir(foreign)
+        open(os.path.join(foreign, "holiday.jpg"), "w").close()
+        ignored = os.path.join(self.tmp, "ignored")
+        env = self.environment(name, PRKS_TESTING="1", PRKS_STORAGE=ignored)
+        err = self.refused(env, foreign)
+        self.assertIn("PRKS cannot open its storage root", err)
+        self.assertIn("does not look like a PRKS library", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(os.listdir(foreign), ["holiday.jpg"])
+        # --storage-root won over PRKS_STORAGE: the env root was never created.
+        self.assertFalse(os.path.exists(ignored))
+
+    def test_an_unreachable_testing_database_names_the_local_server(self) -> None:
+        env = self.environment(None, PRKS_DATABASE_URL="postgresql://nobody@127.0.0.1:1/none?connect_timeout=2")
+        err = self.refused(env, self.new_root())
+        self.assertIn("scripts/dev-postgres", err)
 
     def test_a_root_holding_a_sqlite_catalogue_is_refused(self) -> None:
         name = self.migrated()
@@ -397,5 +421,5 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         self.bootstrapped(name, root)
         with open(os.path.join(root, "prks_data_testing.db"), "wb"):
             pass
-        err = self.refused(self.environment(name, PRKS_LIBRARY_BACKEND="postgres"), root)
-        self.assertIn("still holds a SQLite catalogue", err)
+        err = self.refused(self.environment(name), root)
+        self.assertIn("holds a pre-0.8 SQLite Library", err)

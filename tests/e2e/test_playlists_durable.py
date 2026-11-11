@@ -140,7 +140,6 @@ class DurablePlaylistTests(unittest.TestCase):
 
     def order_in_db(self, server, playlist_id):
         rows = self.db_for(server).query(
-            sqlite='SELECT work_id FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC',
             postgres='SELECT work_id FROM prks.playlist_items WHERE playlist_id = %s ORDER BY position ASC',
             params=(playlist_id,))
         return [row['work_id'] for row in rows]

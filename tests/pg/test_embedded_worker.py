@@ -319,8 +319,11 @@ class SettingTests(EmbeddedWorkerTestCase):
         self.assertEqual(jobs.worker.status()["state"], "starting")
         self.assertFalse(any(t.name == "prks-embedded-worker" for t in threading.enumerate()))
 
-    def test_prks_app_has_no_jobs_without_auth(self) -> None:
-        self.assertIsNone(prks_app.start_jobs(None, {"PRKS_EMBEDDED_WORKER": "yes"}))
+    def test_prks_app_with_0_runs_no_embedded_worker(self) -> None:
+        # Every web process authenticates now (PG-C2 #641), so its jobs
+        # runtime always exists; 0 leaves the jobs to a worker process.
+        jobs = prks_app.start_jobs(_Auth(self.open_db()), {"PRKS_EMBEDDED_WORKER": "0"})
+        self.assertIsNone(jobs.worker)
 
 
 class _Auth:

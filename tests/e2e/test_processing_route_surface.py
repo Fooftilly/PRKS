@@ -13,15 +13,15 @@ import unittest
 from backend.storage.config import StorageConfig
 from tests.e2e.fixtures import MINIMAL_PDF, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
-from tests.e2e.postgres_identity import postgres_library
 
 
 def load_tests(loader, standard_tests, pattern):
-    # The path-based inbox is the SQLite Library's page. The PostgreSQL
-    # Library shows the upload queue instead (test_postgres_library_flows).
-    if os.environ.get("PRKS_E2E") != "1" or postgres_library():
-        return unittest.TestSuite()
-    return standard_tests
+    # The path-based inbox was the SQLite Library's page. Every server now
+    # serves the PostgreSQL Library, which shows the upload queue instead
+    # (test_postgres_library_flows); the next PG-C2 (#641) PR deletes this
+    # page, its API and this module.
+    del loader, standard_tests, pattern
+    return unittest.TestSuite()
 
 
 def setUpModule():

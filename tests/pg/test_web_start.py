@@ -11,11 +11,15 @@ stops it unless it may wait for setup.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import signal
 import unittest
 from datetime import timedelta
 from typing import Any
+
+import psycopg
+from psycopg import sql
 
 import prks_app
 from backend.domain.identity import root_pairing
@@ -44,9 +48,15 @@ def settings(env: dict[str, str], *, testing: bool = True, host: str = "127.0.0.
 
 
 class SettingsTests(unittest.TestCase):
-    def test_off_unless_asked_for(self) -> None:
-        self.assertIsNone(settings({}))
-        self.assertIsNone(settings({"PRKS_AUTH": "  "}))
+    def test_unset_is_password_sign_in_or_the_testing_owner(self) -> None:
+        for env in ({}, {"PRKS_AUTH": "  "}):
+            with self.subTest(env=env):
+                self.assertEqual(settings(env, testing=False, host=ALL_INTERFACES).mode, AuthMode.SESSION)
+                self.assertEqual(settings(env).mode, AuthMode.LOOPBACK_OWNER)
+                # A testing server on another address must ask for password sign-in.
+                with self.assertRaises(WebAuthConfigError) as caught:
+                    settings(env, host=ALL_INTERFACES)
+                self.assertIn("PRKS_AUTH=session", str(caught.exception))
 
     def test_session_mode(self) -> None:
         got = settings({"PRKS_AUTH": "session", "PRKS_SESSION_IDLE_DAYS": "7"}, testing=False, host=ALL_INTERFACES)
@@ -181,9 +191,42 @@ class StartTests(WebStartTestCase):
     def test_unfinished_setup_is_refused(self) -> None:
         name = self.database()
         root = self.new_root()
-        for mode in AuthMode:
-            with self.subTest(mode=mode):
-                self.refused("setup_pending", self.web_start, name, root, mode)
+        self.refused("setup_pending", self.web_start, name, root, AuthMode.SESSION)
+        # Not a testing process: loopback-owner never sets an instance up.
+        self.refused("setup_pending", self.web_start, name, root, AuthMode.LOOPBACK_OWNER, testing=False)
+        self.assertIsNone(self.instance(name))
+
+    def test_a_testing_owner_sets_up_a_fresh_database_once(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        auth = self.web_start(name, root, AuthMode.LOOPBACK_OWNER)
+        with psycopg.connect(self.harness.conninfo(name)) as conn:
+            instance = conn.execute("SELECT id, testing, setup_state FROM prks.instance").fetchone()
+        self.assertEqual((auth.instance_id, instance[1], instance[2]), (instance[0], True, "ready"))
+        # The claim was this start's bump; the next start bumps as usual.
+        self.assertEqual(self.db_state(name).generation, 1)
+        self.web_start(name, root, AuthMode.LOOPBACK_OWNER)
+        self.assertEqual(self.db_state(name).generation, 2)
+
+    def test_a_testing_owner_never_sets_up_an_unmarked_database(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        conninfo, marker = self.harness.conninfo(name), self.harness.marker_of(name)
+        db = self.db(name)  # opened while the harness still owns it
+
+        def comment(value: Any) -> None:
+            with psycopg.connect(conninfo, autocommit=True) as conn:
+                conn.execute(sql.SQL("COMMENT ON DATABASE {} IS {}").format(
+                    sql.Identifier(name), sql.Literal(value)))
+
+        comment(None)
+        try:
+            self.refused("not_a_testing_database", start_web_identity, db,
+                         self.web_settings(AuthMode.LOOPBACK_OWNER), root=root, lease=self.lease(root), testing=True)
+            with psycopg.connect(conninfo) as conn:
+                self.assertIsNone(conn.execute("SELECT id FROM prks.instance").fetchone())
+        finally:
+            comment(marker)
 
     def test_a_foreign_root_is_refused_in_every_mode(self) -> None:
         name, _root = self.ready()
@@ -247,8 +290,12 @@ class AppStartTests(WebStartTestCase):
             self.app_start(env, root, **kwargs)
         self.assertEqual(ctx.exception.code, code)
 
-    def test_without_prks_auth_nothing_happens(self) -> None:
-        self.assertIsNone(prks_app.prepare_identity(self.args(host=ALL_INTERFACES), self.config(self.tmp), {}))
+    def test_without_a_database_a_web_process_does_not_start(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            prks_app.prepare_identity(self.args(host=ALL_INTERFACES, testing=False), self.config(self.tmp), {})
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("PRKS_DATABASE_URL", stderr.getvalue())
 
     def test_a_stop_while_waiting_for_setup_exits_0_and_lets_go_of_the_root(self) -> None:
         name = self.database()
