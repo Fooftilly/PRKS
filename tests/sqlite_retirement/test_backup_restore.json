@@ -1,0 +1,672 @@
+{
+  "module": "tests/test_backup_restore.py",
+  "tests": {
+    "TestBackupPathSafety.test_scoped_remove_accepts_a_real_child_tree": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_rejects_intermediate_symlink_escape": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_unlinks_leaf_symlink_without_following_target": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_rejects_a_symlinked_subroot": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_cannot_reach_another_subroot": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_rejects_ambiguous_and_nested_paths": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_safe_remove_unlinks_symlinks_inside_a_tree": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_rollback_dir_rejects_a_symlinked_rollback_root": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_stays_correct_without_descriptor_support": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_scoped_remove_rejects_a_symlinked_subroot_without_descriptors": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_verified_subroot_rejects_a_directory_reparse_point": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_portable_removal_never_traverses_a_nested_reparse_point": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_portable_removal_unlinks_a_nested_symlink_without_following": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_opening_an_absent_subroot_does_not_leak_a_descriptor": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_portable_removal_resolves_the_storage_root_only_once": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_descriptor_removal_anchors_to_the_root_snapshot": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_descriptor_removal_refuses_a_root_link_swapped_in_after_authorization": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_descriptor_removal_refuses_a_root_directory_swapped_in_after_authorization": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_portable_removal_refuses_a_root_swapped_in_after_authorization": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_removal_refuses_a_root_swapped_in_before_it_was_canonicalized": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_removal_refuses_a_root_that_was_gone_when_identity_was_captured": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_an_absent_component_does_not_downgrade_to_path_based_removal": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_staging_token_cannot_follow_a_symlink_outside_maintenance": {
+      "replaced_by": [
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_a_token_only_names_a_file_its_user_staged",
+        "tests/pg/test_maintenance_api.py::MaintenanceApiTests.test_a_staged_token_is_bound_to_the_user_who_uploaded_it"
+      ],
+      "note": "A PostgreSQL staged token is 32 hex digits and names only a file listed in the staged directory for that user, so it cannot spell a path."
+    },
+    "TestBackupPathSafety.test_staging_dir_rejects_a_symlinked_staging_root": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_stale_staging_cleanup_skips_a_symlinked_staging_root": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupPathSafety.test_stale_staging_cleanup_removes_expired_entries": {
+      "replaced_by": [
+        "tests/pg/test_maintenance_api.py::MaintenanceApiTests.test_old_staged_uploads_are_pruned",
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_the_sweeps_leave_the_root_files_and_unknown_entries_alone"
+      ]
+    },
+    "TestReadyBackupReclamation.test_expired_token_and_its_archive_are_reclaimed_past_ttl": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. Archives of runs that are not published are removed by the idle task."
+    },
+    "TestReadyBackupReclamation.test_stale_archive_is_reclaimed_after_a_restart": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. Archives of runs that are not published are removed by the idle task."
+    },
+    "TestReadyBackupReclamation.test_multiple_stale_archives_are_reclaimed_in_one_pass": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. Archives of runs that are not published are removed by the idle task."
+    },
+    "TestReadyBackupReclamation.test_backup_lifecycle_reclaims_abandoned_archives": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. Archives of runs that are not published are removed by the idle task."
+    },
+    "TestReadyBackupReclamation.test_fresh_unregistered_archive_is_preserved": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives",
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_a_backup_requested_while_one_runs_is_not_queued_again"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. The idle task keeps the archive of a running or published run."
+    },
+    "TestReadyBackupReclamation.test_archive_of_an_active_token_is_preserved_even_when_its_file_looks_old": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives",
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_a_backup_requested_while_one_runs_is_not_queued_again"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. The idle task keeps the archive of a running or published run."
+    },
+    "TestReadyBackupReclamation.test_in_progress_work_directory_is_not_reclaimed": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives",
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_a_backup_requested_while_one_runs_is_not_queued_again"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. The idle task keeps the archive of a running or published run."
+    },
+    "TestReadyBackupReclamation.test_cleanup_during_backup_packing_does_not_disturb_it": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives",
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_a_backup_requested_while_one_runs_is_not_queued_again"
+      ],
+      "note": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable. The idle task keeps the archive of a running or published run."
+    },
+    "TestReadyBackupReclamation.test_unrecognized_entries_are_preserved": {
+      "replaced_by": [
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_the_sweeps_leave_the_root_files_and_unknown_entries_alone"
+      ]
+    },
+    "TestReadyBackupReclamation.test_stash_ages_the_archive_from_the_token_clock": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_stale_suffixed_archive_is_reclaimed": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_stale_legacy_timestamp_only_archive_is_still_reclaimed": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_generated_name_recognizes_both_formats": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_same_second_backups_get_distinct_ready_paths": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_same_second_tokens_resolve_to_their_own_archives": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_download_cleanup_of_one_token_keeps_the_other_archive": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_publish_never_replaces_an_existing_ready_archive": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_publish_fails_safely_when_no_free_name_is_found": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_publish_skips_a_symlink_at_the_candidate_name": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_failed_publish_releases_its_name_claim": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_concurrent_publishers_of_one_name_both_survive": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_take_then_download_cleanup_is_unchanged": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_taken_archive_past_ttl_survives_a_sweep_before_download": {
+      "obsolete": "Format 1 kept finished archives under in-memory download tokens and claimed free file names for them. A PostgreSQL backup is a backup run: its archive is named by the run's UUID, it is published only once verified, and only a published run of the actor's Library is downloadable."
+    },
+    "TestReadyBackupReclamation.test_archive_swapped_for_a_directory_is_not_removed": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestReadyBackupReclamation.test_file_only_removal_refuses_a_changed_entry": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestReadyBackupReclamation.test_cleanup_stays_inside_the_backup_subroot": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestReadyBackupReclamation.test_cleanup_refuses_a_symlinked_backup_subroot": {
+      "obsolete": "The format 1 restore and its sweeps removed whole directory trees under .prks-maintenance (staging, rollback, ready archives), so each removal had to be proven inside its subroot and anchored against links and swapped roots. The PostgreSQL backup and restore never remove a directory tree: they unlink single files they named themselves in their own maintenance directories (tests/test_maintenance_dirs.py), and objects go through the storage backend, which refuses links (tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere)."
+    },
+    "TestBackupInventory.test_every_storage_config_path_is_classified": {
+      "replaced_by": [
+        "tests/pg/test_backup_tables.py::BackupTableClassificationTests.test_every_library_scoped_table_is_on_exactly_one_list",
+        "tests/pg/test_backup_tables.py::BackupTableClassificationTests.test_access_identity_and_operational_rows_are_never_content"
+      ],
+      "note": "Format 1 archived storage paths, so each StorageConfig path needed a class. A PostgreSQL archive holds the Library's content tables and the objects they name, so the classification is per table."
+    },
+    "TestBackupInventory.test_non_path_fields_are_explicit": {
+      "replaced_by": [
+        "tests/pg/test_backup_tables.py::BackupTableClassificationTests.test_every_content_column_has_an_interchange_type",
+        "tests/pg/test_backup_tables.py::BackupTableClassificationTests.test_generated_columns_are_never_exported"
+      ],
+      "note": "The PostgreSQL archive is defined by tables and columns, not StorageConfig fields."
+    },
+    "TestRestorePendingPdfCleanup.test_restore_settles_the_claims_it_brings_back": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::CommitTests.test_a_restore_replaces_the_library_and_queues_its_follow_up_work",
+        "tests/pg/test_restore_commit.py::CommitTests.test_holds_survive_a_second_restore_of_the_same_archive",
+        "tests/pg/test_objects_lifecycle.py::RestoreRunTests.test_a_committed_run_hands_its_keys_to_the_catalogue"
+      ]
+    },
+    "TestRestorePendingPdfCleanup.test_a_restored_claim_never_outranks_the_restored_catalogue": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_held_referenced_and_staged_keys_are_never_deleted",
+        "tests/pg/test_restore_round_trip.py::EveryTableRoundTripTests.test_every_content_table_and_object_kind_round_trips"
+      ]
+    },
+    "TestBackupRoundTrip.test_round_trip_to_empty_storage": {
+      "replaced_by": [
+        "tests/pg/test_restore_round_trip.py::EveryTableRoundTripTests.test_every_content_table_and_object_kind_round_trips",
+        "tests/pg/test_backup_entry_points.py::AdminBackupRestoreTests.test_backup_then_restore_round_trips_the_library",
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch"
+      ]
+    },
+    "TestBackupRoundTrip.test_restore_replaces_existing_library": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::CommitTests.test_a_restore_replaces_the_library_and_queues_its_follow_up_work",
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch"
+      ]
+    },
+    "TestBackupRoundTrip.test_sqlite_online_backup_is_used": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ExclusionTests.test_the_whole_archive_is_one_snapshot"
+      ],
+      "note": "The PostgreSQL backup reads every table in one snapshot instead of SQLite's online backup API."
+    },
+    "TestBackupRoundTrip.test_processing_included_when_under_root": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::CommitTests.test_queued_imported_and_deleted_processing_items_round_trip"
+      ],
+      "note": "The legacy processing inbox directory is gone (#636); Processing items are rows and objects that round trip with the Library."
+    },
+    "TestBackupRoundTrip.test_external_processing_not_included": {
+      "obsolete": "The legacy processing inbox directory is gone (#636); Processing items are rows and objects that round trip with the Library."
+    },
+    "TestBackupRoundTrip.test_symlink_in_pdfs_is_not_followed": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_links_are_refused_everywhere",
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_a_stored_object_replaced_by_a_directory_is_unreadable"
+      ]
+    },
+    "TestBackupRoundTrip.test_missing_referenced_pdf_is_warning": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_a_missing_object_fails_the_backup"
+      ],
+      "note": "Stricter on PostgreSQL: a missing object fails the backup instead of producing an archive with a warning."
+    },
+    "TestBackupRoundTrip.test_progress_callback_reports_phases": {
+      "replaced_by": [
+        "tests/pg/test_maintenance_api.py::MaintenanceApiTests.test_progress_follows_a_long_backup_until_it_publishes",
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch"
+      ]
+    },
+    "TestBackupRoundTrip.test_cancel_stops_backup_and_deletes_temps": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::RunTests.test_an_archive_that_does_not_read_back_is_never_published",
+        "tests/pg/test_backup_export.py::RunTests.test_a_database_error_fails_the_run",
+        "tests/pg/test_backup_entry_points.py::BackupJobTests.test_the_idle_task_recovers_runs_and_removes_unpublished_archives"
+      ],
+      "note": "A PostgreSQL backup is a job; a run that stops before publishing leaves an unpublished archive the idle task removes."
+    },
+    "TestBackupRoundTrip.test_orphan_annotations_are_backup_warning": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::StagingTests.test_a_parent_missing_from_the_archive_is_refused_even_if_it_exists_live",
+        "tests/pg/test_restore_staging.py::StagingTests.test_rows_must_name_exactly_the_archives_objects"
+      ],
+      "note": "PostgreSQL foreign keys make an orphan annotation unstorable; restore checks every reference of the staged rows."
+    },
+    "TestBackupRoundTrip.test_work_identity_drift_is_a_backup_and_restore_warning": {
+      "replaced_by": [
+        "tests/pg/test_works_schema.py::AssetPointerTests.test_integrity_query_names_an_inactive_primary",
+        "tests/pg/test_restore_staging.py::StagingTests.test_a_parent_missing_from_the_archive_is_refused_even_if_it_exists_live"
+      ],
+      "note": "The SQLite compatibility mirror could drift from its Work rows; PostgreSQL has no mirror and checks the staged rows' keys."
+    },
+    "TestBackupRoundTrip.test_schema_17_without_its_identity_objects_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_an_archive_of_another_schema_is_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_format_1_and_newer_formats_are_refused_clearly"
+      ],
+      "note": "SQLite schema migration on restore. A PostgreSQL archive carries its migration set and is refused unless it matches the database's, with no SQLite to PostgreSQL migration before 1.0 (#613, R20)."
+    },
+    "TestBackupRoundTrip.test_live_schema_ahead_of_constant_can_backup_and_restore_locally": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_an_archive_of_another_schema_is_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_format_1_and_newer_formats_are_refused_clearly"
+      ],
+      "note": "SQLite schema migration on restore. A PostgreSQL archive carries its migration set and is refused unless it matches the database's, with no SQLite to PostgreSQL migration before 1.0 (#613, R20)."
+    },
+    "TestBackupRoundTrip.test_schema_9_backup_migrates_on_restore": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_an_archive_of_another_schema_is_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_format_1_and_newer_formats_are_refused_clearly"
+      ],
+      "note": "SQLite schema migration on restore. A PostgreSQL archive carries its migration set and is refused unless it matches the database's, with no SQLite to PostgreSQL migration before 1.0 (#613, R20)."
+    },
+    "TestBackupRoundTrip.test_schema_12_backup_with_work_annotations_restores_and_migrates": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_an_archive_of_another_schema_is_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_format_1_and_newer_formats_are_refused_clearly"
+      ],
+      "note": "SQLite schema migration on restore. A PostgreSQL archive carries its migration set and is refused unless it matches the database's, with no SQLite to PostgreSQL migration before 1.0 (#613, R20)."
+    },
+    "TestBackupRoundTrip.test_v10_backup_migrates_saved_views_on_restore": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_an_archive_of_another_schema_is_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_format_1_and_newer_formats_are_refused_clearly"
+      ],
+      "note": "SQLite schema migration on restore. A PostgreSQL archive carries its migration set and is refused unless it matches the database's, with no SQLite to PostgreSQL migration before 1.0 (#613, R20)."
+    },
+    "TestBackupRoundTrip.test_saved_views_survive_backup_restore": {
+      "replaced_by": [
+        "tests/pg/test_restore_round_trip.py::EveryTableRoundTripTests.test_every_content_table_and_object_kind_round_trips",
+        "tests/pg/test_backup_tables.py::BackupTableClassificationTests.test_every_library_scoped_table_is_on_exactly_one_list"
+      ]
+    },
+    "TestBackupRoundTrip.test_restore_migration_failure_restores_previous_library": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_fault_inside_r4_leaves_the_library_as_it_was",
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_refused_archive_fails_the_run_before_r2"
+      ],
+      "note": "SQLite schema migration on restore. A PostgreSQL archive carries its migration set and is refused unless it matches the database's, with no SQLite to PostgreSQL migration before 1.0 (#613, R20)."
+    },
+    "TestBackupCorruption.test_corrupt_pdf_payload_fails_before_mutation": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_tampered_bytes_are_refused",
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_refused_archive_fails_the_run_before_r2"
+      ]
+    },
+    "TestBackupCorruption.test_corrupt_db_payload_fails": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_tampered_bytes_are_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_encrypted_or_corrupt_members_are_refused_as_unreadable"
+      ]
+    },
+    "TestBackupCorruption.test_corrupt_manifest_hash_fails": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_tampered_bytes_are_refused"
+      ]
+    },
+    "TestBackupCorruption.test_corrupt_manifest_size_fails": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_tampered_bytes_are_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused"
+      ]
+    },
+    "TestBackupCorruption.test_unknown_format_version_fails": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_format_1_and_newer_formats_are_refused_clearly"
+      ]
+    },
+    "TestBackupCorruption.test_newer_schema_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_an_archive_of_another_schema_is_refused"
+      ]
+    },
+    "TestZipTraversal.test_parent_traversal_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
+      ]
+    },
+    "TestZipTraversal.test_absolute_path_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
+      ]
+    },
+    "TestZipTraversal.test_windows_drive_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
+      ]
+    },
+    "TestZipTraversal.test_nested_dotdot_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_unsafe_member_names_are_refused"
+      ]
+    },
+    "TestZipTraversal.test_duplicate_members_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_duplicate_members_are_refused"
+      ]
+    },
+    "TestZipTraversal.test_symlink_member_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_links_and_special_entries_are_refused"
+      ]
+    },
+    "TestZipTraversal.test_plain_zip_with_manifest_rejected": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_members_outside_the_layout_or_missing_are_refused",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_a_first_party_archive_passes"
+      ]
+    },
+    "TestZipTraversal.test_module_never_calls_extractall": {
+      "replaced_by": [
+        "tests/test_maintenance_dirs.py::MaintenanceDirectoryTests.test_no_maintenance_module_extracts_an_archive_wholesale"
+      ]
+    },
+    "TestRestoreRollback.test_fail_after_old_db_moved_restores_original": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_fault_inside_r4_leaves_the_library_as_it_was"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestRestoreRollback.test_fail_after_new_pdfs_installed_restores_original": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_fault_inside_r4_leaves_the_library_as_it_was",
+        "tests/pg/test_restore_staging.py::StagingTests.test_a_missing_object_is_written_and_a_different_one_is_never_overwritten"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestRestoreRollback.test_stage_keeps_in_flight_upload_file": {
+      "replaced_by": [
+        "tests/pg/test_backup_entry_points.py::RestoreCopyTests.test_a_live_copy_is_kept_and_a_dead_ones_copy_is_removed"
+      ]
+    },
+    "TestRestoreRollback.test_confirm_required": {
+      "replaced_by": [
+        "tests/pg/test_maintenance_api.py::MaintenanceApiTests.test_a_restore_needs_the_confirmation",
+        "tests/pg/test_http_backup_stage.py::BackupStageHttpTests.test_a_restore_needs_the_confirmation_and_a_staged_token"
+      ]
+    },
+    "TestRestoreRollback.test_token_is_single_use": {
+      "replaced_by": [
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch"
+      ]
+    },
+    "TestCrashJournalRecovery.test_journal_removal_surfaces_an_enumeration_failure": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_recovery_keeps_rollback_material_when_journal_removal_fails": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_startup_reclaims_a_rollback_tree_no_journal_can_name": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_startup_leaves_a_fresh_rollback_tree_alone": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_a_failed_journal_removal_keeps_even_an_aged_rollback_tree": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_replaying_a_journal_without_rollback_material_keeps_live_data": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_recovery_completes_database_sidecars_after_a_partial_pass": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_journal_with_an_unusable_transaction_id_is_refused": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_incomplete_journal_restores_previous": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_takes_over_a_run_that_stalled_before_the_drain"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_committed_journal_keeps_new_and_cleans_rollback": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_never_takes_over_a_run_that_reached_the_drain",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestCrashJournalRecovery.test_canonical_installed_journal_restores_previous": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestRestoreCrashWindows.test_crash_after_old_move_started_database": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_old_renamed_before_old_moved_database": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_new_install_started_database": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_new_renamed_before_new_installed_database": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_old_move_started_pdfs": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_old_renamed_before_old_moved_pdfs": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_new_install_started_pdfs": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreCrashWindows.test_crash_after_new_renamed_before_new_installed_pdfs": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_after_a_crash_clears_the_flag_and_drops_the_schema",
+        "tests/pg/test_restore_jobs.py::KillAfterCommitTests.test_a_restore_killed_after_r4_still_rebuilds_search_after_restart"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window. A crash before R4 commits leaves the old Library, after it the new one."
+    },
+    "TestRestoreDurabilityBoundary.test_a_refused_directory_sync_keeps_the_previous_library_recoverable": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestRestoreDurabilityBoundary.test_an_unconfirmed_commit_record_does_not_roll_back_a_finished_restore": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::LeaseTests.test_recovery_never_takes_over_a_run_that_reached_the_drain"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestRestoreDurabilityBoundary.test_a_sidecar_rename_that_fails_leaves_the_previous_library_intact": {
+      "obsolete": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestRestoreDurabilityBoundary.test_a_restore_survives_a_symlinked_storage_root": {
+      "replaced_by": [
+        "tests/test_storage_root_binding.py::TestRootSnapshot.test_retargeting_the_root_link_does_not_move_runtime_io"
+      ],
+      "note": "Runtime IO, the restore's object writes included, goes through the anchored root."
+    },
+    "TestRestoreDurabilityBoundary.test_every_staged_payload_file_is_flushed_before_it_can_be_installed": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/storage_backend_contract.py::StorageBackendContract.test_readers_never_observe_a_partial_new_object"
+      ],
+      "note": "Restored objects are written with put_new, whose content barrier precedes publication."
+    },
+    "TestRestoreDurabilityBoundary.test_staging_refuses_a_tree_whose_directory_entries_cannot_be_synced": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_failed_content_sync_publishes_nothing"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestDiskAccounting.test_backup_does_not_reserve_two_copies_of_pdf_library": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_verification_needs_no_free_space_for_the_archives_objects"
+      ]
+    },
+    "TestDiskAccounting.test_backup_rejects_when_snapshot_archive_margin_unavailable": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_a_disk_error_while_writing_is_a_backup_failure"
+      ],
+      "note": "A PostgreSQL backup fails cleanly when the disk fills instead of reserving a margin up front."
+    },
+    "TestDiskAccounting.test_restore_upload_space_uses_content_length_not_live_library": {
+      "replaced_by": [
+        "tests/pg/test_http_backup_stage.py::BackupStageHttpTests.test_refusals_before_the_body_stage_nothing",
+        "tests/test_backup_upload_stream.py::StreamUploadTests.test_a_body_over_the_limit_is_refused_before_it_is_read",
+        "tests/pg/test_backup_entry_points.py::AdminBackupRestoreTests.test_a_full_disk_while_copying_the_archive_is_a_clean_refusal"
+      ],
+      "note": "The PostgreSQL stage route bounds the upload by its configured limit; a disk that fills while it is copied is a clean refusal."
+    },
+    "TestDiskAccounting.test_extract_space_uses_declared_uncompressed_not_archive_again": {
+      "replaced_by": [
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_entry_count_size_and_free_space_bounds",
+        "tests/pg/test_restore_staging.py::ArchiveContainmentTests.test_compression_bounds_pass_first_party_output_and_refuse_bombs"
+      ]
+    },
+    "TestDiskAccounting.test_commit_rename_does_not_require_live_plus_staged_copy": {
+      "replaced_by": [
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_full_disk_in_r4_fails_the_run_with_its_sqlstate",
+        "tests/pg/test_restore_commit.py::AbortTests.test_a_full_disk_in_r1_fails_the_run_and_drops_the_staging_schema"
+      ],
+      "note": "Format 1 restored by renaming the SQLite database and the file directories under the root, recorded in a crash journal so each rename could be undone or finished. The PostgreSQL restore stages rows in a staging schema and replaces the Library in one database transaction (R4); objects are written once with put_new and never renamed over live ones, so there is no journal, rollback tree or rename window."
+    },
+    "TestSelfVerificationAndChunks.test_invalid_hash_is_not_served": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::RunTests.test_an_archive_that_does_not_read_back_is_never_published",
+        "tests/pg/test_maintenance_api.py::MaintenanceApiTests.test_an_unpublished_run_is_not_downloadable"
+      ]
+    },
+    "TestSelfVerificationAndChunks.test_chunked_copy_never_reads_whole_file": {
+      "replaced_by": [
+        "tests/pg/test_backup_export.py::ObjectSafetyTests.test_the_lease_is_renewed_while_one_large_member_streams",
+        "tests/test_backup_upload_stream.py::StreamUploadTests.test_the_body_is_copied_in_bounded_reads_and_synced"
+      ]
+    },
+    "TestSelfVerificationAndChunks.test_iter_file_chunks_bounded": {
+      "replaced_by": [
+        "tests/test_backup_upload_stream.py::StreamUploadTests.test_the_body_is_copied_in_bounded_reads_and_synced",
+        "tests/pg/test_restore_staging.py::StagingTests.test_the_lease_is_renewed_while_a_member_streams"
+      ]
+    },
+    "TestSelfVerificationAndChunks.test_tests_never_use_production_storage": {
+      "replaced_by": [
+        "tests/test_storage_bind_guards.py::StorageBindGuardTests.test_for_testing_data_still_refused"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_download_and_restore_via_http": {
+      "replaced_by": [
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_progress_stream_then_token_download": {
+      "replaced_by": [
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch",
+        "tests/pg/test_maintenance_api.py::MaintenanceApiTests.test_progress_follows_a_long_backup_until_it_publishes"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_restore_post_requires_origin_when_present": {
+      "replaced_by": [
+        "tests/pg/test_http_admission.py::CsrfTests.test_cross_origin_and_malformed_requests_are_refused"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_download_without_token_does_not_create_backup": {
+      "replaced_by": [
+        "tests/pg/test_http_backup_stage.py::BackupStageHttpTests.test_reads_and_malformed_requests_never_start_a_backup"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_get_progress_does_not_create_backup": {
+      "replaced_by": [
+        "tests/pg/test_http_backup_stage.py::BackupStageHttpTests.test_reads_and_malformed_requests_never_start_a_backup"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_progress_post_requires_json_content_type": {
+      "replaced_by": [
+        "tests/pg/test_http_backup_stage.py::BackupStageHttpTests.test_reads_and_malformed_requests_never_start_a_backup"
+      ]
+    },
+    "TestBackupRestoreHTTP.test_stage_rejects_upload_when_content_length_exceeds_free_space": {
+      "replaced_by": [
+        "tests/pg/test_http_backup_stage.py::BackupStageHttpTests.test_refusals_before_the_body_stage_nothing",
+        "tests/pg/test_backup_entry_points.py::AdminBackupRestoreTests.test_a_full_disk_while_copying_the_archive_is_a_clean_refusal"
+      ],
+      "note": "The PostgreSQL stage route refuses a body over its configured limit before reading it; running out of space while copying is a clean refusal."
+    }
+  }
+}
