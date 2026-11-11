@@ -96,9 +96,7 @@ def _updates(sql: str) -> list[tuple[str, set[str]]]:
         if _NOT_A_STATEMENT_BEFORE.search(sql, 0, word.start()):
             continue
         if not sql[word.end():].strip():  # a fragment: the statement is assembled elsewhere
-            if word.group(0) == "UPDATE":
-                raise ValueError("unresolved UPDATE fragment: %r" % sql[max(0, word.start() - 40):])
-            continue
+            raise ValueError("unresolved UPDATE fragment: %r" % sql[max(0, word.start() - 40):])
         if _NOT_A_STATEMENT_AFTER.match(sql, word.end()):
             continue
         update = _UPDATE.match(sql, word.start())
@@ -276,7 +274,17 @@ def _render(node: ast.expr) -> str:
             return "%s"
         if name == "Composed" and len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple)):
             return "".join(_render(part) for part in node.args[0].elts)
+        if _joined_parts(node) is not None:
+            return _render(node.func.value).join(_render(part) for part in _joined_parts(node))
     return "{}"
+
+
+def _joined_parts(node: ast.Call) -> list[ast.expr] | None:
+    """The parts of ``sep.join([...])`` over a literal list, which render joined."""
+    if _call_name(node) == "join" and isinstance(node.func, ast.Attribute) and _is_text(node.func.value) \
+            and len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple)):
+        return list(node.args[0].elts)
+    return None
 
 
 def _is_text(node: ast.AST) -> bool:
@@ -295,12 +303,16 @@ def _is_text(node: ast.AST) -> bool:
 def _consumed(node: ast.AST) -> list[ast.AST]:
     """The sub-expressions ``_render`` folds into ``node``'s text.
 
-    Anything else inside it (a ``.format`` or ``.join`` argument) is read
-    as an expression of its own, so a statement passed there is still seen.
+    Anything else inside it (a ``.format`` argument, or a ``.join`` over a
+    sequence built elsewhere) is read as an expression of its own, so a
+    statement passed there is still seen.
     """
     if not isinstance(node, ast.Call):
         return list(ast.iter_child_nodes(node))
     name = _call_name(node)
+    parts = _joined_parts(node)
+    if parts is not None:
+        return [node.func.value, node.args[0], *parts]
     if name in ("format", "join"):
         return [node.func.value] if isinstance(node.func, ast.Attribute) else []
     if name == "Composed" and node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
@@ -314,7 +326,11 @@ def _sql_literals(source: str) -> list[str]:
     An f-string, a ``+`` chain, a ``%`` template and ``psycopg.sql``
     composition are rendered whole, with each value Python supplies as
     ``{}``, so a target composed in Python reads as composed instead of as
-    unrelated fragments. Docstrings are prose.
+    unrelated fragments. A ``.join`` over a literal list renders joined, and
+    any other literal list or tuple of strings is read space-joined, as the
+    statement it may become elsewhere (each of its statements still parses
+    on its own). A bare ``UPDATE`` left outside such a list is refused.
+    Docstrings are prose.
     """
     tree = ast.parse(source)
     inner: set[int] = set()
@@ -324,8 +340,13 @@ def _sql_literals(source: str) -> list[str]:
             docstrings.add(id(node.value))
         if _is_text(node):
             inner.update(id(part) for part in _consumed(node))
+    sequences = [node for node in ast.walk(tree) if isinstance(node, (ast.List, ast.Tuple))
+                 and id(node) not in inner and any(_is_text(part) for part in node.elts)]
+    for node in sequences:
+        inner.update(id(part) for part in node.elts)
     return [_render(node) for node in ast.walk(tree)
-            if _is_text(node) and id(node) not in inner and id(node) not in docstrings]
+            if _is_text(node) and id(node) not in inner and id(node) not in docstrings] \
+        + [" ".join(_render(part) for part in node.elts) for node in sequences]
 
 
 # The SQLite runtime PG-C2 deletes; its statements never reach PostgreSQL.
@@ -422,6 +443,14 @@ class WriterAuditTests(unittest.TestCase):
             'stmt = sql.SQL("UPDATE ") + table + sql.SQL(" SET status = %s")',
             'parts = ["UPDATE "]',
             'stmt = sql.SQL(", ").join([sql.SQL("UPDATE prks.works SET status = %s")])',
+            'query = " ".join(["update", "works", "set", "status = %s"])',
+            'query = " ".join(("update works", "set status = %s"))',
+            'query = ", ".join(["update works set seen = now()", "author_text = %s"])',
+            'stmt = sql.SQL(" ").join([sql.SQL("update"), sql.Identifier("works"), sql.SQL("set status = %s")])',
+            'parts = ["update works", "set status = %s"]\nquery = " ".join(parts)',
+            'parts = [sql.SQL("update"), sql.Identifier("works"), sql.SQL("set status = %s")]',
+            'parts.append("update")',
+            'NEXT = "update"',
         ):
             with self.subTest(source=source):
                 _read, offenders = self.module_offences(rogue, source)
@@ -431,7 +460,10 @@ class WriterAuditTests(unittest.TestCase):
                        'LABEL = "Update Position fields"',
                        'HELP = "update the abstract, then save"',
                        'sql = f"UPDATE prks.jobs SET status = %s WHERE id = {job}"',
-                       'sql = "SELECT 1 FROM prks.works FOR UPDATE"'):
+                       'sql = "SELECT 1 FROM prks.works FOR UPDATE"',
+                       'raise ResearchError("nothing_to_update", "Nothing to update.")',
+                       'ACTIONS = ("create", "update", "delete")',
+                       'query = " ".join(["update", "prks.jobs", "set", "status = %s"])'):
             with self.subTest(source=source):
                 self.assertEqual(self.module_offences(rogue, source)[1], [])
         _read, offenders = self.module_offences(
