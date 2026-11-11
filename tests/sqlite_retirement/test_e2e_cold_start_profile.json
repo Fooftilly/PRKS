@@ -1,0 +1,17 @@
+{
+  "module": "tests/test_e2e_cold_start_profile.py",
+  "tests": {
+    "ChildStartupPhaseTests.test_text_reconcile_subphases_record_bounded_durations": {
+      "obsolete": "It times the stages of the SQLite text index's startup reconcile (PRKSTextIndex._reconcile_all_inner), which only server._sqlite_startup_maintenance runs. A PostgreSQL server runs no startup text reconcile: each adopted PDF queues a text job for the worker, and a gap in the derived rows schedules a repair job (tests/pg/test_search_rebuild.py::RepairTests), so there are no startup_text_* phases to record."
+    },
+    "ChildStartupPhaseTests.test_pending_pdf_records_extractor_probe_and_work_sync_once": {
+      "obsolete": "It times the stages of the SQLite text index's startup reconcile (PRKSTextIndex._reconcile_all_inner), which only server._sqlite_startup_maintenance runs. A PostgreSQL server runs no startup text reconcile: each adopted PDF queues a text job for the worker, and a gap in the derived rows schedules a repair job (tests/pg/test_search_rebuild.py::RepairTests), so there are no startup_text_* phases to record. The extractor availability probe is the text job's own (tests/pg/test_search_text.py::ExtractionTests.test_a_missing_extractor_records_no_outcome)."
+    },
+    "HarnessColdStartIntegrationTests.test_source_instruments_actual_reconcilers_and_entrypoint": {
+      "replaced_by": [
+        "tests/test_e2e_startup_profile.py::EntrypointInstrumentationTests.test_the_entrypoint_records_its_startup_phases"
+      ],
+      "note": "The entrypoint phases keep their check. The server and text_index phases it also checked are the SQLite startup reconcilers, which PostgreSQL does not run."
+    }
+  }
+}

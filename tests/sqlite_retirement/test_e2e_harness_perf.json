@@ -1,0 +1,52 @@
+{
+  "module": "tests/test_e2e_harness_perf.py",
+  "tests": {
+    "E2ESeedCacheTests.test_seed_snapshot_is_built_once_and_cloned_per_test": {
+      "obsolete": "The SQLite E2E seed cache builds a seeded storage root once per worker and clones its files into each test's root. A PostgreSQL E2E server is seeded with rows in its own disposable database before it starts (AppServer.start calls seed_postgres_library and never _materialize_seed), so there is no file template to cache, clone or reuse."
+    },
+    "E2ESeedCacheTests.test_cache_can_be_disabled_for_clean_ab_benchmark": {
+      "obsolete": "The SQLite E2E seed cache builds a seeded storage root once per worker and clones its files into each test's root. A PostgreSQL E2E server is seeded with rows in its own disposable database before it starts (AppServer.start calls seed_postgres_library and never _materialize_seed), so there is no file template to cache, clone or reuse. PRKS_E2E_SEED_CACHE has nothing to switch off."
+    },
+    "E2ESeedCacheTests.test_seeded_pdf_index_survives_real_snapshot_clone_without_import": {
+      "replaced_by": [
+        "tests/pg/test_e2e_library.py::PostgresLibraryLegTests.test_the_seed_writes_the_library_through_the_facade",
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_repeated_job_reads_nothing_again"
+      ],
+      "note": "On PostgreSQL the seed adopts the managed PDFs and queues their text jobs for the server's worker; a repeated text job for unchanged bytes extracts nothing again."
+    },
+    "E2ESeedCacheTests.test_seeded_index_detects_mutated_pdf_and_reextracts": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::CommandTests.test_a_replace_drops_the_old_text_and_queues_the_new",
+        "tests/pg/test_search_text.py::OrderingTests.test_an_extraction_of_replaced_bytes_writes_nothing"
+      ],
+      "note": "A PostgreSQL Asset's bytes change only through a replace, which records the new hash, drops the old text and queues a new extraction; the SQLite file fingerprint check has no counterpart."
+    },
+    "E2ESeedCacheTests.test_deleted_seed_index_rebuilds_from_canonical_pdfs": {
+      "replaced_by": [
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_full_rebuild_restores_a_fresh_recompute_and_a_second_changes_nothing",
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_text_extracts_what_is_missing_and_records_a_corrupt_pdf"
+      ]
+    },
+    "E2ESeedCacheTests.test_seed_index_unavailable_extractor_fails_closed": {
+      "replaced_by": [
+        "tests/pg/test_search_text.py::ExtractionTests.test_a_missing_extractor_records_no_outcome",
+        "tests/pg/test_search_rebuild.py::RebuildTests.test_a_missing_extractor_fails_the_run_which_resumes_from_its_cursor"
+      ]
+    },
+    "E2ESeedCacheTests.test_finalize_checkpoints_wal_into_main_db": {
+      "obsolete": "It covers finalizing the SQLite seed template: PRAGMA wal_checkpoint(TRUNCATE), the -wal and -shm companions, and refusing a template that an open SQLite writer holds. A PostgreSQL seed is committed rows in the server's own database, with no database file to checkpoint or copy, so the WAL handling goes with the SQLite seed cache."
+    },
+    "E2ESeedCacheTests.test_finalize_refuses_snapshot_when_checkpoint_busy": {
+      "obsolete": "It covers finalizing the SQLite seed template: PRAGMA wal_checkpoint(TRUNCATE), the -wal and -shm companions, and refusing a template that an open SQLite writer holds. A PostgreSQL seed is committed rows in the server's own database, with no database file to checkpoint or copy, so the WAL handling goes with the SQLite seed cache."
+    },
+    "E2ESeedCacheTests.test_materialize_does_not_cache_busy_seed_template": {
+      "obsolete": "It covers finalizing the SQLite seed template: PRAGMA wal_checkpoint(TRUNCATE), the -wal and -shm companions, and refusing a template that an open SQLite writer holds. A PostgreSQL seed is committed rows in the server's own database, with no database file to checkpoint or copy, so the WAL handling goes with the SQLite seed cache."
+    },
+    "E2ESeedCacheTests.test_failed_seed_attempt_does_not_poison_retry": {
+      "obsolete": "It covers finalizing the SQLite seed template: PRAGMA wal_checkpoint(TRUNCATE), the -wal and -shm companions, and refusing a template that an open SQLite writer holds. A PostgreSQL seed is committed rows in the server's own database, with no database file to checkpoint or copy, so the WAL handling goes with the SQLite seed cache. A failed PostgreSQL seed leaves no cache entry because nothing is cached."
+    },
+    "E2ESeedCacheTests.test_wal_checkpoint_ok_requires_busy_zero": {
+      "obsolete": "It covers finalizing the SQLite seed template: PRAGMA wal_checkpoint(TRUNCATE), the -wal and -shm companions, and refusing a template that an open SQLite writer holds. A PostgreSQL seed is committed rows in the server's own database, with no database file to checkpoint or copy, so the WAL handling goes with the SQLite seed cache."
+    }
+  }
+}
