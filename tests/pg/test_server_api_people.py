@@ -140,7 +140,11 @@ class ProfileEditTests(ServerApiTestCase):
         person = self.person(person_id)
         self.assertEqual((person["about"], [g["id"] for g in person["groups"]]), ("A new biography.", [group_id]))
 
-    def test_a_group_edit_naming_a_missing_parent_creates_nothing(self) -> None:
+    def test_a_refused_group_edit_leaves_its_typed_parent_uncreated(self) -> None:
+        # A typed parent that does not exist yet is created in the same
+        # transaction as the group. Each edit below is refused for a name that
+        # is already taken, after the parent was made: the refusal must roll the
+        # parent back with it.
         group_a = self.group("Atomic A")
         self.group("Atomic B")
         before = self.ok(self.get("/api/person-groups"))
