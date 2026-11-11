@@ -11,6 +11,7 @@ Research-ACK fence and Library isolation.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -483,3 +484,158 @@ class IsolationTests(ResearchIndexTestCase):
         self.assertEqual(self.mentions(theirs)["concepts"], [(their_concept, 0, 23)])
         self.assertEqual(self.sql("SELECT library_id FROM derived.work_note_state WHERE work_id = %s",
                                   (theirs,))[0]["library_id"], other.library_id)
+
+
+class EncodedReferenceTests(ResearchIndexTestCase):
+    def test_an_escaped_concept_delimiter_indexes_one_full_name(self) -> None:
+        work = self.library.add_work("Escaped Concept")
+        self.research_note(work, "See [[concept-encoded:Category%5D%5D%20Theory]] here.")
+        self.run_jobs()
+        concepts = self.concept_ids()
+        self.assertEqual(list(concepts), ["Category]] Theory"])
+        self.assertEqual([row[0] for row in self.mentions(work)["concepts"]], [concepts["Category]] Theory"]])
+        self.assertEqual([row["id"] for row in self.refs(work)["concepts"]], [concepts["Category]] Theory"]])
+
+    def test_the_content_hash_names_the_text(self) -> None:
+        self.assertEqual(reindex.content_hash("abc"), reindex.content_hash("abc"))
+        self.assertNotEqual(reindex.content_hash("abc"), reindex.content_hash("abd"))
+
+
+class ResearchNetworkTests(ResearchIndexTestCase):
+    """Concepts named by notes, the hierarchy, verdicts and cycles (the retired ``tests/test_research_network.py``)."""
+
+    def mention_count(self, concept_id: str) -> int:
+        return int(self.sql("SELECT count(*) AS n FROM derived.concept_mentions WHERE concept_id = %s",
+                            (concept_id,))[0]["n"])
+
+    def test_a_note_creates_its_concept_once_whatever_the_spelling(self) -> None:
+        work = self.library.add_work("Dialectic")
+        self.research_note(work, "Adorno's account of [[concept:Culture Industry]] depends upon standardization.")
+        (concept,) = self.library.list_concepts()
+        self.assertEqual((concept["name"], concept["description"]), ("Culture Industry", ""))
+        self.research_note(work, "Same idea as [[concept:culture industry]] and [[concept:  Culture   Industry  ]].")
+        self.assertEqual([item["id"] for item in self.library.list_concepts()], [concept["id"]])
+        self.assertIn("[[concept:culture industry]]", self.library.get_work(work)["text_content"])
+
+    def test_the_last_reference_going_keeps_the_concept(self) -> None:
+        a, b = self.library.add_work("A"), self.library.add_work("B")
+        self.research_note(a, "See [[concept:Culture Industry]].")
+        self.research_note(b, "Also [[concept:Culture Industry]].")
+        self.run_jobs()
+        (concept,) = self.library.list_concepts()
+        self.assertEqual(self.mention_count(concept["id"]), 2)
+        self.research_note(a, "No concept here.")
+        self.run_jobs()
+        self.assertEqual(self.mention_count(concept["id"]), 1)
+        self.research_note(b, "Gone.")
+        self.run_jobs()
+        self.assertEqual(self.mention_count(concept["id"]), 0)
+        self.assertIsNotNone(self.library.get_concept(concept["id"]))
+
+    def test_renames_aliases_and_collisions(self) -> None:
+        work = self.library.add_work("W")
+        self.research_note(work, "[[concept:Culture Industry]]")
+        (concept,) = self.library.list_concepts()
+        self.library.update_concept(concept["id"], name="Cultural Industry")
+        item = self.library.get_concept(concept["id"])
+        self.assertEqual((item["name"], item["aliases"]), ("Cultural Industry", ["Culture Industry"]))
+        self.research_note(work, "still [[concept:Culture Industry]]")
+        self.assertEqual(len(self.library.list_concepts()), 1)
+        # A capitalization-only rename changes the display name and adds no alias.
+        other = self.concept("Mass Culture")
+        self.library.update_concept(other, name="MASS CULTURE")
+        self.assertEqual((self.library.get_concept(other)["name"], self.library.get_concept(other)["aliases"]),
+                         ("MASS CULTURE", []))
+        self.refused("concept_exists", self.library.update_concept, other, name="Cultural Industry")
+        self.assertEqual(self.library.get_concept(other)["name"], "MASS CULTURE")
+        # An alias resolves a note to its Concept.
+        self.library.replace_concept_aliases(other, ["Kulturindustrie"])
+        self.research_note(work, "[[concept:Kulturindustrie]]")
+        self.assertEqual(len(self.library.list_concepts()), 2)
+
+    def test_parents_and_cycles(self) -> None:
+        a, b, c = self.concept("Critical Theory"), self.concept("Mass Culture"), self.concept("Culture Industry")
+        self.library.replace_concept_parents(c, [a, b])
+        self.assertEqual({p["id"] for p in self.library.get_concept(c)["parents"]}, {a, b})
+        self.library.replace_concept_parents(b, [a])
+        self.refused("concept_cycle", self.library.replace_concept_parents, a, [c])
+        self.refused("concept_cycle", self.library.replace_concept_parents, a, [a])
+
+    def test_a_referenced_concept_refuses_its_delete_whatever_the_index_says(self) -> None:
+        work = self.library.add_work("W")
+        self.research_note(work, "[[concept:Culture Industry]]")
+        (concept,) = self.library.list_concepts()
+        # The reindex job has not run: the canonical note is the guard, not the index.
+        self.assertEqual(self.mention_count(concept["id"]), 0)
+        error = self.refused("concept_in_use", self.library.delete_concept, concept["id"])
+        self.assertEqual(error.http_status, 409)
+        self.run_jobs()
+        self.refused("concept_in_use", self.library.delete_concept, concept["id"])
+        self.assertIsNotNone(self.library.get_concept(concept["id"]))
+
+    def test_code_escapes_private_notes_and_unknown_arguments_create_nothing(self) -> None:
+        work = self.library.add_work("W")
+        self.research_note(work, "code `[[concept:Culture Industry]]` and \\[[concept:Mass Culture]] [[argument:A-MISSING]]")
+        self.library.update_work_metadata(work, {"private_notes": "[[concept:Secret Idea]]"})
+        self.research_note(work, "public prose only")
+        self.assertEqual((self.library.list_concepts(), self.library.list_arguments()), ([], []))
+
+    def test_argument_sources_targets_responses_and_cycles(self) -> None:
+        w1, w2 = self.library.add_work("Work One"), self.library.add_work("Work Two")
+        pos = self.position("Mass-produced culture necessarily standardizes experience.")
+        a = self.library.create_argument(
+            name="Standardization argument", kind="argument",
+            main_text="Adorno argues cultural commodities become standardized.",
+            sources=[{"work_id": w1, "pages": "94–136"}, {"work_id": w2, "pages": "§3"}],
+            targets=[{"type": "position", "id": pos, "verdict_id": "supports"}])
+        self.assertEqual((a["kind"], len(a["sources"]), a["sources"][0]["pages"], a["targets"][0]["verdict_id"]),
+                         ("argument", 2, "94–136", "supports"))
+        stance = self.library.create_argument(name="Holds the position", kind="stance",
+                                              targets=[{"type": "position", "id": pos, "verdict_id": "holds"}])
+        self.assertEqual(stance["kind"], "stance")
+        b = self.argument("Habermas response", targets=[{"type": "argument", "id": a["id"], "verdict_id": "opposes"}])
+        self.assertEqual(self.library.get_argument(a["id"])["responses"][0]["id"], b)
+        self.refused("argument_cycle", self.library.replace_argument_targets, a["id"],
+                     [{"type": "argument", "id": a["id"], "verdict_id": "supports"}])
+        self.refused("argument_cycle", self.library.replace_argument_targets, a["id"],
+                     [{"type": "argument", "id": b, "verdict_id": "supports"}])
+        c = self.argument("C")
+        self.library.replace_argument_targets(b, [{"type": "argument", "id": c, "verdict_id": "qualifies"}])
+        self.library.replace_argument_targets(a["id"], [{"type": "argument", "id": b, "verdict_id": "qualifies"}])
+        self.refused("argument_cycle", self.library.replace_argument_targets, c,
+                     [{"type": "argument", "id": a["id"], "verdict_id": "supports"}])
+        with self.assertRaises(ResearchError) as caught:
+            self.library.create_argument(name="No verdict", kind="argument", targets=[{"type": "position", "id": pos}])
+        self.assertIn("verdict", caught.exception.code)
+
+    def test_a_noted_or_answered_argument_refuses_its_delete_whatever_the_index_says(self) -> None:
+        work = self.library.add_work("W")
+        argument = self.argument("Linked")
+        self.research_note(work, "See [[argument:%s|label]]." % argument)
+        self.refused("argument_in_use", self.library.delete_argument, argument)  # before the reindex
+        self.run_jobs()
+        self.refused("argument_in_use", self.library.delete_argument, argument)
+        self.research_note(work, "")
+        self.run_jobs()
+        other = self.argument("Response", targets=[{"type": "argument", "id": argument, "verdict_id": "opposes"}])
+        self.refused("argument_targeted", self.library.delete_argument, argument)
+        self.assertIsNotNone(self.library.get_argument(other))
+
+    def test_logs_never_carry_a_concept_name(self) -> None:
+        records: list[logging.LogRecord] = []
+
+        class Collect(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+        handler = Collect(level=logging.DEBUG)
+        root = logging.getLogger()
+        previous = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+        try:
+            self.concept("Culture Industry SECRETNAME")
+        finally:
+            root.removeHandler(handler)
+            root.setLevel(previous)
+        self.assertNotIn("SECRETNAME", "\n".join(record.getMessage() for record in records))

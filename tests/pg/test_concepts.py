@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import unicodedata
 from typing import Any
+from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
-from backend.domain.identity.library_scope import library_query
+from backend.domain.identity.library_scope import LibraryScope, library_query
 from backend.domain.research import concepts
 from backend.domain.works import notes
 from backend.entity_ids import generate
@@ -361,3 +362,74 @@ class ConcurrencyTests(ConceptTestCase):
         # resolves (and creates) the names it holds.
         self.assertEqual(contender, (True, 1))
         self.assertIsNone(self.library.get_concept(ethics))
+
+
+class CatalogTests(ConceptTestCase):
+    """The Concept catalog's child counts, parents and aliases (the retired ``tests/test_concept_catalog_counts.py``)."""
+
+    EDGES = {"beta": ["Alpha"], "Gamma": ["Alpha", "zeta"], "delta": ["beta", "Gamma", "Alpha"],
+             "Epsilon": ["delta"], "eta": ["delta", "zeta"], "Theta": ["Epsilon"], "iota": ["Theta", "eta", "beta"]}
+
+    def counts(self) -> dict[str, int]:
+        return {item["name"]: item["subconcept_count"] for item in self.library.list_concepts()}
+
+    def graph(self) -> dict[str, str]:
+        ids = {name: self.concept(name)
+               for name in ("zeta", "Alpha", "beta", "Gamma", "delta", "Epsilon", "eta", "Theta", "iota")}
+        for child, parents in self.EDGES.items():
+            self.library.replace_concept_parents(ids[child], [ids[p] for p in parents])
+        self.library.replace_concept_aliases(ids["Gamma"], ["gamma-2", "Gamma One"])
+        self.library.replace_concept_aliases(ids["iota"], ["jot"])
+        return ids
+
+    def catalog_statements(self) -> list[str]:
+        seen: list[str] = []
+        real = LibraryScope.execute
+
+        def record(scope: LibraryScope, query: Any, params: Any = None) -> Any:
+            seen.append(str(query))
+            return real(scope, query, params)
+
+        with mock.patch.object(LibraryScope, "execute", autospec=True, side_effect=record):
+            self.library.list_concepts()
+        return [query for query in seen if "concept" in query]
+
+    def test_child_counts_are_direct_children_once_per_parent(self) -> None:
+        self.assertEqual(self.library.list_concepts(), [])
+        lonely = self.concept("Lonely")
+        (item,) = self.library.list_concepts()
+        self.assertEqual((item["subconcept_count"], item["parents"], item["aliases"]), (0, [], []))
+        self.assertIs(type(item["subconcept_count"]), int)
+        for name in ("A", "B"):
+            self.library.replace_concept_parents(self.concept(name), [lonely])
+        left, right = self.concept("Left"), self.concept("Right")
+        mid = self.concept("Mid")
+        self.library.replace_concept_parents(mid, [left, right])
+        self.library.replace_concept_parents(self.concept("Leaf"), [mid])
+        self.assertEqual(self.counts(), {"A": 0, "B": 0, "Leaf": 0, "Left": 1, "Lonely": 2, "Mid": 1, "Right": 1})
+
+    def test_order_parents_aliases_and_counts_over_a_graph(self) -> None:
+        ids = self.graph()
+        items = self.library.list_concepts()
+        self.assertEqual([item["name"] for item in items],
+                         ["Alpha", "beta", "delta", "Epsilon", "eta", "Gamma", "iota", "Theta", "zeta"])
+        by_name = {item["name"]: item for item in items}
+        for child, parents in self.EDGES.items():
+            self.assertEqual(by_name[child]["parents"],
+                             [{"id": ids[p], "name": p} for p in sorted(parents, key=str.lower)], child)
+        self.assertEqual(self.counts(), {"Alpha": 3, "beta": 2, "delta": 2, "Epsilon": 1, "eta": 1, "Gamma": 1,
+                                         "iota": 0, "Theta": 1, "zeta": 2})
+        self.assertEqual((by_name["Gamma"]["aliases"], by_name["iota"]["aliases"]), (["Gamma One", "gamma-2"], ["jot"]))
+        for item in items:
+            self.assertIs(type(item["subconcept_count"]), int)
+            self.assertEqual(self.library.get_concept(item["id"])["name"], item["name"])
+
+    def test_the_catalog_is_three_uncorrelated_statements_whatever_its_size(self) -> None:
+        self.concept("Solo")
+        small = self.catalog_statements()
+        self.graph()
+        large = self.catalog_statements()
+        self.assertEqual(small, large)
+        self.assertEqual(len(large), 3)
+        for query in large:
+            self.assertNotIn("(SELECT", query.upper())

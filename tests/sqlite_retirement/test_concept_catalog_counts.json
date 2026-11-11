@@ -1,0 +1,49 @@
+{
+  "module": "tests/test_concept_catalog_counts.py",
+  "tests": {
+    "ConceptCatalogCountTests.test_no_concepts": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_child_counts_are_direct_children_once_per_parent"
+      ]
+    },
+    "ConceptCatalogCountTests.test_single_concept_has_zero_children": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_child_counts_are_direct_children_once_per_parent"
+      ]
+    },
+    "ConceptCatalogCountTests.test_one_direct_child": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_child_counts_are_direct_children_once_per_parent"
+      ]
+    },
+    "ConceptCatalogCountTests.test_several_direct_children": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_child_counts_are_direct_children_once_per_parent"
+      ]
+    },
+    "ConceptCatalogCountTests.test_multi_parent_child_counts_once_per_parent": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_child_counts_are_direct_children_once_per_parent"
+      ]
+    },
+    "ConceptCatalogCountTests.test_only_direct_children_count": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_child_counts_are_direct_children_once_per_parent"
+      ]
+    },
+    "ConceptCatalogCountTests.test_ordering_parents_and_output_parity_over_graph": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_order_parents_aliases_and_counts_over_a_graph"
+      ],
+      "note": "The frozen pre-#141 SQLite oracle is replaced by the expected order, parents, aliases and counts written out for the same graph."
+    },
+    "ConceptCatalogCountTests.test_query_shape_is_constant_and_uncorrelated": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::CatalogTests.test_the_catalog_is_three_uncorrelated_statements_whatever_its_size"
+      ]
+    },
+    "ConceptCatalogCountTests.test_old_query_plan_was_correlated": {
+      "obsolete": "Guards SQLite's EXPLAIN QUERY PLAN wording for the pre-#141 correlated count; the PostgreSQL catalog has no such statement and its test checks the statement text for any subquery instead."
+    }
+  }
+}
