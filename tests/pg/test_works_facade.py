@@ -296,6 +296,17 @@ class CreateTests(WorksFacadeTestCase):
         self.assertEqual((self.core(without)["text_content"], self.core(without)["private_notes"]),
                          ("", None))
 
+    def test_the_catalog_leaves_out_the_notes_the_detail_has(self) -> None:
+        text = "x" * 5000
+        work_id = self.library.add_work("Notes", text_content=text, private_notes="secret")
+        summary = next(row for row in self.library.get_all_works() if row["id"] == work_id)
+        self.assertNotIn("text_content", summary)
+        self.assertNotIn("private_notes", summary)
+        self.assertNotIn("secret", repr(summary))
+        detail = self.library.get_work(work_id)
+        assert detail is not None
+        self.assertEqual((detail["text_content"], detail["private_notes"]), (text, "secret"))
+
     def test_a_research_note_renders_its_wiki_links(self) -> None:
         work_id = self.library.add_work("Linked", text_content="See [[Other]]")
         self.assertEqual(self.library.get_work(work_id)["html_content"],
