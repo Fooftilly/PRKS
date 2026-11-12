@@ -44,16 +44,24 @@ class ManagedPdfTests(ServerApiTestCase):
         self.assertNotIn(work["id"], self.found(term, mode=""))
         self.assertIn(work["id"], self.found(term))
 
-    def test_a_replace_keeps_the_path_and_swaps_the_text(self) -> None:
+    def test_a_replace_stores_a_new_object_and_swaps_the_text(self) -> None:
+        """The new PDF is a fresh immutable object: the response and the Work name its new path."""
         work = self.upload("Overwrite Work", "oldtermreplacepdf", "overwrite.pdf")
         self.run_jobs()
         self.assertIn(work["id"], self.found("oldtermreplacepdf"))
+        original = self.ok(self.get(f"/api/works/{work['id']}"))["file_path"]
+        new_pdf = pdf_bytes("newtermreplacepdf")
         res = self.send("POST", f"/api/works/{work['id']}/pdf",
-                        {"file_b64": base64.b64encode(pdf_bytes("newtermreplacepdf")).decode("ascii")})
+                        {"file_b64": base64.b64encode(new_pdf).decode("ascii")})
         replaced = self.ok(res)
-        path = replaced.get("file_path") or self.ok(self.get(f"/api/works/{work['id']}"))["file_path"]
+        self.assertIn("file_path", replaced)
+        path = replaced["file_path"]
+        self.assertEqual(self.ok(self.get(f"/api/works/{work['id']}"))["file_path"], path)
+        self.assertNotEqual(path, original, "a replace never overwrites the old object")
         self.assertTrue(path.startswith("/api/pdfs/"))
-        self.assertIn(b"%PDF", self.get(path).raw[:32])
+        served = self.get(path)
+        self.assertEqual(served.status, 200)
+        self.assertEqual(served.raw, new_pdf)
         self.assertNotIn(work["id"], self.found("oldtermreplacepdf"))
         self.run_jobs()
         self.assertIn(work["id"], self.found("newtermreplacepdf"))
