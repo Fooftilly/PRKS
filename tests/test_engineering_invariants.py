@@ -4148,9 +4148,9 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
                 "    sorted(paths, key=os.path.basename)\n"
             ),
             "approved_helper_callbacks": (
-                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "from backend.pdf_linearize import linearize_pdf_to, is_pdf_linearized\n"
                 "def f(executor, paths):\n"
-                "    executor.submit(maybe_linearize_pdf_in_place, paths[0], context='bulk')\n"
+                "    executor.submit(linearize_pdf_to, paths[0], paths[1], context='bulk')\n"
                 "    list(filter(is_pdf_linearized, paths))\n"
             ),
             "local_callbacks": (
@@ -4373,7 +4373,7 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
             self.assertIn("store_new_managed_pdf_bytes", finding.message)
         self.assertEqual(len(process), 1)
         self.assertIn("backend.pdf_linearize", process[0].message)
-        self.assertIn("maybe_linearize_pdf_in_place", process[0].message)
+        self.assertIn("linearize_pdf_to", process[0].message)
 
     def test_same_orchestration_passes_in_focused_modules(self):
         """The rules are scoped to the adapter: the focused modules that own
@@ -4404,12 +4404,12 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
         cases = {
             "approved_storage_and_linearize_helpers": (
                 "from backend.services import work_pdf_replace\n"
-                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "from backend.pdf_linearize import linearize_pdf_to, is_pdf_linearized\n"
                 "def post(name, data):\n"
                 "    stored = work_pdf_replace.store_new_managed_pdf_bytes(pdfs_dir, name, data)\n"
                 "    abs_path = _safe_pdf_path_in_pdfs_dir(stored)\n"
                 "    if abs_path and not is_pdf_linearized(abs_path):\n"
-                "        maybe_linearize_pdf_in_place(abs_path, context='upload')\n"
+                "        linearize_pdf_to(abs_path, abs_path + '.linearized', context='upload')\n"
             ),
             "serve_managed_pdf": (
                 "import os\ndef get(path):\n"

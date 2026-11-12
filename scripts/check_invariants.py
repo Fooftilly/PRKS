@@ -3362,7 +3362,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                 f"{what} orchestrates an external process from the HTTP adapter. "
                 "backend/server.py must not run qpdf or any other subprocess: PDF "
                 "linearization belongs in backend.pdf_linearize (call "
-                "maybe_linearize_pdf_in_place / is_pdf_linearized); other external "
+                "linearize_pdf_to / is_pdf_linearized); other external "
                 "tools belong in a focused backend module"
             ),
         )
