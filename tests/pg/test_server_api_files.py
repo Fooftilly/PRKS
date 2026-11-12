@@ -21,7 +21,7 @@ from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
 
-class ManagedPdfTests(ServerApiTestCase):
+class ManagedPdfTestCase(ServerApiTestCase):
     def upload(self, title: str, text: str, name: str) -> dict[str, Any]:
         work = self.create_work(title, status="Planned", **self.upload_fields(text, name))
         return self.ok(self.get(f"/api/works/{work['id']}"))
@@ -29,6 +29,8 @@ class ManagedPdfTests(ServerApiTestCase):
     def found(self, term: str, mode: str = "any=1&") -> list[str]:
         return self.search_ids(f"/api/search?{mode}q={quote(term)}")
 
+
+class ManagedPdfTests(ManagedPdfTestCase):
     def test_an_upload_is_served_from_its_managed_path(self) -> None:
         work = self.upload("Upload API Work", "PRKS upload fetch smoke", "upload_test.pdf")
         self.assertTrue(work["file_path"].startswith("/api/pdfs/"))
@@ -136,3 +138,26 @@ class ManagedPdfTests(ServerApiTestCase):
         self.assertEqual((res.status, res.body.get("code")), (501, "not_ported"), res.raw)
         with open(path, "rb") as handle:
             self.assertEqual(handle.read(), before)
+
+
+class AdoptionSpellingTests(ManagedPdfTestCase):
+    def test_only_the_exact_managed_path_is_adopted(self) -> None:
+        """Encoded slashes, URL delimiters and padding never name a managed PDF.
+
+        SQLite trimmed outer whitespace before adopting; PostgreSQL refuses
+        every spelling but the exact path it serves.
+        """
+        work = self.upload("Spelling Owner", "spelling", "spelling.pdf")
+        path = work["file_path"]
+        name = path.rsplit("/", 1)[1]
+        for spelling in (f"{path}%2F", f"/api/pdfs/x%2F{name}", f"{path}?x", f"{path};x", f"{path}#x",
+                         f"  {path}  "):
+            with self.subTest(spelling=spelling):
+                body = self.refused(self.send("POST", "/api/works", {"title": "Adopt", "file_path": spelling}), 400)
+                self.assertEqual(body.get("error"), "file_path is not a managed PDF")
+        self.assertEqual(self.titles(), ["Spelling Owner"])
+        for suffix in ("?x", ";x"):
+            with self.subTest(suffix=suffix):
+                res = self.get(f"{path}{suffix}")
+                self.assertEqual(res.status, 200, "the route serves the path, never the delimiter")
+                self.assertIn(b"%PDF", res.raw[:32])

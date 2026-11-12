@@ -1,0 +1,1060 @@
+{
+  "module": "tests/test_server_api.py",
+  "tests": {
+    "TestServerAPI.test_10_thumbnail_endpoint_smoke": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_thumbnail_is_rendered_for_a_pdf_work"
+      ]
+    },
+    "TestServerAPI.test_10b_thumbnail_cache_follows_primary_asset_switch": {
+      "replaced_by": [
+        "tests/pg/test_works_primary_projection.py::PrimaryProjectionTests.test_the_thumbnail_fields_follow_the_primary_asset"
+      ]
+    },
+    "TestServerAPI.test_11_post_concepts_single_json_body": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_concept_is_created_from_one_json_body"
+      ]
+    },
+    "TestServerAPI.test_12_pdf_path_outside_storage_returns_404": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_the_pdf_route_validates_the_whole_suffix"
+      ]
+    },
+    "TestServerAPI.test_12b_pdf_route_validates_the_whole_suffix": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_the_pdf_route_validates_the_whole_suffix"
+      ]
+    },
+    "TestServerAPI.test_13_get_work_not_found_404": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_an_unknown_work_is_404_and_a_search_is_a_list"
+      ]
+    },
+    "TestServerAPI.test_14_search_returns_json_list": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_an_unknown_work_is_404_and_a_search_is_a_list"
+      ]
+    },
+    "TestServerAPI.test_15_post_concepts_does_not_attach_work_metadata": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_concept_never_attaches_a_role_to_the_work_it_mentions"
+      ]
+    },
+    "TestServerAPI.test_16_playlist_add_item_and_get": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_playlist_lists_the_work_added_to_it"
+      ]
+    },
+    "TestServerAPI.test_17_post_pdf_rejects_unsafe_stored_file_path": {
+      "obsolete": "Seeds a pre-guard row holding file_path /api/pdfs/..; PostgreSQL stores no client path (an Asset names a key the store minted at ingest) and migrates no SQLite library before 1.0 (#613, R20), so no such row exists. Refusing the spelling is test_a_dotdot_file_path_is_refused_on_create_and_on_patch."
+    },
+    "TestServerAPI.test_17b_post_and_patch_reject_dotdot_file_path_with_400": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_dotdot_file_path_is_refused_on_create_and_on_patch"
+      ],
+      "note": "A PATCH of any file_path is 501 not_ported on PostgreSQL."
+    },
+    "TestServerAPI.test_18_delete_work_with_dotdot_file_path_does_not_crash": {
+      "obsolete": "Seeds a pre-guard row holding file_path /api/pdfs/..; PostgreSQL stores no client path (an Asset names a key the store minted at ingest) and migrates no SQLite library before 1.0 (#613, R20), so no such row exists."
+    },
+    "TestServerAPI.test_19_delete_non_empty_folder_returns_conflict": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_folder_that_holds_a_work_refuses_deletion"
+      ]
+    },
+    "TestServerAPI.test_1_get_works_empty": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::RequestIdTests.test_a_read_carries_a_request_id"
+      ]
+    },
+    "TestServerAPI.test_1a_internal_error_has_request_id": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::RequestIdTests.test_an_internal_error_names_its_request_id"
+      ]
+    },
+    "TestServerAPI.test_1aa_client_errors_endpoint_accepts_payload": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::RequestIdTests.test_the_client_error_log_takes_an_object_only"
+      ]
+    },
+    "TestServerAPI.test_1ab_client_errors_endpoint_rejects_invalid_payload": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::RequestIdTests.test_the_client_error_log_takes_an_object_only"
+      ]
+    },
+    "TestServerAPI.test_1b_settings_get_and_patch_annotation_author": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::SettingsTests.test_annotation_author_and_bibtex_fields_are_patched_and_read_back"
+      ]
+    },
+    "TestServerAPI.test_20_tags_endpoint_roundtrip": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_tag_is_created_and_listed"
+      ]
+    },
+    "TestServerAPI.test_20b_tags_merge_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_tag_merge_moves_its_works_and_a_self_merge_is_refused"
+      ]
+    },
+    "TestServerAPI.test_20c_delete_tag_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_tag_delete_removes_it_with_its_aliases_and_promotes_nothing"
+      ]
+    },
+    "TestServerAPI.test_21_recent_and_bibtex_smoke": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::RecentAndBibtexTests.test_only_the_open_event_puts_a_work_in_recent"
+      ]
+    },
+    "TestServerAPI.test_21b_bibtex_includes_translator_role": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::RecentAndBibtexTests.test_bibtex_names_the_translator"
+      ]
+    },
+    "TestServerAPI.test_21c_bibtex_includes_book_contributor_roles": {
+      "replaced_by": [
+        "tests/pg/test_server_api_catalog.py::RecentAndBibtexTests.test_bibtex_names_a_books_introduction_foreword_and_afterword"
+      ]
+    },
+    "TestServerAPI.test_22_roles_and_annotations_endpoints": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::RoleTests.test_a_role_is_added_and_removed_once_beside_annotations"
+      ],
+      "note": "Annotations need a managed PDF on PostgreSQL."
+    },
+    "TestServerAPI.test_22b_role_credit_name_post_and_patch": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::RoleTests.test_a_credit_name_is_set_changed_and_cleared"
+      ]
+    },
+    "TestServerAPI.test_22c10_atomic_pdf_temps_are_unique_and_path_lock_is_shared": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::StoreTests.test_two_ingests_of_one_file_are_two_objects",
+        "tests/pg/test_annotations_materialize.py::ConcurrencyTests.test_two_materializations_of_one_asset_hold_the_locks_in_turn"
+      ],
+      "note": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist."
+    },
+    "TestServerAPI.test_22c11_shared_managed_pdf_cow_keeps_sibling_materialization_honest": {
+      "obsolete": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist."
+    },
+    "TestServerAPI.test_22c12_legacy_annotations_reject_stale_set_revision": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::LegacyReplaceTests.test_a_stale_set_revision_is_refused_and_the_base_is_required"
+      ]
+    },
+    "TestServerAPI.test_22c13_cow_stale_final_mark_returns_retargeted_file_path": {
+      "obsolete": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist."
+    },
+    "TestServerAPI.test_22c14_cow_retarget_db_failure_removes_orphan_exclusive": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::FailureTests.test_a_failure_after_adoption_rolls_the_command_back"
+      ],
+      "note": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist. A failed commit leaves the new key to the orphan sweep."
+    },
+    "TestServerAPI.test_22c15_cow_retarget_zero_row_after_delete_removes_orphan": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::ConcurrencyTests.test_a_work_deleted_while_rendering_is_not_found",
+        "tests/pg/test_annotations_materialize.py::ConcurrencyTests.test_a_work_delete_holding_the_work_refuses_the_commit"
+      ],
+      "note": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist."
+    },
+    "TestServerAPI.test_22c2_annotation_adopt_byte_only": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::LegacyReplaceTests.test_byte_only_markup_is_adopted_and_links_are_skipped"
+      ]
+    },
+    "TestServerAPI.test_22c3_online_legacy_marks_via_pdf_claim": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_only_a_pdf_claim_marks_the_bytes_materialized"
+      ]
+    },
+    "TestServerAPI.test_22c4_annotations_only_never_marks_materialization": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_an_annotation_save_never_marks_even_with_a_leftover_pdf_token"
+      ],
+      "note": "A plain replace on PostgreSQL reports what its new bytes embed (the empty set when there are no annotations)."
+    },
+    "TestServerAPI.test_22c5_same_token_replay_does_not_mark_new_generation": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_a_replayed_token_never_marks_a_later_set_and_a_stale_claim_is_refused"
+      ]
+    },
+    "TestServerAPI.test_22c6_intervening_annotations_reject_stale_pdf_claim": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_a_claim_overtaken_by_another_save_is_refused_and_the_current_one_wins",
+        "tests/pg/test_annotations_materialize.py::RenderingRaceTests.test_an_edit_holding_the_locks_is_seen_by_the_commit",
+        "tests/pg/test_annotations_materialize.py::RenderingRaceTests.test_a_commit_holding_the_locks_is_seen_by_an_edit"
+      ],
+      "note": "The held process lock is SQLite's; PostgreSQL serializes the claim on the Work and Asset row locks."
+    },
+    "TestServerAPI.test_22c7_pdf_post_no_managed_pdf_404_before_mark": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_a_claim_on_a_work_without_a_managed_pdf_is_404_and_records_nothing"
+      ]
+    },
+    "TestServerAPI.test_22c8_pdf_post_missing_work_does_not_grow_lock_dict": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_a_claim_on_a_work_without_a_managed_pdf_is_404_and_records_nothing"
+      ],
+      "note": "PostgreSQL takes no process lock for POST /pdf, so there is no lock dictionary to grow; the missing Work is still 404."
+    },
+    "TestServerAPI.test_22c9_atomic_pdf_replace_keeps_live_bytes_on_write_failure": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::FailureTests.test_a_write_that_fails_publishes_nothing",
+        "tests/pg/test_objects_ingest.py::FailureTests.test_a_failed_ingest_leaves_existing_objects_alone"
+      ],
+      "note": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist."
+    },
+    "TestServerAPI.test_22c_annotation_http_validation": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::LegacyReplaceTests.test_a_malformed_or_conflicting_list_changes_nothing",
+        "tests/pg/test_server_api_annotations.py::LegacyReplaceTests.test_a_work_without_a_managed_pdf_stores_no_annotation"
+      ],
+      "note": "A viewer id belongs to each file on PostgreSQL, so another Work's id is no conflict (tests/pg/test_annotations.py::PersistenceTests.test_one_viewer_id_on_two_assets_is_two_annotations)."
+    },
+    "TestServerAPI.test_22d_annotation_save_token_only_after_success": {
+      "replaced_by": [
+        "tests/pg/test_server_api_annotations.py::LegacyReplaceTests.test_a_save_token_is_recorded_only_after_a_save"
+      ]
+    },
+    "TestServerAPI.test_23_static_path_traversal_blocked": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::RouteTests.test_a_static_path_never_leaves_the_served_tree"
+      ]
+    },
+    "TestServerAPI.test_24_invalid_pdf_base64_returns_400": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::RouteTests.test_a_pdf_body_that_is_not_base64_is_refused"
+      ]
+    },
+    "TestServerAPI.test_25_folder_works_post_patch_and_get_folder_fields": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::RouteTests.test_a_work_is_in_one_folder_and_moves_or_leaves_it_by_patch"
+      ]
+    },
+    "TestServerAPI.test_2_create_and_get_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::WorkRouteTests.test_create_get_patch_and_delete"
+      ]
+    },
+    "TestServerAPI.test_3_create_folder": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::FolderRouteTests.test_create_and_patch_private_notes"
+      ]
+    },
+    "TestServerAPI.test_3b_create_folder_duplicate_name_conflict": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::FolderRouteTests.test_a_duplicate_name_is_a_conflict_whatever_its_case"
+      ]
+    },
+    "TestServerAPI.test_3c_create_subfolder_with_parent": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::FolderRouteTests.test_a_subfolder_names_its_parent_and_a_cycle_is_refused"
+      ]
+    },
+    "TestServerAPI.test_4_patch_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::WorkRouteTests.test_create_get_patch_and_delete"
+      ]
+    },
+    "TestServerAPI.test_4b_patch_work_private_notes": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::WorkRouteTests.test_create_get_patch_and_delete"
+      ]
+    },
+    "TestServerAPI.test_4c_patch_folder_private_notes": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::FolderRouteTests.test_create_and_patch_private_notes"
+      ]
+    },
+    "TestServerAPI.test_4d_patch_folder_parent_and_cycle_rejection": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::FolderRouteTests.test_a_subfolder_names_its_parent_and_a_cycle_is_refused"
+      ]
+    },
+    "TestServerAPI.test_5_delete_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::WorkRouteTests.test_create_get_patch_and_delete"
+      ]
+    },
+    "TestServerAPI.test_5b_delete_missing_work_returns_200": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::WorkRouteTests.test_deleting_a_missing_work_is_a_clean_no_op"
+      ]
+    },
+    "TestServerAPI.test_5c_post_work_folder_rollback_removes_partial_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_a_filing_refused_after_the_create_undoes_the_work_and_its_text"
+      ]
+    },
+    "TestServerAPI.test_5d_post_work_into_missing_folder_is_refused_before_creation": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_a_missing_folder_is_refused_before_anything_is_stored"
+      ]
+    },
+    "TestServerAPI.test_5e_filing_into_a_missing_folder_is_a_refusal_not_a_500": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_the_domain_refuses_filing_into_a_missing_folder_or_a_missing_work"
+      ]
+    },
+    "TestServerAPI.test_5f_post_work_with_unknown_person_is_refused_before_creation": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_an_unknown_person_is_refused_before_anything_is_stored"
+      ]
+    },
+    "TestServerAPI.test_5g_person_deleted_after_the_check_leaves_no_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_a_person_deleted_after_the_check_leaves_no_work_and_no_alias"
+      ]
+    },
+    "TestServerAPI.test_5h_filing_a_missing_work_is_not_called_a_missing_folder": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_the_domain_refuses_filing_into_a_missing_folder_or_a_missing_work"
+      ]
+    },
+    "TestServerAPI.test_5i_refused_roles_leave_no_alias_promotion_behind": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_a_person_deleted_after_the_check_leaves_no_work_and_no_alias"
+      ]
+    },
+    "TestServerAPI.test_5j_valid_roles_still_promote_credit_and_keep_order": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::InitialRoleTests.test_valid_roles_keep_their_order_and_promote_the_credit"
+      ]
+    },
+    "TestServerAPI.test_5k_roles_creation_would_skip_do_not_block_the_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::InitialRoleTests.test_roles_the_create_would_skip_do_not_block_it"
+      ]
+    },
+    "TestServerAPI.test_5l_refused_roles_leave_the_playlist_untouched": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_refused_roles_leave_the_playlist_untouched"
+      ]
+    },
+    "TestServerAPI.test_5m_undoing_a_create_keeps_an_adopted_pdf": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_undoing_a_create_never_claims_a_pdf_it_only_adopted"
+      ]
+    },
+    "TestServerAPI.test_6_patch_person": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::PersonRouteTests.test_links_are_patched_and_read_back"
+      ]
+    },
+    "TestServerAPI.test_6b_delete_unlinked_person": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::PersonRouteTests.test_an_unlinked_person_is_deleted_and_a_linked_one_is_a_conflict"
+      ]
+    },
+    "TestServerAPI.test_6c_delete_linked_person_conflict": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::PersonRouteTests.test_an_unlinked_person_is_deleted_and_a_linked_one_is_a_conflict"
+      ]
+    },
+    "TestServerAPI.test_7_person_groups_api": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::PersonRouteTests.test_person_groups_and_their_members"
+      ]
+    },
+    "TestServerAPI.test_8_pdf_upload_and_fetch": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_an_upload_is_served_from_its_managed_path"
+      ]
+    },
+    "TestServerAPI.test_8b_search_indexes_pdf_text_all_mode_only": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_pdf_text_is_found_by_any_mode_only_once_extracted"
+      ]
+    },
+    "TestServerAPI.test_9_pdf_overwrite_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_replace_stores_a_new_object_and_swaps_the_text"
+      ]
+    },
+    "TestServerAPI.test_9b2_patch_file_path_syncs_text_index": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_file_path_change_is_refused_as_not_ported_and_changes_nothing"
+      ],
+      "note": "On PostgreSQL a file_path PATCH is not ported (501 not_ported, pre-1.0): a Work's file changes only through the replace route, so there is no PATCH adoption to guard. The refused change keeps the Work's text."
+    },
+    "TestServerAPI.test_9b3_overwrite_extraction_failure_clears_old_text": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_replace_whose_extraction_fails_leaves_neither_text"
+      ]
+    },
+    "TestServerAPI.test_9b_manual_reindex_pdf_text": {
+      "replaced_by": [
+        "tests/pg/test_http_search.py::SearchHttpTests.test_the_pdf_text_rebuild_route_queues_a_text_rebuild"
+      ]
+    },
+    "TestServerAPI.test_9c_linearize_existing_pdfs_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_linearizing_existing_pdfs_is_refused_as_not_ported"
+      ],
+      "note": "Managed PDFs are immutable objects on PostgreSQL; rewriting them in place is not ported (501). Uploads are linearized at ingest."
+    },
+    "TestServerAPI.test_a_failed_pdf_write_leaves_no_orphan_in_the_managed_directory": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::StoreTests.test_a_failed_source_write_publishes_nothing"
+      ]
+    },
+    "TestServerAPI.test_a_file_backed_work_is_not_enriched_however_its_url_looks": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_file_backed_work_is_never_enriched"
+      ]
+    },
+    "TestServerAPI.test_a_linearization_failure_does_not_fail_or_orphan_the_upload": {
+      "replaced_by": [
+        "tests/pg/test_server_api_uploads.py::UploadTests.test_a_failed_linearization_never_fails_the_upload",
+        "tests/pg/test_objects_ingest.py::StoreTests.test_a_linearized_copy_that_cannot_be_stored_falls_back_to_the_source"
+      ]
+    },
+    "TestServerAPI.test_a_rejected_create_never_removes_a_pdf_it_did_not_upload": {
+      "replaced_by": [
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_undoing_a_create_never_claims_a_pdf_it_only_adopted"
+      ]
+    },
+    "TestServerAPI.test_a_rejected_work_create_leaves_no_stored_pdf_behind": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::FacadeTests.test_an_upload_refused_before_storing_writes_nothing",
+        "tests/pg/test_objects_ingest.py::FacadeTests.test_a_create_refused_after_storing_leaves_only_orphans"
+      ],
+      "note": "A create refused after its bytes are stored leaves them to the orphan sweep on PostgreSQL (§11.2), never removed by the request."
+    },
+    "TestServerAPI.test_adopting_an_existing_managed_pdf_holds_the_cleanup_lock": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_a_settle_meeting_an_adoption_in_flight_keeps_the_object",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_an_adoption_meeting_a_settle_in_flight_fails_cleanly",
+        "tests/pg/test_server_api_core.py::CreateRefusalTests.test_undoing_a_create_never_claims_a_pdf_it_only_adopted"
+      ],
+      "note": "PostgreSQL has no per-basename cleanup lock: adoption and cleanup serialize on the object's row lock in one transaction."
+    },
+    "TestServerAPI.test_an_inferred_video_is_enriched_exactly_like_a_declared_one": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_an_inferred_video_is_enriched_like_a_declared_one"
+      ]
+    },
+    "TestServerAPI.test_an_unexpected_add_work_failure_leaves_no_stored_pdf_behind": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::FailureTests.test_a_rolled_back_create_leaves_the_bytes_to_the_sweep"
+      ],
+      "note": "The bytes are left to the orphan sweep on PostgreSQL (§11.2), never removed by the request."
+    },
+    "TestServerAPI.test_an_unknown_source_kind_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_the_source_kind_is_stored_canonically_and_an_unknown_one_is_refused"
+      ]
+    },
+    "TestServerAPI.test_browse_projection_is_compact": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_the_browse_projection_is_compact"
+      ]
+    },
+    "TestServerAPI.test_browse_projections_are_deterministically_ordered": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_the_projections_are_deterministically_ordered"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_bad_content_type_rejected": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_cross_origin_or_non_json_request_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_does_not_sync_text_index": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_status_change_never_reindexes_text"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_invalid_status_400": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_bad_status_an_unknown_action_or_a_missing_work_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_missing_work_is_atomic": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_bad_status_an_unknown_action_or_a_missing_work_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_privacy_no_title_in_logs": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_no_title_reaches_the_logs"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_status_and_counts": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_status_change_counts_each_work_once_and_touches_only_those"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_trust_cross_origin_forbidden": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_cross_origin_or_non_json_request_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_bulk_works_unknown_action_400": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_bad_status_an_unknown_action_or_a_missing_work_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_create_rejects_encoded_slash_file_path_alias": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::AdoptionSpellingTests.test_only_the_exact_managed_path_is_adopted"
+      ]
+    },
+    "TestServerAPI.test_create_rejects_url_delimiter_file_path_spellings": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::AdoptionSpellingTests.test_only_the_exact_managed_path_is_adopted"
+      ]
+    },
+    "TestServerAPI.test_create_with_whitespace_file_path_stores_canonical_and_holds_lock": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::AdoptionSpellingTests.test_only_the_exact_managed_path_is_adopted"
+      ],
+      "note": "PostgreSQL refuses a padded file_path instead of trimming it; it has no cleanup lock to hold."
+    },
+    "TestServerAPI.test_default_folder_destination_is_uncategorized": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_no_folder_files_the_work_in_uncategorized"
+      ]
+    },
+    "TestServerAPI.test_default_works_etag_follows_managed_pdf_file_size": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_works_catalog_follows_a_replaced_pdfs_size"
+      ],
+      "note": "A managed PDF never grows in place on PostgreSQL; its size changes through a replace."
+    },
+    "TestServerAPI.test_every_response_forbids_mime_sniffing": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::ShellTests.test_every_response_forbids_mime_sniffing"
+      ]
+    },
+    "TestServerAPI.test_failed_tag_merge_changes_no_canonical_relationship": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::TagReportTests.test_a_refused_merge_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_folders_etag_changes_on_bulk_move_folder": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_folder_catalog_follows_a_move_and_a_bulk_move"
+      ]
+    },
+    "TestServerAPI.test_folders_etag_changes_when_a_work_moves_between_folders": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_folder_catalog_follows_a_move_and_a_bulk_move"
+      ]
+    },
+    "TestServerAPI.test_folders_etag_follows_every_index_field_within_one_second": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_folder_catalog_follows_every_field_back_to_back"
+      ]
+    },
+    "TestServerAPI.test_folders_etag_is_stable_when_nothing_changed": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_an_unchanged_folder_catalog_revalidates"
+      ]
+    },
+    "TestServerAPI.test_get_work_never_mutates_last_opened_at": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::OpenEventTests.test_reading_a_work_never_records_an_open"
+      ]
+    },
+    "TestServerAPI.test_group_http_failure_does_not_create_typed_parent": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_refused_group_edit_leaves_its_typed_parent_uncreated"
+      ]
+    },
+    "TestServerAPI.test_index_sync_failure_keeps_note": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::ResearchNoteTests.test_a_failed_reindex_keeps_the_note"
+      ]
+    },
+    "TestServerAPI.test_internal_refresh_shaped_mutations_do_not_record_an_open": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::OpenEventTests.test_a_save_and_its_refresh_read_never_record_an_open"
+      ]
+    },
+    "TestServerAPI.test_linking_through_the_api_advances_the_relationship_revision": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::RoleApiTests.test_linking_and_crediting_advance_the_relationship_revision"
+      ]
+    },
+    "TestServerAPI.test_managed_pdf_names_survive_being_re_minted_for_copy_on_write": {
+      "obsolete": "PostgreSQL never shares one managed object between Works by path or rewrites it in place: every write goes to a fresh key adopted under the Work and Asset locks, so the copy-on-write retarget does not exist."
+    },
+    "TestServerAPI.test_missing_argument_ref_omitted_from_research_refs": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::ResearchNoteTests.test_a_missing_argument_is_left_out_of_the_references"
+      ]
+    },
+    "TestServerAPI.test_note_save_creates_concept_and_research_refs": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::ResearchNoteTests.test_a_note_names_a_new_concept_and_lists_it_once_reindexed",
+        "tests/pg/test_http_research.py::ResearchNoteRouteTests.test_note_refs_pending_until_the_reindex_runs"
+      ]
+    },
+    "TestServerAPI.test_oembed_reconstructs_a_canonical_validated_youtube_url": {
+      "replaced_by": [
+        "tests/pg/test_server_api_uploads.py::OembedTests.test_only_the_canonical_validated_url_is_looked_up"
+      ]
+    },
+    "TestServerAPI.test_oembed_stays_best_effort_for_malformed_unicode": {
+      "replaced_by": [
+        "tests/pg/test_server_api_uploads.py::OembedTests.test_a_malformed_source_url_keeps_the_lookup_best_effort"
+      ]
+    },
+    "TestServerAPI.test_open_event_is_idempotent_in_membership_and_404s_for_unknown": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::OpenEventTests.test_the_open_event_lists_a_work_once_and_an_unknown_one_is_404"
+      ]
+    },
+    "TestServerAPI.test_patch_echoing_same_file_path_skips_adoption_when_pdf_missing": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_file_path_change_is_refused_as_not_ported_and_changes_nothing"
+      ],
+      "note": "On PostgreSQL a file_path PATCH is not ported (501 not_ported, pre-1.0): a Work's file changes only through the replace route, so there is no PATCH adoption to guard."
+    },
+    "TestServerAPI.test_patch_retarget_away_last_weak_alias_wakes_deferred_claim": {
+      "obsolete": "Weak aliases (``/api/pdfs/../a.pdf``) and deferred claims are SQLite path spellings; PostgreSQL Assets name canonical object keys and a file_path PATCH is not ported."
+    },
+    "TestServerAPI.test_patch_retarget_claims_and_unlinks_old_managed_pdf": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_file_path_change_is_refused_as_not_ported_and_changes_nothing",
+        "tests/pg/test_objects_lifecycle.py::RewriteTests.test_a_rewrite_points_at_the_new_key_and_claims_the_old"
+      ],
+      "note": "On PostgreSQL a file_path PATCH is not ported (501 not_ported, pre-1.0): a Work's file changes only through the replace route, so there is no PATCH adoption to guard. A replace claims the old keys."
+    },
+    "TestServerAPI.test_patch_same_path_drop_survives_concurrent_retarget_cleanup": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_file_path_change_is_refused_as_not_ported_and_changes_nothing"
+      ],
+      "note": "On PostgreSQL a file_path PATCH is not ported (501 not_ported, pre-1.0): a Work's file changes only through the replace route, so there is no PATCH adoption to guard."
+    },
+    "TestServerAPI.test_patching_file_path_onto_a_work_holds_the_cleanup_lock": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_file_path_change_is_refused_as_not_ported_and_changes_nothing"
+      ],
+      "note": "On PostgreSQL a file_path PATCH is not ported (501 not_ported, pre-1.0): a Work's file changes only through the replace route, so there is no PATCH adoption to guard."
+    },
+    "TestServerAPI.test_pdf_get_strips_url_delimiters_to_stem_path": {
+      "replaced_by": [
+        "tests/pg/test_server_api_files.py::AdoptionSpellingTests.test_only_the_exact_managed_path_is_adopted"
+      ]
+    },
+    "TestServerAPI.test_pdf_upload_writes_only_inside_the_managed_pdf_directory": {
+      "replaced_by": [
+        "tests/pg/test_server_api_uploads.py::UploadTests.test_an_upload_is_stored_only_inside_the_pdf_store"
+      ]
+    },
+    "TestServerAPI.test_person_groups_etag_follows_same_second_body_and_membership": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_person_group_catalog_follows_a_description_and_a_member"
+      ],
+      "note": "PostgreSQL ETags name the representation, never an updated_at stamp, so there is no stamp to restore."
+    },
+    "TestServerAPI.test_person_metadata_only_patch_leaves_memberships_untouched": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_metadata_only_edit_keeps_the_memberships"
+      ]
+    },
+    "TestServerAPI.test_person_profile_patch_applies_metadata_and_groups_together": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_metadata_and_groups_are_applied_together"
+      ]
+    },
+    "TestServerAPI.test_person_profile_patch_is_atomic_across_metadata_and_groups": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_missing_group_refuses_the_whole_edit"
+      ]
+    },
+    "TestServerAPI.test_persons_etag_follows_same_second_body_and_membership": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_person_catalog_follows_a_biography_and_a_membership"
+      ],
+      "note": "PostgreSQL ETags name the representation, never an updated_at stamp, so there is no stamp to restore."
+    },
+    "TestServerAPI.test_playlists_etag_follows_same_second_title_membership_and_content": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_playlist_catalog_follows_title_membership_and_notes_but_not_order"
+      ],
+      "note": "PostgreSQL ETags name the representation, never an updated_at stamp, so there is no stamp to restore."
+    },
+    "TestServerAPI.test_processing_files_api_scan_patch_and_import": {
+      "replaced_by": [
+        "tests/pg/test_http_processing.py::UploadTests.test_an_upload_creates_an_item_and_a_replay_answers_it_without_reading_the_body",
+        "tests/pg/test_http_processing.py::QueueTests.test_edit_at_a_revision",
+        "tests/pg/test_http_processing.py::ImportAndDeleteTests.test_import_once_then_replay"
+      ],
+      "note": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1)."
+    },
+    "TestServerAPI.test_processing_files_contract_round_trip": {
+      "replaced_by": [
+        "tests/pg/test_http_processing.py::QueueTests.test_pages",
+        "tests/pg/test_http_processing.py::ImportAndDeleteTests.test_a_batch_answers_each_item",
+        "tests/pg/test_http_processing.py::AccessTests.test_the_openapi_document_is_served"
+      ],
+      "note": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1)."
+    },
+    "TestServerAPI.test_processing_files_pdf_preview_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_http_processing.py::QueueTests.test_preview_with_range_and_head"
+      ],
+      "note": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1)."
+    },
+    "TestServerAPI.test_processing_files_refusals_keep_domain_messages": {
+      "replaced_by": [
+        "tests/pg/test_http_processing.py::UploadTests.test_a_body_that_is_not_a_pdf_or_ends_early_is_refused_and_leaves_no_item",
+        "tests/pg/test_http_processing.py::ImportAndDeleteTests.test_delete_is_idempotent_and_refuses_import"
+      ],
+      "note": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1)."
+    },
+    "TestServerAPI.test_processing_files_request_schema_matches_the_live_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_http_processing.py::RequestSchemaParityTests.test_patch_bodies_agree",
+        "tests/pg/test_http_processing.py::RequestSchemaParityTests.test_import_bodies_agree",
+        "tests/pg/test_http_processing.py::RequestSchemaParityTests.test_no_write_omits_its_json_body"
+      ],
+      "note": "The path-based inbox's PATCH/import routes are replaced by the upload queue (Processing redesign, L-PR-1). The same parity (coercions, ignored keys, skipped entries, the status alias, refused types, missing bodies) is checked against the served /api/openapi/processing-items.json with openapi-core and the live PostgreSQL routes."
+    },
+    "TestServerAPI.test_processing_files_rescan_query_controls_scan_and_avoids_duplicate_fetch": {
+      "obsolete": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1). There is no folder to scan, so there is no rescan query."
+    },
+    "TestServerAPI.test_publishers_api_list_create_alias_delete": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::PublisherTests.test_a_publisher_is_listed_created_aliased_and_deleted"
+      ]
+    },
+    "TestServerAPI.test_publishers_api_refuses_wrong_types_and_keeps_domain_messages": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::PublisherTests.test_wrong_types_are_refused_and_domain_messages_are_kept"
+      ]
+    },
+    "TestServerAPI.test_recent_etag_follows_display_change_of_a_listed_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_recent_follows_an_open_and_a_listed_works_title"
+      ]
+    },
+    "TestServerAPI.test_recent_etag_follows_opening_a_work": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_recent_follows_an_open_and_a_listed_works_title"
+      ]
+    },
+    "TestServerAPI.test_recently_added_etag_follows_create_and_member_edit": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_recently_added_follows_a_create_an_edit_and_a_move"
+      ]
+    },
+    "TestServerAPI.test_research_note_ack_includes_research_refs_not_body": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::ResearchNoteTests.test_a_note_acknowledgement_carries_the_references_not_the_body"
+      ],
+      "note": "On PostgreSQL the acknowledgement's references are pending until the queued reindex ran."
+    },
+    "TestServerAPI.test_rollback_keeps_the_pdf_when_ownership_cannot_be_established": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::FailureTests.test_a_rolled_back_create_leaves_the_bytes_to_the_sweep"
+      ],
+      "note": "A request never removes stored bytes on PostgreSQL; the sweep decides ownership from the catalogue."
+    },
+    "TestServerAPI.test_saved_view_tag_results_are_live_after_bulk_remove": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_a_tag_view_follows_a_bulk_tag_removal"
+      ]
+    },
+    "TestServerAPI.test_saved_views_crud_and_duplicate_name": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_a_view_is_created_listed_read_renamed_and_deleted"
+      ]
+    },
+    "TestServerAPI.test_saved_views_live_results_match_search": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_an_author_view_stores_the_search_and_its_results_stay_live"
+      ]
+    },
+    "TestServerAPI.test_saved_views_privacy_sentinel_not_logged": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_no_saved_query_reaches_the_logs"
+      ]
+    },
+    "TestServerAPI.test_saved_views_reject_invalid_and_partial_search": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_an_incomplete_search_is_refused_on_create_and_on_update"
+      ]
+    },
+    "TestServerAPI.test_saved_views_request_schema_matches_the_live_endpoint": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_the_request_schema_matches_the_live_endpoint"
+      ]
+    },
+    "TestServerAPI.test_saved_views_trust_boundary": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_a_cross_origin_or_non_json_request_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_saved_views_wrong_types_keep_domain_messages": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_wrong_types_keep_the_domain_messages"
+      ]
+    },
+    "TestServerAPI.test_search_publisher_query_param": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::PublisherTests.test_a_search_by_publisher_finds_the_work"
+      ]
+    },
+    "TestServerAPI.test_server_cached_jpeg_served_as_jpeg": {
+      "replaced_by": [
+        "tests/pg/test_objects_portraits.py::SuccessTests.test_a_jpeg_portrait_keeps_its_encoding"
+      ]
+    },
+    "TestServerAPI.test_server_invalid_image_url_patch_does_not_purge_cache": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::PortraitTests.test_a_private_image_url_is_refused_on_edit_and_keeps_the_portrait"
+      ]
+    },
+    "TestServerAPI.test_server_invalid_image_url_post_rejected": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::PortraitTests.test_a_private_image_url_is_refused_on_create_and_creates_no_person"
+      ]
+    },
+    "TestServerAPI.test_server_invalid_remote_bytes_not_cached": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::PortraitTests.test_remote_bytes_that_are_not_an_image_are_never_served",
+        "tests/pg/test_objects_portraits.py::FailureTests.test_a_failed_fetch_or_transcode_writes_nothing"
+      ]
+    },
+    "TestServerAPI.test_server_legacy_bin_migrated_and_invalid_not_served": {
+      "obsolete": "The legacy .bin portrait cache predates the WebP cache on SQLite; PostgreSQL migrates no SQLite library before 1.0 (#613, R20) and stores portraits as objects (tests/pg/test_objects_portraits.py)."
+    },
+    "TestServerAPI.test_server_person_profile_image_cache_purged_on_image_url_change": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::PortraitTests.test_a_new_image_url_is_fetched_again",
+        "tests/pg/test_objects_portraits.py::PersonChangeTests.test_changing_the_image_url_claims_the_portrait"
+      ]
+    },
+    "TestServerAPI.test_server_person_profile_image_serves_cache_when_remote_fails": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::PortraitTests.test_a_portrait_is_served_and_stays_served_when_the_remote_fails"
+      ]
+    },
+    "TestServerAPI.test_server_post_work_without_folder_id_uses_uncategorized": {
+      "replaced_by": [
+        "tests/pg/test_server_api_routes.py::RouteTests.test_a_work_is_filed_in_uncategorized_by_default"
+      ]
+    },
+    "TestServerAPI.test_server_stale_loopback_image_url_never_connects": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::PortraitTests.test_a_stored_loopback_image_url_is_never_connected_to"
+      ]
+    },
+    "TestServerAPI.test_source_kind_is_stored_canonically": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_the_source_kind_is_stored_canonically_and_an_unknown_one_is_refused"
+      ]
+    },
+    "TestServerAPI.test_stale_index_argument_delete_returns_409": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::ResearchNoteTests.test_a_concept_or_argument_a_note_names_refuses_deletion_before_the_reindex"
+      ]
+    },
+    "TestServerAPI.test_stale_index_concept_delete_returns_409": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::ResearchNoteTests.test_a_concept_or_argument_a_note_names_refuses_deletion_before_the_reindex"
+      ]
+    },
+    "TestServerAPI.test_tag_delete_reports_affected_works_and_folders": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::TagReportTests.test_a_delete_reports_the_works_and_folders_it_changed"
+      ]
+    },
+    "TestServerAPI.test_tag_merge_reports_entities_that_already_carry_both": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::TagReportTests.test_a_merge_reports_a_work_that_already_carried_both"
+      ]
+    },
+    "TestServerAPI.test_tag_merge_reports_source_linked_works_and_folders": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::TagReportTests.test_a_merge_reports_the_sources_works_and_folders"
+      ]
+    },
+    "TestServerAPI.test_tags_etag_representation_contract": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_tag_catalog_follows_colors_aliases_and_the_set_but_not_links"
+      ],
+      "note": "No route renames a tag or an alias, and PostgreSQL keeps names in step with their identity keys, so the SQL renames are alias changes here."
+    },
+    "TestServerAPI.test_the_role_api_refuses_a_role_outside_the_domain": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::RoleApiTests.test_a_role_outside_the_domain_is_refused"
+      ]
+    },
+    "TestServerAPI.test_the_role_api_refuses_an_oversized_credit_name": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::RoleApiTests.test_an_oversized_credit_name_is_refused_on_add_and_on_edit"
+      ]
+    },
+    "TestServerAPI.test_trust_attacker_host_and_origin_rejected_as_untrusted_host": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_an_untrusted_or_repeated_host_is_refused_and_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_trust_cross_origin_delete_leaves_work": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_cross_origin_delete_leaves_the_work"
+      ]
+    },
+    "TestServerAPI.test_trust_cross_origin_post_forbidden": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_cross_origin_null_or_repeated_origin_is_refused_and_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_trust_duplicate_content_type_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_json_body_needs_one_json_content_type"
+      ]
+    },
+    "TestServerAPI.test_trust_duplicate_host_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_an_untrusted_or_repeated_host_is_refused_and_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_trust_duplicate_origin_forbidden": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_cross_origin_null_or_repeated_origin_is_refused_and_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_trust_empty_body_missing_content_type_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_json_body_needs_one_json_content_type"
+      ]
+    },
+    "TestServerAPI.test_trust_empty_json_body_keeps_object_semantics": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_an_empty_json_body_is_an_empty_object"
+      ]
+    },
+    "TestServerAPI.test_trust_form_urlencoded_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_json_body_needs_one_json_content_type"
+      ]
+    },
+    "TestServerAPI.test_trust_json_charset_patch_allowed": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_json_content_type_with_a_charset_is_served"
+      ]
+    },
+    "TestServerAPI.test_trust_localhost_host_allowed": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_loopback_host_by_name_or_address_is_served"
+      ]
+    },
+    "TestServerAPI.test_trust_loopback_ip_host_allowed": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_loopback_host_by_name_or_address_is_served"
+      ]
+    },
+    "TestServerAPI.test_trust_missing_content_type_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_json_body_needs_one_json_content_type"
+      ]
+    },
+    "TestServerAPI.test_trust_missing_origin_json_allowed": {
+      "replaced_by": [
+        "tests/pg/test_http_admission.py::CsrfTests.test_cross_origin_and_malformed_requests_are_refused"
+      ],
+      "note": "Stricter on PostgreSQL: a mutation without Origin needs Sec-Fetch-Site: same-origin, or it is refused."
+    },
+    "TestServerAPI.test_trust_origin_null_forbidden": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_cross_origin_null_or_repeated_origin_is_refused_and_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_trust_same_origin_json_post_allowed": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_same_origin_json_post_is_served"
+      ]
+    },
+    "TestServerAPI.test_trust_text_plain_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_a_json_body_needs_one_json_content_type"
+      ]
+    },
+    "TestServerAPI.test_trust_untrusted_host_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_trust.py::TrustBoundaryTests.test_an_untrusted_or_repeated_host_is_refused_and_changes_nothing"
+      ]
+    },
+    "TestServerAPI.test_two_same_second_uploads_do_not_share_one_managed_pdf": {
+      "replaced_by": [
+        "tests/pg/test_server_api_uploads.py::UploadTests.test_two_uploads_of_one_name_never_share_a_managed_pdf",
+        "tests/pg/test_objects_ingest.py::StoreTests.test_two_ingests_of_one_file_are_two_objects"
+      ]
+    },
+    "TestServerAPI.test_upload_filenames_are_sanitized_without_being_mangled": {
+      "replaced_by": [
+        "tests/pg/test_server_api_uploads.py::UploadTests.test_upload_names_are_sanitized_without_being_mangled"
+      ]
+    },
+    "TestServerAPI.test_video_work_lookalike_youtube_hostname_rejected": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_video_needs_a_youtube_url_and_a_refusal_creates_nothing"
+      ]
+    },
+    "TestServerAPI.test_video_work_malformed_url_rejected_no_work_created": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_video_needs_a_youtube_url_and_a_refusal_creates_nothing"
+      ]
+    },
+    "TestServerAPI.test_video_work_missing_url_rejected": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_video_needs_a_youtube_url_and_a_refusal_creates_nothing"
+      ]
+    },
+    "TestServerAPI.test_video_work_non_youtube_url_rejected_no_work_created": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_video_needs_a_youtube_url_and_a_refusal_creates_nothing"
+      ]
+    },
+    "TestServerAPI.test_video_work_valid_short_url_accepted": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_watch_or_short_url_is_accepted"
+      ]
+    },
+    "TestServerAPI.test_video_work_valid_watch_url_accepted": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::VideoSourceTests.test_a_watch_or_short_url_is_accepted"
+      ]
+    },
+    "TestServerAPI.test_vue_bootstrap_bundle_is_served_with_the_shell": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::ShellTests.test_the_vue_bundle_is_served_with_the_shell"
+      ]
+    },
+    "TestServerAPI.test_work_creation_with_initial_roles_is_construction": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::RoleApiTests.test_a_work_created_with_roles_keeps_their_order_at_revision_0"
+      ]
+    },
+    "TestServerAPI.test_work_metadata_sync_http_lost_response_replay": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::SyncReplayTests.test_a_metadata_operation_whose_response_was_lost_replays_at_revision_1"
+      ]
+    },
+    "TestServerAPI.test_work_tag_sync_http_replay_and_options_etag": {
+      "replaced_by": [
+        "tests/pg/test_server_api_work_writes.py::SyncReplayTests.test_a_tag_operation_replays_its_first_result"
+      ]
+    },
+    "TestServerAPI.test_works_browse_etag_follows_every_rendered_field": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_the_works_browse_follows_every_rendered_field_but_not_a_move"
+      ]
+    },
+    "TestServerAPI.test_works_browse_etag_follows_managed_pdf_file_size": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_the_works_browse_follows_a_replaced_pdfs_size"
+      ],
+      "note": "A managed PDF never grows in place on PostgreSQL; its size changes through a replace."
+    }
+  }
+}
