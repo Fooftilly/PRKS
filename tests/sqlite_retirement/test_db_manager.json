@@ -79,7 +79,7 @@
     },
     "TestDBManager.test_bibtex_author_text_fallback_escapes_special_characters": {
       "replaced_by": [
-        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_escaping_whitespace_and_unicode"
+        "tests/pg/test_works_bibtex.py::AuthorTextTests.test_the_author_text_fallback_escapes_special_characters"
       ]
     },
     "TestDBManager.test_bibtex_author_without_given_name_or_mononym": {
@@ -314,14 +314,12 @@
     },
     "TestDBManager.test_etag_works_catalog_updates_on_add_role": {
       "replaced_by": [
-        "tests/test_works_core_parity.py::WorksCoreParityTests.test_etags_follow_the_representation",
-        "tests/test_people_roles_parity.py::RoleParityTests.test_links_read_back_on_the_work_and_its_summaries"
+        "tests/pg/test_people_roles.py::CatalogEtagTests.test_adding_and_removing_a_credit_change_the_catalog_etag"
       ]
     },
     "TestDBManager.test_etag_works_catalog_updates_on_delete_work_role": {
       "replaced_by": [
-        "tests/test_works_core_parity.py::WorksCoreParityTests.test_etags_follow_the_representation",
-        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+        "tests/pg/test_people_roles.py::CatalogEtagTests.test_adding_and_removing_a_credit_change_the_catalog_etag"
       ]
     },
     "TestDBManager.test_folder_operations": {
