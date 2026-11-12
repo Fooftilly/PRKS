@@ -118,6 +118,25 @@ class MembershipTests(PlaylistTestCase):
         self.assertEqual({row["title"]: row["item_count"] for row in self.library.get_all_playlists()},
                          {"A": 1, "B": 0})
 
+    def test_a_failed_removal_leaves_the_membership_and_revisions(self) -> None:
+        # Offline coherence treats a failed request as a no-op, so a partly
+        # committed removal would make a stale cache look eligible.
+        playlist_id = self.add("Rollback")
+        (work_id,) = self.works("Rollback Work")
+        self.library.add_work_to_playlist(playlist_id, work_id)
+        before = (self.membership(work_id), self.state(playlist_id), self.items(playlist_id),
+                  self.library.get_playlist(playlist_id)["updated_at"])
+        # The timestamp write runs after the item is deleted and the order
+        # advanced, so failing it is exactly the partial-commit window.
+        with mock.patch.object(playlists, "_touch", side_effect=RuntimeError("forced timestamp failure")):
+            with self.assertRaises(RuntimeError):
+                self.library.remove_work_from_playlist(playlist_id, work_id)
+        self.assertEqual((self.membership(work_id), self.state(playlist_id), self.items(playlist_id),
+                          self.library.get_playlist(playlist_id)["updated_at"]), before)
+        # The ordinary removal still works once the injected failure is gone.
+        self.library.remove_work_from_playlist(playlist_id, work_id)
+        self.assertEqual(self.items(playlist_id), [])
+
     def test_a_missing_work_or_playlist_is_refused(self) -> None:
         playlist_id, work_id = self.add("A"), self.library.add_work("W")
         for args in ((generate("PL"), work_id), (playlist_id, generate("W")), (" ", work_id), (playlist_id, "")):
