@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -505,6 +506,61 @@ class TestStoragePackageImport(unittest.TestCase):
 
             importlib.reload(storage_pkg)
         self.assertFalse(hasattr(storage_pkg, "resolve_storage_root"))
+
+
+class StoragePathJoinTests(unittest.TestCase):
+    """The child-path join every managed file goes through (moved from ``tests/test_db_manager.py``)."""
+
+    def _assert_posix_child(self, actual, root, *parts):
+        """Assert a POSIX acceptance result, skipping the check on Windows.
+
+        ``windows_semantics=False`` disables drive-prefix *validation* only; the
+        join still uses native ``Path`` semantics. On Windows a drive-looking
+        segment re-anchors regardless, so the helper returns None (or another
+        path) and there is no POSIX expectation to assert.
+        """
+        if os.name == "nt":
+            return
+        self.assertEqual(actual, os.path.realpath(os.path.join(root, *parts)))
+
+    def test_resolved_child_path_rejects_a_drive_qualified_segment_at_any_depth(self):
+        """The rule belongs to the join, so it is tested on the primitive.
+
+        ``joinpath()`` re-anchors on a drive-qualified component wherever it
+        appears. Same drive silently rewrites the target and stays beneath the
+        root, so containment cannot catch it; a different drive leaves the root
+        altogether.
+        """
+        root = tempfile.mkdtemp()
+        try:
+            for parts in (
+                ("C:sample.pdf",),
+                ("batch", "C:sample.pdf"),
+                ("batch", "D:other.pdf"),
+                ("batch", "sub", "c:deep.pdf"),
+            ):
+                with self.subTest(parts=parts):
+                    self.assertIsNone(
+                        paths.resolved_child_path(
+                            root, *parts, windows_semantics=True
+                        )
+                    )
+                    # POSIX keeps them: ordinary filename characters there.
+                    self._assert_posix_child(
+                        paths.resolved_child_path(
+                            root, *parts, windows_semantics=False
+                        ),
+                        root,
+                        *parts,
+                    )
+            self.assertEqual(
+                paths.resolved_child_path(
+                    root, "batch", "plain.pdf", windows_semantics=True
+                ),
+                os.path.realpath(os.path.join(root, "batch", "plain.pdf")),
+            )
+        finally:
+            shutil.rmtree(root)
 
 
 if __name__ == "__main__":

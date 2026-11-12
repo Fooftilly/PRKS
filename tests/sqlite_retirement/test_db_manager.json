@@ -1,0 +1,685 @@
+{
+  "module": "tests/test_db_manager.py",
+  "tests": {
+    "TestDBManager.test_add_and_get_work": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_work_without_a_source",
+        "tests/pg/test_server_api_core.py::WorkRouteTests.test_create_get_patch_and_delete"
+      ]
+    },
+    "TestDBManager.test_add_folder_allows_same_title_under_different_parents": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::IdentityTests.test_titles_are_unique_per_parent_by_identity_key"
+      ]
+    },
+    "TestDBManager.test_add_folder_rejects_duplicate_title": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::IdentityTests.test_titles_are_unique_per_parent_by_identity_key",
+        "tests/pg/test_server_api_core.py::FolderRouteTests.test_a_duplicate_name_is_a_conflict_whatever_its_case"
+      ]
+    },
+    "TestDBManager.test_add_person_group_parent_name_creates_parent": {
+      "replaced_by": [
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_a_group_with_a_new_parent_by_name",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_an_existing_parent_is_found_by_name"
+      ]
+    },
+    "TestDBManager.test_add_role_rejects_duplicate_person_and_role": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_a_constructed_duplicate_is_refused",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_refusals"
+      ]
+    },
+    "TestDBManager.test_add_tag_case_insensitive_returns_same_id": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::IdentityTests.test_names_compare_by_identity_key",
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_names_aliases_and_the_catalog"
+      ]
+    },
+    "TestDBManager.test_add_work_thumb_page_and_private_notes": {
+      "replaced_by": [
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_pdf_fields",
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_a_private_note_through_patch"
+      ]
+    },
+    "TestDBManager.test_add_work_thumb_page_invalid_becomes_null": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_an_invalid_page_never_reaches_the_column"
+      ]
+    },
+    "TestDBManager.test_add_work_to_folder_rejects_other_folder": {
+      "replaced_by": [
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_work_filing_and_the_work_projection",
+        "tests/pg/test_folders.py::WorkFilingTests.test_filing_moving_and_clearing_advance_the_work_folder"
+      ]
+    },
+    "TestDBManager.test_app_settings_annotation_author": {
+      "replaced_by": [
+        "tests/test_settings_parity.py::SettingsFacadeParityTests.test_defaults_and_the_annotation_author",
+        "tests/pg/test_settings.py::ReadAndPatchTests.test_the_annotation_author"
+      ]
+    },
+    "TestDBManager.test_app_settings_bibtex_export_fields_invalid": {
+      "replaced_by": [
+        "tests/test_settings_parity.py::SettingsFacadeParityTests.test_unknown_keys_and_refusals",
+        "tests/pg/test_settings.py::ReadAndPatchTests.test_invalid_values_are_refused_with_sqlites_messages"
+      ]
+    },
+    "TestDBManager.test_app_settings_bibtex_export_fields_patch_merge": {
+      "replaced_by": [
+        "tests/test_settings_parity.py::SettingsFacadeParityTests.test_complete_and_partial_profile_patches",
+        "tests/pg/test_settings.py::ReadAndPatchTests.test_complete_and_partial_profile_patches_merge"
+      ]
+    },
+    "TestDBManager.test_append_person_alias_if_new": {
+      "replaced_by": [
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_which_credits_become_aliases",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credits_that_are_the_name_or_hold_a_comma_are_not_promoted"
+      ]
+    },
+    "TestDBManager.test_bibtex_author_text_fallback_escapes_special_characters": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_escaping_whitespace_and_unicode"
+      ]
+    },
+    "TestDBManager.test_bibtex_author_without_given_name_or_mononym": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors",
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_cite_keys"
+      ]
+    },
+    "TestDBManager.test_bibtex_blank_author_text_keeps_unknown_cite_key": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_cite_keys",
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_a_work_with_only_a_title"
+      ]
+    },
+    "TestDBManager.test_bibtex_empty_family_in_text_credit_does_not_crash": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors"
+      ]
+    },
+    "TestDBManager.test_bibtex_falls_back_to_author_text_without_linked_author": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors"
+      ]
+    },
+    "TestDBManager.test_bibtex_fileless_pdf_with_video_url_credits_persons": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_a_url_never_makes_a_pdf_a_video"
+      ]
+    },
+    "TestDBManager.test_bibtex_generation": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_every_entry_type_and_unknown_ones",
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors"
+      ]
+    },
+    "TestDBManager.test_bibtex_heuristic_when_doc_type_empty": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_every_entry_type_and_unknown_ones"
+      ]
+    },
+    "TestDBManager.test_bibtex_includes_intro_foreword_afterword_roles": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_a_book_credits_every_exported_role_in_order",
+        "tests/pg/test_server_api_catalog.py::RecentAndBibtexTests.test_bibtex_names_a_books_introduction_foreword_and_afterword"
+      ]
+    },
+    "TestDBManager.test_bibtex_includes_translator_role": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_a_book_credits_every_exported_role_in_order",
+        "tests/pg/test_server_api_catalog.py::RecentAndBibtexTests.test_bibtex_names_the_translator"
+      ]
+    },
+    "TestDBManager.test_bibtex_legacy_video_without_source_kind_is_corporate": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_a_video_whose_stored_kind_is_missing_or_cased_stays_a_video"
+      ]
+    },
+    "TestDBManager.test_bibtex_linked_author_precedes_author_text": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors"
+      ]
+    },
+    "TestDBManager.test_bibtex_location_multiple_places": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_escaping_whitespace_and_unicode",
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_every_export_field_toggle"
+      ]
+    },
+    "TestDBManager.test_bibtex_location_semicolon_normalizes_whitespace": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_escaping_whitespace_and_unicode"
+      ]
+    },
+    "TestDBManager.test_bibtex_location_single_place": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_every_export_field_toggle"
+      ]
+    },
+    "TestDBManager.test_bibtex_malformed_names_keep_one_valid_entry": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_unpaired_braces_never_break_the_entry",
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_cite_keys_hold_no_entry_structure"
+      ]
+    },
+    "TestDBManager.test_bibtex_misc_from_doc_type": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_every_entry_type_and_unknown_ones"
+      ]
+    },
+    "TestDBManager.test_bibtex_multiple_authors_follow_role_order": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_roles_follow_order_index_then_insertion"
+      ]
+    },
+    "TestDBManager.test_bibtex_plain_author_text_uses_last_word_for_cite_key": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_cite_keys"
+      ]
+    },
+    "TestDBManager.test_bibtex_respects_export_field_omissions": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_every_export_field_toggle"
+      ]
+    },
+    "TestDBManager.test_bibtex_uses_credit_name_for_author": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_author_text_and_linked_authors",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "TestDBManager.test_bibtex_video_channel_credit_is_a_single_corporate_author": {
+      "replaced_by": [
+        "tests/test_works_bibtex_parity.py::BibtexParityTests.test_a_video_channel_is_one_corporate_author"
+      ]
+    },
+    "TestDBManager.test_bulk_deduplicates_work_ids": {
+      "replaced_by": [
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_status_change_counts_each_work_once_and_touches_only_those"
+      ]
+    },
+    "TestDBManager.test_bulk_invalid_folder_is_atomic": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_missing_works_folders_and_tags_are_refused_alike_and_change_nothing",
+        "tests/pg/test_works_bulk.py::RefusalTests.test_a_missing_work_folder_or_tag_refuses_with_404_and_writes_nothing"
+      ]
+    },
+    "TestDBManager.test_bulk_invalid_tag_is_atomic": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_missing_works_folders_and_tags_are_refused_alike_and_change_nothing",
+        "tests/pg/test_works_bulk.py::RefusalTests.test_a_missing_work_folder_or_tag_refuses_with_404_and_writes_nothing"
+      ]
+    },
+    "TestDBManager.test_bulk_invalid_work_is_atomic": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_missing_works_folders_and_tags_are_refused_alike_and_change_nothing",
+        "tests/pg/test_works_bulk.py::RefusalTests.test_a_missing_work_folder_or_tag_refuses_with_404_and_writes_nothing"
+      ]
+    },
+    "TestDBManager.test_bulk_move_folder_advances_work_folder_revision_only_on_change": {
+      "replaced_by": [
+        "tests/pg/test_works_bulk.py::ActionTests.test_move_folder_files_moves_and_clears_through_the_work_folder_scope"
+      ]
+    },
+    "TestDBManager.test_bulk_move_folder_and_clear": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_move_folder_files_moves_and_clears_alike"
+      ]
+    },
+    "TestDBManager.test_bulk_rejects_over_limit": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_invalid_bodies_are_refused_alike",
+        "tests/pg/test_works_bulk.py::RefusalTests.test_an_invalid_body_is_refused_before_the_database_is_reached"
+      ]
+    },
+    "TestDBManager.test_bulk_rejects_unknown_action": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_invalid_bodies_are_refused_alike",
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_bad_status_an_unknown_action_or_a_missing_work_changes_nothing"
+      ]
+    },
+    "TestDBManager.test_bulk_set_status_rejects_invalid_values": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_invalid_bodies_are_refused_alike",
+        "tests/pg/test_server_api_bulk_views.py::BulkTests.test_a_bad_status_an_unknown_action_or_a_missing_work_changes_nothing"
+      ]
+    },
+    "TestDBManager.test_bulk_set_status_updates_selected_only": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_set_status_answers_and_advances_alike",
+        "tests/pg/test_works_bulk.py::ActionTests.test_set_status_advances_only_the_works_that_change"
+      ]
+    },
+    "TestDBManager.test_bulk_tags_add_remove_idempotent": {
+      "replaced_by": [
+        "tests/test_works_bulk_parity.py::BulkWorkParityTests.test_tag_actions_are_idempotent_alike",
+        "tests/pg/test_works_bulk.py::ActionTests.test_tag_actions_are_idempotent_and_advance_only_changed_links"
+      ]
+    },
+    "TestDBManager.test_bulk_transaction_rollback_on_injected_failure": {
+      "replaced_by": [
+        "tests/pg/test_works_bulk.py::RefusalTests.test_a_failure_on_a_later_work_rolls_back_every_earlier_one"
+      ]
+    },
+    "TestDBManager.test_delete_folder_rejects_subfolders": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::DeleteTests.test_a_folder_with_files_or_subfolders_is_refused"
+      ]
+    },
+    "TestDBManager.test_delete_tag_removes_tag_and_aliases": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_delete",
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_tag_delete_removes_it_with_its_aliases_and_promotes_nothing"
+      ]
+    },
+    "TestDBManager.test_delete_work": {
+      "replaced_by": [
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_deleting_works"
+      ]
+    },
+    "TestDBManager.test_delete_work_keeps_tags_that_were_only_linked_to_it": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_deleting_a_work_keeps_its_tags"
+      ]
+    },
+    "TestDBManager.test_delete_work_removes_pdf_thumbnail_cache_files": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_delete_removes_the_work_its_thumbnails_and_claims_its_file",
+        "tests/test_derived_caches.py::ThumbnailCleanupTests.test_only_the_works_thumbnails_are_removed"
+      ]
+    },
+    "TestDBManager.test_delete_work_role": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "TestDBManager.test_delete_work_with_unsafe_pdf_path_still_removes_row": {
+      "replaced_by": [
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_deleting_works",
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_delete_cascades_and_tombstones_every_scope"
+      ]
+    },
+    "TestDBManager.test_ensure_default_uncategorized_folder_id_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::RaceTests.test_two_first_uncategorized_lookups_make_one_folder",
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_uncategorized_and_related_folders"
+      ]
+    },
+    "TestDBManager.test_etag_works_catalog_follows_pdf_size_without_row_change": {
+      "replaced_by": [
+        "tests/pg/test_server_api_freshness.py::CatalogEtagTests.test_the_works_catalog_follows_a_replaced_pdfs_size"
+      ]
+    },
+    "TestDBManager.test_etag_works_catalog_updates_on_add_role": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_etags_follow_the_representation",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_links_read_back_on_the_work_and_its_summaries"
+      ]
+    },
+    "TestDBManager.test_etag_works_catalog_updates_on_delete_work_role": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_etags_follow_the_representation",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "TestDBManager.test_folder_operations": {
+      "replaced_by": [
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_create_read_and_list",
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_delete",
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_work_filing_and_the_work_projection"
+      ]
+    },
+    "TestDBManager.test_folder_reparent_cycle_guard_and_top_level_move": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::HierarchyTests.test_a_cycle_is_refused_at_any_depth",
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_fields_hierarchy_and_their_revisions"
+      ]
+    },
+    "TestDBManager.test_get_all_folders_hides_empty_uncategorized": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::WorkFilingTests.test_the_uncategorized_folder_is_one_root_folder_hidden_while_empty"
+      ]
+    },
+    "TestDBManager.test_get_all_tags_includes_aliases_array": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_names_aliases_and_the_catalog"
+      ]
+    },
+    "TestDBManager.test_get_all_works_includes_folder_id": {
+      "replaced_by": [
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_work_filing_and_the_work_projection"
+      ]
+    },
+    "TestDBManager.test_get_all_works_linked_authors_multiple": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_links_read_back_on_the_work_and_its_summaries"
+      ]
+    },
+    "TestDBManager.test_get_all_works_omits_text_and_private_notes": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_the_catalog_lists",
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_a_private_note_through_patch"
+      ]
+    },
+    "TestDBManager.test_get_all_works_sets_file_size_bytes_for_local_pdf": {
+      "replaced_by": [
+        "tests/test_works_core_parity.py::WorksCoreParityTests.test_a_managed_pdf_records_its_file"
+      ]
+    },
+    "TestDBManager.test_get_publishers_in_use_and_delete_publisher": {
+      "replaced_by": [
+        "tests/test_people_core_parity.py::PublisherParityTests.test_in_use_counts_works_by_name_and_alias",
+        "tests/test_people_core_parity.py::PublisherParityTests.test_delete_alias_and_publisher"
+      ]
+    },
+    "TestDBManager.test_get_recently_added_works_order": {
+      "replaced_by": [
+        "tests/pg/test_works_facade.py::OrderAndPrecisionTests.test_added_orders_at_second_precision_then_by_id",
+        "tests/pg/test_server_api_freshness.py::BrowseTests.test_recently_added_follows_a_create_an_edit_and_a_move"
+      ]
+    },
+    "TestDBManager.test_get_works_by_tag_alias": {
+      "replaced_by": [
+        "tests/test_search_parity.py::SearchParityTests.test_the_tag_filter_lists_tagged_works_newest_first"
+      ]
+    },
+    "TestDBManager.test_get_works_by_tag_name": {
+      "replaced_by": [
+        "tests/test_search_parity.py::SearchParityTests.test_the_tag_filter_lists_tagged_works_newest_first"
+      ]
+    },
+    "TestDBManager.test_group_create_rolls_back_typed_parent": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_refused_group_edit_leaves_its_typed_parent_uncreated",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_names_are_unique_and_a_parent_cannot_share_the_name"
+      ]
+    },
+    "TestDBManager.test_group_delete_rolls_back_reparenting": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_group_leaves_tombstones_and_moves_its_children",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_delete_reparents_children_and_drops_members"
+      ]
+    },
+    "TestDBManager.test_group_update_rolls_back_typed_parent": {
+      "replaced_by": [
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_a_refused_group_edit_leaves_its_typed_parent_uncreated",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_the_hierarchy_stays_acyclic"
+      ]
+    },
+    "TestDBManager.test_import_processing_file_keeps_inbox_when_add_work_fails": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_import_processing_prunes_empty_nested_dirs": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_import_processing_without_target_folder_uses_uncategorized": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::ImportTests.test_no_target_folder_files_the_work_in_uncategorized_and_names_it_after_the_file"
+      ]
+    },
+    "TestDBManager.test_linked_authors_uses_credit_name": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_links_read_back_on_the_work_and_its_summaries",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "TestDBManager.test_merge_tags_dedupes_work_with_both_tags": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_merge",
+        "tests/pg/test_server_api_freshness.py::TagReportTests.test_a_merge_reports_a_work_that_already_carried_both"
+      ]
+    },
+    "TestDBManager.test_merge_tags_drops_source_alias_matching_target_canonical": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_merge",
+        "tests/pg/test_tags.py::MergeTests.test_a_merge_moves_links_aliases_and_the_name"
+      ]
+    },
+    "TestDBManager.test_merge_tags_migrates_source_aliases": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_merge",
+        "tests/pg/test_organization_schema.py::TagTests.test_a_merge_moves_aliases_and_keeps_the_source_name_as_an_alias"
+      ]
+    },
+    "TestDBManager.test_merge_tags_missing_raises": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_merge",
+        "tests/pg/test_tags.py::MergeTests.test_refusals_name_sqlites_messages"
+      ]
+    },
+    "TestDBManager.test_merge_tags_moves_work_and_folder_links": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_merge",
+        "tests/pg/test_tags.py::MergeTests.test_a_merge_moves_links_aliases_and_the_name"
+      ]
+    },
+    "TestDBManager.test_merge_tags_self_raises": {
+      "replaced_by": [
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_merge",
+        "tests/pg/test_server_api_catalog.py::CatalogTests.test_a_tag_merge_moves_its_works_and_a_self_merge_is_refused"
+      ]
+    },
+    "TestDBManager.test_move_work_to_folder_assign_move_clear": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::WorkFilingTests.test_filing_moving_and_clearing_advance_the_work_folder",
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_work_filing_and_the_work_projection"
+      ]
+    },
+    "TestDBManager.test_move_work_to_folder_rejects_bad_folder": {
+      "replaced_by": [
+        "tests/pg/test_folders.py::WorkFilingTests.test_a_missing_work_or_folder_is_refused"
+      ]
+    },
+    "TestDBManager.test_move_work_to_nested_folder": {
+      "replaced_by": [
+        "tests/test_folders_parity.py::FolderFacadeParityTests.test_work_filing_and_the_work_projection"
+      ]
+    },
+    "TestDBManager.test_next_role_order_index": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_construction_keeps_the_given_order_and_skips_what_it_cannot_insert",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_constructed_ties_keep_insertion_order"
+      ]
+    },
+    "TestDBManager.test_person_and_role_operations": {
+      "replaced_by": [
+        "tests/test_people_core_parity.py::PersonParityTests.test_a_person_reads_back_alike",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_one_constructed_role",
+        "tests/test_people_roles_parity.py::RoleParityTests.test_a_persons_works"
+      ]
+    },
+    "TestDBManager.test_person_group_rejects_duplicate_name_case_insensitive": {
+      "replaced_by": [
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_names_are_unique_and_a_parent_cannot_share_the_name",
+        "tests/pg/test_people_facade.py::IdentityTests.test_group_names_compare_by_identity_key"
+      ]
+    },
+    "TestDBManager.test_person_groups_hierarchy_and_membership": {
+      "replaced_by": [
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_membership_from_both_ends",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_the_hierarchy_stays_acyclic",
+        "tests/test_people_core_parity.py::PersonGroupParityTests.test_fields_update_and_advance"
+      ]
+    },
+    "TestDBManager.test_persons_catalog_reads_are_one_snapshot": {
+      "replaced_by": [
+        "tests/pg/test_people_facade.py::GroupCatalogTests.test_the_catalog_reads_each_relationship_once_however_large",
+        "tests/test_people_core_parity.py::PersonParityTests.test_the_catalog_orders_by_last_name_then_id"
+      ]
+    },
+    "TestDBManager.test_playlist_membership_removal_rolls_back_on_a_failed_second_write": {
+      "replaced_by": [
+        "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders"
+      ]
+    },
+    "TestDBManager.test_processing_backslash_name_survives_rescan_preview_and_import": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_files_list_uses_constant_query_count": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_files_rescan_deletes_stale": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_files_scan_update_and_import_move_flow": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_preview_does_not_strip_into_a_different_file": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_role_order_index_then_rowid": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_scan_avoids_not_in_and_handles_many_files": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_scan_ignores_symlink_escape": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_processing_scan_keeps_existing_ids_and_imported_rows": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_prune_orphan_pdf_thumbnails": {
+      "obsolete": "It tested prune_orphan_pdf_thumbnails, the SQLite start-up sweep that deleted thumbnails whose Work row or page no longer matched works.thumb_page. On PostgreSQL the thumbnails of a deleted Work are removed with its delete (tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_delete_removes_the_work_its_thumbnails_and_claims_its_file) and the thumbnail name carries the primary asset, so a stale page renders under another name; no start-up sweep reads the SQLite catalogue any more."
+    },
+    "TestDBManager.test_remove_last_work_tag_keeps_the_tag_in_the_catalog": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag"
+      ]
+    },
+    "TestDBManager.test_remove_tag_keeps_tag_when_still_on_another_work": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag",
+        "tests/test_tags_parity.py::TagFacadeParityTests.test_work_and_folder_tags_and_their_options"
+      ]
+    },
+    "TestDBManager.test_resolved_child_path_rejects_a_drive_qualified_segment_at_any_depth": {
+      "replaced_by": [
+        "tests/test_storage_paths.py::StoragePathJoinTests.test_resolved_child_path_rejects_a_drive_qualified_segment_at_any_depth"
+      ]
+    },
+    "TestDBManager.test_role_credit_name_stored_and_returned": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal",
+        "tests/pg/test_people_sync.py::WorkRoleSyncTests.test_a_credit_override_is_the_links_state_and_its_alias"
+      ]
+    },
+    "TestDBManager.test_safe_pdf_path_rejects_a_drive_qualified_filename": {
+      "replaced_by": [
+        "tests/test_managed_pdf_names.py::TestManagedPdfPathHelpers.test_safe_pdf_path_rejects_a_drive_qualified_filename"
+      ]
+    },
+    "TestDBManager.test_safe_pdf_path_rejects_path_shaped_input": {
+      "replaced_by": [
+        "tests/test_managed_pdf_names.py::TestManagedPdfPathHelpers.test_safe_pdf_path_rejects_path_shaped_input"
+      ]
+    },
+    "TestDBManager.test_safe_processing_path_keeps_posix_names_that_look_like_windows_paths": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_safe_processing_path_rejects_path_shaped_input_everywhere": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_safe_processing_path_rejects_windows_drive_and_separator_spellings": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_safe_processing_path_resolves_exact_relative_paths": {
+      "obsolete": "It tested the legacy SQLite processing inbox (a scanned for_processing directory with rows in processing_files), which the PostgreSQL Processing queue replaced (docs/postgresql-architecture.md \u00a711.5): browser uploads into managed objects, imported in one transaction, with no directory scan, rename or move. The queue's own behaviour is tested in tests/pg/test_processing_queue.py and tests/pg/test_http_processing.py."
+    },
+    "TestDBManager.test_saved_view_create_rolls_back_on_failure": {
+      "replaced_by": [
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_create_read_update_delete_and_list",
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_refusals_carry_sqlites_message_and_status"
+      ]
+    },
+    "TestDBManager.test_saved_view_crud_order_and_timestamps": {
+      "replaced_by": [
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_create_read_update_delete_and_list",
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_the_list_order"
+      ]
+    },
+    "TestDBManager.test_saved_view_delete_does_not_touch_works": {
+      "replaced_by": [
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_create_read_update_delete_and_list",
+        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_a_view_is_created_listed_read_renamed_and_deleted"
+      ]
+    },
+    "TestDBManager.test_saved_view_duplicate_name_is_case_insensitive": {
+      "replaced_by": [
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_refusals_carry_sqlites_message_and_status"
+      ]
+    },
+    "TestDBManager.test_saved_view_max_bound": {
+      "replaced_by": [
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_the_limit"
+      ]
+    },
+    "TestDBManager.test_saved_view_validation_rejects_invalid_definitions": {
+      "replaced_by": [
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_every_definition_shape",
+        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_refusals_carry_sqlites_message_and_status"
+      ]
+    },
+    "TestDBManager.test_search_works_list_shape_omits_text_content": {
+      "replaced_by": [
+        "tests/test_search_parity.py::SearchParityTests.test_both_find_the_same_works"
+      ]
+    },
+    "TestDBManager.test_search_works_publisher_and_author_filters": {
+      "replaced_by": [
+        "tests/test_search_parity.py::SearchParityTests.test_author_and_publisher_filters"
+      ]
+    },
+    "TestDBManager.test_thumb_cache_stem_includes_primary_asset": {
+      "replaced_by": [
+        "tests/test_derived_caches.py::ThumbnailStemTests.test_thumb_cache_stem_includes_primary_asset"
+      ]
+    },
+    "TestDBManager.test_update_person_metadata": {
+      "replaced_by": [
+        "tests/test_people_core_parity.py::PersonParityTests.test_profile_fields_advance_only_when_they_change",
+        "tests/pg/test_server_api_people.py::ProfileEditTests.test_metadata_and_groups_are_applied_together"
+      ]
+    },
+    "TestDBManager.test_update_role_credit_name_clear_and_set": {
+      "replaced_by": [
+        "tests/test_people_roles_parity.py::RoleParityTests.test_credit_edits_and_removal"
+      ]
+    },
+    "TestDBManager.test_update_work_metadata": {
+      "replaced_by": [
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_a_metadata_patch_and_its_revisions"
+      ]
+    },
+    "TestDBManager.test_update_work_metadata_doc_type": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::DocTypeTests.test_doc_type_normalizes_on_patch_and_is_strict_on_the_wire"
+      ]
+    },
+    "TestDBManager.test_update_work_metadata_edition": {
+      "replaced_by": [
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_a_metadata_patch_and_its_revisions",
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_every_supported_field_round_trips"
+      ]
+    },
+    "TestDBManager.test_update_work_metadata_hide_pdf_link_annotations": {
+      "replaced_by": [
+        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_pdf_fields"
+      ]
+    },
+    "TestDBManager.test_work_ids_matching_publisher_alias_equivalence": {
+      "replaced_by": [
+        "tests/test_search_parity.py::SearchParityTests.test_a_publisher_record_brings_in_its_names_and_aliases",
+        "tests/pg/test_search_queries.py::PublisherRecordTests.test_a_matching_record_brings_in_every_label"
+      ]
+    },
+    "TestDBManager.test_work_ids_matching_publisher_substring": {
+      "replaced_by": [
+        "tests/test_search_parity.py::SearchParityTests.test_author_and_publisher_filters",
+        "tests/pg/test_server_api_routes.py::PublisherTests.test_a_search_by_publisher_finds_the_work"
+      ]
+    }
+  }
+}

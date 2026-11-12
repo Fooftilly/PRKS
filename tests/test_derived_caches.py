@@ -44,5 +44,16 @@ class ThumbnailCleanupTests(unittest.TestCase):
         self.assertEqual(prks_delete_pdf_thumbnails_for_work_id("W-ANY", missing), ())
 
 
+class ThumbnailStemTests(unittest.TestCase):
+    """Thumbnail cache names (moved from ``tests/test_db_manager.py``)."""
+
+    def test_thumb_cache_stem_includes_primary_asset(self):
+        self.assertNotEqual(
+            prks_thumb_cache_stem("W-1", 1, "AS-A"),
+            prks_thumb_cache_stem("W-1", 1, "AS-B"),
+        )
+        self.assertIn("_aAS-A_", prks_thumb_cache_stem("W-1", 1, "AS-A"))
+
+
 if __name__ == "__main__":
     unittest.main()
