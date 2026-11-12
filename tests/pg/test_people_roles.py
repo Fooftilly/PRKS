@@ -189,6 +189,22 @@ class RevisionTests(RoleTestCase):
                          [(self.ann, "Author", 0), (self.bo, "Author", 0), (self.bo, "Editor", 1)])
 
 
+class CatalogEtagTests(RoleTestCase):
+    def etag(self) -> str:
+        return self.library.etag_works_catalog(self.library.get_all_works())
+
+    def test_adding_and_removing_a_credit_change_the_catalog_etag(self) -> None:
+        before = self.etag()
+        self.library.add_role(self.ann, self.work, "Author")
+        linked = self.etag()
+        self.assertNotEqual(before, linked)
+        self.library.add_role(self.bo, self.work, "Editor")
+        both = self.etag()
+        self.assertNotEqual(linked, both)
+        self.assertTrue(self.library.delete_work_role(self.work, self.bo, "Editor", 1))
+        self.assertNotEqual(both, self.etag())
+
+
 class TombstoneTests(RoleTestCase):
     def recreate_work(self, work_id: str, manifestation_id: str) -> None:
         new = commands.NewWork(work_id=work_id, manifestation_id=manifestation_id, title="Again")
