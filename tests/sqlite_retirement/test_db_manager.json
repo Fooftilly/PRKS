@@ -599,8 +599,7 @@
     },
     "TestDBManager.test_saved_view_delete_does_not_touch_works": {
       "replaced_by": [
-        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_create_read_update_delete_and_list",
-        "tests/pg/test_server_api_bulk_views.py::SavedViewTests.test_a_view_is_created_listed_read_renamed_and_deleted"
+        "tests/pg/test_saved_views.py::CrudTests.test_deleting_a_view_leaves_the_works_it_finds"
       ]
     },
     "TestDBManager.test_saved_view_duplicate_name_is_case_insensitive": {
