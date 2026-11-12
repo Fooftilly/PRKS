@@ -398,8 +398,7 @@
     },
     "TestDBManager.test_group_delete_rolls_back_reparenting": {
       "replaced_by": [
-        "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_group_leaves_tombstones_and_moves_its_children",
-        "tests/test_people_core_parity.py::PersonGroupParityTests.test_delete_reparents_children_and_drops_members"
+        "tests/pg/test_people_facade.py::DeletionTests.test_a_failed_group_delete_rolls_back_the_reparenting"
       ]
     },
     "TestDBManager.test_group_update_rolls_back_typed_parent": {
@@ -505,13 +504,12 @@
     },
     "TestDBManager.test_persons_catalog_reads_are_one_snapshot": {
       "replaced_by": [
-        "tests/pg/test_people_facade.py::GroupCatalogTests.test_the_catalog_reads_each_relationship_once_however_large",
-        "tests/test_people_core_parity.py::PersonParityTests.test_the_catalog_orders_by_last_name_then_id"
+        "tests/pg/test_people_facade.py::PersonCatalogTests.test_a_membership_committed_during_the_read_is_not_half_seen"
       ]
     },
     "TestDBManager.test_playlist_membership_removal_rolls_back_on_a_failed_second_write": {
       "replaced_by": [
-        "tests/pg/test_playlists.py::MembershipTests.test_adding_moving_and_removing_advance_the_work_and_both_orders"
+        "tests/pg/test_playlists.py::MembershipTests.test_a_failed_removal_leaves_the_membership_and_revisions"
       ]
     },
     "TestDBManager.test_processing_backslash_name_survives_rescan_preview_and_import": {

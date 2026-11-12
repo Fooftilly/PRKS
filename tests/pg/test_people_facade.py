@@ -383,6 +383,24 @@ class DeletionTests(PeopleFacadeTestCase):
         self.assertEqual(self.library.get_person_groups_state(person)["groups"],
                          [{"group_id": middle, "revision": 2, "present": False}])
 
+    def test_a_failed_group_delete_rolls_back_the_reparenting(self) -> None:
+        parent = self.library.add_person_group_with_parent_options("Parent")
+        group = self.library.add_person_group_with_parent_options("Group", parent_id=parent)
+        child = self.library.add_person_group_with_parent_options("Child", parent_id=group)
+        before = self.revisions("person-group-field")
+        # The group's own DELETE runs after its children moved and its scopes
+        # advanced, so failing it is exactly the partial-commit window.
+        failing = "SELECT 1 / 0 WHERE %(group_id)s::text IS NOT NULL"
+        with mock.patch.object(groups, "_DELETE_SQL", failing):
+            with self.assertRaises(Exception):
+                self.library.delete_person_group(group)
+        self.assertIsNotNone(self.library.get_person_group(group))
+        self.assertEqual(self.library.get_person_group(child)["parent_id"], group)
+        self.assertEqual(self.revisions("person-group-field"), before)
+        # The ordinary delete still works once the injected failure is gone.
+        self.library.delete_person_group(group)
+        self.assertEqual(self.library.get_person_group(child)["parent_id"], parent)
+
     def stale_add(self, group_id: str, person_id: str, base: int) -> tuple[int, dict[str, Any]]:
         return self.run_command(lambda scope: groups.apply_member_operation(
             scope, group_id, person_id, True, base), serializable=True)
@@ -648,6 +666,42 @@ class GroupCatalogTests(CatalogTestCase):
         self.assertNotIn("SubPlan", plan)  # no per-group correlated count
         # One scan of the memberships, whichever way the planner reads them.
         self.assertEqual(len(re.findall(r" on (?:prks\.)?person_group_members\b", plan)), 1, plan)
+
+
+class PersonCatalogTests(CatalogTestCase):
+    def test_a_membership_committed_during_the_read_is_not_half_seen(self) -> None:
+        person = self.library.add_person("Ada", "Snapshot")
+        kept = self.library.add_person_group_with_parent_options("Kept Group")
+        added = self.library.add_person_group_with_parent_options("Added During Read")
+        self.library.add_person_to_group(person, kept)
+        real = persons.persons
+        committed: list[Any] = []
+
+        def read_then_write(scope: LibraryScope) -> list[dict[str, Any]]:
+            rows = real(scope)
+            # Another writer commits a membership after the profiles are read
+            # and before their group chips are.
+            def write() -> None:
+                with facade_context.acting_as(self.actor.context):
+                    try:
+                        self.library.add_person_to_group(person, added)
+                        committed.append(True)
+                    except BaseException as exc:  # noqa: BLE001 - reported to the test thread
+                        committed.append(exc)
+            writer = threading.Thread(target=write)
+            writer.start()
+            writer.join(10)
+            return rows
+
+        with mock.patch.object(persons, "persons", side_effect=read_then_write):
+            rows = self.library.get_all_persons()
+        self.assertEqual(committed, [True])
+        row = next(item for item in rows if item["id"] == person)
+        self.assertEqual([group["id"] for group in row["groups"]], [kept])
+        self.assertEqual(row["assigned_roles"], [])
+        # The next read sees the committed membership.
+        row = next(item for item in self.library.get_all_persons() if item["id"] == person)
+        self.assertEqual(sorted(group["id"] for group in row["groups"]), sorted([kept, added]))
 
 
 class PublisherCatalogTests(CatalogTestCase):
