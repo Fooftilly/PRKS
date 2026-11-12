@@ -44,6 +44,7 @@
     },
     "TestDBManager.test_add_work_thumb_page_invalid_becomes_null": {
       "replaced_by": [
+        "tests/pg/test_works_facade.py::CreateTests.test_an_invalid_thumbnail_page_is_created_as_none",
         "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_an_invalid_page_never_reaches_the_column"
       ]
     },
