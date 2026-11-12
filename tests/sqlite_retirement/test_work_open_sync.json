@@ -38,7 +38,6 @@
     },
     "WorkOpenSyncTests.test_mixed_precision_sorts_chronologically": {
       "replaced_by": [
-        "tests/test_work_open_rules.py::OpenRuleTests.test_a_second_resolution_value_compares_as_milliseconds",
         "tests/pg/test_works_facade.py::OrderAndPrecisionTests.test_recent_orders_at_millisecond_precision_then_by_id"
       ]
     },

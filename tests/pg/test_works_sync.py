@@ -14,16 +14,12 @@ concurrent note writers.
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from unittest import mock
 
 from backend import sync_protocol, work_metadata_sync, work_note_sync, work_open_sync, work_source_sync
-from backend.db_manager import PRKSDatabase
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.identity.request_context import RequestContext
@@ -33,12 +29,10 @@ from backend.domain.works import commands, notes
 from backend.entity_ids import generate
 from backend.pg_facade import NotPortedError
 from backend.pg_facade import context as facade_context
-from backend.storage.config import StorageConfig
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers import work_lifecycle, work_metadata
 from tests.pg.test_works_mutations import MutationTestCase
-from tests.works_parity_helpers import _Side
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 _OTHER_VIDEO = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -254,41 +248,6 @@ class ConcurrentOperationTests(SyncTestCase):
 
 class CreateWorkTests(SyncTestCase):
     maxDiff = None
-
-    def test_a_created_work_matches_sqlite(self) -> None:
-        tmp = tempfile.mkdtemp(prefix="prks-pg-sync-ref-")
-        self.addCleanup(shutil.rmtree, tmp, True)
-        reference = PRKSDatabase(storage=StorageConfig.for_testing(tmp),
-                                 schema_path=os.path.join(os.path.dirname(__file__), "..", "..",
-                                                          "backend", "db_schema.sql"))
-        for payload in (create_payload(), create_payload(title="", status="Planned", abstract="",
-                                                         author_text="", private_notes="",
-                                                         thumb_url="", doc_type="Online")):
-            with self.subTest(payload=payload):
-                work_id = "W-" + uuid.uuid4().hex.upper()
-                data = self.envelope("CREATE_WORK", work_id, payload)
-                mine = self.send(data)
-                theirs = sync_protocol.process_operation(reference, dict(data, device_id=str(uuid.uuid4())))
-                drop = ("folder_id",)
-                self.assertEqual({k: v for k, v in mine[1].items() if k not in drop},
-                                 {k: v for k, v in theirs[1].items() if k not in drop})
-                pg_side, ref_side = _Side(self.library, self.storage.pdfs_dir, self.device), \
-                    _Side(reference, tmp, "")
-                for side in (pg_side, ref_side):
-                    work = side.db.get_work(work_id)
-                    side.labels.update({work_id: "<W>", work["primary_manifestation_id"]: "<MF>"})
-                    if work["primary_asset_id"]:
-                        side.labels[work["primary_asset_id"]] = "<AS>"
-                filed = ("folder", "folder_id", "folder_title", "playlist", "playlist_id", "playlist_title")
-                # SQLite's sync insert leaves file_path NULL where add_work writes "";
-                # PostgreSQL has no file column and projects "" for both.
-                self.assertEqual((self.library.get_work(work_id)["file_path"],
-                                  reference.get_work(work_id)["file_path"]), ("", None))
-                filed += ("file_path",)
-                self.assertEqual(
-                    {k: v for k, v in pg_side.normal(self.library.get_work(work_id)).items() if k not in filed},
-                    {k: v for k, v in ref_side.normal(reference.get_work(work_id)).items() if k not in filed})
-        self.assertEqual(len(self.filing.filed), 2)
 
     def test_a_second_create_of_one_id_converges(self) -> None:
         work_id = "W-" + uuid.uuid4().hex.upper()

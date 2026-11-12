@@ -37,7 +37,6 @@ Nothing in this module imports the database layer; the handler is handed the
 """
 import json
 
-from backend import work_identity
 
 # Field -> maximum accepted length. The bound is the only validation this layer
 # adds: synchronization is not a licence to start normalizing values PRKS never
@@ -179,6 +178,7 @@ SYNCED_FIELDS = {
     "publisher": 500,
     "location": 500,
 }
+
 
 # Cached projections that carry a synchronized field and therefore have to be
 # reconciled when it is acknowledged. Absent means "the Work detail only".
@@ -461,60 +461,6 @@ def database_to_wire(field, value):
     return codec_for(field).to_wire(value)
 
 
-def get_field_state_on_conn(conn, work_id):
-    """Every supported field's canonical value and revision, or None.
-
-    A field with no revision row has never been changed since revisions
-    existed, which is revision 0 -- the same "missing means zero" rule the
-    Work-Tag scopes use.
-    """
-    # Byte-limited fields contribute their REVISION only. The Work record
-    # already carries the acknowledged value, and echoing it into a second
-    # cached projection would double what this endpoint sends, what IndexedDB
-    # stores and what every re-read costs -- for a value the client already
-    # has. Small scalars stay inline; there is nothing to save by splitting
-    # them.
-    valued = sorted(set(SYNCED_FIELDS) - BYTE_LIMITED_FIELDS)
-    columns = ", ".join(valued) if valued else "id"
-    row = conn.execute("SELECT %s FROM works WHERE id = ?" % columns, (work_id,)).fetchone()
-    if row is None:
-        return None
-    # Ask for this Work's own scopes by key rather than scanning every
-    # `work-field` row in the library and discarding the ones that belong to
-    # other Works: the cost of that scan grows with the library, while the
-    # answer never does. `(scope_type, scope_id)` is the primary key, so this
-    # is an indexed lookup of at most one row per supported field.
-    by_key = {scope_key(work_id, field): field for field in SYNCED_FIELDS}
-    placeholders = ", ".join("?" * len(by_key))
-    revisions = {
-        by_key[scope_id]: revision
-        for scope_id, revision in conn.execute(
-            "SELECT scope_id, revision FROM sync_entity_revisions "
-            "WHERE scope_type = 'work-field' AND scope_id IN (%s)" % placeholders,
-            tuple(by_key),
-        ).fetchall()
-    }
-    fields = {}
-    for field in sorted(SYNCED_FIELDS):
-        entry = {"revision": revisions.get(field, 0)}
-        if field not in BYTE_LIMITED_FIELDS:
-            # The WIRE representation, deliberately: this projection describes
-            # synchronization state, and its `value` is what a base revision
-            # was observed against. The Work record is where the ENTITY
-            # representation lives -- `thumb_page` is "3" here and 3 there, and
-            # that difference is the point rather than an inconsistency.
-            entry["value"] = database_to_wire(field, row[field])
-        fields[field] = entry
-    return {"work_id": work_id, "fields": fields}
-
-
-def get_revision(conn, work_id, field):
-    row = conn.execute(
-        "SELECT revision FROM sync_entity_revisions WHERE scope_type = 'work-field' AND scope_id = ?",
-        (scope_key(work_id, field),)).fetchone()
-    return row[0] if row else 0
-
-
 # A field-scoped operation is the wrong semantic unit for some (field, Work)
 # pairs. `source_url` is the first: on a Work whose canonical kind is video it
 # is one spelling of an identity spanning `source_kind`, `provider` and
@@ -526,55 +472,6 @@ def get_revision(conn, work_id, field):
 FIELD_KIND_GUARDS = {
     "source_url": "video",
 }
-
-
-def guarded_field_refusal(conn, work_id, field):
-    """The reason this field may not be set on this Work, or None."""
-    forbidden_kind = FIELD_KIND_GUARDS.get(field)
-    if forbidden_kind is None:
-        return None
-    row = conn.execute("SELECT source_kind FROM works WHERE id = ?", (work_id,)).fetchone()
-    if row is None:
-        return None   # a missing Work is ENTITY_NOT_FOUND, decided elsewhere
-    if canonical(row[0]).strip().lower() != forbidden_kind:
-        return None
-    return "WRONG_OPERATION_FOR_SOURCE"
-
-
-def set_field_on_conn(conn, work_id, field, value):
-    """Write one field and advance its revision together, in the caller's
-    transaction. Returns (changed, revision_after).
-
-    A no-op write advances nothing: a revision is a record of the value
-    actually changing, and inflating it would manufacture staleness for every
-    device that already holds the current value.
-    """
-    if field not in SYNCED_FIELDS:
-        raise ValueError("unsupported synchronized field: %s" % field)
-    # Comparison happens on CANONICAL DATABASE meaning, never on the spelling.
-    # Wire "3" and column 3 are the same state, and so are wire "" and NULL --
-    # advancing a revision for a representation difference would manufacture
-    # staleness for every device that already holds the value.
-    desired = wire_to_database(field, value)
-    row = conn.execute("SELECT %s FROM works WHERE id = ?" % field, (work_id,)).fetchone()
-    if row is None:
-        return False, 0
-    revision = get_revision(conn, work_id, field)
-    if wire_to_database(field, row[0]) == desired:
-        return False, revision
-    conn.execute(
-        "UPDATE works SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?" % field,
-        (desired, work_id))
-    conn.execute("""INSERT INTO sync_entity_revisions (scope_type, scope_id, revision)
-                    VALUES ('work-field', ?, 1) ON CONFLICT (scope_type, scope_id)
-                    DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
-                 (scope_key(work_id, field),))
-    if field == "source_url":
-        # A URL on a Work with no kind and no file makes it an inferred video.
-        # Whether that is video identity needs the URL parser, which the SQL
-        # mirror cannot run, so the §12.2 Asset rule is applied here (#60).
-        work_identity.reconcile_origin_asset(conn, work_id)
-    return True, revision + 1
 
 
 def validate(op):
@@ -688,58 +585,3 @@ def fit_terminal_result(result, current, desired):
     return result
 
 
-def apply(db, conn, op, received_at):
-    work_id = op["entity_id"]
-    field, desired = op["payload"]["field"], op["payload"]["value"]
-    result = {"work_id": work_id, "field": field}
-    row = conn.execute("SELECT %s FROM works WHERE id = ?" % field, (work_id,)).fetchone()
-    if row is None:
-        result["code"] = "ENTITY_NOT_FOUND"
-        return 404, result
-    # Both sides in CANONICAL WIRE form. For every field but `thumb_page` that
-    # is the value unchanged; for `thumb_page` it is what makes column 3, wire
-    # "3" and wire "003" one state rather than three, so two devices that chose
-    # the same page are never told they disagreed.
-    refusal = guarded_field_refusal(conn, work_id, field)
-    if refusal is not None:
-        # Terminal, and deliberately not a conflict: there is nothing for the
-        # user to choose between. A video's source is changed by the aggregate
-        # source operation, which keeps every identity column consistent.
-        result["code"] = refusal
-        return 409, result
-    current = database_to_wire(field, row[0])
-    desired = canonical_wire(field, desired)
-    revision = get_revision(conn, work_id, field)
-    base = op["base_revision"]
-    if base > revision:
-        result.update(code="FUTURE_REVISION", current_revision=revision,
-                      **disagreement(field, current, desired))
-        return 400, fit_terminal_result(result, current, desired)
-    # A stale base is only a conflict when the two devices actually disagree.
-    # Two people typing the same DOI have converged, not collided.
-    if base < revision and current != desired:
-        result.update(code="REVISION_CONFLICT", current_revision=revision,
-                      **disagreement(field, current, desired))
-        return 409, fit_terminal_result(result, current, desired)
-    changed, after = set_field_on_conn(conn, work_id, field, desired)
-    result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed)
-    if field in BYTE_LIMITED_FIELDS:
-        # The ledger has no retention policy: whatever goes in `result_json`
-        # stays there for the life of the library. Echoing the value back
-        # would make every edit a permanent second copy of the text, so the
-        # acknowledgement says only that the value was applied. The client
-        # already holds the authoritative copy in its immutable operation
-        # payload and reconstructs the effective value from it, so no second
-        # request is needed and replay stays exact.
-        result["value_omitted"] = True
-    else:
-        result["value"] = canonical_wire(field, desired)
-    return 200, result
-
-
-class _Handler:
-    validate = staticmethod(validate)
-    apply = staticmethod(apply)
-
-
-HANDLER = _Handler()

@@ -1,11 +1,9 @@
 """Work-Person roles: the PostgreSQL facade returns SQLite's JSON (L-P-1 #632, PR 3).
 
-Each test runs the same calls on the library object of its leg and on a
-reference ``PRKSDatabase`` built in the same test, and compares the results
-after replacing generated ids, timestamps and ETag digests
-(``tests/people_parity_helpers.py``). On the ``postgres`` leg
-(``scripts/test-postgres --parity``) the left side is
-:class:`backend.pg_facade.PostgresLibrary`. Inputs avoid the documented
+Each test runs the same calls on :class:`backend.pg_facade.PostgresLibrary`
+and on the recorded SQLite ``PRKSDatabase``, and compares the results after
+replacing generated ids, timestamps and ETag digests
+(``tests/people_parity_helpers.py``). Inputs avoid the documented
 differences (``backend/pg_facade/people.py``), and a Person's roles on
 several Works are created in separate commands.
 """

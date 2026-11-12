@@ -2,9 +2,8 @@
 
 Owned by the Annotations and objects lane (``docs/postgresql-
 architecture.md`` §15.2): PDF annotations, materialization and managed
-objects. Each ported method keeps the ``PRKSDatabase`` signature and return
-shape and is registered by one line, ``@ported`` from
-:mod:`backend.pg_facade.registry`, directly above it.
+objects. Each method keeps the signature and return shape of the
+SQLite library it replaced.
 
 A method acts for the bound
 :class:`~backend.domain.identity.request_context.RequestContext` (see
@@ -59,7 +58,7 @@ from typing import TYPE_CHECKING, Any, List, NoReturn, Optional, TypeVar
 
 from backend.log_safety import safe_error_type, safe_log_id
 from backend.pg_facade.context import current_context
-from backend.pg_facade.registry import FacadeMixin, ported
+from backend.pg_facade.registry import FacadeMixin
 
 if TYPE_CHECKING:
     from backend.domain.identity.library_scope import LibraryScope
@@ -97,14 +96,10 @@ def _raise_refused(refused: str) -> NoReturn:
 
 class AnnotationsMixin(FacadeMixin):
     """PDF annotation reads and writes (L-A-1)."""
-
-    @ported
     def get_work_annotations(self, work_id: str) -> str:
         from backend.domain.annotations import store
 
         return json.dumps(_read(self, lambda scope: store.work_annotations(scope, work_id)))
-
-    @ported
     def get_work_annotations_state(self, work_id: str):
         from backend.domain.annotations import store
 
@@ -112,26 +107,18 @@ class AnnotationsMixin(FacadeMixin):
         if snapshot is None:
             return None
         return {key: snapshot[key] for key in ("work_id", "annotations", "known_absent")}
-
-    @ported
     def get_work_annotations_snapshot(self, work_id: str):
         from backend.domain.annotations import store
 
         return _read(self, lambda scope: store.snapshot(scope, work_id))
-
-    @ported
     def get_work_pdf_materialization(self, work_id: str):
         from backend.domain.annotations import store
 
         return _read(self, lambda scope: store.materialization(scope, work_id))
-
-    @ported
     def adopt_byte_only_user_markup(self, work_id: str, viewer_items):
         from backend.domain.annotations import operations
 
         return _command(self, lambda scope: operations.adopt(scope, work_id, viewer_items))
-
-    @ported
     def save_work_annotations(
         self,
         work_id: str,
@@ -143,8 +130,6 @@ class AnnotationsMixin(FacadeMixin):
 
         items = parse_annotations_json(annotations_json)
         return self.sync_work_annotations(work_id, items, base_set_revision=base_set_revision)
-
-    @ported
     def sync_work_annotations(
         self,
         work_id: str,
@@ -155,8 +140,6 @@ class AnnotationsMixin(FacadeMixin):
         from backend.domain.annotations import operations
 
         return _command(self, lambda scope: operations.replace_all(scope, work_id, items, base_set_revision))
-
-    @ported
     def accept_work_pdf_materialization_claim(self, work_id: str, claimed_revision):
         from backend.domain.annotations import materialize
 
@@ -164,8 +147,6 @@ class AnnotationsMixin(FacadeMixin):
         if isinstance(accepted, str):
             _raise_refused(accepted)
         return accepted
-
-    @ported
     def mark_work_pdf_materialized_if_claim_current(self, work_id: str, claimed_revision):
         from backend.domain.annotations import materialize
 
@@ -174,8 +155,6 @@ class AnnotationsMixin(FacadeMixin):
         if isinstance(confirmed, str):
             _raise_refused(confirmed)
         return confirmed
-
-    @ported
     def mark_work_pdf_materialized(self, work_id: str, *, at_revision=None):
         from backend.domain.annotations import materialize
 

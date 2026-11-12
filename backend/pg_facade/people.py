@@ -1,9 +1,8 @@
 """People family of the PostgreSQL transition facade (L-P-1).
 
 Owned by the People lane (``docs/postgresql-architecture.md`` §15.2):
-persons, roles, person groups and publishers. Each ported method keeps the
-``PRKSDatabase`` signature and return shape and is registered by one line,
-``@ported`` from :mod:`backend.pg_facade.registry`, directly above it.
+persons, roles, person groups and publishers. Each method keeps the signature and return shape of the
+SQLite library it replaced.
 
 A method acts for the bound
 :class:`~backend.domain.identity.request_context.RequestContext` (see
@@ -51,7 +50,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
-from backend.pg_facade.registry import FacadeMixin, ported
+from backend.pg_facade.registry import FacadeMixin
 
 if TYPE_CHECKING:
     from backend.domain.identity.library_scope import LibraryScope
@@ -110,8 +109,6 @@ class PeopleMixin(FacadeMixin):
     """Persons, Person Groups and publishers (L-P-1 PR 2)."""
 
     # -- Persons ----------------------------------------------------------------
-
-    @ported
     def add_person(
         self,
         first_name: str,
@@ -143,14 +140,10 @@ class PeopleMixin(FacadeMixin):
         new_id = person_id
         _command(self, lambda scope: persons.create_person(scope, new_id, fields))
         return new_id
-
-    @ported
     def get_all_persons(self) -> List[dict]:
         from backend.domain.people import queries
 
         return _read(self, queries.person_catalog)
-
-    @ported
     def get_person(self, person_id: str) -> Optional[dict]:
         from backend.domain.works.rules import finish_work_summary_rows
         from backend.domain.people import queries
@@ -162,18 +155,12 @@ class PeopleMixin(FacadeMixin):
         if person["works"]:
             finish_work_summary_rows(person["works"], _pdfs_dir(self))
         return person
-
-    @ported
     def etag_persons_catalog(self, rows: List[dict]) -> str:
         return _etag("persons", rows)
-
-    @ported
     def get_person_metadata_state(self, person_id: str) -> Optional[dict]:
         from backend.domain.people import persons
 
         return _read(self, lambda scope: persons.field_state(scope, person_id))
-
-    @ported
     def update_person_profile(self, person_id: str, fields: dict, group_ids=None) -> None:
         """Profile fields and, when ``group_ids`` is a list, the exact group set, atomically."""
         from backend.domain.people import persons
@@ -197,8 +184,6 @@ class PeopleMixin(FacadeMixin):
                 raise ValueError("Person not found.")
 
         _command(self, run, serializable=True)
-
-    @ported
     def delete_person_if_unlinked(self, person_id: str) -> None:
         from backend.domain.people import persons
 
@@ -220,8 +205,6 @@ class PeopleMixin(FacadeMixin):
             raise ValueError("Person not found.")
 
     # -- Person Groups ----------------------------------------------------------
-
-    @ported
     def add_person_group_with_parent_options(
         self,
         name: str,
@@ -245,8 +228,6 @@ class PeopleMixin(FacadeMixin):
             return groups.insert_group(scope, group_id, n, pid or "", description or "")
 
         return _command(self, run)
-
-    @ported
     def update_person_group(self, group_id: str, fields: dict) -> None:
         from backend import person_group_sync as rules
         from backend.domain.people import groups
@@ -270,31 +251,21 @@ class PeopleMixin(FacadeMixin):
                                      "" if value in (None, False) else str(value))
 
         _command(self, run)
-
-    @ported
     def delete_person_group(self, group_id: str) -> None:
         from backend.domain.people import groups
 
         if not _command(self, lambda scope: groups.delete_group(scope, group_id)):
             raise ValueError("Group not found.")
-
-    @ported
     def get_all_person_groups(self) -> List[dict]:
         from backend.domain.people import queries
 
         return _read(self, queries.group_catalog)
-
-    @ported
     def get_person_group(self, group_id: str) -> Optional[dict]:
         from backend.domain.people import queries
 
         return _read(self, lambda scope: queries.group_detail(scope, group_id))
-
-    @ported
     def etag_person_groups_catalog(self, rows: List[dict]) -> str:
         return _etag("person-groups", rows)
-
-    @ported
     def add_person_to_group(self, person_id: str, group_id: str) -> None:
         from backend.domain.people import groups
 
@@ -305,34 +276,24 @@ class PeopleMixin(FacadeMixin):
             groups.set_member(scope, group_id, person_id, True)
 
         _command(self, run, serializable=True)
-
-    @ported
     def remove_person_from_group(self, person_id: str, group_id: str) -> None:
         from backend.domain.people import groups
 
         _command(self, lambda scope: groups.set_member(scope, group_id, person_id, False))
-
-    @ported
     def get_person_group_sync_state(self, group_id: str) -> Optional[dict]:
         from backend.domain.people import groups
 
         return _read(self, lambda scope: groups.group_state(scope, group_id))
-
-    @ported
     def get_person_groups_state(self, person_id: str) -> Optional[dict]:
         from backend.domain.people import groups
 
         return _read(self, lambda scope: groups.person_group_state(scope, person_id))
 
     # -- Roles ------------------------------------------------------------------
-
-    @ported
     def has_work_role(self, person_id: str, work_id: str, role_type: str) -> bool:
         from backend.domain.people import roles
 
         return _read(self, lambda scope: roles.has_role(scope, work_id, person_id, role_type))
-
-    @ported
     def add_role(
         self,
         person_id: str,
@@ -358,8 +319,6 @@ class PeopleMixin(FacadeMixin):
             roles.set_role(scope, role, True, credit_name)
 
         _command(self, run, serializable=True)
-
-    @ported
     def insert_initial_role(self, work_id: str, person_id: str, role_type: str,
                             order_index: int = 0, credit_name: str = "") -> None:
         """A relationship a new Work is born with. Creates no revision."""
@@ -369,8 +328,6 @@ class PeopleMixin(FacadeMixin):
         _command(self, lambda scope: roles.insert_initial_roles(scope, work_id, wanted,
                                                                 skip_invalid=False),
                  serializable=True)
-
-    @ported
     def missing_person_ids(self, person_ids) -> List[str]:
         from backend.domain.people import roles
 
@@ -378,15 +335,11 @@ class PeopleMixin(FacadeMixin):
         if not wanted:
             return []
         return _read(self, lambda scope: roles.missing_persons(scope, wanted))
-
-    @ported
     def missing_initial_role_person_ids(self, roles) -> List[str]:
         from backend.domain.people.rules import eligible_initial_roles
 
         eligible = eligible_initial_roles(roles)
         return self.missing_person_ids(p for _i, p, _t, _c in eligible)
-
-    @ported
     def insert_initial_roles(self, work_id: str, roles) -> int:
         """All the relationships a new Work is born with, in one transaction."""
         from backend.domain.people import roles as role_domain
@@ -398,26 +351,18 @@ class PeopleMixin(FacadeMixin):
             return 0
         return _command(self, lambda scope: role_domain.insert_initial_roles(
             scope, work_id, wanted, skip_invalid=True), serializable=True)
-
-    @ported
     def next_role_order_index(self, work_id: str) -> int:
         from backend.domain.people import roles
 
         return _read(self, lambda scope: roles.next_order_index(scope, work_id))
-
-    @ported
     def get_work_roles(self, work_id: str) -> List[dict]:
         from backend.domain.people import roles
 
         return _read(self, lambda scope: roles.work_roles(scope, work_id))
-
-    @ported
     def get_work_roles_state(self, work_id: str) -> Optional[dict]:
         from backend.domain.people import roles
 
         return _read(self, lambda scope: roles.roles_state(scope, work_id))
-
-    @ported
     def update_role_credit_name(
         self,
         work_id: str,
@@ -445,8 +390,6 @@ class PeopleMixin(FacadeMixin):
             return True
 
         return _command(self, run)
-
-    @ported
     def delete_work_role(self, work_id: str, person_id: str, role_type: str,
                          order_index: int = 0) -> bool:
         """Remove one role; True when a row was deleted (``order_index`` is ignored)."""
@@ -457,34 +400,24 @@ class PeopleMixin(FacadeMixin):
             scope, roles.Role(work_id, person_id, role_type), False))
 
     # -- Publishers -------------------------------------------------------------
-
-    @ported
     def add_publisher(self, name: str) -> Dict[str, Any]:
         from backend.domain.people import publishers
 
         new_id = _new_id("R")
         return _command(self, lambda scope: publishers.create_publisher(scope, new_id, name))
-
-    @ported
     def add_publisher_alias(self, publisher_id: str, alias: str) -> None:
         from backend.domain.people import publishers
 
         new_id = _new_id("M")
         _command(self, lambda scope: publishers.add_alias(scope, new_id, publisher_id, alias))
-
-    @ported
     def delete_publisher_alias(self, publisher_id: str, alias: str) -> bool:
         from backend.domain.people import publishers
 
         return _command(self, lambda scope: publishers.delete_alias(scope, publisher_id, alias))
-
-    @ported
     def delete_publisher(self, publisher_id: str) -> None:
         from backend.domain.people import publishers
 
         _command(self, lambda scope: publishers.delete_publisher(scope, publisher_id))
-
-    @ported
     def get_publishers_in_use(self) -> List[dict]:
         from backend.domain.people import publishers
 

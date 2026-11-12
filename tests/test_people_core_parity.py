@@ -1,11 +1,9 @@
 """Persons, Person Groups and publishers: the PostgreSQL facade returns SQLite's JSON (L-P-1 #632).
 
-Each test runs the same calls on the library object of its leg and on a
-reference ``PRKSDatabase`` built in the same test, and compares the results
-after replacing generated ids, timestamps and ETag digests
-(``tests/people_parity_helpers.py``). On the SQLite leg both sides are
-SQLite; on the ``postgres`` leg (``scripts/test-postgres --parity``) the left
-side is :class:`backend.pg_facade.PostgresLibrary`. Inputs avoid the
+Each test runs the same calls on :class:`backend.pg_facade.PostgresLibrary`
+and on the recorded SQLite ``PRKSDatabase``, and compares the results after
+replacing generated ids, timestamps and ETag digests
+(``tests/people_parity_helpers.py``). Inputs avoid the
 documented differences (``backend/pg_facade/people.py``): aliases are
 written in their canonical ``", "`` form and names differ in ASCII letters
 only where case matters.

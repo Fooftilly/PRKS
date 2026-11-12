@@ -1,0 +1,13 @@
+{
+  "module": "tests/test_work_open_rules.py",
+  "partial": true,
+  "tests": {
+    "OpenRuleTests.test_a_second_resolution_value_compares_as_milliseconds": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::ConcurrentOperationTests.test_opens_from_many_devices_keep_the_latest",
+        "tests/pg/test_works_facade.py::OrderAndPrecisionTests.test_recent_orders_at_millisecond_precision_then_by_id"
+      ],
+      "note": "work_open_sync.comparable padded a one-second SQLite text timestamp to milliseconds so text ordering compared old and new rows on one scale. PostgreSQL stores last_opened_at as timestamptz and compares instants, so PG-C2 deleted comparable with the SQLite handler; the replacement checks that the latest open wins at millisecond resolution."
+    }
+  }
+}

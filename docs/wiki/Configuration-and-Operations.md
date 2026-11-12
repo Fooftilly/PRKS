@@ -84,13 +84,9 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 
 ## Database migrations
 
-PRKS automatically upgrades supported older databases at startup.
+Every start applies the PostgreSQL schema (`backend/db/schema/`) before it serves, unless `PRKS_MIGRATE_ON_START=0` leaves that to `python prks_app.py migrate` (Docker Compose does). Each schema file is applied once, in order, inside a transaction, and its checksum is recorded.
 
-Current schema version: **17**.
-
-Schema migrations are transactional and version-ordered. A database marked version N has passed every migration through N.
-
-Databases created by a newer PRKS version are refused rather than downgraded. Download a verified backup before installing a PRKS revision that announces a database schema upgrade.
+A database whose applied files differ from the code's, or that a newer PRKS migrated, is refused rather than downgraded. Download a verified backup before installing a PRKS revision that announces a schema change. Before 1.0 there is no migration from a pre-0.8 SQLite Library: start PostgreSQL PRKS on a new data root.
 
 ## Logging and privacy
 

@@ -1,14 +1,10 @@
-"""Generic semantic-operation protocol: envelope, ledger, dispatch.
+"""The semantic-operation envelope every sync family shares, and the operations PRKS accepts.
 
-This layer owns exactly what every operation family shares and nothing that
-only one family needs. Domain rules -- which payloads are legal, what a
-revision means, what the mutation is -- live in per-family handler modules, so
-adding a family is a registration rather than another branch in a growing
-conditional here.
-
-The ledger, revisions and lifecycle history are canonical backup state. No
-retention policy exists: dropping an old idempotency row could reapply an old
-operation.
+``backend.sync.protocol`` runs the protocol on PostgreSQL: it normalizes each
+envelope here, hashes it here, and dispatches to the family handlers in
+``backend.sync.handlers``, which may only implement an operation listed here.
+Domain rules (which payloads are legal, what a revision means) live in the
+per-family rule modules (``backend/*_sync.py``).
 """
 import hashlib
 import json
@@ -23,29 +19,24 @@ MAX_ID_CHARS = 200
 MAX_DEPENDENCIES = 16
 ACKNOWLEDGED = "ACKNOWLEDGED"
 
-_HANDLERS = {}
 _ENTITY_TYPES = {}
 
 
-def register(operation, handler, *, entity_type="work"):
-    """Bind one operation name to its domain handler and entity type.
+def register(operation, *, entity_type="work"):
+    """Accept one operation name, with the entity type its envelope must name.
 
-    A handler provides `validate(op)` -- raising ValueError(code) for anything
-    this family forbids -- and `apply(db, conn, op, received_at)` returning
-    `(http_status, result)`. Nothing else about the family is visible here.
-    `entity_type` is registered with the operation because prefixes are not
-    unique across record families (Persons and Positions both use `P-`).
+    ``entity_type`` is registered with the operation because prefixes are not
+    unique across record families (Persons and Positions both use ``P-``).
     """
-    if operation in _HANDLERS:
-        raise RuntimeError("duplicate sync operation handler: " + operation)
+    if operation in _ENTITY_TYPES:
+        raise RuntimeError("duplicate sync operation: " + operation)
     if not isinstance(entity_type, str) or not entity_type.strip():
         raise RuntimeError("sync operation entity_type is required")
-    _HANDLERS[operation] = handler
     _ENTITY_TYPES[operation] = entity_type
 
 
 def supported_operations():
-    return frozenset(_HANDLERS)
+    return frozenset(_ENTITY_TYPES)
 
 
 def normalize_envelope(data):
@@ -63,7 +54,7 @@ def normalize_envelope(data):
         if not isinstance(data[field], str) or not UUID.fullmatch(data[field]):
             raise ValueError("INVALID_ENVELOPE")
         out[field] = data[field].lower()
-    if not isinstance(data["operation"], str) or data["operation"] not in _HANDLERS:
+    if not isinstance(data["operation"], str) or data["operation"] not in _ENTITY_TYPES:
         raise ValueError("INVALID_ENVELOPE")
     if data["entity_type"] != _ENTITY_TYPES[data["operation"]]:
         raise ValueError("INVALID_ENVELOPE")
@@ -118,181 +109,114 @@ def normalize_dependencies(value, op_id):
     return seen
 
 
-def dependencies_satisfied(conn, op):
-    for dep_id in op["depends_on"]:
-        row = conn.execute(
-            "SELECT device_id, status FROM sync_operations WHERE op_id = ?",
-            (dep_id,),
-        ).fetchone()
-        if row is None or row[0] != op["device_id"] or row[1] != ACKNOWLEDGED:
-            return False
-    return True
 
 
 def request_hash(op):
     return hashlib.sha256(json.dumps(op, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def insert_result(conn, op, digest, http_status, result):
-    conn.execute("""INSERT INTO sync_operations
-        (op_id, device_id, operation_type, entity_type, entity_id, request_hash, status, http_status, result_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (op["op_id"], op["device_id"], op["operation"], op["entity_type"], op["entity_id"],
-         digest, result["code"], http_status, json.dumps(result, sort_keys=True, separators=(",", ":"))))
 
 
-def process_operation(db, data):
-    """Execute one semantic operation exactly once, ever.
-
-    Validation errors precede the ledger deliberately: a malformed envelope is
-    not an outcome worth remembering, and ledgering one would burn an op_id the
-    client can legitimately retry after fixing nothing but its own bug.
-    """
-    try:
-        op = normalize_envelope(data)
-        handler = _HANDLERS[op["operation"]]
-        handler.validate(op)
-    except ValueError as exc:
-        return 400, {"code": exc.args[0]}
-    digest = request_hash(op)
-    received_at = datetime.now(timezone.utc)
-    with db.connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        seen = conn.execute("SELECT request_hash, http_status, result_json FROM sync_operations WHERE op_id = ?",
-                            (op["op_id"],)).fetchone()
-        if seen:
-            if seen[0] != digest:
-                return 409, {"code": "OP_ID_REUSE"}
-            return seen[1], json.loads(seen[2])
-        if not dependencies_satisfied(conn, op):
-            return 400, {"code": "UNSATISFIED_DEPENDENCY"}
-        status, result = handler.apply(db, conn, op, received_at)
-        # DELETE_WORK may carry an ephemeral file_path for post-commit PDF
-        # cleanup on the first ACK. The immortal ledger must not retain
-        # filenames or paths (logging/privacy rules); replay returns only the
-        # wire ACK shape. PDF cleanup on replay either has no path (skip) or
-        # re-checks live Work references when a path is supplied.
-        to_store = result
-        if op["operation"] == "DELETE_WORK":
-            to_store = {
-                "code": result["code"],
-                "work_id": result["work_id"],
-                "changed": result["changed"],
-            }
-        insert_result(conn, op, digest, status, to_store)
-        return status, result
 
 
-# Registration is explicit and lives here so the set of families PRKS accepts
-# is readable in one place. Handler modules import nothing from this one.
-from backend import (  # noqa: E402
-    argument_sync, concept_sync, folder_sync, folder_tag_sync, person_group_sync,
-    person_metadata_sync, person_sync, pdf_annotation_sync, playlist_sync,
-    position_sync, tag_sync, work_lifecycle_sync, work_metadata_sync,
-    work_note_sync, work_open_sync, work_role_sync, work_source_sync,
-    work_tag_sync,
-)
+# Registration is explicit and lives here so the set of operations PRKS
+# accepts is readable in one place.
 
 # The Tag VOCABULARY, as opposed to the Work-Tag relationship below. Two
 # shapes only: PRKS has no rename and no colour editor, so a field family would
 # be inventing product semantics rather than moving existing ones off the wire.
-register("CREATE_TAG", tag_sync.CREATE_HANDLER, entity_type="tag")
-register("DELETE_TAG", tag_sync.DELETE_HANDLER, entity_type="tag")
-register("MERGE_TAG", tag_sync.MERGE_HANDLER, entity_type="tag")
-register("ADD_WORK_TAG", work_tag_sync.HANDLER)
-register("REMOVE_WORK_TAG", work_tag_sync.HANDLER)
-register("ADD_FOLDER_TAG", folder_tag_sync.HANDLER, entity_type="folder")
-register("REMOVE_FOLDER_TAG", folder_tag_sync.HANDLER, entity_type="folder")
-register("MARK_WORK_OPENED", work_open_sync.HANDLER)
-register("SET_WORK_METADATA_FIELD", work_metadata_sync.HANDLER)
+register("CREATE_TAG", entity_type="tag")
+register("DELETE_TAG", entity_type="tag")
+register("MERGE_TAG", entity_type="tag")
+register("ADD_WORK_TAG")
+register("REMOVE_WORK_TAG")
+register("ADD_FOLDER_TAG", entity_type="folder")
+register("REMOVE_FOLDER_TAG", entity_type="folder")
+register("MARK_WORK_OPENED")
+register("SET_WORK_METADATA_FIELD")
 # Source identity is an AGGREGATE, not a field: see work_source_sync's module
 # docstring for why three field-scoped operations would be the wrong unit.
-register("SET_WORK_SOURCE", work_source_sync.HANDLER)
-register("CREATE_WORK", work_lifecycle_sync.CREATE_HANDLER)
-register("DELETE_WORK", work_lifecycle_sync.DELETE_HANDLER)
+register("SET_WORK_SOURCE")
+register("CREATE_WORK")
+register("DELETE_WORK")
 # Work-Person roles are ELEMENTS, not an ordered aggregate: see
 # work_role_sync's module docstring for the schema evidence behind that.
-register("ADD_WORK_PERSON_ROLE", work_role_sync.HANDLER)
-register("REMOVE_WORK_PERSON_ROLE", work_role_sync.HANDLER)
+register("ADD_WORK_PERSON_ROLE")
+register("REMOVE_WORK_PERSON_ROLE")
 # Editing the credit override on an existing link shares the relationship's
 # scope and revision: it changes the same element's semantic state.
-register("SET_WORK_PERSON_ROLE_CREDIT", work_role_sync.HANDLER)
-register("CREATE_PERSON", person_sync.HANDLER, entity_type="person")
+register("SET_WORK_PERSON_ROLE_CREDIT")
+register("CREATE_PERSON", entity_type="person")
 # Destruction, like the Group family's: it addresses an identity rather than a
 # value, so it carries no base revision. The protection is the ordinary
 # endpoint's -- a Person credited on a file is refused, never cascaded.
-register("DELETE_PERSON", person_sync.DELETE_HANDLER, entity_type="person")
+register("DELETE_PERSON", entity_type="person")
 # Editing a Person is FIELD-scoped, not profile-scoped: see
 # person_metadata_sync's module docstring for the schema evidence behind that.
-register("SET_PERSON_METADATA_FIELD", person_metadata_sync.HANDLER, entity_type="person")
+register("SET_PERSON_METADATA_FIELD", entity_type="person")
 # Person Groups: four shapes over one entity. Construction mints the id, the
 # three editable columns are independent FIELDS, membership is an element of a
 # SET, and deletion addresses the identity and so carries no base revision.
-register("CREATE_PERSON_GROUP", person_group_sync.CREATE_HANDLER,
-         entity_type="person-group")
-register("SET_PERSON_GROUP_FIELD", person_group_sync.FIELD_HANDLER,
-         entity_type="person-group")
-register("ADD_PERSON_GROUP_MEMBER", person_group_sync.MEMBER_HANDLER,
-         entity_type="person-group")
-register("REMOVE_PERSON_GROUP_MEMBER", person_group_sync.MEMBER_HANDLER,
-         entity_type="person-group")
-register("DELETE_PERSON_GROUP", person_group_sync.DELETE_HANDLER,
-         entity_type="person-group")
+register("CREATE_PERSON_GROUP", entity_type="person-group")
+register("SET_PERSON_GROUP_FIELD", entity_type="person-group")
+register("ADD_PERSON_GROUP_MEMBER", entity_type="person-group")
+register("REMOVE_PERSON_GROUP_MEMBER", entity_type="person-group")
+register("DELETE_PERSON_GROUP", entity_type="person-group")
 # Folders. Moving one is a FIELD, because the hierarchy is a parent pointer on
 # one row -- and which folder a Work is in is a field on the WORK, because a
 # Work is in at most one folder rather than a set of them.
-register("CREATE_FOLDER", folder_sync.CREATE_HANDLER, entity_type="folder")
-register("SET_FOLDER_FIELD", folder_sync.FIELD_HANDLER, entity_type="folder")
-register("DELETE_FOLDER", folder_sync.DELETE_HANDLER, entity_type="folder")
-register("SET_WORK_FOLDER", folder_sync.WORK_FOLDER_HANDLER)
+register("CREATE_FOLDER", entity_type="folder")
+register("SET_FOLDER_FIELD", entity_type="folder")
+register("DELETE_FOLDER", entity_type="folder")
+register("SET_WORK_FOLDER")
 # Playlists. The three editable columns are FIELDS; which playlist a Work is in
 # is a field on the WORK, because a Work is in at most one playlist; and the
 # ORDER is an aggregate under one revision -- two devices that each dragged one
 # video produced two whole orders, and merging them index by index would invent
 # a third neither of them chose.
-register("CREATE_PLAYLIST", playlist_sync.CREATE_HANDLER, entity_type="playlist")
-register("SET_PLAYLIST_FIELD", playlist_sync.FIELD_HANDLER, entity_type="playlist")
-register("REORDER_PLAYLIST_ITEMS", playlist_sync.ORDER_HANDLER, entity_type="playlist")
-register("DELETE_PLAYLIST", playlist_sync.DELETE_HANDLER, entity_type="playlist")
-register("SET_WORK_PLAYLIST", playlist_sync.WORK_PLAYLIST_HANDLER)
+register("CREATE_PLAYLIST", entity_type="playlist")
+register("SET_PLAYLIST_FIELD", entity_type="playlist")
+register("REORDER_PLAYLIST_ITEMS", entity_type="playlist")
+register("DELETE_PLAYLIST", entity_type="playlist")
+register("SET_WORK_PLAYLIST")
 # Concepts. `description` is the only column that is not part of a Concept's
 # identity, so it is the only FIELD. Renaming writes an alias -- every note that
 # already says the old name must go on resolving -- so `name` and `aliases` are
 # ONE aggregate, and the hierarchy is another whose acyclicity only the server
 # can see.
-register("CREATE_CONCEPT", concept_sync.CREATE_HANDLER, entity_type="concept")
-register("SET_CONCEPT_FIELD", concept_sync.FIELD_HANDLER, entity_type="concept")
-register("SET_CONCEPT_IDENTITY", concept_sync.IDENTITY_HANDLER, entity_type="concept")
-register("SET_CONCEPT_PARENTS", concept_sync.PARENTS_HANDLER, entity_type="concept")
-register("DELETE_CONCEPT", concept_sync.DELETE_HANDLER, entity_type="concept")
+register("CREATE_CONCEPT", entity_type="concept")
+register("SET_CONCEPT_FIELD", entity_type="concept")
+register("SET_CONCEPT_IDENTITY", entity_type="concept")
+register("SET_CONCEPT_PARENTS", entity_type="concept")
+register("DELETE_CONCEPT", entity_type="concept")
 # Positions. Deliberately the smallest domain: a claim record with two
 # INDEPENDENT scalar fields. `positions.name` carries no UNIQUE constraint and
 # renaming one writes nothing else, so nothing forces `name` and `description`
 # into one judgement -- and joining them would make an unrelated description
 # edit conflict with a rename.
-register("CREATE_POSITION", position_sync.CREATE_HANDLER, entity_type="position")
-register("SET_POSITION_FIELD", position_sync.FIELD_HANDLER, entity_type="position")
-register("DELETE_POSITION", position_sync.DELETE_HANDLER, entity_type="position")
+register("CREATE_POSITION", entity_type="position")
+register("SET_POSITION_FIELD", entity_type="position")
+register("DELETE_POSITION", entity_type="position")
 # Arguments and Stances. Construction carries the argument's INITIAL sources and
 # targets because `create_argument` applies them in one transaction: "Create
 # response" and "Create from Work" both produce an already-connected record, and
 # splitting that would let the creation be acknowledged while its connection was
 # refused. The three columns are independent FIELDS. Sources are one ordered
 # AGGREGATE, and so are targets -- and targets are ONE aggregate across two
-# tables, because `_replace_targets_on_conn` takes a single mixed list, deletes
-# from both tables, and checks acyclicity over both.
-register("CREATE_ARGUMENT", argument_sync.CREATE_HANDLER, entity_type="argument")
-register("SET_ARGUMENT_FIELD", argument_sync.FIELD_HANDLER, entity_type="argument")
-register("SET_ARGUMENT_SOURCES", argument_sync.SOURCES_HANDLER, entity_type="argument")
-register("SET_ARGUMENT_TARGETS", argument_sync.TARGETS_HANDLER, entity_type="argument")
-register("DELETE_ARGUMENT", argument_sync.DELETE_HANDLER, entity_type="argument")
+# tables, because `_write_targets` (backend/domain/research/arguments.py) takes a
+# single mixed list and deletes from both tables, and acyclicity spans both.
+register("CREATE_ARGUMENT", entity_type="argument")
+register("SET_ARGUMENT_FIELD", entity_type="argument")
+register("SET_ARGUMENT_SOURCES", entity_type="argument")
+register("SET_ARGUMENT_TARGETS", entity_type="argument")
+register("DELETE_ARGUMENT", entity_type="argument")
 # Work notes. Each whole body is one aggregate and the two columns deliberately
 # do not share a revision: Research Notes run semantic markup processing;
 # Private Notes never do.
-register("SET_WORK_RESEARCH_NOTE", work_note_sync.HANDLER)
-register("SET_WORK_PRIVATE_NOTE", work_note_sync.HANDLER)
+register("SET_WORK_RESEARCH_NOTE")
+register("SET_WORK_PRIVATE_NOTE")
 # PDF annotations: one revisioned aggregate per annotation under a Work.
 # PDF bytes are never in these operations — see pdf_annotation_sync.
-register("CREATE_PDF_ANNOTATION", pdf_annotation_sync.CREATE_HANDLER)
-register("SET_PDF_ANNOTATION", pdf_annotation_sync.SET_HANDLER)
-register("DELETE_PDF_ANNOTATION", pdf_annotation_sync.DELETE_HANDLER)
+register("CREATE_PDF_ANNOTATION")
+register("SET_PDF_ANNOTATION")
+register("DELETE_PDF_ANNOTATION")

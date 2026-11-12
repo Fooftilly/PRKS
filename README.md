@@ -176,12 +176,6 @@ Every start applies the PostgreSQL schema (`backend/db/schema/`) before it serve
 
 Before 1.0 there is no migration from a pre-0.8 SQLite Library: start PostgreSQL PRKS on a new data root.
 
-### Pre-0.8 SQLite catalogue
-
-The SQLite catalogue format this version no longer serves ended at the version below. It stays recorded here until the SQLite code leaves the repository.
-
-Current schema version: **17**.
-
 ## Documentation
 
 Exact startup, configuration, and safety contracts stay in this README (host/port, Docker publish, env vars, schema version, auth warning). Detailed current feature and user behavior lives in the version-controlled [Wiki source](docs/wiki/Home.md), which is published to the [GitHub Wiki](https://github.com/Fooftilly/PRKS/wiki).

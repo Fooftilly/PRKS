@@ -10,7 +10,7 @@
     },
     "WorkCreateSyncTests.test_creates_video_work_and_files_uncategorized": {
       "replaced_by": [
-        "tests/pg/test_works_sync.py::CreateWorkTests.test_a_created_work_matches_sqlite",
+        "tests/test_folders_parity.py::FolderSyncParityTests.test_create_work_files_the_work",
         "tests/pg/test_folders_sync.py::CreateWorkFilingTests.test_a_work_with_no_folder_goes_to_one_uncategorized_root"
       ]
     },

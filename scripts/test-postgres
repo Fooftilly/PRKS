@@ -18,9 +18,9 @@
 #   scripts/test-postgres tests.pg.test_harness [more unittest ids]
 #   scripts/test-postgres --profile [--sizes 12,48,128] [--repetitions 8]
 #       opt-in, synthetic pg_stat_statements profile on a new disposable server
-#   scripts/test-postgres --parity [--json PATH]
-#       the SQLite/PostgreSQL backend parity leg and its coverage report
-#       (#625, scripts/run_backend_parity.py)
+#   scripts/test-postgres --parity
+#       the parity test modules (tests/test_*.py carrying @parametrize_backends,
+#       tests/backend_parity.py): the facade against SQLite's recorded answers
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -184,7 +184,16 @@ if [[ "$PROFILE" == true ]]; then
   PRKS_PG_PROFILE_NONCE="$PROFILE_NONCE" "$PY" -m scripts.pg_stat_profile "$@"
 elif [[ "${1:-}" == "--parity" ]]; then
   shift
-  "$PY" scripts/run_backend_parity.py "$@"
+  if [[ "$#" -ne 0 ]]; then
+    echo "test-postgres: --parity takes no arguments" >&2
+    exit 2
+  fi
+  mapfile -t modules < <(grep -l '^@parametrize_backends' tests/test_*.py | sed -e 's#/#.#' -e 's#\.py$##')
+  if [[ "${#modules[@]}" -eq 0 ]]; then
+    echo "test-postgres: no parity test modules found" >&2
+    exit 2
+  fi
+  "$PY" -m unittest -v "${modules[@]}"
 elif [[ -n "${PRKS_PG_SHARD:-}" ]]; then
   # Preserve the exact reviewed CI entrypoint while splitting only helper
   # modules between independent disposable PostgreSQL containers. Never

@@ -273,11 +273,8 @@ class AnnotationParityTests(WorksParityTestCase):
         self.assert_same_reads()
 
     def leg_mark_materialized(self) -> None:
-        if self.parity_backend == "sqlite":
-            self.leg.db.mark_work_pdf_materialized(self.ids[0])
-            return
         # PostgreSQL acknowledges only bytes it committed, and those get a new
         # key (another file_path than SQLite's): mark the column directly.
-        self.leg.db.parity_library.database.command(lambda tx: tx.execute(
+        self.leg.db.database.command(lambda tx: tx.execute(
             "UPDATE prks.assets SET materialized_pdf_annotation_revision = canonical_annotation_set_revision"
             " WHERE work_id = %s", (self.ids[0],)))

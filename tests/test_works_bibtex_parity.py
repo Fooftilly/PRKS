@@ -25,7 +25,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import DOC_TYPES
-from tests.backend_parity import POSTGRES, parametrize_backends
+from tests.backend_parity import parametrize_backends
 from tests.bibtex_entry import assert_one_bibtex_entry
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
@@ -71,17 +71,13 @@ class BibtexParityTests(PeopleParityTestCase):
             side.db.add_role(person[index], work[index], role_type, credit_name=credit_name)
 
     def _row(self, side: PeopleSide, pg_sql: str, sqlite_sql: str, params: dict[str, Any]) -> None:
-        if side is self.leg and self.parity_backend == POSTGRES:
+        if side is self.leg:
             from backend.pg_facade.context import current_context
 
             values = {**params, "library_id": current_context().library_id}
-            side.db.parity_library.database.command(lambda tx: tx.execute(pg_sql, values))
+            side.db.database.command(lambda tx: tx.execute(pg_sql, values))
             return
-        if side is self.ref:
-            side.db.sql(sqlite_sql, params)
-            return
-        with side.db.connection() as conn:
-            conn.execute(sqlite_sql, params)
+        side.db.sql(sqlite_sql, params)
 
     def manifestation_both(self, work: Pair, *, kind: str = "edition", title: Optional[str] = None,
                            doc_type: Optional[str] = None, year: Optional[str] = None,
@@ -125,7 +121,7 @@ class BibtexParityTests(PeopleParityTestCase):
         day one that converts to a local time zone.
         """
         for index, side in enumerate(self.sides()):
-            zone = "+00" if side is self.leg and self.parity_backend == POSTGRES else ""
+            zone = "+00" if side is self.leg else ""
             self._row(side, _PG_EDITED, _SQLITE_EDITED, {"work_id": work[index], "at": f"{day} 23:59:59{zone}"})
         return day
 
@@ -335,15 +331,7 @@ class BibtexParityTests(PeopleParityTestCase):
                 video = self.work_both(f"Legacy {stored!r}", doc_type="online", year="2010",
                                        author_text="Numberphile; Brady Haran",
                                        source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-                for index, side in enumerate(self.sides()):
-                    if side is self.leg and self.parity_backend == POSTGRES:
-                        continue
-                    statement = "UPDATE works SET source_kind = ? WHERE id = ?", (stored, video[index])
-                    if side is self.ref:
-                        side.db.sql(*statement)
-                        continue
-                    with side.db.connection() as conn:
-                        conn.execute(*statement)
+                self.ref.db.sql("UPDATE works SET source_kind = ? WHERE id = ?", (stored, video[1]))
                 entry = self.bibtex(video)
                 self.assertTrue(entry.startswith("@online{Numberphile2010,\n"))
                 self.assertIn("  author = {{Numberphile; Brady Haran}},\n", entry)

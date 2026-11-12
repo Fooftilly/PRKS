@@ -35,6 +35,13 @@ class ResearchError(ValueError):
         self.http_status = http_status
 
 
+def validate_kind(kind) -> str:
+    """An Argument's kind, trimmed: ``argument`` or ``stance``."""
+    if not isinstance(kind, str) or kind.strip() not in ARGUMENT_KINDS:
+        raise ResearchError("invalid_kind", "Kind must be argument or stance.")
+    return kind.strip()
+
+
 def _clean_text(raw, *, field: str, required: bool, max_len: int) -> str:
     if raw is None:
         if required:

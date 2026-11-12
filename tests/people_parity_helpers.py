@@ -1,12 +1,11 @@
 """Shared fixture of the People parity tests (L-P-1 #632).
 
-As in ``tests/works_parity_helpers.py``: a test does the same calls on its
-leg's library object and on a reference SQLite ``PRKSDatabase`` built in the
-same test, then compares the results after replacing what differs by
-construction. Generated ids (Persons, Person Groups, publishers, publisher
-aliases and Works) become labels the test chose, and timestamps and ETags
-become their formats. On the ``postgres`` leg the left side is the
-PostgreSQL facade.
+As in ``tests/works_parity_helpers.py``: a test does the same calls on the
+PostgreSQL facade and on the recorded SQLite reference
+(``tests/parity_reference.py``), then compares the results after replacing
+what differs by construction. Generated ids (Persons, Person Groups,
+publishers, publisher aliases and Works) become labels the test chose, and
+timestamps and ETags become their formats.
 """
 
 from __future__ import annotations
@@ -17,13 +16,10 @@ import shutil
 import tempfile
 from typing import Any
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.parity_reference import reference_for
 from tests.backend_parity import BackendParityTestCase
 
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
 _ID = re.compile(r"\b(PG|P|R|M|W|MF|AS)-[0-9A-F]{32}\b")
 _MOMENT = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{3})?")
 _ETAG = re.compile(r'W/"prks-([a-z-]+)-(\d+)-([0-9a-f]+)"')
@@ -87,16 +83,14 @@ def _unordered(state: Any) -> Any:
 
 
 class PeopleParityTestCase(BackendParityTestCase):
-    """Two sides per test: ``self.leg`` (this leg's library) and ``self.ref`` (SQLite)."""
+    """Two sides per test: ``self.leg`` (the facade) and ``self.ref`` (SQLite's recording)."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp(prefix="prks-people-parity-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         leg_storage = StorageConfig.for_testing(os.path.join(self.tmp, "leg"))
-        ref_storage = StorageConfig.for_testing(os.path.join(self.tmp, "ref"))
         self.leg = PeopleSide(self.open_library(leg_storage))
-        self.ref = PeopleSide(reference_for(
-            self, lambda: PRKSDatabase(storage=ref_storage, schema_path=_SCHEMA_PATH)))
+        self.ref = PeopleSide(reference_for(self))
 
     def sides(self) -> tuple[PeopleSide, PeopleSide]:
         return self.leg, self.ref

@@ -134,7 +134,7 @@ def is_video(row: Mapping[str, Any]) -> bool:
 def stored_value(row: Mapping[str, Any], field: str) -> Any:
     """The column value a legacy field reads, as the Work projection does."""
     owner, column = FIELD_COLUMNS[field]
-    if field == "source_url" and is_video(row):
+    if rules.FIELD_KIND_GUARDS.get(field) == "video" and is_video(row):
         return row["stream_url"]
     if owner == "asset" and row["asset_id"] is None:
         return None
@@ -147,7 +147,7 @@ def scope_id(work_id: str, field: str) -> str:
 
 def refusal(row: Mapping[str, Any], field: str, database_value: Any) -> Optional[FieldRefused]:
     """Why ``field`` may not take ``database_value`` on this Work, or None."""
-    if field == "source_url" and is_video(row):
+    if rules.FIELD_KIND_GUARDS.get(field) == "video" and is_video(row):
         return FieldRefused(field, WRONG_OPERATION_FOR_SOURCE,
                             "source_url cannot be set on this Work: its source identity is not a "
                             "field-scoped value")

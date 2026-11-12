@@ -1,10 +1,9 @@
 """Shared fixture of the Works parity tests (L-W-1 #628).
 
-A test does the same calls on its leg's library object and on a reference
-SQLite ``PRKSDatabase`` built in the same test, then compares the results
-after replacing what differs by construction: generated ids (each becomes a
-label naming its Work) and the current time (each timestamp becomes its
-format). On the ``postgres`` leg the left side is the PostgreSQL facade.
+A test does the same calls on the PostgreSQL facade and on the recorded SQLite
+reference (``tests/parity_reference.py``), then compares the results after
+replacing what differs by construction: generated ids (each becomes a label
+naming its Work) and the current time (each timestamp becomes its format).
 """
 
 from __future__ import annotations
@@ -16,13 +15,10 @@ import tempfile
 import uuid
 from typing import Any, Optional
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.parity_reference import reference_for
-from tests.backend_parity import POSTGRES, SQLITE, BackendParityTestCase
+from tests.backend_parity import BackendParityTestCase
 
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SCHEMA_PATH = os.path.join(_PROJECT_DIR, "backend", "db_schema.sql")
 _ID = re.compile(r"\b(W|MF|AS)-[0-9A-F]{32}\b")
 _MOMENT = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{3})?")
 _ETAG = re.compile(r'W/"prks-([a-z-]+)-(\d+)-([0-9a-f]{32})"')
@@ -79,7 +75,7 @@ class _Side:
 
 
 class WorksParityTestCase(BackendParityTestCase):
-    """Two sides per test: ``self.leg`` (this leg's library) and ``self.ref`` (SQLite)."""
+    """Two sides per test: ``self.leg`` (the facade) and ``self.ref`` (SQLite's recording)."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.mkdtemp(prefix="prks-works-parity-")
@@ -88,45 +84,29 @@ class WorksParityTestCase(BackendParityTestCase):
         ref_storage = StorageConfig.for_testing(os.path.join(self.tmp, "ref"))
         leg_db = self.open_library(leg_storage)
         self.leg = _Side(leg_db, leg_storage.pdfs_dir, self._leg_device())
-        self.ref = _Side(reference_for(self, lambda: PRKSDatabase(storage=ref_storage, schema_path=_SCHEMA_PATH)),
-                         ref_storage.pdfs_dir,
-                         str(uuid.uuid4()))
+        self.ref = _Side(reference_for(self), ref_storage.pdfs_dir, str(uuid.uuid4()))
 
     def _leg_device(self) -> str:
-        if self.parity_backend == POSTGRES:
-            from backend.pg_facade.context import current_context
+        from backend.pg_facade.context import current_context
 
-            device = current_context().device_id
-            assert device is not None
-            return str(device)
-        return str(uuid.uuid4())
+        device = current_context().device_id
+        assert device is not None
+        return str(device)
 
     def send(self, side: _Side, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         """Process one operation with the protocol of ``side``'s backend.
 
-        On the ``postgres`` leg that is :mod:`backend.sync.protocol`, acting
-        for the bound actor; an operation it has no handler for is a
-        refusal the parity log records, so the test is skipped, not failed.
+        The facade's is :mod:`backend.sync.protocol`, acting for the bound
+        actor; the reference replays SQLite's recorded answer.
         """
         if side is self.ref:
             return side.db.process_operation(data)
-        if self.parity_backend == SQLITE:
-            from backend import sync_protocol
-
-            return sync_protocol.process_operation(side.db, data)
-        from backend.pg_facade import NotPortedError
         from backend.pg_facade.context import current_context
         from backend.sync import protocol
         from backend.sync.families import Environment
 
-        library = side.db.parity_library
-        try:
-            return protocol.process_operation(library.database, current_context(), data,
-                                              Environment(pdfs_dir=side.pdfs_dir))
-        except NotPortedError as exc:
-            self.parity_log.unported.add(exc.method)
-            self.parity_log.refusals += 1
-            raise
+        return protocol.process_operation(side.db.database, current_context(), data,
+                                          Environment(pdfs_dir=side.pdfs_dir))
 
     def send_both(self, operation: str, ids: tuple[str, str], payload: dict[str, Any],
                   base_revision: Optional[int] = None, **options: Any) -> tuple[int, dict[str, Any]]:

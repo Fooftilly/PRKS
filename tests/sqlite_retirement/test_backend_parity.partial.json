@@ -1,0 +1,12 @@
+{
+  "module": "tests/pg/test_backend_parity.py",
+  "partial": true,
+  "tests": {
+    "PostgresLegTests.test_sqlite_leg_never_touches_postgres": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and added a PostgreSQL twin that turned a call to an unported method into a skip. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers, and a NotPortedError fails the test like any other error (tests/backend_parity.py)."
+    },
+    "PostgresLegTests.test_the_fixture_records_a_refusal_inside_a_ported_method": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and added a PostgreSQL twin that turned a call to an unported method into a skip. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers, and a NotPortedError fails the test like any other error (tests/backend_parity.py)."
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "module": "tests/test_correlated_catalog_count_gate.py",
+  "partial": true,
+  "tests": {
+    "LiveCorpusTests.test_every_allowlist_entry_has_owner_or_untracked_reason": {
+      "replaced_by": [
+        "tests/test_correlated_catalog_count_gate.py::LiveCorpusTests.test_current_tree_passes_against_head"
+      ],
+      "note": "It required the grandfathered allowlist to be non-empty and every entry to name its owner. All ten entries were correlated COUNT queries in backend/db_manager.py, which PG-C2 deleted, so the allowlist is now empty and SQL-CATALOG-003 forbids adding to it; the live check proves the tree has no correlated catalogue COUNT against that empty list."
+    }
+  }
+}

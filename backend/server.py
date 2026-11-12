@@ -32,18 +32,6 @@ from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.services import work_pdf_replace
-from backend.text_index import (
-    PRKSTextIndex,
-    get_text_index,
-    replace_text_index,
-    reset_text_index,
-)
-from backend.research_index import (
-    PRKSResearchIndex,
-    get_research_index,
-    replace_research_index,
-    reset_research_index,
-)
 from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.errors import research_error_envelope
@@ -105,7 +93,7 @@ from backend.performance import (
     set_status,
     snapshot as performance_snapshot,
 )
-from backend.backup_restore import (
+from backend.domain.maintenance.upload import (
     RestoreError,
     backup_max_upload_bytes,
     stream_upload_to_file,
@@ -120,6 +108,8 @@ from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_m
 
 if TYPE_CHECKING:
     from backend.pg_facade import PostgresLibrary
+    from backend.pg_facade.research_index import PostgresResearchIndex
+    from backend.pg_facade.text_index import PostgresTextIndex
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -147,8 +137,8 @@ _bound_storage: StorageConfig | None = None
 pdfs_dir: str | None = None
 thumbs_dir: str | None = None
 db: "PostgresLibrary | None" = None
-text_index: PRKSTextIndex | None = None
-research_index: PRKSResearchIndex | None = None
+text_index: "PostgresTextIndex | None" = None
+research_index: "PostgresResearchIndex | None" = None
 
 
 def normalize_listen_host(host: str) -> str:
@@ -395,50 +385,14 @@ def _postgres_library(config: StorageConfig, database):
 
 
 def _publish_binding(config: StorageConfig, db_local, candidate, research_candidate) -> StorageConfig:
+    """Publish a built binding whole: the adapters were all built before this runs."""
     global _bound_storage, pdfs_dir, thumbs_dir, db, text_index, research_index
-    previous_published = (
-        _bound_storage,
-        pdfs_dir,
-        thumbs_dir,
-        db,
-        text_index,
-        research_index,
-    )
-    try:
-        previous_index = get_text_index()
-    except RuntimeError:
-        previous_index = None
-    try:
-        previous_research = get_research_index()
-    except RuntimeError:
-        previous_research = None
-    try:
-        replace_text_index(candidate)
-        replace_research_index(research_candidate)
-        _bound_storage = config
-        pdfs_dir = config.pdfs_dir
-        thumbs_dir = config.thumbs_dir
-        db = db_local
-        text_index = candidate
-        research_index = research_candidate
-    except Exception:
-        if previous_index is not None:
-            replace_text_index(previous_index)
-        else:
-            reset_text_index()
-        if previous_research is not None:
-            replace_research_index(previous_research)
-        else:
-            reset_research_index()
-        (
-            _bound_storage,
-            pdfs_dir,
-            thumbs_dir,
-            db,
-            text_index,
-            research_index,
-        ) = previous_published
-        raise
+    _bound_storage = config
+    pdfs_dir = config.pdfs_dir
+    thumbs_dir = config.thumbs_dir
+    db = db_local
+    text_index = candidate
+    research_index = research_candidate
     return config
 
 

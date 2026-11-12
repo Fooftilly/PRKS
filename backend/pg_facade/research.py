@@ -1,10 +1,8 @@
 """Research family of the PostgreSQL transition facade (L-R-1).
 
 Owned by the Research lane (``docs/postgresql-architecture.md`` §15.2):
-Concepts, Positions, Arguments and derived mentions. Each ported method
-keeps the ``PRKSDatabase`` signature and return shape and is registered by
-one line, ``@ported`` from :mod:`backend.pg_facade.registry`, directly
-above it.
+Concepts, Positions, Arguments and derived mentions. Each method keeps the signature and return shape of the
+SQLite library it replaced.
 
 A method acts for the bound
 :class:`~backend.domain.identity.request_context.RequestContext` (see
@@ -63,7 +61,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
-from backend.pg_facade.registry import FacadeMixin, ported
+from backend.pg_facade.registry import FacadeMixin
 
 if TYPE_CHECKING:
     from backend.domain.identity.library_scope import LibraryScope
@@ -107,14 +105,10 @@ def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T], *, serializa
 
 class ResearchMixin(FacadeMixin):
     """Concepts (L-R-1 PR 2); Positions, Arguments and Stances (PR 3)."""
-
-    @ported
     def list_concepts(self) -> List[dict]:
         from backend.domain.research import concepts
 
         return _read(self, concepts.catalog)
-
-    @ported
     def get_concept(self, concept_id: str) -> Optional[dict]:
         from backend.domain.research import concepts
 
@@ -122,52 +116,36 @@ class ResearchMixin(FacadeMixin):
         if not cid:
             return None
         return _read(self, lambda scope: concepts.detail(scope, cid))
-
-    @ported
     def create_concept(self, name, description: str = "") -> dict:
         from backend.domain.research import concepts
         from backend.entity_ids import generate
 
         new_id = generate("C")
         return _command(self, lambda scope: concepts.create(scope, new_id, name, description))
-
-    @ported
     def update_concept(self, concept_id: str, *, name=None, description=None) -> dict:
         from backend.domain.research import concepts
 
         return _command(self, lambda scope: concepts.update(scope, concept_id, name, description))
-
-    @ported
     def replace_concept_aliases(self, concept_id: str, aliases) -> dict:
         from backend.domain.research import concepts
 
         return _command(self, lambda scope: concepts.replace_aliases(scope, concept_id, aliases))
-
-    @ported
     def replace_concept_parents(self, concept_id: str, parent_ids) -> dict:
         from backend.domain.research import concepts
 
         return _command(self, lambda scope: concepts.replace_parents(scope, concept_id, parent_ids))
-
-    @ported
     def delete_concept(self, concept_id: str) -> None:
         from backend.domain.research import concepts
 
         _command(self, lambda scope: concepts.remove(scope, concept_id))
-
-    @ported
     def get_concept_sync_state(self, concept_id: str) -> Optional[dict]:
         from backend.domain.research import concepts
 
         return _read(self, lambda scope: concepts.sync_state(scope, concept_id))
-
-    @ported
     def list_positions(self) -> List[dict]:
         from backend.domain.research import positions
 
         return _read(self, positions.catalog)
-
-    @ported
     def get_position(self, position_id: str) -> Optional[dict]:
         from backend.domain.research import positions
 
@@ -175,46 +153,32 @@ class ResearchMixin(FacadeMixin):
         if not pid:
             return None
         return _read(self, lambda scope: positions.detail(scope, pid))
-
-    @ported
     def create_position(self, name, description: str = "") -> dict:
         from backend.domain.research import positions
         from backend.entity_ids import generate
 
         new_id = generate("P")
         return _command(self, lambda scope: positions.create(scope, new_id, name, description))
-
-    @ported
     def update_position(self, position_id: str, *, name=None, description=None) -> dict:
         from backend.domain.research import positions
 
         return _command(self, lambda scope: positions.update(scope, position_id, name, description))
-
-    @ported
     def delete_position(self, position_id: str) -> None:
         from backend.domain.research import positions
 
         _command(self, lambda scope: positions.remove(scope, position_id))
-
-    @ported
     def get_position_sync_state(self, position_id: str) -> Optional[dict]:
         from backend.domain.research import positions
 
         return _read(self, lambda scope: positions.sync_state(scope, position_id))
-
-    @ported
     def list_verdicts(self) -> List[dict]:
         from backend.domain.research import arguments
 
         return _read(self, arguments.verdicts)
-
-    @ported
     def list_arguments(self, kind: Optional[str] = None) -> List[dict]:
         from backend.domain.research import arguments
 
         return _read(self, lambda scope: arguments.catalog(scope, kind))
-
-    @ported
     def get_argument(self, argument_id: str) -> Optional[dict]:
         from backend.domain.research import arguments
 
@@ -222,8 +186,6 @@ class ResearchMixin(FacadeMixin):
         if not aid:
             return None
         return _read(self, lambda scope: arguments.detail(scope, aid))
-
-    @ported
     def create_argument(self, *, name, kind, main_text: str = "", sources=None, targets=None) -> dict:
         from backend.domain.research import arguments
         from backend.entity_ids import generate
@@ -232,39 +194,27 @@ class ResearchMixin(FacadeMixin):
         return _command(self, lambda scope: arguments.create(scope, new_id, name, kind, main_text, sources,
                                                              targets),
                         serializable=True)
-
-    @ported
     def update_argument(self, argument_id: str, *, name=None, kind=None, main_text=None) -> dict:
         from backend.domain.research import arguments
 
         return _command(self, lambda scope: arguments.update(scope, argument_id, name, kind, main_text))
-
-    @ported
     def replace_argument_sources(self, argument_id: str, sources) -> dict:
         from backend.domain.research import arguments
 
         return _command(self, lambda scope: arguments.replace_sources(scope, argument_id, sources),
                         serializable=True)
-
-    @ported
     def replace_argument_targets(self, argument_id: str, targets) -> dict:
         from backend.domain.research import arguments
 
         return _command(self, lambda scope: arguments.replace_targets(scope, argument_id, targets))
-
-    @ported
     def delete_argument(self, argument_id: str) -> None:
         from backend.domain.research import arguments
 
         _command(self, lambda scope: arguments.remove(scope, argument_id))
-
-    @ported
     def get_argument_sync_state(self, argument_id: str) -> Optional[dict]:
         from backend.domain.research import arguments
 
         return _read(self, lambda scope: arguments.sync_state(scope, argument_id))
-
-    @ported
     def save_work_notes(self, work_id: str, text_content) -> None:
         """The Work PATCH's Research Note save (L-R-1 #634): SQLite's refusals, then ``notes.set_note``.
 

@@ -26,7 +26,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from tests.backend_parity import POSTGRES, SQLITE, parametrize_backends
+from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
 _FIELDS = ("first_name", "last_name", "aliases", "about", "image_url", "link_wikipedia",
@@ -55,13 +55,11 @@ class PeopleSyncParityTests(PeopleParityTestCase):
         self.devices = {id(self.leg): self._leg_device(), id(self.ref): str(uuid.uuid4())}
 
     def _leg_device(self) -> str:
-        if self.parity_backend == POSTGRES:
-            from backend.pg_facade.context import current_context
+        from backend.pg_facade.context import current_context
 
-            device = current_context().device_id
-            assert device is not None
-            return str(device)
-        return str(uuid.uuid4())
+        device = current_context().device_id
+        assert device is not None
+        return str(device)
 
     def new_id(self, prefix: str, label: str) -> str:
         entity_id = prefix + "-" + uuid.uuid4().hex.upper()
@@ -81,22 +79,12 @@ class PeopleSyncParityTests(PeopleParityTestCase):
     def send(self, side: PeopleSide, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if side is self.ref:
             return side.db.process_operation(data)
-        if self.parity_backend == SQLITE:
-            from backend import sync_protocol
-
-            return sync_protocol.process_operation(side.db, data)
-        from backend.pg_facade import NotPortedError
         from backend.pg_facade.context import current_context
         from backend.sync import protocol
         from backend.sync.families import Environment
 
-        try:
-            return protocol.process_operation(side.db.parity_library.database, current_context(), data,
-                                              Environment(pdfs_dir=os.path.join(self.tmp, "leg-pdfs")))
-        except NotPortedError as exc:
-            self.parity_log.unported.add(exc.method)
-            self.parity_log.refusals += 1
-            raise
+        return protocol.process_operation(side.db.database, current_context(), data,
+                                          Environment(pdfs_dir=os.path.join(self.tmp, "leg-pdfs")))
 
     def send_both(self, operation: str, ids: Any, payload: dict[str, Any], base: Optional[int] = None,
                   ) -> tuple[int, dict[str, Any]]:

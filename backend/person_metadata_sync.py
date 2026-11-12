@@ -27,7 +27,6 @@ Nothing in this module imports the database layer; the handler is handed the
 """
 import json
 
-from backend import work_metadata_sync as meta
 from backend.person_image import PersonImageUrlError, normalize_person_image_url
 from backend.person_sync import FIELDS as PERSON_FIELDS
 
@@ -93,77 +92,6 @@ def disagreement(current, desired):
     return {"current_value": current, "requested_value": desired}
 
 
-def get_revision(conn, person_id, field):
-    row = conn.execute(
-        "SELECT revision FROM sync_entity_revisions WHERE scope_type = ? AND scope_id = ?",
-        (SCOPE_TYPE, scope_key(person_id, field))).fetchone()
-    return row[0] if row else 0
-
-
-def set_field_on_conn(conn, person_id, field, value):
-    """Write one profile field and advance its revision together, in the
-    caller's transaction. Returns (changed, revision_after).
-
-    A no-op write advances nothing: a revision records the value actually
-    changing, and inflating it would manufacture staleness for every device
-    that already holds the current value. `persons` columns are nullable, so
-    NULL and "" are compared as the same state -- a device that cleared a
-    field it had never set has not changed anything.
-    """
-    if field not in SYNCED_FIELDS:
-        raise ValueError("unsupported synchronized field: %s" % field)
-    desired = canonical_wire(field, value)
-    row = conn.execute("SELECT %s FROM persons WHERE id = ?" % field, (person_id,)).fetchone()
-    if row is None:
-        return False, 0
-    revision = get_revision(conn, person_id, field)
-    if ("" if row[0] is None else str(row[0])) == desired:
-        return False, revision
-    conn.execute(
-        "UPDATE persons SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?" % field,
-        (desired, person_id))
-    conn.execute("""INSERT INTO sync_entity_revisions (scope_type, scope_id, revision)
-                    VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id)
-                    DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
-                 (SCOPE_TYPE, scope_key(person_id, field)))
-    return True, revision + 1
-
-
-def get_field_state_on_conn(conn, person_id):
-    """Every supported field's revision, or None when the Person is gone.
-
-    Revisions ONLY, unlike the Work equivalent, and for a reason specific to
-    this entity: the Person detail the client already caches carries all eleven
-    values, and none of them has a length bound, so echoing them here would
-    make a second copy of the whole profile -- biography included -- in what
-    this endpoint sends, what IndexedDB stores, and what every re-read costs.
-    A field with no revision row has never changed since revisions existed,
-    which is revision 0 -- the same "missing means zero" rule every other scope
-    uses.
-    """
-    if conn.execute("SELECT 1 FROM persons WHERE id = ?", (person_id,)).fetchone() is None:
-        return None
-    # Asked for by key rather than by scanning every `person-field` row in the
-    # library: `(scope_type, scope_id)` is the primary key, so this is an
-    # indexed lookup of at most one row per supported field, and its cost does
-    # not grow with the number of people.
-    by_key = {scope_key(person_id, field): field for field in SYNCED_FIELDS}
-    placeholders = ", ".join("?" * len(by_key))
-    revisions = {
-        by_key[scope_id]: revision
-        for scope_id, revision in conn.execute(
-            "SELECT scope_id, revision FROM sync_entity_revisions "
-            "WHERE scope_type = ? AND scope_id IN (%s)" % placeholders,
-            (SCOPE_TYPE,) + tuple(by_key),
-        ).fetchall()
-    }
-    return {
-        "person_id": person_id,
-        "fields": {field: {"revision": revisions.get(field, 0)}
-                   for field in sorted(SYNCED_FIELDS)},
-    }
-
-
 def validate(op):
     payload = op["payload"]
     if set(payload) != {"field", "value"}:
@@ -183,49 +111,3 @@ def validate(op):
         raise ValueError("INVALID_BASE_REVISION")
 
 
-def apply(db, conn, op, received_at):
-    person_id = op["entity_id"]
-    field, desired = op["payload"]["field"], op["payload"]["value"]
-    result = {"person_id": person_id, "field": field}
-    row = conn.execute("SELECT %s FROM persons WHERE id = ?" % field, (person_id,)).fetchone()
-    if row is None:
-        # A Person this device created may still be waiting on its own
-        # CREATE_PERSON; the coordinator's dependency ordering is what keeps
-        # that from arriving here, so reaching this line means the Person is
-        # genuinely gone.
-        result["code"] = "ENTITY_NOT_FOUND"
-        return 404, result
-    current = "" if row[0] is None else str(row[0])
-    desired = canonical_wire(field, desired)
-    revision = get_revision(conn, person_id, field)
-    base = op["base_revision"]
-    if base > revision:
-        result.update(code="FUTURE_REVISION", current_revision=revision,
-                      **disagreement(current, desired))
-        return 400, meta.fit_terminal_result(result, current, desired)
-    # A stale base is only a conflict when the two devices actually disagree.
-    # Two people correcting the same spelling have converged, not collided.
-    if base < revision and current != desired:
-        result.update(code="REVISION_CONFLICT", current_revision=revision,
-                      **disagreement(current, desired))
-        return 409, meta.fit_terminal_result(result, current, desired)
-    changed, after = set_field_on_conn(conn, person_id, field, desired)
-    # The acknowledgement does NOT echo the value back. No Person field has a
-    # length bound, the ledger has no retention policy, and a client that
-    # cannot durably store an oversized result reads it as a failed sync and
-    # retries the same operation forever. So the ACK says only that the value
-    # was applied -- the client already holds the authoritative copy in its
-    # immutable payload, and the canonical form is reachable from it (the only
-    # field whose stored spelling differs from what was typed is `image_url`,
-    # and the difference is a trim the client performs before enqueueing).
-    result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed,
-                  value_omitted=True)
-    return 200, result
-
-
-class _Handler:
-    validate = staticmethod(validate)
-    apply = staticmethod(apply)
-
-
-HANDLER = _Handler()
