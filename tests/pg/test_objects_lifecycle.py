@@ -543,6 +543,19 @@ class RetryTests(ObjectsTestCase):
         self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 1})
         self.assertEqual(self.claims(), {})
 
+    def test_a_failed_removal_logs_its_error_type_and_never_the_path_or_name(self) -> None:
+        obj = self.put()
+        self.claim(obj.key, self.actor.library_id)
+        secret = f"/home/private-user/PRIVATE_BOOK_X9Q7/{obj.key.name}"
+        with (mock.patch.object(self.objects, "delete", side_effect=OSError(13, "Permission denied", secret)),
+              self.assertLogs("prks.objects", "WARNING") as logs):
+            self.assertIs(self.settle(obj.key), Settled.FAILED)
+        text = "\n".join(logs.output)
+        self.assertIn("object_cleanup_failed", text)
+        self.assertIn("error=PermissionError", text)  # OSError(13, ...) is a PermissionError
+        for private in ("private-user", "PRIVATE_BOOK_X9Q7", "Permission denied", obj.key.name):
+            self.assertNotIn(private, text)
+
     def test_bytes_already_gone_settle_as_removed(self) -> None:
         obj = self.put()
         self.claim(obj.key, self.actor.library_id)
