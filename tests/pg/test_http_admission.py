@@ -455,6 +455,28 @@ class LoopbackOwnerTests(AdmissionTestCase):
         ))
         self.assertIsInstance(mapped, session_api.Admitted)
 
+    def test_only_a_profile_image_read_acts_on_the_epoch_it_read(self) -> None:
+        # The portrait fill is a Library command; an <img> sends no epoch, so
+        # admission gives that one read the epoch it just read, and no other.
+        self.run_sql("UPDATE prks.libraries SET epoch = 3")
+
+        def admitted(path: str, method: str = "GET"):
+            outcome = session_api.handle(self.auth, session_api.HttpRequest(
+                method=method, path=path, headers=Message(), peer="127.0.0.1",
+                request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+                read_json=lambda: {},
+            ))
+            assert isinstance(outcome, session_api.Admitted), outcome
+            return outcome
+
+        image = admitted("/api/persons/P-1/profile-image")
+        self.assertEqual((image.epoch, image.context.epoch), (3, 3))
+        for path in ("/api/persons/P-1", "/api/tags", "/api/persons/P-1/profile-image/x",
+                     "/api/persons//profile-image"):
+            with self.subTest(path=path):
+                self.assertIsNone(admitted(path).context.epoch)
+        self.assertIsNone(admitted("/api/persons/P-1/profile-image", method="HEAD").context.epoch)
+
     def test_only_a_ledgered_route_leaves_the_epoch_fence_to_itself(self) -> None:
         self.run_sql("UPDATE prks.libraries SET epoch = 2")
         headers = Message()

@@ -46,3 +46,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PRKS_CONTAINER=1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["serve", "--host", "0.0.0.0"]

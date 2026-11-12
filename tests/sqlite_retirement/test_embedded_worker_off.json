@@ -1,0 +1,15 @@
+{
+  "module": "tests/test_embedded_worker_off.py",
+  "tests": {
+    "EmbeddedWorkerOffTests.test_the_sqlite_runtime_has_no_worker_thread_and_no_psycopg": {
+      "replaced_by": [
+        "tests/pg/test_embedded_worker.py::SettingTests.test_prks_app_with_0_runs_no_embedded_worker",
+        "tests/pg/test_embedded_worker.py::SettingTests.test_0_runs_no_worker_and_opens_no_pool"
+      ],
+      "note": "There is no web process without PRKS_AUTH and psycopg any more: every web process serves its Library from PostgreSQL and has a jobs runtime. What stays is that PRKS_EMBEDDED_WORKER=0 starts no embedded worker thread and opens no worker pool."
+    },
+    "EmbeddedWorkerOffTests.test_the_sqlite_runtime_answers_queue_paths_without_psycopg": {
+      "obsolete": "It called the Processing queue handlers the way the SQLite runtime did, with no admitted request context and a SQLite store, to prove they claimed none of their paths and loaded no psycopg there. That runtime is gone: every request now reaches the queue with an admitted context on PostgreSQL, where its routes, access rules and refusals are tested in tests/pg/test_http_processing.py (QueueTests, ImportAndDeleteTests, AccessTests)."
+    }
+  }
+}

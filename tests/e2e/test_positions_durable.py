@@ -110,7 +110,7 @@ class DurablePositionTests(unittest.TestCase):
     def positions_in_db(self, server):
         return {row['name']: row for row in
                 self.db_for(server).query(
-                    sqlite='SELECT * FROM positions', postgres='SELECT * FROM prks.positions')}
+                    postgres='SELECT * FROM prks.positions')}
 
     # ---- creation -----------------------------------------------------------
 
@@ -168,7 +168,6 @@ class DurablePositionTests(unittest.TestCase):
         self.reconnect(page, context)
         self.drained(page, 'a repeated name is not a refusal')
         rows = self.db_for(server).query(
-            sqlite='SELECT id FROM positions WHERE name = ?',
             postgres='SELECT id FROM prks.positions WHERE name = %s', params=(POSITION_A_NAME,))
         self.assertEqual(len(rows), 2)
 

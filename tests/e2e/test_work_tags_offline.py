@@ -59,7 +59,6 @@ class OfflineWorkTagTests(unittest.TestCase):
     def tag_ledger(self, server):
         """This family's server-ledger rows: op_id (text) and status."""
         return library_for(server).query(
-            sqlite='SELECT op_id, status FROM sync_operations WHERE %s ORDER BY rowid' % self.TAG_LEDGER,
             postgres='SELECT op_id::text AS op_id, status FROM prks.sync_operations WHERE %s'
                      ' ORDER BY applied_at, op_id' % self.TAG_LEDGER)
 

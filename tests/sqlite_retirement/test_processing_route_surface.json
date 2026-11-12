@@ -1,0 +1,18 @@
+{
+  "module": "tests/e2e/test_processing_route_surface.py",
+  "tests": {
+    "ProcessingRouteSurfaceTests.test_processing_files_page_mounts_from_the_route": {
+      "replaced_by": [
+        "tests/e2e/test_app.py::TabContextHostRootTests.test_processing_files_refresh_keeps_tab_root",
+        "tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests.test_upload_preview_edit_import_and_remove"
+      ],
+      "note": "The route still mounts Files for Processing in the main tile, now as the managed upload queue (§11.5). The path-based inbox page this test opened was the SQLite Library's and is never shown on PostgreSQL."
+    },
+    "ProcessingRouteSurfaceTests.test_save_and_import_go_through_the_typed_client": {
+      "replaced_by": [
+        "tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests.test_upload_preview_edit_import_and_remove"
+      ],
+      "note": "Saving a file's draft metadata and importing it into the Library is checked on the upload queue. The inbox directory, PATCH /api/processing-files/<name> and its import route belong to the retired path-based inbox, which the SQLite deletion PR removes with this module."
+    }
+  }
+}

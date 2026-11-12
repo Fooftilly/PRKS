@@ -335,8 +335,8 @@ FEATURES = {
         "selectors": ("tests.e2e.test_publishers_route_surface",),
     },
     "processing": {
-        "description": "Processing Files inbox Vue route surface",
-        "selectors": ("tests.e2e.test_processing_route_surface",),
+        "description": "Files for Processing route, mounted in its tab root",
+        "selectors": ("tests.e2e.test_app.TabContextHostRootTests",),
     },
     "postgres-library": {
         "description": "PG-C1 flows on the PostgreSQL Library: restore recovery, Processing queue, Research-ACK fence (PostgreSQL leg only)",
@@ -726,7 +726,7 @@ AFFECTED_RULES = (
             "frontend-app/**/*.stories.js",
         ),
         "features": ("processing",),
-        "note": "Vue Processing Files inbox (#302 R3) → processing, because test_processing_route_surface opens #/processing-files. Shared route-surface stays unmapped (CI full).",
+        "note": "Vue Processing Files inbox (#302 R3) → processing, because TabContextHostRootTests opens #/processing-files in its tab root. Shared route-surface stays unmapped (CI full).",
     },
     {
         "name": "processing-queue-vue",

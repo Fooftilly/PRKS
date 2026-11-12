@@ -7,28 +7,37 @@ are never served. A profile edit that names a missing group changes nothing,
 and one that names groups applies metadata and memberships together; a
 Person Group edit naming a missing parent creates nothing.
 
-Where the portrait bytes live (the cache file, its purge on a URL change,
-the legacy ``.bin`` migration) is not asserted here: on PostgreSQL that is
-the portrait object's (``tests/pg/test_objects_portraits.py``).
+The route serves the portrait object the Person row names
+(``portrait_locator``, ``tests/pg/test_objects_portraits.py``): a fetch made
+through it becomes that object, never a file in ``people_dir``; a catalogued
+portrait is served without fetching; a reader's miss is served uncached; and
+the object a backup took is the one served after a restore.
 These replace the matching ``tests/test_server_api.py`` cases.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
+import tempfile
 from io import BytesIO
 from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
+from backend.derived_caches import prks_person_image_cache_safe_id
+from backend.domain.maintenance import backup, restore
 from backend.person_image import PortraitImage, decode_and_transcode
+from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 
-def portrait_png() -> bytes:
+def portrait_png(color: tuple[int, int, int] = (120, 80, 200)) -> bytes:
     from PIL import Image
 
     buf = BytesIO()
-    Image.new("RGB", (64, 64), (120, 80, 200)).save(buf, format="PNG")
+    Image.new("RGB", (64, 64), color).save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -46,6 +55,78 @@ class PortraitTests(ServerApiTestCase):
 
     def image(self, person_id: str):
         return self.get(f"/api/persons/{quote(person_id)}/profile-image")
+
+    def catalogued(self, person_id: str) -> dict[str, Any]:
+        return self.sql("SELECT portrait_locator, portrait_sha256, portrait_byte_size FROM prks.persons "
+                        "WHERE id = %s", (person_id,))[0]
+
+    def cache_files(self, person_id: str) -> list[str]:
+        """Files of the retired per-Person cache (``<safe id>_<url hash>_v<rev>.webp``) in ``people_dir``.
+
+        Portrait objects share the directory under their own random names.
+        """
+        people_dir = self.storage.people_dir
+        prefix = prks_person_image_cache_safe_id(person_id) + "_"
+        return sorted(n for n in (os.listdir(people_dir) if os.path.isdir(people_dir) else [])
+                      if n.startswith(prefix))
+
+    def test_a_fetched_portrait_becomes_the_catalogued_object(self) -> None:
+        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+            person_id = self.person("Object", "Portrait", "https://example.invalid/o.jpg")
+            served = self.image(person_id)
+        self.assertEqual((served.status, served.raw), (200, self.portrait.body))
+        row = self.catalogued(person_id)
+        self.assertIsNotNone(row["portrait_locator"], "the fetch names a portrait object")
+        self.assertEqual((row["portrait_sha256"], row["portrait_byte_size"]),
+                         (hashlib.sha256(self.portrait.body).hexdigest(), len(self.portrait.body)))
+        objects = LocalFilesystemStorage.for_config(self.storage)
+        with objects.open_read(StorageKey(NAMESPACE_PORTRAITS, row["portrait_locator"])) as handle:
+            self.assertEqual(handle.read(), self.portrait.body)
+        self.assertEqual(self.cache_files(person_id), [], "no per-Person cache file is written")
+
+    def test_a_catalogued_portrait_is_served_without_fetching(self) -> None:
+        person_id = self.person("Stored", "Portrait", "https://example.invalid/s.jpg")
+        with self.acting():
+            stored = self.facade._cache_person_portrait(person_id, lambda _url: self.portrait)
+        assert stored is not None
+        with mock.patch("backend.server.fetch_and_prepare", side_effect=AssertionError("must use the object")):
+            served = self.image(person_id)
+        self.assertEqual((served.status, served.raw), (200, self.portrait.body))
+
+    def test_a_readers_miss_is_served_and_never_cached(self) -> None:
+        person_id = self.person("Reader", "Portrait", "https://example.invalid/r.jpg")
+        self.user("Reader", library=self.lib, role="reader")
+        reader = self.session_cookie("Reader")
+        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+            served = self.call("GET", f"/api/persons/{quote(person_id)}/profile-image", cookies=reader)
+        self.assertEqual((served.status, served.raw), (200, self.portrait.body))
+        self.assertIsNone(self.catalogued(person_id)["portrait_locator"], "a reader never writes")
+        self.assertEqual(self.cache_files(person_id), [])
+
+    def test_the_backed_up_portrait_is_served_after_a_restore(self) -> None:
+        encoded = decode_and_transcode(portrait_png((10, 200, 40)))
+        assert encoded is not None
+        later = PortraitImage(body=encoded[0], subtype=encoded[1])
+        self.assertNotEqual(later.body, self.portrait.body)
+        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+            person_id = self.person("Restored", "Portrait", "https://example.invalid/before.jpg")
+            self.assertEqual(self.image(person_id).raw, self.portrait.body)
+        out = tempfile.mkdtemp(prefix="prks-pg-portrait-backup-")
+        self.addCleanup(shutil.rmtree, out, True)
+        objects = LocalFilesystemStorage.for_config(self.storage)
+        archive = backup.write_backup(self.db.config.conninfo, objects, self.lib, out,
+                                      prks_version="0.8.0-test").path
+        # After the backup the Person gets another portrait.
+        self.ok(self.send("PATCH", f"/api/persons/{quote(person_id)}", {"image_url": "https://example.invalid/after.jpg"}))
+        with mock.patch("backend.server.fetch_and_prepare", return_value=later):
+            self.assertEqual(self.image(person_id).raw, later.body)
+        restore.restore_library(self.db.config.conninfo, objects, archive, self.lib,
+                                owner_user_id=self.owner, staging_dir=out)
+        with mock.patch("backend.server.fetch_and_prepare", side_effect=AssertionError("must use the object")):
+            served = self.image(person_id)
+        self.assertEqual((served.status, served.raw), (200, self.portrait.body))
+        self.assertEqual(self.catalogued(person_id)["portrait_sha256"],
+                         hashlib.sha256(self.portrait.body).hexdigest())
 
     def test_a_portrait_is_served_and_stays_served_when_the_remote_fails(self) -> None:
         with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):

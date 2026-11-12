@@ -31,7 +31,10 @@ sign, spaces or leading zeros (400 ``LIBRARY_EPOCH_REQUIRED`` otherwise,
 checked before the capability); then, for an authorized actor only,
 maintenance is 503 ``MAINTENANCE`` and another epoch than the Library's 409
 ``LIBRARY_EPOCH_CHANGED``. Admitted responses carry the Library's current
-epoch in ``PRKS-Library-Epoch``.
+epoch in ``PRKS-Library-Epoch``. One read acts on the epoch it read: ``GET
+/api/persons/<id>/profile-image`` may fill the Person's cached portrait, a
+Library command, and an ``<img>`` sends no epoch, so its context carries the
+epoch admission read and a restore since then fences the fill.
 
 The admission check runs in its own transaction and commits before the route
 runs: today's routes still write SQLite, so no PostgreSQL transaction spans
@@ -97,6 +100,17 @@ _ADMIN_READS = frozenset({"/api/diagnostics/jobs"})
 # Mutations that change no Library content: authorized, never epoch-fenced.
 # Mutations whose route looks up its ledger before it fences the epoch.
 _LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})
+
+# Reads that may fill a derived cache in the Library (a Person's portrait,
+# fetched from its ``image_url`` on a miss). The fill is a Library command, so
+# it needs an acted-on epoch, and a browser ``<img>`` sends none: admission
+# gives the context the epoch it just read. A restore since then refuses the
+# fill (``LIBRARY_EPOCH_CHANGED``), and the route serves the image uncached.
+def _fills_derived_cache(method: str, path: str) -> bool:
+    parts = path.split("/")
+    return (method == "GET" and len(parts) == 5 and parts[1:3] == ["api", "persons"]
+            and bool(parts[3]) and parts[4] == "profile-image")
+
 
 _NON_LIBRARY_MUTATIONS = {
     "/api/client-errors": Capability.READ_LIBRARY,  # a browser error report, logged only
@@ -439,7 +453,10 @@ def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
             return _refused(Refusal.NOT_AUTHENTICATED)
         if not fenced:
             ctx = RequestContext.for_session(session)
-            return Admitted(library_query(auth.db, ctx, _current_epoch, capability=capability), ctx)
+            current = library_query(auth.db, ctx, _current_epoch, capability=capability)
+            if _fills_derived_cache(method, path):
+                ctx = RequestContext.for_session(session, epoch=current)
+            return Admitted(current, ctx)
         if request.route_fences_epoch and path in _LEDGERED_MUTATIONS:
             # A replay of a ledgered operation answers whatever the epoch is
             # now; anything else meets the route's own epoch fence, so the

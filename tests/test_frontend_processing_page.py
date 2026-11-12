@@ -92,12 +92,12 @@ class FrontendProcessingPageTests(unittest.TestCase):
         policy = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "policy.py"))
         rule = policy[policy.index('"name": "processing-vue"'):policy.index('"name": "concepts-vue"')]
         self.assertIn('"features": ("processing",)', rule)
-        self.assertIn("test_processing_route_surface", rule)
+        self.assertIn("TabContextHostRootTests", rule)
         self.assertIn("#/processing-files", rule)
         self.assertNotIn('"features": ("browse",)', rule)
-        e2e = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "test_processing_route_surface.py"))
-        self.assertIn("prksNavigate('#/processing-files')", e2e)
-        self.assertIn("data-prks-processing-page", e2e)
+        e2e = _read(os.path.join(_PROJECT_DIR, "tests", "e2e", "test_app.py"))
+        self.assertIn('a.nav-link[href="#/processing-files"]', e2e)
+        self.assertIn("data-prks-processing-queue", e2e)
 
     def test_failed_reads_keep_the_painted_inbox_and_people(self):
         app = _read(_APP)

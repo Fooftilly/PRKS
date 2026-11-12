@@ -239,9 +239,11 @@ class EntrypointInstrumentationTests(unittest.TestCase):
         }
         self.assertTrue({
             "startup_dependency_gate", "startup_identity", "startup_jobs",
-            "startup_storage_open", "startup_restore", "startup_bind",
+            "startup_storage_open", "startup_bind",
         }.issubset(phases))
         self.assertLessEqual(phases, startup_profile.PHASES)
+        # The SQLite restore journal recovery left with the SQLite store (PG-C2 #641).
+        self.assertNotIn("startup_restore", phases)
 
 
 if __name__ == "__main__":

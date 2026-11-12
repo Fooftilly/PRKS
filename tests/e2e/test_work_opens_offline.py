@@ -92,7 +92,6 @@ class OfflineWorkOpenTests(unittest.TestCase):
 
     def server_opened_at(self, server, work_id):
         rows = library_for(server).query(
-            sqlite="SELECT last_opened_at FROM works WHERE id = ?",
             postgres="SELECT last_opened_at FROM prks.works WHERE id = %s",
             params=(work_id,))
         value = rows[0]['last_opened_at']

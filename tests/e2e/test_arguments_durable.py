@@ -197,7 +197,6 @@ class DurableArgumentTests(unittest.TestCase):
 
         self.reconnect(page, context); self.drained(page)
         rows = self.db_for(server).query(
-            sqlite="SELECT id, name FROM arguments WHERE name IN (?, ?)",
             postgres="SELECT id, name FROM prks.arguments WHERE name IN (%s, %s)",
             params=("Offline Argument", "Offline Stance"))
         self.assertEqual({row["id"] for row in rows}, set(ids))
@@ -348,7 +347,6 @@ class DurableArgumentTests(unittest.TestCase):
                           for source in saved["sources"]],
                          [(remaining_work, "5-6")])
         works = self.db_for(server).query(
-            sqlite="SELECT id FROM works WHERE id = ?",
             postgres="SELECT id FROM prks.works WHERE id = %s", params=(deleted_work,))
         self.assertEqual(works, [], "the selected Work was still deleted")
 
@@ -391,7 +389,6 @@ class DurableArgumentTests(unittest.TestCase):
             "op => op.entity_id === id).server_result)", created["id"])
         self.assertEqual(result["code"], "POSITION_NOT_FOUND")
         rows = self.db_for(server).query(
-            sqlite="SELECT id FROM arguments WHERE id = ?",
             postgres="SELECT id FROM prks.arguments WHERE id = %s", params=(created["id"],))
         self.assertEqual(rows, [], "refused construction rolls INSERT back")
 

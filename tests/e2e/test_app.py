@@ -29,7 +29,6 @@ from tests.e2e.harness import (
     wait_for_async,
 )
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer
-from tests.e2e.postgres_identity import postgres_library
 from tests.ux_tour.fixtures import TAG_NAMES, seed_ux_tour_library
 
 NOTES = """# E2E Research Note
@@ -3336,9 +3335,8 @@ class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
         self._assert_viewer_kept(page, page_number)
         self.assertEqual(_popup_comment(page, ann_id), "fifth")
         self.assertIn("fifth", _managed_pdf_annotation_contents(page, work_id))
-        if postgres_library():
-            # Each materialization is a new immutable object for the same document.
-            self.assertGreater(len(paths), 1)
+        # Each materialization is a new immutable object for the same document.
+        self.assertGreater(len(paths), 1)
 
     def test_a_failed_materialization_keeps_the_saved_annotation_and_retries(self):
         server, page, work_id = self._open()
@@ -5717,22 +5715,17 @@ class TabContextHostRootTests(_BrowserE2E):
     def test_processing_files_refresh_keeps_tab_root(self):
         """Refreshing Files for Processing reloads it inside the same tab root.
 
-        The PostgreSQL server shows the managed upload queue on this route and
-        never the legacy inbox page (PG-C1, §11.5); SQLite shows the legacy
-        page. Each backend's page is checked with its own Refresh button.
+        The route shows the managed upload queue (§11.5), never the retired
+        inbox page.
         """
         _server, page, _collector = self._start_app()
-        if postgres_library():
-            refresh = "[data-prks-processing-queue] [data-processing-refresh]"
-        else:
-            refresh = "#prks-processing-refresh"
+        refresh = "[data-prks-processing-queue] [data-processing-refresh]"
         page.locator('#sidebar a.nav-link[href="#/processing-files"]').click()
         page.wait_for_function("() => location.hash === '#/processing-files'")
         page.locator(refresh).wait_for()
         page.locator("h2.prks-page-title", has_text="Files for Processing").wait_for()
-        if postgres_library():
-            self.assertEqual(page.locator("#prks-processing-refresh").count(), 0,
-                             "the legacy inbox page is never shown on PostgreSQL")
+        self.assertEqual(page.locator("#prks-processing-refresh").count(), 0,
+                         "the retired inbox page is never shown")
         root_id = self._assert_single_mounted_root(page)
         page.locator(refresh).click()
         page.wait_for_function(

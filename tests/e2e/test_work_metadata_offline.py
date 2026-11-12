@@ -159,15 +159,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def ledger(self, server):
         """The server-ledger rows of SET_WORK_METADATA_FIELD: op_id, status, result_json (text)."""
         return library_for(server).query(
-            sqlite="SELECT op_id, status, result_json FROM sync_operations"
-                   " WHERE operation_type = 'SET_WORK_METADATA_FIELD' ORDER BY rowid",
             postgres="SELECT op_id::text AS op_id, status, result::text AS result_json"
                      " FROM prks.sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'"
                      " ORDER BY applied_at, op_id")
 
     def stored_abstract(self, server, work_id):
         return library_for(server).query(
-            sqlite="SELECT abstract FROM works WHERE id = ?",
             postgres="SELECT abstract FROM prks.works WHERE id = %s", params=(work_id,))[0]['abstract']
 
     def server_fields(self, server, work_id):
@@ -1969,8 +1966,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.progress(page)
         shown = self.progress_excerpt(page, work)
-        expected = db.query(sqlite="SELECT SUBSTR(?, 1, 100) AS e",
-                            postgres="SELECT substr(%s, 1, 100) AS e", params=(pending,))[0]['e']
+        expected = db.query(postgres="SELECT substr(%s, 1, 100) AS e", params=(pending,))[0]['e']
         self.assertIn(expected, shown,
                       'the pending excerpt equals what SQLite would produce')
         self.assertEqual(len(expected), 100)

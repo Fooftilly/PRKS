@@ -347,7 +347,6 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.reconnect(page, context)
         self.settled(page)
         rows = self.db_for(server).query(
-            sqlite='SELECT 1 FROM person_group_members WHERE group_id = ? AND person_id = ?',
             postgres='SELECT 1 FROM prks.person_group_members WHERE group_id = %s AND person_id = %s',
             params=(group, person))
         self.assertEqual(len(rows), 1)
@@ -402,7 +401,6 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.reconnect(page, context)
         self.settled(page)
         rows = self.db_for(server).query(
-            sqlite='SELECT 1 FROM person_group_members WHERE group_id = ? AND person_id = ?',
             postgres='SELECT 1 FROM prks.person_group_members WHERE group_id = %s AND person_id = %s',
             params=(group, person))
         self.assertEqual(len(rows), 1, 'all three reached the server, in order')
@@ -482,7 +480,6 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.reconnect(page, context)
         self.settled(page)
         self.assertEqual(self.db_for(server).query(
-            sqlite='SELECT 1 FROM persons WHERE id = ?',
             postgres='SELECT 1 FROM prks.persons WHERE id = %s', params=(person,)), [])
 
     def test_a_person_credited_on_a_file_cannot_be_deleted(self):

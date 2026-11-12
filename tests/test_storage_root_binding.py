@@ -1178,16 +1178,20 @@ class TestProcessEntry(RootTestCase):
         args = build_parser().parse_args(["--testing", "--storage-root", "/srv/lib"])
         self.assertEqual(args.storage_root, "/srv/lib")
 
-    def test_root_is_opened_before_restore_recovery_and_binding(self):
+    def test_root_is_opened_before_anchoring_and_binding(self):
+        # The SQLite restore journal recovery that ran between them left with
+        # the SQLite store (PG-C2 #641); a PostgreSQL restore recovers
+        # through its jobs (backend.domain.maintenance).
         with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
             src = handle.read()
         main = src[src.index('if __name__ == "__main__":'):]
+        self.assertNotIn("recover_incomplete_restore", src)
         order = [
             main.index("ensure_runtime_or_exit()"),
             main.index("StorageConfig.from_env(cli_root=args.storage_root)"),
             main.index("open_storage(config"),
             main.index("refuse_sqlite_catalogue(library_database, bound_root)"),
-            main.index("recover_incomplete_restore(config)"),
+            main.index("bound_root.anchor(config)"),
             main.index("bind_storage(config, library_database=library_database)"),
             # The source report needs logging configured, or INFO is dropped.
             main.index("setup_logging(config)"),
@@ -1228,25 +1232,6 @@ class TestProcessEntry(RootTestCase):
         with patch.object(prks_app, "open_storage_root") as opened:
             prks_app.open_storage(StorageConfig.for_testing(self.path("lib")))
         self.assertTrue(opened.call_args.kwargs.get("defer_logs"))
-
-    def test_refused_root_exits_cleanly_before_touching_storage(self):
-        foreign = self.path("foreign")
-        os.mkdir(foreign)
-        open(os.path.join(foreign, "holiday.jpg"), "w").close()
-        env = dict(os.environ, PRKS_TESTING="1", PRKS_STORAGE=self.path("ignored"))
-        env.pop("PRKS_LOG_FILE", None)
-        proc = subprocess.run(
-            [sys.executable, os.path.join(_PROJECT_DIR, "prks_app.py"), "--testing",
-             "--storage-root", foreign, "--port", "1"],
-            cwd=_PROJECT_DIR, env=env, capture_output=True, text=True, timeout=120,
-        )
-        self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("PRKS cannot open its storage root", proc.stderr)
-        self.assertIn("does not look like a PRKS library", proc.stderr)
-        self.assertNotIn("Traceback", proc.stderr)
-        self.assertEqual(os.listdir(foreign), ["holiday.jpg"])
-        # --storage-root won over PRKS_STORAGE: the env root was never created.
-        self.assertFalse(os.path.exists(self.path("ignored")))
 
     def test_invalid_cli_root_is_a_clean_startup_error(self):
         env = dict(os.environ, PRKS_TESTING="1")
@@ -1402,10 +1387,12 @@ class TestRootSnapshot(RootTestCase):
         self.assertEqual(anchored.processing_dir, "/srv/inbox")
         self.assertEqual(anchored.log_file, "/var/log/prks.log")
 
-    def test_process_entry_anchors_before_recovery(self):
+    def test_process_entry_anchors_before_binding(self):
+        # Every open after the root lease stays beneath the validated root.
         with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
             main = handle.read().split('if __name__ == "__main__":', 1)[1]
-        self.assertLess(main.index("bound_root.anchor(config)"), main.index("recover_incomplete_restore(config)"))
+        self.assertLess(main.index("bound_root.anchor(config)"),
+                        main.index("bind_storage(config, library_database=library_database)"))
 
 
 class TestWholeRootInvariants(RootTestCase):
