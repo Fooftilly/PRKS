@@ -371,7 +371,7 @@
     },
     "TestServerAPI.test_9_pdf_overwrite_endpoint": {
       "replaced_by": [
-        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_replace_keeps_the_path_and_swaps_the_text"
+        "tests/pg/test_server_api_files.py::ManagedPdfTests.test_a_replace_stores_a_new_object_and_swaps_the_text"
       ]
     },
     "TestServerAPI.test_9b2_patch_file_path_syncs_text_index": {
