@@ -66,6 +66,7 @@ function parsePersonBirthDeathField(text) {
 
 const PERSON_DATE_HELP =
     'Use dd/mm/yyyy (year last; may be negative, e.g. 15/03/-384), yyyy or -yyyy for year only, or 8 digits ddmmyyyy.';
+window.PERSON_DATE_HELP = PERSON_DATE_HELP;
 
 const PERSON_MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',

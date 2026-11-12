@@ -125,12 +125,20 @@ class PlaylistsVueContracts(unittest.TestCase):
         )
 
     def test_new_playlist_navigates_the_originating_owner(self):
-        app = (FRONTEND / "app.js").read_text()
-        pending = app.index("const pending = window.__prksPendingPlaylistAttach")
-        save = app[pending:app.index("} catch (e)", pending)]
-        self.assertIn("prksTakePlaylistIndexCreateTabId", save)
-        self.assertIn("prksNavigate('#/playlists/' + encodeURIComponent(newId), { tabId: createTabId })", save)
+        forms = ROOT / "frontend-app" / "src" / "features" / "create-forms"
+        gate = (forms / "playlist-save.ts").read_text(encoding="utf-8")
+        view = (forms / "PlaylistCreateForm.vue").read_text(encoding="utf-8")
+        pending = gate.index("const pending = deps.pendingAttach()")
+        save = gate[pending:]
+        self.assertIn("takeIndexCreateTabId", save)
+        self.assertIn("tabId: createTabId", save)
+        self.assertIn("#/playlists/", save)
         self.assertNotIn("location.hash", save)
+        self.assertIn("prksOpenGeneration", gate)
+        self.assertIn("clearPendingIfSame", gate)
+        self.assertIn("prksTakePlaylistIndexCreateTabId", view)
+        self.assertIn("readPendingPlaylistAttach", view)
+        self.assertIn("clearPendingPlaylistAttachIfSame", view)
         stub = (FRONTEND / "components" / "playlists.js").read_text()
         take = stub[
             stub.index("function prksTakePlaylistIndexCreateTabId()") : stub.index(
