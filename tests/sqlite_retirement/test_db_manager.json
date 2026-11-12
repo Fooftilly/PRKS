@@ -590,8 +590,7 @@
     },
     "TestDBManager.test_saved_view_create_rolls_back_on_failure": {
       "replaced_by": [
-        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_create_read_update_delete_and_list",
-        "tests/test_saved_views_parity.py::SavedViewFacadeParityTests.test_refusals_carry_sqlites_message_and_status"
+        "tests/pg/test_saved_views.py::AtomicityTests.test_a_failure_after_the_write_rolls_it_back"
       ]
     },
     "TestDBManager.test_saved_view_crud_order_and_timestamps": {
