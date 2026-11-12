@@ -6,7 +6,6 @@ assertions fail.
 """
 from __future__ import annotations
 
-import copy
 import json
 import math
 import os
@@ -36,7 +35,6 @@ from tests.e2e.install_browser import (
 from tests.e2e.policy import (
     PROFILE_ENV,
     ROUTE_FASTPATH_ENV,
-    SEED_CACHE_ENV,
     env_flag_enabled,
 )
 from tests.e2e.postgres_identity import provision_library, seed_postgres_library
@@ -51,8 +49,6 @@ _ACTIVE_PROFILE = None
 # These are event counters, not durations. The serial benchmark exports them
 # separately from phase_seconds so partial telemetry cannot look complete.
 NAV_TIMING_COUNT_KEYS = frozenset(("nav_timing_attempts", "nav_timing_samples"))
-_SEED_CACHE_TMP = None
-_SEED_SNAPSHOTS = {}
 
 # Per-test hang diagnosis: always updated (printing remains opt-in via DIAGNOSTIC).
 _HEARTBEAT_LOCK = threading.Lock()
@@ -145,11 +141,6 @@ def finish_test_profile(test_id: str) -> dict:
         for key, value in sorted(profile["phases"].items())
         if value > 0
     }
-
-
-def seed_cache_enabled() -> bool:
-    """Worker-local immutable seed snapshots are on unless explicitly disabled."""
-    return _env_enabled(SEED_CACHE_ENV, default=True)
 
 
 def diagnostic_enabled() -> bool:
@@ -362,138 +353,6 @@ class ChromiumHolder:
             finally:
                 self.browser = None
                 self.pw = None
-
-
-def clear_seed_cache() -> None:
-    """Drop worker-local seed snapshots. Primarily used by unit tests/benchmarks."""
-    global _SEED_CACHE_TMP
-    _SEED_SNAPSHOTS.clear()
-    if _SEED_CACHE_TMP is not None:
-        try:
-            _SEED_CACHE_TMP.cleanup()
-        finally:
-            _SEED_CACHE_TMP = None
-
-
-def _seed_cache_root() -> str:
-    global _SEED_CACHE_TMP
-    if _SEED_CACHE_TMP is None:
-        _SEED_CACHE_TMP = tempfile.TemporaryDirectory(prefix="prks-e2e-seed-cache-")
-    return _SEED_CACHE_TMP.name
-
-
-def _wal_checkpoint_ok(row) -> bool:
-    """True when ``PRAGMA wal_checkpoint`` completed without a blocked writer.
-
-    SQLite returns ``(busy, log, checkpointed)``. ``busy != 0`` means the
-    checkpoint did not finish; that is not raised as ``sqlite3.Error``, so
-    callers must inspect the row before treating the main ``.db`` as complete.
-    """
-    if row is None:
-        return False
-    try:
-        busy = int(row[0])
-    except (TypeError, ValueError, IndexError):
-        return False
-    return busy == 0
-
-
-def _finalize_seed_template(template: str) -> None:
-    """Checkpoint SQLite WAL into main DB files so clones are self-contained.
-
-    Seed builders open PRKSDatabase without an explicit close. On some Python /
-    SQLite timings the template can retain ``-wal``/``-shm`` companions. A
-    successful checkpoint makes each clone a single consistent ``.db`` and
-    avoids rare WAL-replay surprises when the server opens a fresh copy.
-
-    Fail closed: companions are removed only when ``wal_checkpoint(TRUNCATE)``
-    reports ``busy=0``. A blocked/incomplete checkpoint raises so the caller
-    never inserts the template into the immutable seed cache — a live connection
-    can still mutate the directory after caching, which breaks that contract.
-    Connect with ``timeout=0`` so a leaked writer fails immediately instead of
-    waiting on SQLite's default busy timeout.
-    """
-    import sqlite3
-
-    for root, _dirs, files in os.walk(template):
-        for name in files:
-            if not name.endswith(".db"):
-                continue
-            db_path = os.path.join(root, name)
-            try:
-                conn = sqlite3.connect(db_path, timeout=0)
-            except sqlite3.Error as exc:
-                raise RuntimeError(
-                    "E2E seed template SQLite connect failed during WAL finalize"
-                ) from exc
-            try:
-                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-                conn.commit()
-            except sqlite3.Error as exc:
-                raise RuntimeError(
-                    "E2E seed template WAL checkpoint failed"
-                ) from exc
-            finally:
-                conn.close()
-            if not _wal_checkpoint_ok(row):
-                raise RuntimeError(
-                    "E2E seed template still has an active SQLite user"
-                )
-            for suffix in ("-wal", "-shm"):
-                companion = db_path + suffix
-                try:
-                    if os.path.exists(companion):
-                        os.unlink(companion)
-                except OSError:
-                    pass
-
-
-def _materialize_seed(seed_fn, destination: str):
-    """Populate destination from a worker-local immutable seed snapshot.
-
-    The first use of a seed function builds a template in a private temporary
-    directory. Every AppServer still gets its own fresh storage tree; later
-    tests merely copy that pristine template instead of rebuilding SQLite,
-    PDFs and research indexes from scratch. Returned fixture IDs are deep
-    copied so a test cannot mutate the cache's metadata.
-
-    A failed WAL finalize does not insert into ``_SEED_SNAPSHOTS``. Each build
-    attempt uses a unique temporary directory under the cache root so a leftover
-    failed template (e.g. Windows refusing to delete an open SQLite DB) cannot
-    poison a later retry via ``FileExistsError`` on a reused ``seed-N`` path.
-    """
-    if not seed_cache_enabled():
-        started = time.perf_counter()
-        ids = seed_fn(destination) or {}
-        _profile_phase("seed_build", time.perf_counter() - started)
-        return copy.deepcopy(ids), False
-
-    cached = _SEED_SNAPSHOTS.get(seed_fn)
-    hit = cached is not None
-    if cached is None:
-        cache_root = _seed_cache_root()
-        # Unique path per attempt — never derive from len(_SEED_SNAPSHOTS).
-        template = tempfile.mkdtemp(prefix="seed-", dir=cache_root)
-        started = time.perf_counter()
-        try:
-            ids = seed_fn(template) or {}
-            _finalize_seed_template(template)
-        except Exception:
-            try:
-                shutil.rmtree(template, ignore_errors=True)
-            except OSError:
-                pass
-            raise
-        _profile_phase("seed_build", time.perf_counter() - started)
-        cached = (template, copy.deepcopy(ids))
-        _SEED_SNAPSHOTS[seed_fn] = cached
-
-    template, cached_ids = cached
-    started = time.perf_counter()
-    # Destination is a fresh TemporaryDirectory root; copy contents into it.
-    shutil.copytree(template, destination, dirs_exist_ok=True)
-    _profile_phase("seed_clone", time.perf_counter() - started)
-    return copy.deepcopy(cached_ids), hit
 
 
 def python_for_subprocess() -> str:
@@ -1133,7 +992,6 @@ class AppServer:
         self._stdout = None
         self._stderr = None
         self._seed_fn = seed_fn
-        self.seed_cache_hit = False
         # Optional subprocess env overrides (e.g. HTTPS_PROXY to deny a specific
         # best-effort outbound call deterministically). Never used to change how the
         # app talks to its own storage/port.
@@ -1162,10 +1020,7 @@ class AppServer:
                 raise
         if self._seed_fn is not None:
             # The seed is rows in this server's own database, written through
-            # the PostgreSQL facade as the owner: nothing to snapshot and
-            # clone, so the worker-local seed cache is not used. That cache
-            # (_materialize_seed) and its unit tests leave with the SQLite
-            # store in the next PG-C2 PR.
+            # the PostgreSQL facade as the owner, so each server builds its own.
             with profile_e2e_phase("seed_build"):
                 self.ids = seed_postgres_library(self._seed_fn, self.storage_root, self.library)
         env = os.environ.copy()

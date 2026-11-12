@@ -25,7 +25,6 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # Runner/harness env switches. The harness reads them to configure a run; the
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
-SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
 # Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
 ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 # Manual soft module-affinity sharding pilot; never train normal history.
@@ -46,17 +45,14 @@ def env_flag_enabled(name: str, default: bool = False, environ=None) -> bool:
 def benchmark_modes(environ=None) -> tuple:
     """Active non-representative modes for the *effective* configuration.
 
-    ``--profile`` adds instrumentation overhead and ``--no-seed-cache`` measures
-    a slower non-default configuration; both are also reachable through
-    ``PRKS_E2E_PROFILE`` / ``PRKS_E2E_SEED_CACHE`` without the matching flag.
+    ``--profile`` adds instrumentation overhead; it is also reachable through
+    ``PRKS_E2E_PROFILE`` without the flag.
     The runner exports its flags into the environment before asking, so this is
     the single decision covering CLI- and environment-driven benchmark runs.
     """
     modes = []
     if env_flag_enabled(PROFILE_ENV, environ=environ):
         modes.append("profile")
-    if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
-        modes.append("no-seed-cache")
     if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
         modes.append("route-fastpath")
     if env_flag_enabled(MODULE_AFFINITY_ENV, environ=environ):

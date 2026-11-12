@@ -24,7 +24,6 @@ _PRIORITY = (
     "postgres_drop",
     "postgres_drop_failed",
     "seed_build",
-    "seed_clone",
     "server_start",
     "server_spawn",
     "server_http_ready",

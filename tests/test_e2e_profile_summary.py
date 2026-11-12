@@ -29,7 +29,7 @@ def _report():
             "postgres_drop": 6.0,
             "server_start": 5.0,
             "server_stop": 7.0,
-            "seed_clone": 2.5,
+            "seed_build": 2.5,
             "app_ready": 2.0,
         },
     }
@@ -64,7 +64,7 @@ class ManualE2EProfileSummaryTests(unittest.TestCase):
             ("wall_seconds", math.inf),
             ("wall_seconds", 0),
             ("schema_version", 1),
-            ("benchmark_modes", ["no-seed-cache"]),
+            ("benchmark_modes", ["route-fastpath"]),
         ):
             with self.subTest(key=key, bad=bad):
                 report = _report()
