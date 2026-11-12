@@ -359,8 +359,7 @@
     },
     "TestDBManager.test_get_all_works_omits_text_and_private_notes": {
       "replaced_by": [
-        "tests/test_works_core_parity.py::WorksCoreParityTests.test_the_catalog_lists",
-        "tests/test_works_mutations_parity.py::WorksMutationParityTests.test_a_private_note_through_patch"
+        "tests/pg/test_works_facade.py::CreateTests.test_the_catalog_leaves_out_the_notes_the_detail_has"
       ]
     },
     "TestDBManager.test_get_all_works_sets_file_size_bytes_for_local_pdf": {
