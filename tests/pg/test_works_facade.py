@@ -307,6 +307,21 @@ class CreateTests(WorksFacadeTestCase):
         assert detail is not None
         self.assertEqual((detail["text_content"], detail["private_notes"]), (text, "secret"))
 
+    def test_an_invalid_thumbnail_page_is_created_as_none(self) -> None:
+        # A video Work has an Asset, so the page has somewhere to land.
+        def create(page: Any) -> Any:
+            work_id = self.library.add_work("Clip", source_kind="video", source_url=_VIDEO,
+                                            provider="youtube", provider_id="dQw4w9WgXcQ",
+                                            thumb_page=page, private_notes="")
+            work = self.library.get_work(work_id)
+            assert work is not None
+            return work["thumb_page"]
+
+        for page in ("x", "0", "-3", 0, "1.5", ""):
+            with self.subTest(page=page):
+                self.assertIsNone(create(page))
+        self.assertEqual(create("4"), 4)
+
     def test_a_research_note_renders_its_wiki_links(self) -> None:
         work_id = self.library.add_work("Linked", text_content="See [[Other]]")
         self.assertEqual(self.library.get_work(work_id)["html_content"],
