@@ -39,7 +39,6 @@ class ResearchHttpTestCase(HttpAuthTestCase):
 
         module = self.server_module
         previous = (module.db, module.research_index)
-        self.sqlite = previous
         self.addCleanup(self._restore, previous)
         self.facade = PostgresLibrary(self.db, storage=module._bound_storage)
         module.db = self.facade
@@ -212,10 +211,6 @@ class ResearchNoteRouteTests(ResearchHttpTestCase):
         # The note blocks the deletes, as on SQLite.
         self.refused(self.send("DELETE", f"/api/concepts/{ethics}"), 409, "concept_in_use")
         self.refused(self.send("DELETE", f"/api/arguments/{claim}"), 409, "argument_in_use")
-        # Nothing ran against the SQLite store or its index file.
-        sqlite_db, sqlite_index = self.sqlite
-        self.assertEqual((sqlite_db.list_concepts(), sqlite_db.list_arguments()), ([], []))
-        self.assertEqual(sqlite_index.concept_mention_counts(), {})
 
     def test_a_note_names_new_concepts_and_refuses_bad_bodies(self) -> None:
         work = self.work("W")

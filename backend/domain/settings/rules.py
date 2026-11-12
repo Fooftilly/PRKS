@@ -32,6 +32,9 @@ PRKS_BIBTEX_EXPORT_FIELD_IDS: Tuple[str, ...] = (
 )
 
 
+# The longest stored value of one application setting, in characters.
+APP_SETTING_MAX_LEN = 500
+
 PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT: Dict[str, bool] = {k: True for k in PRKS_BIBTEX_EXPORT_FIELD_IDS}
 
 

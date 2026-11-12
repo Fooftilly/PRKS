@@ -525,8 +525,9 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
         self.assertEqual(self.ok(self.get(path))["status"], "ready")
 
 
-class SqliteRuntimeTests(HttpAuthTestCase):
-    def test_the_sqlite_runtime_has_no_queue(self) -> None:
+class ServerWithoutAuthTests(HttpAuthTestCase):
+    def test_a_server_without_auth_has_no_queue(self) -> None:
+        """The queue's routes exist only with ``PRKS_AUTH`` (``prks_app`` always starts it)."""
         self.serve(auth=None)
         self.assertEqual(self.call("GET", "/api/processing-items").status, 404)
         res = self.call("POST", "/api/processing-items", headers=[("Content-Type", "application/pdf")])

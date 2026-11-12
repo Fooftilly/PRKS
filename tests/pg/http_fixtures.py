@@ -2,8 +2,8 @@
 
 Each test gets a fresh migrated PostgreSQL database (``IdentityTestCase``)
 and its own ``PRKSThreadingTCPServer`` on a free loopback port, configured
-the way ``run_server`` configures it, in front of a SQLite storage root
-bound once per test class in a temporary directory (never ``data/``).
+the way ``run_server`` configures it, with the PostgreSQL Library of that
+database bound to a storage root in a temporary directory (never ``data/``).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -61,7 +61,7 @@ _SENTINEL: Any = object()
 
 
 class HttpAuthTestCase(IdentityTestCase):
-    """Fresh PostgreSQL identity + a SQLite-backed PRKS server per test."""
+    """Fresh PostgreSQL identity + a PRKS server on its Library per test."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -75,23 +75,18 @@ class HttpAuthTestCase(IdentityTestCase):
         cls.server_module = server_module
         cls._previous = (
             server_module._bound_storage, server_module.pdfs_dir, server_module.thumbs_dir,
-            server_module.processing_dir, server_module.db, server_module.text_index,
-            server_module.research_index,
+            server_module.db, server_module.text_index, server_module.research_index,
         )
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-http-auth-")
-        storage = os.path.join(cls._tmpdir, "storage")
-        processing = os.path.join(cls._tmpdir, "processing")
-        os.makedirs(storage)
-        os.makedirs(processing)
-        server_module.bind_storage(
-            replace(StorageConfig.for_testing(storage), processing_dir=processing)
-        )
+        cls._storage = StorageConfig.for_testing(os.path.join(cls._tmpdir, "storage"))
+        # Tests place managed PDF files under the root's pdfs directory.
+        os.makedirs(cls._storage.pdfs_dir)
 
     @classmethod
     def tearDownClass(cls) -> None:
         module = cls.server_module
         (
-            module._bound_storage, module.pdfs_dir, module.thumbs_dir, module.processing_dir,
+            module._bound_storage, module.pdfs_dir, module.thumbs_dir,
             module.db, module.text_index, module.research_index,
         ) = cls._previous
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
@@ -99,6 +94,8 @@ class HttpAuthTestCase(IdentityTestCase):
 
     def setUp(self) -> None:
         super().setUp()
+        # This test's database is a fresh one, so its Library is bound per test.
+        self.server_module.bind_storage(self._storage, library_database=self.db)
         self.owner = self.user("Owner")
         self.lib = self.run_sql(
             "SELECT library_id FROM prks.library_memberships WHERE user_id = %s", (self.owner,)
@@ -117,7 +114,7 @@ class HttpAuthTestCase(IdentityTestCase):
     def serve(
         self, settings: Optional[WebAuthSettings] = None, *, auth: Any = _SENTINEL, jobs: Any = None
     ) -> WebAuth:
-        """Start a server on a free loopback port; ``auth=None`` serves the SQLite runtime.
+        """Start a server on a free loopback port; ``auth=None`` serves without ``PRKS_AUTH``.
 
         ``jobs`` is the PRKS_AUTH runtime's ``WebJobs`` (job diagnostics), as
         ``run_server`` sets it; its worker is not started here.

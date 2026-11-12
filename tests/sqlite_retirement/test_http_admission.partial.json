@@ -1,0 +1,13 @@
+{
+  "module": "tests/pg/test_http_admission.py",
+  "partial": true,
+  "tests": {
+    "SqliteRuntimeTests.test_no_authentication_and_the_old_origin_rule": {
+      "replaced_by": [
+        "tests/pg/test_http_admission.py::CsrfTests.test_matching_origin_or_same_origin_fetch",
+        "tests/pg/test_http_admission.py::CsrfTests.test_cross_origin_and_malformed_requests_are_refused"
+      ],
+      "note": "It asserted that a server without PRKS_AUTH writes to the SQLite Library with only the Origin check. No SQLite Library is bound any more and the PostgreSQL Library needs an admitted actor, so the Origin rule is asserted under PRKS_AUTH."
+    }
+  }
+}
