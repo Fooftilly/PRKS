@@ -33,6 +33,10 @@ class TestInventoryClassification(unittest.TestCase):
         for name in inv.operational_root_entries + inv.external_operational:
             self.assertNotIn(name, payload_classes)
 
+    def test_claim_lock_is_operational_state_never_backup_payload(self):
+        inv = backup_storage_inventory()
+        self.assertIn(".prks-maintenance/root.claim", inv.operational_root_entries)
+
     def test_operational_entries_can_never_be_payload_paths(self):
         inv = backup_storage_inventory()
         for entry in inv.operational_root_entries:
