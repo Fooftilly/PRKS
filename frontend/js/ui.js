@@ -1397,7 +1397,6 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
     if (newPerson) {
         allPersons = (Array.isArray(allPersons) ? allPersons : []).concat([newPerson]);
         window.allPersons = allPersons;
-        window.__prksProcessingPeople = allPersons;
     }
     // The form it was typed into may be gone (closed, or reopened fresh): the
     // Person exists, but it must not be written into someone else's fields.

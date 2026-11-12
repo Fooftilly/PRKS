@@ -29,8 +29,6 @@ from tests.e2e import policy
 # TS state/routes, backend changes and cross-feature dependencies fail full.
 SAFE_VUE_VIEWS = frozenset(
     {
-        "frontend-app/src/features/processing/ProcessingFileCard.vue",
-        "frontend-app/src/features/processing/ProcessingFilesRoute.vue",
         "frontend-app/src/features/progress/ProgressView.vue",
         "frontend-app/src/features/publishers/PublishersRoute.vue",
         "frontend-app/src/features/types/TypeDetailRoute.vue",

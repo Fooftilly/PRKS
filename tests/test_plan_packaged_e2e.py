@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/e2e-classic-distribution-gate.yml"
 
 PROGRESS = "frontend-app/src/features/progress/ProgressView.vue"
-PROCESSING = "frontend-app/src/features/processing/ProcessingFilesRoute.vue"
+PUBLISHERS = "frontend-app/src/features/publishers/PublishersRoute.vue"
 BUNDLE = "frontend/vue/assets/app-generated.js"
 SW = "frontend/sw.js"
 STAMP_DIFF = (
@@ -46,9 +46,9 @@ BROWSE_CASE = (
     "tests.e2e.test_browse_offline.BrowseOfflineTests."
     "test_progress_renders_offline_from_the_cached_catalog"
 )
-PROCESSING_CASE = (
-    "tests.e2e.test_app.TabContextHostRootTests."
-    "test_processing_files_refresh_keeps_tab_root"
+PUBLISHERS_CASE = (
+    "tests.e2e.test_publishers_route_surface.PublishersRouteSurfaceTests."
+    "test_publishers_page_mounts_from_the_route"
 )
 
 
@@ -112,12 +112,12 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
 
     def test_two_safe_views_union_their_affected_tests(self):
         candidate = plan_packaged_e2e(
-            [PROGRESS, PROCESSING], known_test_ids=inventory(BROWSE_CASE, PROCESSING_CASE)
+            [PROGRESS, PUBLISHERS], known_test_ids=inventory(BROWSE_CASE, PUBLISHERS_CASE)
         )
         self.assertTrue(candidate["candidate"])
         self.assertEqual(candidate["proposed_mode"], "smoke_affected")
         self.assertIn(BROWSE_CASE, candidate["test_ids"])
-        self.assertIn(PROCESSING_CASE, candidate["test_ids"])
+        self.assertIn(PUBLISHERS_CASE, candidate["test_ids"])
         self.assertEqual(candidate["test_count"], 16)
 
     def test_generated_assets_require_full_until_reproducibility_proof(self):
@@ -144,7 +144,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
             "frontend/js/pdf-annotation-state.js",
             "frontend-app/src/main.ts",
             "frontend-app/src/features/progress/route.ts",
-            "frontend-app/src/features/processing/session.ts",
+            "frontend-app/src/features/processing-queue/session.ts",
             "frontend-app/src/features/research-graph/GraphView.vue",
             "frontend-app/src/components/SharedModal.vue",
             "frontend-app/src/features/progress/NewRoute.vue",
@@ -164,10 +164,10 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
 
     def test_every_affected_feature_must_have_discovered_tests(self):
         incomplete = plan_packaged_e2e(
-            [PROGRESS, PROCESSING], known_test_ids=inventory(BROWSE_CASE)
+            [PROGRESS, PUBLISHERS], known_test_ids=inventory(BROWSE_CASE)
         )
         self.assertEqual(incomplete["proposed_mode"], "full")
-        self.assertIn("processing", incomplete["reason"])
+        self.assertIn("publishers", incomplete["reason"])
 
     def test_smoke_alone_cannot_masquerade_as_affected_coverage(self):
         only_smoke = inventory()
@@ -272,7 +272,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
 
     def test_affected_fixture_ids_are_real_unittest_methods(self):
         import ast
-        for test_id in (BROWSE_CASE, PROCESSING_CASE):
+        for test_id in (BROWSE_CASE, PUBLISHERS_CASE):
             module, class_name, method_name = test_id.rsplit(".", 2)
             path = ROOT / (module.replace(".", "/") + ".py")
             source = ast.parse(path.read_text(encoding="utf-8"))

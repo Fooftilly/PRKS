@@ -5,21 +5,6 @@ interface TagsMutationOutcome {
   reason?: string
 }
 
-/** Painted inbox people. The coordinator stores the person rows; quick-create appends `{ id, name }`. */
-interface ProcessingPeopleCatalogueEntry {
-  id?: string
-  name?: string
-  first_name?: string
-  last_name?: string
-}
-
-interface ProcessingPreviewTarget {
-  id: string
-  filename?: string
-  relPath?: string
-  canPreview?: boolean
-}
-
 interface PrksPromptTextOptions {
   title: string
   message?: string
@@ -161,38 +146,8 @@ interface Window {
     },
   ) => Promise<unknown>
   prksReleaseResearchGraph?: (owner: object) => void
-  __prksProcessingPeople?: ProcessingPeopleCatalogueEntry[]
-  prksReloadProcessingFiles?: (
-    owner: object,
-    generation: number,
-    resume?: { visibleCount?: number | null } | null,
-  ) => Promise<boolean | string>
-  prksProcessingAttachResources?: (owner: object, host: HTMLElement) => void
-  prksProcessingReleaseResources?: (owner: object) => void
-  prksProcessingSetPreview?: (
-    owner: object,
-    file: ProcessingPreviewTarget,
-  ) => 'card' | 'side' | 'unavailable'
-  prksProcessingRecords?: import('./src/features/processing/records').ProcessingRecords
   prksMarkProcessingImportChanged?: () => void
   prksParsePublishedDateInput?: (raw: string) => string
-  prksProcessingSearchTags?: () => Promise<unknown>
-  prksProcessingCreateTag?: (name: string) => Promise<{ id: string; name: string }>
-  prksProcessingQuickCreateFolder?: (title: string) => Promise<{
-    ok?: boolean
-    id?: string
-    title?: string
-    folders?: unknown
-    foldersFailed?: boolean
-    message?: string
-  }>
-  prksProcessingQuickCreatePerson?: (name: string) => Promise<{
-    ok?: boolean
-    id?: string
-    name?: string
-    people?: unknown
-    message?: string
-  } | null>
   prksSegmentedControlHtml?: (
     hiddenId: string,
     ariaLabel: string,
