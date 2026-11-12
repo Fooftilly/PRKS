@@ -410,6 +410,121 @@ class AccessTests(ProcessingHttpTestCase):
         self.assertIn("/api/processing-items/{item_id}/import", doc["paths"])
 
 
+class RequestSchemaParityTests(ProcessingHttpTestCase):
+    """The served OpenAPI document and the live routes accept and refuse the same write bodies.
+
+    Each payload is validated with openapi-core against
+    ``/api/openapi/processing-items.json`` as served, then sent to the live
+    route. Where the domain refuses a value the schema leaves open
+    (``status_draft``), the case says so.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        from openapi_core import OpenAPI
+
+        self.api = OpenAPI.from_dict(self.ok(self.get("/api/openapi/processing-items.json")))
+
+    def schema_accepts(self, method: str, path: str, body: Any, *, raw: Optional[bytes] = None) -> bool:
+        from openapi_core.testing import MockRequest
+
+        data = raw if raw is not None else (None if body is None else json.dumps(body).encode("utf-8"))
+        request = MockRequest(host_url=self.origin, method=method.lower(), path=path, data=data,
+                              content_type="application/json")
+        try:
+            self.api.validate_request(request)
+        except Exception:  # noqa: BLE001 - any validation failure means "refused"
+            return False
+        return True
+
+    def parity(self, method: str, path: str, body: Any, *, valid: bool) -> Response:
+        """Assert the schema's verdict on ``body``, send it, and return the live answer."""
+        self.assertEqual(self.schema_accepts(method, path, body), valid, body)
+        return self.send(method, path, body)
+
+    def test_patch_bodies_agree(self) -> None:
+        item = self.upload()
+        path = f"/api/processing-items/{item['id']}"
+        person = self.ok(self.send("POST", "/api/persons", {"first_name": "Parity", "last_name": "Person"}))["id"]
+        tag = self.ok(self.add_tag(self.cookies))["id"]
+        # Unknown keys, top-level and nested, are ignored by both; scalars are stringified and trimmed.
+        edited = self.ok(self.parity("PATCH", path, {
+            "revision": 0, "title": "  Parity  ", "year": 1999, "abs_path": "/elsewhere.pdf",
+            "roles": [{"person_id": person, "role_type": "Author", "extra": 1}],
+            "tags": [{"id": tag, "extra": True}],
+        }, valid=True))
+        self.assertEqual((edited["draft"]["title"], edited["draft"]["year"]), ("Parity", "1999"))
+        self.assertEqual([one["person_id"] for one in edited["draft"]["roles"]], [person])
+        self.assertEqual([one["id"] for one in edited["draft"]["tags"]], [tag])
+        # Arrays in draft fields are stringified too.
+        edited = self.ok(self.parity("PATCH", path, {"revision": 1, "publisher": ["x"]}, valid=True))
+        self.assertEqual(edited["draft"]["publisher"], "['x']")
+        # null roles and tags leave them unchanged.
+        edited = self.ok(self.parity("PATCH", path, {"revision": 2, "roles": None, "tags": None}, valid=True))
+        self.assertEqual([one["person_id"] for one in edited["draft"]["roles"]], [person])
+        self.assertEqual([one["id"] for one in edited["draft"]["tags"]], [tag])
+        # Entries that are not objects are skipped by both.
+        edited = self.ok(self.parity("PATCH", path, {
+            "revision": 3, "roles": [None, "Author", [1], {"person_id": person, "role_type": "Author"}],
+            "tags": [None, 7],
+        }, valid=True))
+        self.assertEqual([one["person_id"] for one in edited["draft"]["roles"]], [person])
+        self.assertEqual(edited["draft"]["tags"], [])
+        # `status` is the legacy spelling of `status_draft`; a page below 1 clears the thumbnail page.
+        edited = self.ok(self.parity("PATCH", path, {"revision": 4, "status": "Paused", "thumb_page": 0},
+                                     valid=True))
+        self.assertEqual((edited["draft"]["status_draft"], edited["draft"]["thumb_page"]), ("Paused", None))
+        # The schema leaves status_draft open; the domain refuses an unknown status.
+        self.refused(self.parity("PATCH", path, {"revision": 5, "status_draft": "Nope"}, valid=True), 400,
+                     "VALIDATION_ERROR")
+        # Refused by both: no or a bad revision, roles or tags that are not arrays, a body that is not an object.
+        for body in (
+            {"title": "No revision"},
+            {"revision": -1},
+            {"revision": "5"},
+            {"revision": True},
+            {"revision": 1.5},
+            {"revision": 5, "roles": "Author"},
+            {"revision": 5, "tags": {"id": tag}},
+            ["title"],
+        ):
+            with self.subTest(body=body):
+                self.refused(self.parity("PATCH", path, body, valid=False), 400, "VALIDATION_ERROR")
+        self.assertEqual(self.ok(self.get(path))["revision"], 5)
+
+    def test_import_bodies_agree(self) -> None:
+        item = self.upload()
+        path = f"/api/processing-items/{item['id']}/import"
+        # The single import takes any JSON value and ignores it.
+        for body in ([1], "x"):
+            with self.subTest(body=body):
+                self.assertTrue(self.schema_accepts("POST", path, body))
+        self.ok(self.parity("POST", path, {}, valid=True), 201)
+        again = self.ok(self.parity("POST", path, ["ignored"], valid=True))
+        self.assertFalse(again["created"])
+        second = self.upload()
+        batch = "/api/processing-items/import"
+        results = self.ok(self.parity("POST", batch, {"item_ids": [second["id"]]}, valid=True))["results"]
+        self.assertEqual([(one["item_id"], one["ok"]) for one in results], [(second["id"], True)])
+        for body in ({}, {"item_ids": []}, {"item_ids": [1]}, {"item_ids": "x"}, {"item_ids": ["x"] * 501},
+                     {"item_ids": [second["id"]], "extra": 1}, [second["id"]]):
+            with self.subTest(body=str(body)[:40]):
+                self.refused(self.parity("POST", batch, body, valid=False), 400, "VALIDATION_ERROR")
+
+    def test_no_write_omits_its_json_body(self) -> None:
+        item = self.upload()
+        path = f"/api/processing-items/{item['id']}"
+        for method, write_path in (("PATCH", path), ("POST", f"{path}/import"),
+                                   ("POST", "/api/processing-items/import")):
+            for raw in (None, b""):
+                with self.subTest(method=method, path=write_path, raw=raw):
+                    self.assertFalse(self.schema_accepts(method, write_path, None, raw=raw))
+            with self.subTest(method=method, path=write_path, live=True):
+                res = self.call(method, write_path, cookies=self.cookies, epoch=self.library_epoch())
+                self.assertEqual(res.status, 415, res.raw)
+        self.assertEqual(self.ok(self.get(path))["status"], "ready")
+
+
 class SqliteRuntimeTests(HttpAuthTestCase):
     def test_the_sqlite_runtime_has_no_queue(self) -> None:
         self.serve(auth=None)
