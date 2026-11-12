@@ -711,9 +711,11 @@
     },
     "TestServerAPI.test_processing_files_request_schema_matches_the_live_endpoint": {
       "replaced_by": [
-        "tests/pg/test_http_processing.py::AccessTests.test_the_openapi_document_is_served"
+        "tests/pg/test_http_processing.py::RequestSchemaParityTests.test_patch_bodies_agree",
+        "tests/pg/test_http_processing.py::RequestSchemaParityTests.test_import_bodies_agree",
+        "tests/pg/test_http_processing.py::RequestSchemaParityTests.test_no_write_omits_its_json_body"
       ],
-      "note": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1)."
+      "note": "The path-based inbox's PATCH/import routes are replaced by the upload queue (Processing redesign, L-PR-1). The same parity (coercions, ignored keys, skipped entries, the status alias, refused types, missing bodies) is checked against the served /api/openapi/processing-items.json with openapi-core and the live PostgreSQL routes."
     },
     "TestServerAPI.test_processing_files_rescan_query_controls_scan_and_avoids_duplicate_fetch": {
       "obsolete": "The path-based Files for Processing inbox (scan, rescan, path claims) is replaced by the upload queue (Processing redesign, L-PR-1). There is no folder to scan, so there is no rescan query."

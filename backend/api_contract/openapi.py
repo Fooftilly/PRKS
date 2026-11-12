@@ -1187,7 +1187,7 @@ def processing_items_openapi_document() -> dict[str, Any]:
                 "requestBody": {"required": True, "content": _json("ProcessingImportRequest")},
                 "responses": {
                     "200": {"description": "A result per item, in order.", "content": _json("ProcessingImportResults")},
-                    "400": _error("item_ids missing, empty, not strings, or more than 500 (VALIDATION_ERROR)."),
+                    "400": _error("item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR)."),
                 },
             },
         },

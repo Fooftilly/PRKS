@@ -406,6 +406,10 @@ def _import_one(handler: Any, library: Any, item_id: str) -> None:
 def _import_batch(handler: Any, library: Any, data: Any) -> None:
     from backend.domain.processing import commands
 
+    if isinstance(data, dict) and set(data) - {"item_ids"}:
+        # ProcessingImportRequest forbids other keys; the served schema says so too.
+        _invalid(handler, "Only item_ids may be sent.")
+        return
     ids = data.get("item_ids") if isinstance(data, dict) else None
     if not isinstance(ids, list) or not ids or not all(isinstance(one, str) for one in ids):
         _invalid(handler, "item_ids must be a non-empty array of item ids.")
