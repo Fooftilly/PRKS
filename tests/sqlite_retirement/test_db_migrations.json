@@ -1,0 +1,181 @@
+{
+  "module": "tests/test_db_migrations.py",
+  "tests": {
+    "TestClassification.test_unrelated_sqlite_db_is_refused_without_mutation": {
+      "replaced_by": [
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_a_root_holding_a_sqlite_catalogue_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_non_empty_databases_are_refused_untouched"
+      ]
+    },
+    "TestConstraintAndDrift.test_current_version_schema_drift_is_not_auto_repaired": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot"
+      ]
+    },
+    "TestConstraintAndDrift.test_db_manager_has_no_ad_hoc_schema_mutation": {
+      "obsolete": "It read db_manager.py's source to prove PRKSDatabase never changed the SQLite schema outside the migration registry. db_manager.py is deleted with SQLite. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_playlist_unique_conflict_rolls_back_without_deleting": {
+      "obsolete": "It checked that the SQLite v10 playlist uniqueness migration rolled back instead of deleting rows that broke it. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_folder_parent_title_index_is_accepted": {
+      "obsolete": "It checked the SQLite v10 drift detector accepted the folders (parent, title COLLATE NOCASE) index. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_folder_parent_title_index_rejects_extra_key": {
+      "obsolete": "It checked the SQLite v10 drift detector refused a folders index with an extra key. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_folder_parent_title_index_rejects_reversed_keys": {
+      "obsolete": "It checked the SQLite v10 drift detector refused a folders index with reversed keys. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_folder_parent_title_index_rejects_wrong_expression": {
+      "obsolete": "It checked the SQLite v10 drift detector refused a folders index on the wrong expression. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_missing_nocase_collation_is_schema_drift": {
+      "obsolete": "It checked the SQLite v10 drift detector refused a folders index without NOCASE. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_unexpected_fk_is_schema_drift": {
+      "obsolete": "It checked the SQLite v10 drift detector refused an unexpected foreign key. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v10_wrong_index_definition_is_schema_drift": {
+      "obsolete": "It checked the SQLite v10 drift detector refused a wrong index definition. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v9_compatibility_table_missing_fk_is_refused": {
+      "obsolete": "It checked the SQLite v9 compatibility check refused a table missing its foreign key. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v9_unexpected_fk_is_incompatible": {
+      "obsolete": "It checked the SQLite v9 compatibility check refused an unexpected foreign key. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestConstraintAndDrift.test_v9_wrong_named_index_is_reconciled": {
+      "obsolete": "It checked the SQLite v9 reconciler replaced a wrongly named index. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestFreshDatabase.test_fresh_database_is_version_10_and_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_fresh_database_applies_every_file_once_in_order",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_after_applied_files_is_applied"
+      ]
+    },
+    "TestFtsAndTags.test_fts_rebuild_reindexes_and_keeps_triggers_current": {
+      "obsolete": "It checked a SQLite migration rebuilt the works_fts FTS5 table and its triggers. PostgreSQL search has no FTS5 table; its index rebuild is tested in tests/pg/test_search_rebuild.py. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestFtsAndTags.test_tag_case_dedupe_preserves_relationships": {
+      "obsolete": "It checked a SQLite migration merged tags whose names differed only by case without losing links. PostgreSQL holds one tag per identity key from its first schema (tests/pg/test_organization_schema.py::TagTests.test_unicode_identity_follows_the_shared_key). PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestLegacyAndV9.test_duplicate_identical_version_rows_are_normalized": {
+      "obsolete": "It checked the SQLite migrator collapsed duplicate schema_version rows. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestLegacyAndV9.test_fresh_and_migrated_schema_signatures_match": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot",
+        "tests/pg/test_schema_snapshot.py::TemplateCloneMatchesSnapshotTests.test_harness_clone_is_the_migrated_schema"
+      ]
+    },
+    "TestLegacyAndV9.test_numeric_pre_v9_uses_legacy_bridge": {
+      "obsolete": "It checked the SQLite migrator's bridge for numeric pre-v9 catalogues. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestLegacyAndV9.test_unversioned_legacy_reaches_v10_and_keeps_rows": {
+      "obsolete": "It checked an unversioned legacy SQLite catalogue reached v10 with its rows. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestLegacyAndV9.test_v9_missing_objects_are_reconciled": {
+      "obsolete": "It checked the SQLite v9 reconciler recreated missing objects. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPdfMaterializationMigration.test_v14_duplicate_roles_block_unique_index": {
+      "obsolete": "It checked the SQLite v14 migration refused duplicate work_roles before adding its unique index. PostgreSQL has the uniqueness from its first schema (tests/pg/test_people_schema.py::RoleTests.test_one_row_per_work_person_role_and_scope). PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPdfMaterializationMigration.test_v14_missing_roles_unique_index_is_created": {
+      "obsolete": "It checked the SQLite v14 migration created the work_roles unique index. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPendingPdfCleanupMigration.test_a_claim_table_with_a_foreign_key_is_schema_drift": {
+      "obsolete": "It checked the SQLite pending_pdf_cleanup claim table's drift detector. PostgreSQL records cleanup claims in its own object tables (\u00a711.2). PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPendingPdfCleanupMigration.test_a_claim_table_without_its_primary_key_is_schema_drift": {
+      "obsolete": "It checked the SQLite pending_pdf_cleanup claim table's drift detector. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPendingPdfCleanupMigration.test_a_missing_claim_table_is_loud_schema_drift": {
+      "obsolete": "It checked the SQLite pending_pdf_cleanup claim table's drift detector. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPendingPdfCleanupMigration.test_fresh_database_has_the_claim_table": {
+      "obsolete": "It checked a fresh SQLite catalogue had the pending_pdf_cleanup table. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPendingPdfCleanupMigration.test_upgraded_schema_matches_a_fresh_one": {
+      "obsolete": "It checked the SQLite v16 upgrade matched a fresh v16 schema. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestPendingPdfCleanupMigration.test_v15_library_upgrades_and_keeps_its_works": {
+      "obsolete": "It checked a SQLite v15 catalogue upgraded with its Works. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRegistry.test_production_registry_is_contiguous": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_non_sql_files_are_ignored_and_order_is_numeric"
+      ]
+    },
+    "TestRegistry.test_registry_rejects_gap_duplicate_and_out_of_order": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_malformed_directories_are_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused"
+      ]
+    },
+    "TestRemoveWorkAnnotationsMigration.test_divergent_stale_blob_is_discarded": {
+      "obsolete": "It checked the SQLite v13 migration that dropped the works.annotations JSON blob. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRemoveWorkAnnotationsMigration.test_empty_canonical_stays_empty_when_blob_is_stale": {
+      "obsolete": "It checked the SQLite v13 migration that dropped the works.annotations JSON blob. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRemoveWorkAnnotationsMigration.test_failed_v13_rolls_back_drop_and_version": {
+      "obsolete": "It checked the SQLite v13 migration rolled back as a whole. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRemoveWorkAnnotationsMigration.test_fresh_v13_matches_v12_migrated_v13": {
+      "obsolete": "It checked the SQLite v13 upgrade matched a fresh v13 schema. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRemoveWorkAnnotationsMigration.test_legacy_marker_keeps_work_annotations_current_schema_does_not": {
+      "obsolete": "It checked the SQLite legacy marker kept works.annotations only on pre-v13 catalogues. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRemoveWorkAnnotationsMigration.test_v12_migrates_to_v13_preserving_canonical_annotations": {
+      "obsolete": "It checked the SQLite v13 migration kept the canonical annotation rows. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestRemoveWorkAnnotationsMigration.test_v13_migration_sql_drops_without_reading_json": {
+      "obsolete": "It checked the SQLite v13 migration SQL never parsed the dropped JSON. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestResearchNetworkMigration.test_fresh_v12_matches_v11_migrated_v12": {
+      "obsolete": "It checked the SQLite v12 Research Network upgrade matched a fresh v12 schema. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestResearchNetworkMigration.test_v11_migrates_to_v12_preserving_concepts_and_arguments": {
+      "obsolete": "It checked the SQLite v12 migration kept Concepts and Arguments. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestResearchNetworkMigration.test_v12_wrong_concept_parent_fk_is_schema_drift": {
+      "obsolete": "It checked the SQLite v12 drift detector refused a wrong concept_parents foreign key. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestSavedViewsMigration.test_fresh_v11_matches_v10_migrated_v11": {
+      "obsolete": "It checked the SQLite v11 saved-views upgrade matched a fresh v11 schema. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestSavedViewsMigration.test_v10_migrates_to_v11_and_keeps_rows": {
+      "obsolete": "It checked the SQLite v11 migration kept existing rows. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestSavedViewsMigration.test_v11_wrong_saved_views_index_is_schema_drift": {
+      "obsolete": "It checked the SQLite v11 drift detector refused a wrong saved_views index. PostgreSQL is the only Library store and the pre-1.0 policy has no SQLite-to-PostgreSQL migration (docs/postgresql-architecture.md), so no SQLite catalogue is ever upgraded again; PostgreSQL schema changes are numbered SQL files applied by backend/db/migrate (tests/pg/test_migrate.py) and pinned by the schema snapshot (tests/pg/test_schema_snapshot.py)."
+    },
+    "TestTransactionsAndOrder.test_failed_migration_rolls_back_schema_and_version": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_failing_file_rolls_back_whole_and_stops"
+      ]
+    },
+    "TestTransactionsAndOrder.test_migrations_run_in_order_and_commit_between_steps": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_fresh_database_applies_every_file_once_in_order",
+        "tests/pg/test_migrate.py::MigrateTests.test_concurrent_runs_apply_each_file_once"
+      ]
+    },
+    "TestVersionRefusal.test_newer_version_is_refused_without_schema_changes": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_newer_schema_database_is_refused"
+      ]
+    },
+    "TestVersionRefusal.test_non_integer_negative_and_conflicting_versions_fail": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused"
+      ]
+    }
+  }
+}

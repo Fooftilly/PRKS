@@ -142,6 +142,16 @@ class CrudTests(SavedViewTestCase):
         self.refused("Name is required.", 400, self.library.update_saved_view, _MISSING, name=" ")
         self.assertEqual(self.library.get_saved_views(), [kept])
 
+    def test_deleting_a_view_leaves_the_works_it_finds(self) -> None:
+        work_id = self.library.add_work("Kept Work")
+        view = self.create("Everything", {**_ALL, "q": "kept"})
+        self.library.delete_saved_view(view["id"])
+        self.assertIsNone(self.library.get_saved_view(view["id"]))
+        work = self.library.get_work(work_id)
+        assert work is not None
+        self.assertEqual(work["title"], "Kept Work")
+        self.assertEqual(self.count("works"), 1)
+
 
 class NameTests(SavedViewTestCase):
     def test_names_compare_by_identity_key(self) -> None:
