@@ -25,7 +25,6 @@ HEAVY = {
         "Enforce PRKS engineering invariants",
         "Resolve diff-aware check base",
         "Fail on new E2E page.wait_for_timeout",
-        "Schema-change gate (db_schema + migration + version + PK parity)",
         "Fail on new correlated catalogue COUNT SQL",
     ),
     "pyright": (

@@ -161,7 +161,6 @@ class PostgresLibraryLegTests(unittest.TestCase):
         import ast
 
         from backend.pg_facade import PostgresLibrary
-        from backend.pg_facade.registry import ported_methods
         from tests.e2e import fixtures
 
         with open(fixtures.__file__, encoding="utf-8") as fh:
@@ -172,7 +171,7 @@ class PostgresLibraryLegTests(unittest.TestCase):
             and isinstance(node.func.value, ast.Name) and node.func.value.id == "db"
         }
         self.assertTrue(called)
-        self.assertEqual(sorted(called - set(ported_methods(PostgresLibrary))), [])
+        self.assertEqual(sorted(name for name in called if not hasattr(PostgresLibrary, name)), [])
 
     def test_the_people_seeds_fill_the_postgresql_library(self) -> None:
         from tests.e2e import fixtures

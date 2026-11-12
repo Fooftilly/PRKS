@@ -2,9 +2,8 @@
 
 Owned by the Works lane (``docs/postgresql-architecture.md`` §15.2): Works,
 Manifestations, notes, lifecycle, metadata, bulk actions, BibTeX and wiki
-links. Each ported method keeps the ``PRKSDatabase`` signature and return
-shape and is registered by one line, ``@ported`` from
-:mod:`backend.pg_facade.registry`, directly above it.
+links. Each method keeps the signature and return shape of the
+SQLite library it replaced.
 
 A method acts for the :class:`~backend.domain.identity.request_context.RequestContext`
 bound with :func:`backend.pg_facade.context.acting_as`; it refuses to run
@@ -31,7 +30,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
-from backend.pg_facade.registry import FacadeMixin, ported
+from backend.pg_facade.registry import FacadeMixin
 
 if TYPE_CHECKING:
     from backend.domain.works.rules import DeletedWorkRecord
@@ -115,32 +114,23 @@ class WorksMixin(FacadeMixin):
         return self._read(read)
 
     # -- ids and ETags ----------------------------------------------------------
-
-    @ported
     def generate_id(self, prefix: str) -> str:
         from backend.entity_ids import generate
 
         return generate(prefix)
 
     @staticmethod
-    @ported
     def etag_for_representation(label: str, rows: List[dict]) -> str:
         from backend.etags import etag_for_representation as derive
 
         return derive(label, rows)
-
-    @ported
     def etag_works_catalog(self, rows: List[dict]) -> str:
         return self.etag_for_representation("works", rows)
-
-    @ported
     def etag_recent_works(self) -> str:
         from backend.domain.works import queries
 
         count, newest = self._read(queries.recent_etag_parts)
         return f'W/"prks-recent-{count}-{newest}"'
-
-    @ported
     def etag_recently_added_works(self) -> str:
         from backend.domain.works import queries
 
@@ -148,8 +138,6 @@ class WorksMixin(FacadeMixin):
         return f'W/"prks-recently-added-{count}-{newest}"'
 
     # -- create -----------------------------------------------------------------
-
-    @ported
     def add_work(self, title: str, status: str = 'Not Started', abstract: str = "",
                  text_content: str = "", published_date: str = "", file_path: str = "",
                  author_text: str = "", year: str = "", publisher: str = "",
@@ -292,8 +280,6 @@ class WorksMixin(FacadeMixin):
         return commands.ManagedFile(storage_locator=name, sha256=digest.hexdigest(), byte_size=size)
 
     # -- reads ------------------------------------------------------------------
-
-    @ported
     def get_work(self, work_id: str) -> Optional[dict]:
         from backend.domain.organization import links
         from backend.domain.works import projection, queries
@@ -323,28 +309,20 @@ class WorksMixin(FacadeMixin):
             work["html_content"] = html_content
         self._finish([work])
         return work
-
-    @ported
     def get_primary_thumbnail_fields(self, work_id: str) -> Optional[dict]:
         from backend.domain.works import projection, queries
 
         return projection.thumbnail_fields(self._read(lambda scope: queries.work(scope, work_id)))
-
-    @ported
     def get_all_works(self) -> List[dict]:
         from backend.domain.works import projection, queries
 
         cores = self._read(queries.works_by_created)
         return self._finish([projection.work_summary(core) for core in cores])
-
-    @ported
     def get_works_browse_catalog(self) -> List[dict]:
         from backend.domain.works import projection, queries
 
         cores = self._read(queries.works_by_title)
         return self._finish([projection.work_browse(core) for core in cores])
-
-    @ported
     def get_recent_browse(self, limit: int = 30) -> List[dict]:
         from backend.domain.works import projection, queries
 
@@ -352,8 +330,6 @@ class WorksMixin(FacadeMixin):
         return self._finish([
             projection.work_browse(core, excerpt=False, extra=("last_opened_at",)) for core in cores
         ])
-
-    @ported
     def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
         from backend.domain.works import projection, queries
 
@@ -363,22 +339,16 @@ class WorksMixin(FacadeMixin):
                                    extra=("created_at", "publisher", "folder_id"))
             for core in cores
         ])
-
-    @ported
     def get_recent_works(self, limit: int = 30) -> List[dict]:
         from backend.domain.works import projection, queries
 
         cores = self._read(lambda scope: queries.works_by_opened(scope, limit))
         return self._finish([projection.work_summary(core, with_folder=False) for core in cores])
-
-    @ported
     def get_recently_added_works(self, limit: int = 50) -> List[dict]:
         from backend.domain.works import projection, queries
 
         cores = self._read(lambda scope: queries.works_by_created(scope, limit))
         return self._finish([projection.work_summary(core) for core in cores])
-
-    @ported
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         from backend.domain.works import projection, queries
 
@@ -390,8 +360,6 @@ class WorksMixin(FacadeMixin):
 
 
     # -- mutations (L-W-1 PR 3) -------------------------------------------------
-
-    @ported
     def mark_work_opened(self, work_id: str) -> bool:
         """Record an open now (server time), through the max-register."""
         from backend.domain.works import commands
@@ -403,8 +371,6 @@ class WorksMixin(FacadeMixin):
         existed, _changed, _effective = self._command(
             lambda scope: commands.mark_opened(scope, wid, moment))
         return existed
-
-    @ported
     def update_work_metadata(self, work_id: str, fields: dict):
         """``PRKSDatabase.update_work_metadata`` on PostgreSQL.
 
@@ -461,27 +427,19 @@ class WorksMixin(FacadeMixin):
         self._command(lambda scope: _patch_work(scope, work_id, synced, notes, plain),
                       serializable=bool(notes))
         return ()
-
-    @ported
     def get_work_source_state(self, work_id: str) -> Optional[dict[str, Any] | str]:
         """The source's revision, or ``INVALID_SOURCE_STATE``; ``None`` when the Work is missing."""
         from backend.domain.works import source
 
         return self._read(lambda scope: source.source_state(scope, work_id))
-
-    @ported
     def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
         from backend.domain.works import metadata
 
         return self._read(lambda scope: metadata.field_state(scope, work_id))
-
-    @ported
     def get_work_notes_state(self, work_id: str) -> Optional[dict]:
         from backend.domain.works import notes
 
         return self._read(lambda scope: notes.notes_state(scope, work_id))
-
-    @ported
     def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
         """Delete the Work and what it owns, claiming its managed file for cleanup.
 
@@ -503,8 +461,6 @@ class WorksMixin(FacadeMixin):
 
 
     # -- bulk actions (L-W-2) ----------------------------------------------------
-
-    @ported
     def bulk_update_works(self, data: dict) -> Dict[str, Any]:
         """``PRKSDatabase.bulk_update_works`` on PostgreSQL: one SERIALIZABLE transaction.
 
@@ -536,8 +492,6 @@ class WorksMixin(FacadeMixin):
         return request.result()
 
     # -- wiki links (L-W-2) -------------------------------------------------------
-
-    @ported
     def resolve_wiki_links(self, text: str) -> str:
         """``PRKSDatabase.resolve_wiki_links`` on PostgreSQL: the same renderer, read in one snapshot.
 
@@ -549,8 +503,6 @@ class WorksMixin(FacadeMixin):
         return self._read(lambda scope: wiki_links.render(scope, text))
 
     # -- BibTeX (L-W-2) -----------------------------------------------------------
-
-    @ported
     def generate_bibtex(self, work_id: str) -> str:
         """``PRKSDatabase.generate_bibtex`` on PostgreSQL: the same formatter, read in one snapshot.
 

@@ -1149,7 +1149,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         body = runtime[at : runtime.index("\n        /**", at)]
         self.assertIn("result.member_work_ids", body)
         self.assertIn("invalidateEntity('work', members[i])", body)
-        backend = _read(os.path.join(_PROJECT_DIR, "backend", "folder_sync.py"))
+        backend = _read(os.path.join(_PROJECT_DIR, "backend", "domain", "organization", "folders.py"))
         self.assertIn('result["member_work_ids"]', backend)
 
     def test_folder_parent_id_must_be_present_not_merely_nullish(self):

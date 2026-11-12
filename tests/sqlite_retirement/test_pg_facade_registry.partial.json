@@ -1,0 +1,75 @@
+{
+  "module": "tests/test_pg_facade_registry.py",
+  "partial": true,
+  "tests": {
+    "FacadeSkeletonTests.test_the_registry_of_the_real_facade_is_valid": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "RegistryDiscoveryTests.test_one_decorator_in_a_mixin_registers_the_method": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "RegistryDiscoveryTests.test_two_mixins_registering_one_method_are_refused": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "RegistryDiscoveryTests.test_a_registration_with_another_signature_is_refused": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "RegistryDiscoveryTests.test_a_registration_prksdatabase_does_not_have_is_refused": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "RegistryDiscoveryTests.test_an_unregistered_override_is_refused": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "RegistryDiscoveryTests.test_ported_static_and_property_members_are_discovered": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "DescriptorKindTests.test_a_plain_method_cannot_stand_in_for_a_static_method": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "DescriptorKindTests.test_a_matching_static_method_is_accepted": {
+      "obsolete": "The ported-method registry (backend/pg_facade/registry.py: @ported, ported_methods, validate_registry) decided which PostgresLibrary methods stood in for PRKSDatabase ones while both backends served the Library. PG-C2 deleted PRKSDatabase, so the facade is the only Library and has no registry to validate: a method exists on it or not."
+    },
+    "SurfaceTests.test_surface_is_what_the_adapter_calls_on_db": {
+      "replaced_by": [
+        "tests/test_pg_facade_registry.py::AdapterSurfaceTests.test_the_facade_has_every_library_member_the_adapter_reaches"
+      ],
+      "note": "The surface was the PRKSDatabase methods the adapter called on db; the replacement collects the same db.<name> uses and requires each on PostgresLibrary."
+    },
+    "SurfaceTests.test_surface_is_what_the_postgresql_runtime_reaches": {
+      "replaced_by": [
+        "tests/test_pg_facade_registry.py::AdapterSurfaceTests.test_the_facade_has_every_library_member_the_adapter_reaches"
+      ],
+      "note": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "SurfaceTests.test_surface_reads_all_backend_modules_but_the_sqlite_class_and_pg_packages": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "SurfaceTests.test_a_retired_method_reached_again_makes_coverage_incomplete": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "SurfaceTests.test_coverage_counts_ported_and_unported": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "PostgresReachTests.test_the_facade_covers_everything_the_postgresql_runtime_reaches": {
+      "replaced_by": [
+        "tests/test_pg_facade_registry.py::AdapterSurfaceTests.test_the_facade_has_every_library_member_the_adapter_reaches"
+      ],
+      "note": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "PostgresReachTests.test_no_sqlite_only_code_is_reachable_from_the_postgresql_runtime": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "PostgresReachTests.test_sqlite_branches_leave_the_surface": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "PostgresReachTests.test_a_sqlite_only_scope_reached_outside_sqlite_code_is_named": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "PostgresReachTests.test_a_renamed_sqlite_only_scope_is_refused": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    },
+    "PostgresReachTests.test_a_sqlite_handler_is_bound_only_where_it_is_defined_and_applied_only_by_sqlite_code": {
+      "obsolete": "The reach tooling (backend/pg_facade/reach.py, facade_surface, coverage) proved SQLite-only code unreachable from the PostgreSQL runtime and measured how much of the PRKSDatabase surface the facade ported. PG-C2 deleted the SQLite code, so nothing is left to be unreachable or unported."
+    }
+  }
+}

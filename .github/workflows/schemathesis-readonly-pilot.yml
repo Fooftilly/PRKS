@@ -12,7 +12,7 @@ on:
       - "backend/api_contract/openapi.py"
       - "backend/api_contract/publishers.py"
       - "backend/server.py"
-      - "backend/db_manager.py"
+      - "backend/pg_facade/works.py"
       - "tests/e2e/fixtures.py"
       - "tests/ux_tour/fixtures.py"
       - "docs/api/openapi-publishers.json"

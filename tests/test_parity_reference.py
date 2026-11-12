@@ -242,7 +242,7 @@ class RecordingsTests(unittest.TestCase):
                 class_name, _, method = test_id.partition(".")
                 with self.subTest(file=os.path.basename(path), test=key):
                     self.assertTrue(callable(getattr(getattr(module, class_name, None), method, None)),
-                                    "a stale recording: re-record with %s=1" % RECORD_ENV)
+                                    "a recording of a test that no longer exists")
 
 
 if __name__ == "__main__":

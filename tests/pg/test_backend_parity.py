@@ -1,9 +1,8 @@
-"""The parity fixture's ``postgres`` leg over real harness databases (#625, PG-3).
+"""The parity fixture over real harness databases (#625, PG-3; PG-C2 #641).
 
-Proves that the twin gets the PostgreSQL facade over its own harness-created
-database (never the SQLite file, never another test's database), that the
-database is dropped after the test, and that a ported method really runs
-against PostgreSQL through the recorder.
+Proves that a parity test gets the PostgreSQL facade over its own
+harness-created database (never another test's database), that the database
+is dropped after the test, and that the facade really runs against it.
 """
 
 from __future__ import annotations
@@ -11,70 +10,21 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-import unittest.mock
-from typing import Any
 
-from backend.db.database import Transaction
-from backend.pg_facade import (
-    FacadeMixin,
-    NotPortedError,
-    PostgresLibrary,
-    ported,
-    validate_registry,
-)
+from backend.pg_facade import PostgresLibrary
 from backend.storage.config import StorageConfig
-from tests.backend_parity import (
-    POSTGRES,
-    SQLITE,
-    BackendParityTestCase,
-    ParityLog,
-    ParityRecorder,
-    with_refusal_log,
-)
+from tests.backend_parity import BackendParityTestCase
 from tests.pg.harness import get_harness
 
 
-def _probe(backend: str) -> BackendParityTestCase:
-    """A fixture instance of one leg (a local class, so discovery never runs it)."""
+def _probe() -> BackendParityTestCase:
+    """A fixture instance (a local class, so discovery never runs it)."""
 
     class Probe(BackendParityTestCase):
-        parity_backend = backend
-
         def runTest(self) -> None:
             pass
 
     return Probe()
-
-
-class _ProcessingFromPostgres(FacadeMixin):
-    @ported
-    def scan_processing_files(self) -> list[dict[str, Any]]:
-        def read(tx: Transaction) -> list[dict[str, Any]]:
-            row = tx.execute(
-                "SELECT current_database() AS db, current_setting('transaction_read_only') AS ro"
-            ).fetchone()
-            assert row is not None
-            return [dict(row)]
-
-        return self._database.query(read)
-
-
-class _Library(_ProcessingFromPostgres, PostgresLibrary):
-    pass
-
-
-class _ProcessingCallingUnported(FacadeMixin):
-    @ported
-    def scan_processing_files(self) -> list[dict[str, Any]]:
-        try:
-            self.get_processing_files()
-        except NotPortedError:
-            pass
-        return []
-
-
-class _NestingLibrary(_ProcessingCallingUnported, PostgresLibrary):
-    pass
 
 
 class PostgresLegTests(unittest.TestCase):
@@ -84,19 +34,17 @@ class PostgresLegTests(unittest.TestCase):
         self.root = tmp.name
         self.storage = StorageConfig.for_testing(self.root)
 
-    def _open(self) -> tuple[BackendParityTestCase, ParityRecorder]:
-        probe = _probe(POSTGRES)
+    def _open(self) -> tuple[BackendParityTestCase, PostgresLibrary]:
+        probe = _probe()
         library = probe.open_library(self.storage)
-        self.assertIsInstance(library, ParityRecorder)
+        self.assertIsInstance(library, PostgresLibrary)
         return probe, library
 
     def test_each_open_gets_its_own_harness_database_dropped_afterwards(self) -> None:
         harness = get_harness()
         first_probe, first = self._open()
         second_probe, second = self._open()
-        dbnames = [
-            harness_dbname(lib.parity_library.database.config.conninfo) for lib in (first, second)
-        ]
+        dbnames = [harness_dbname(lib.database.config.conninfo) for lib in (first, second)]
         self.assertNotEqual(dbnames[0], dbnames[1])
         for name in dbnames:
             self.assertTrue(name.startswith("prks_test_"))
@@ -109,49 +57,18 @@ class PostgresLegTests(unittest.TestCase):
     def test_postgres_leg_never_opens_the_sqlite_database(self) -> None:
         probe, library = self._open()
         self.addCleanup(probe.doCleanups)
-        self.assertIsInstance(library.parity_library, PostgresLibrary)
-        self.assertIs(library.parity_library.storage, self.storage)
-        self.assertFalse(os.path.exists(self.storage.db_path))
-
-    def test_sqlite_leg_never_touches_postgres(self) -> None:
-        probe = _probe(SQLITE)
-        with unittest.mock.patch(
-            "tests.pg.harness.get_harness", side_effect=AssertionError("harness used")
-        ):
-            library = probe.open_library(self.storage)
-        self.assertTrue(os.path.exists(self.storage.db_path))
-        self.assertFalse(isinstance(library, ParityRecorder))
+        self.assertIs(library.storage, self.storage)
+        self.assertEqual(os.listdir(self.root), [])
 
     def test_a_ported_method_runs_against_postgresql(self) -> None:
-        self.assertEqual(validate_registry(_Library), [])
-        harness = get_harness()
-        name = harness.create_database("parity")
-        self.addCleanup(harness.drop_database, name)
-        from backend.db import Database, DatabaseConfig
-
-        database = Database(
-            DatabaseConfig(conninfo=harness.conninfo(name), role="test", pool_min=0, pool_max=1)
-        )
-        self.addCleanup(database.close)
-        log = ParityLog()
-        recorder = ParityRecorder(
-            _Library(database, storage=self.storage), frozenset({"scan_processing_files"}), log
-        )
-        self.assertEqual(recorder.scan_processing_files(), [{"db": name, "ro": "on"}])
-        self.assertEqual(log.ported, {"scan_processing_files"})
-        self.assertEqual(log.unported, set())
-
-    def test_the_fixture_records_a_refusal_inside_a_ported_method(self) -> None:
         probe, library = self._open()
         self.addCleanup(probe.doCleanups)
-        self.assertEqual(type(library.parity_library).__name__, "PostgresLibrary")
-        log = ParityLog()
-        facade = with_refusal_log(_NestingLibrary, log)(object(), storage=self.storage)  # type: ignore[arg-type]
-        self.assertEqual(validate_registry(_NestingLibrary), [])
-        recorder = ParityRecorder(facade, frozenset({"scan_processing_files"}), log)
-        self.assertEqual(recorder.scan_processing_files(), [])
-        self.assertEqual(log.unported, {"get_processing_files"})
-        self.assertEqual(log.refusals, 1)
+        self.assertEqual(library.get_all_tags(), [])
+        tag_id = library.add_tag("Ethics")["id"]
+        self.assertEqual([tag["id"] for tag in library.get_all_tags()], [tag_id])
+        count = library.database.query(lambda tx: tx.execute(
+            "SELECT count(*) AS n FROM prks.tags WHERE id = %s", (tag_id,)).fetchone()["n"])
+        self.assertEqual(count, 1)
 
 
 def harness_dbname(conninfo: str) -> str:

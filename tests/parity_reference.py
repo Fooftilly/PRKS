@@ -1,21 +1,23 @@
 """The recorded SQLite reference of the parity tests (PG-C2 #641).
 
-A parity test does the same calls on its leg's library object and on a
-reference SQLite ``PRKSDatabase``, and compares the results. PG-C2 deletes
-SQLite, and the parity tests must keep proving that PostgreSQL answers as
-SQLite did (``docs/postgresql-architecture.md`` §13.4: a guarantee is retired
-only with a replacement). So the reference side is a :class:`Reference`: a
-recording of every call the reference made, with its result or its error,
-replayed in the same order. A test with more than one reference (a library and
-its research index) replays them in one order: each step records its place
-among all the test's calls, so swapping two references' calls fails.
+A parity test does the same calls on the PostgreSQL facade and on a reference,
+and compares the results. The reference was SQLite's ``PRKSDatabase``; PG-C2
+deleted SQLite, and the parity tests must keep proving that PostgreSQL answers
+as SQLite did (``docs/postgresql-architecture.md`` §13.4: a guarantee is
+retired only with a replacement). So the reference side is a
+:class:`Reference`: a recording of every call SQLite made, with its result or
+its error, replayed in the same order. A test with more than one reference (a
+library and its research index) replays them in one order: each step records
+its place among all the test's calls, so swapping two references' calls fails.
 
-``PRKS_PARITY_RECORD=1`` runs the real ``PRKSDatabase`` (and the SQLite sync
-protocol for ``process_operation``) and writes the recording of each test to
-``tests/parity_reference/<module>.json``. Without it the recording is
-replayed and nothing on the reference side touches SQLite. A replay checks
-each call against the recording: the method name and the arguments must
-match, so a test that changed its calls fails until it is recorded again.
+The recordings in ``tests/parity_reference/<module>.json`` were made with the
+real ``PRKSDatabase`` before it was deleted, and nothing can record them again:
+a test that changes its calls fails its replay, and its SQLite comparison is
+then retired like any other SQLite test (``tests/sqlite_retirement/``). The
+recording machinery stays, under ``PRKS_PARITY_RECORD=1``, for a reference
+whose live object still exists (``tests/test_parity_reference.py``). A replay
+checks each call against the recording: the method name and the arguments must
+match.
 
 Values a run makes up (entity ids, op and device UUIDs) differ between the
 recording and a replay. The recording stores them as placeholders, numbered
@@ -212,17 +214,16 @@ class Reference:
     """One reference object of a parity test: live and recorded, or replayed.
 
     Attribute access returns a callable for every method name; calling it
-    runs (recording) or replays one step. Three names are not methods:
+    runs (recording) or replays one step. Two names are not methods:
 
-    - ``process_operation(data)``: ``backend.sync_protocol.process_operation(db, data)``;
-    - ``sql(statement, params)``: one statement on the SQLite connection, committed
+    - ``sql(statement, params)``: one statement on the live connection, committed
       (a test arranging rows no method writes);
     - ``apply("module:function", *args)``: a module function of the reference.
 
     A ``Reference`` passed as an argument stands for its live object.
     """
 
-    def __init__(self, test_id: str, name: str, module_file: str, open_live: Callable[[], Any],
+    def __init__(self, test_id: str, name: str, module_file: str, open_live: Optional[Callable[[], Any]],
                  varying: _Varying, turns: Optional[_Turns] = None) -> None:
         object.__setattr__(self, "_test_id", test_id)
         object.__setattr__(self, "_name", name)
@@ -231,6 +232,9 @@ class Reference:
         object.__setattr__(self, "_position", 0)
         object.__setattr__(self, "_turns", turns or _Turns())
         if recording():
+            if open_live is None:
+                raise AssertionError("%s: its %s reference was SQLite, which PG-C2 deleted; its recording "
+                                     "cannot be made again" % (test_id, name))
             object.__setattr__(self, "_live", open_live())
             object.__setattr__(self, "_steps", [])
             with _lock:
@@ -278,11 +282,7 @@ class Reference:
             args = tuple(_live_of(arg) for arg in args)
             kwargs = {key: _live_of(arg) for key, arg in kwargs.items()}
             try:
-                if name == "process_operation":
-                    from backend import sync_protocol
-
-                    result = sync_protocol.process_operation(live, *args, **kwargs)
-                elif name == "sql":
+                if name == "sql":
                     with live.connection() as conn:
                         conn.execute(*args, **kwargs)
                     result = None
@@ -375,8 +375,12 @@ if recording():
     atexit.register(write_recordings)
 
 
-def reference_for(test: Any, open_live: Callable[[], Any], *, name: str = "library") -> Reference:
+def reference_for(test: Any, open_live: Optional[Callable[[], Any]] = None, *,
+                  name: str = "library") -> Reference:
     """The reference ``name`` of ``test`` (a ``unittest.TestCase``); replay is checked at cleanup.
+
+    ``open_live`` opens the live object a recording runs; the parity tests'
+    references were SQLite and pass none, so they can only be replayed.
 
     The references of one test share their placeholders, so an id one of
     them returned means the same thing passed to another, and one order of
@@ -414,7 +418,7 @@ def check_every_reference_created(test: Any) -> None:
 
 
 def _test_id(test: Any) -> str:
-    return "%s.%s" % (type(test).__name__.removesuffix("_postgres"), test._testMethodName)
+    return "%s.%s" % (type(test).__name__, test._testMethodName)
 
 
 def _module_file(test: Any) -> str:

@@ -1,0 +1,9 @@
+{
+  "module": "tests/test_agent_guidance_current.py",
+  "partial": true,
+  "tests": {
+    "AgentGuidanceTests.test_readme_current_schema_matches_latest": {
+      "obsolete": "It kept the README line naming the last SQLite catalogue version equal to backend.db_migrations.LATEST_SCHEMA_VERSION. PG-C2 deleted the SQLite migrations and the README subsection that recorded that version until the SQLite code left the repository; the PostgreSQL schema has no single version number, its files are applied once each with a recorded checksum (tests/pg/test_migrate.py)."
+    }
+  }
+}

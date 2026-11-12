@@ -30,7 +30,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from tests.backend_parity import POSTGRES, parametrize_backends
+from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
 Pair = tuple[str, str]
@@ -83,25 +83,21 @@ class SearchParityTests(PeopleParityTestCase):
                 from backend.domain.search import refresh
                 from backend.pg_facade.context import current_context
 
-                library_command(side.db.parity_library.database, current_context(), Capability.EDIT_LIBRARY,
+                library_command(side.db.database, current_context(), Capability.EDIT_LIBRARY,
                                 lambda scope: refresh.refresh_work_search(scope, [work[0]]),
                                 isolation=Isolation.READ_COMMITTED)
 
     def _on_postgres(self, side: PeopleSide) -> bool:
-        return side is self.leg and self.parity_backend == POSTGRES
+        return side is self.leg
 
     def _row(self, side: PeopleSide, pg_sql: str, sqlite_sql: str, params: dict[str, Any]) -> None:
         if self._on_postgres(side):
             from backend.pg_facade.context import current_context
 
             values = {**params, "library_id": current_context().library_id}
-            side.db.parity_library.database.command(lambda tx: tx.execute(pg_sql, values))
+            side.db.database.command(lambda tx: tx.execute(pg_sql, values))
             return
-        if side is self.ref:
-            side.db.sql(sqlite_sql, params)
-            return
-        with side.db.connection() as conn:
-            conn.execute(sqlite_sql, params)
+        side.db.sql(sqlite_sql, params)
 
     # -- comparing
 

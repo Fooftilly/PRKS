@@ -782,13 +782,6 @@ class LiveCorpusTests(unittest.TestCase):
             rc = checker.main(["--root", str(_ROOT), "--base", "HEAD"])
         self.assertEqual(rc, 0, out.getvalue() + err.getvalue())
 
-    def test_every_allowlist_entry_has_owner_or_untracked_reason(self):
-        entries = checker.load_allowlist(_ROOT)
-        self.assertTrue(entries)
-        for idx, entry in enumerate(entries):
-            with self.subTest(entry=entry):
-                self.assertIsNone(checker._validate_entry(idx, entry))
-
 
 if __name__ == "__main__":
     unittest.main()

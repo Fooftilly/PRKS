@@ -1369,8 +1369,6 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/root_pairing.py",
                 "backend/domain/identity/admin.py",
                 "backend/api/session.py",
-                "backend/work_identity.py",
-                "backend/work_projection.py",
                 "backend/work_metadata_sync.py",
                 "backend/work_role_sync.py",
                 "backend/domain/works/__init__.py",
@@ -2565,53 +2563,6 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def _real(self, relpath: str) -> str:
         return (_ROOT / relpath).read_text(encoding="utf-8")
-
-    def test_approved_survivor_aware_cleanup_passes(self):
-        """The real _remove_managed_pdf / retry pass hold the capability."""
-        deletion = "backend/work_deletion.py"
-        self.assertEqual(_codes(self._real(deletion), deletion), [])
-        replace = "backend/services/work_pdf_replace.py"
-        self.assertEqual(_codes(self._real(replace), replace), [])
-
-    def test_capability_is_function_level_not_file_level(self):
-        rogue = (
-            "\n\ndef _fast_delete(db, filename):\n"
-            "    os.remove(safe_pdf_path_under_dir(db.storage.pdfs_dir, filename))\n"
-        )
-        deletion = "backend/work_deletion.py"
-        self.assertEqual(_codes(self._real(deletion) + rogue, deletion), ["INV-STORAGE-002"])
-        nested = (
-            "import os\n"
-            "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
-            "    def later():\n"
-            "        os.remove(os.path.join(pdfs_dir, filename))\n"
-            "    return later\n"
-        )
-        self.assertEqual(_codes(nested, deletion), ["INV-STORAGE-002"])
-        # The approved name in another module is not the capability.
-        moved = (
-            "import os\n"
-            "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
-            "    os.remove(os.path.join(pdfs_dir, filename))\n"
-        )
-        self.assertEqual(_codes(moved, "backend/server.py"), ["INV-STORAGE-002"])
-        self.assertEqual(_codes(moved, deletion), [])
-        # Deferred bodies run outside the capability's lock and re-check.
-        deferred = {
-            "lambda": (
-                "import os\n"
-                "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
-                "    return lambda: os.remove(os.path.join(pdfs_dir, filename))\n"
-            ),
-            "generator": (
-                "import os\n"
-                "def _remove_managed_pdf(db, names, pdfs_dir):\n"
-                "    return (os.remove(os.path.join(pdfs_dir, n)) for n in names)\n"
-            ),
-        }
-        for label, source in deferred.items():
-            with self.subTest(deferred=label):
-                self.assertEqual(_codes(source, deletion), ["INV-STORAGE-002"])
 
     def test_raw_unlink_helper_is_reserved_for_minted_rollback(self):
         call_sites = {

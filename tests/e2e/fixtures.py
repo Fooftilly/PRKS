@@ -6,14 +6,10 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
-from backend.db_manager import PRKSDatabase
-from backend.research_index import PRKSResearchIndex
-from backend.text_index import PRKSTextIndex
 from backend.storage.config import StorageConfig
 
 REPO = Path(__file__).resolve().parents[2]
 MINIMAL_PDF = REPO / "tests" / "browser" / "assets" / "minimal.pdf"
-SCHEMA = REPO / "backend" / "db_schema.sql"
 
 WORK_A_TITLE = "E2E Research Work"
 WORK_B_TITLE = "E2E Related Work"
@@ -23,8 +19,8 @@ PERSON_DISPLAY = "E2E Author"
 PDF_NAME = "e2e-research.pdf"
 
 
-# The PostgreSQL Library a seed writes to instead of the SQLite store, bound
-# by ``seeding_into`` for one seed (PRKS_E2E_LIBRARY_BACKEND=postgres).
+# The PostgreSQL Library a seed writes to, bound by ``seeding_into`` for one
+# seed (tests/e2e/postgres_identity.py).
 _POSTGRES_LIBRARY = None
 
 
@@ -40,29 +36,26 @@ def seeding_into(library):
 
 
 def open_library(cfg: StorageConfig):
-    """The Library a seed writes: the bound PostgreSQL facade, else the root's SQLite store.
+    """The Library a seed writes: the PostgreSQL facade ``seeding_into`` bound.
 
-    Every seed calls methods both share (the public ``PRKSDatabase`` names).
+    ``cfg`` names the seed's storage root; the facade already serves it. A
+    seed run outside ``seeding_into`` has no Library and is refused.
     """
-    if _POSTGRES_LIBRARY is not None:
-        return _POSTGRES_LIBRARY
-    return PRKSDatabase(storage=cfg, schema_path=str(SCHEMA))
+    if _POSTGRES_LIBRARY is None:
+        raise RuntimeError("E2E seeds run inside seeding_into(library)")
+    return _POSTGRES_LIBRARY
 
 
 def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
-    """Index a seeded Research Note before any test reads it, on either store.
+    """Index a seeded Research Note before any test reads it.
 
-    SQLite indexes it here. PostgreSQL's note save queued
-    ``research.reindex_work``, which the server's worker runs at some point
-    after start; a test that opened the Research Graph or a mention count
+    The note save queued ``research.reindex_work``, which the server's
+    worker runs at some point after start; a test that opened the Research Graph or a mention count
     before then saw no mentions (a Work is a graph node only through them).
     So the seed runs that job's transaction itself, as the Library's owner:
-    the Library a test opens already holds the note's mentions, as on SQLite,
-    and the queued job later rebuilds the same rows.
+    the Library a test opens already holds the note's mentions, and the
+    queued job later rebuilds the same rows.
     """
-    if isinstance(db, PRKSDatabase):
-        PRKSResearchIndex(storage=cfg).sync_work(work_id, notes, db)
-        return
     from backend.domain.identity.authorization import Capability
     from backend.domain.identity.library_scope import library_command
     from backend.domain.research import reindex
@@ -124,23 +117,8 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
     db.save_work_notes(work_a, seed_notes)
     _sync_research(cfg, work_a, seed_notes, db)
-    # Seed the real *derived* PDF index once in the worker, before the
-    # immutable fixture snapshot is cloned. Every fresh server still opens
-    # the index, scans canonical works, checks fingerprints and repairs stale
-    # or missing rows; unchanged PDFs need no subprocess-local PyMuPDF import.
-    # No PDF search results are mocked or inserted into the canonical DB.
-    # On PostgreSQL each managed PDF's create queued its text.extract job,
-    # which the server's embedded worker runs (backend/domain/search/text.py).
-    if isinstance(db, PRKSDatabase):
-        text_summary = PRKSTextIndex(storage=cfg).reconcile_all(db)
-        if (
-            text_summary["processed"] != 2
-            or text_summary["indexed"] != 2
-            or text_summary["updated"] != 2
-            or text_summary["failed"]
-            or text_summary["skipped"]
-        ):
-            raise RuntimeError("E2E seed PDF text index did not synchronize")
+    # Each managed PDF's create queued its text.extract job, which the
+    # server's embedded worker runs (backend/domain/search/text.py).
     return {
         "work_a": work_a,
         "work_b": work_b,

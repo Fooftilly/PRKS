@@ -1,0 +1,13 @@
+{
+  "module": "tests/pg/test_works_sync.py",
+  "partial": true,
+  "tests": {
+    "CreateWorkTests.test_a_created_work_matches_sqlite": {
+      "replaced_by": [
+        "tests/test_folders_parity.py::FolderSyncParityTests.test_create_work_files_the_work",
+        "tests/pg/test_works_sync.py::CreateWorkTests.test_a_second_create_of_one_id_converges"
+      ],
+      "note": "It sent CREATE_WORK to the PostgreSQL protocol and to a live SQLite PRKSDatabase and compared the results and the created Works. PG-C2 deleted SQLite; the CREATE_WORK parity test compares the facade with SQLite's recorded answers instead (tests/parity_reference.py)."
+    }
+  }
+}

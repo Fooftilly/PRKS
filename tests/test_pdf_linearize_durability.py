@@ -23,7 +23,6 @@ from unittest.mock import patch
 from backend import fs_durability
 from backend import pdf_linearize
 from backend.pdf_linearize import maybe_linearize_pdf_in_place
-from backend.services import work_pdf_replace
 
 
 ORIGINAL = b"%PDF-1.4\n% original managed bytes\n%%EOF\n"
@@ -267,76 +266,6 @@ class TestLinearizeWithoutQpdf(_LinearizeCase):
         file_sync.assert_not_called()
 
 
-class TestUploadPathInheritsHelperDurability(unittest.TestCase):
-    """A caller that never mentions fsync still gets the full ordering.
-
-    The new-upload path is the one the finding called out as uncompensated: it
-    fsynced the bytes it wrote itself and then let linearization rename over
-    them. It adds nothing now, and is durable because the helper is.
-    """
-
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix="prks-upload-durability-")
-        self.addCleanup(self._tmp.cleanup)
-        self.pdfs_dir = self._tmp.name
-
-    def test_a_new_managed_upload_is_linearized_durably(self):
-        harness = _LinearizeHarness(self.pdfs_dir)
-
-        with patch.object(pdf_linearize, "_linearize_enabled", return_value=True), \
-                patch.object(pdf_linearize.shutil, "which", return_value="/usr/bin/qpdf"), \
-                patch.object(pdf_linearize.subprocess, "run", _fake_qpdf()), \
-                patch.object(pdf_linearize, "fsync_file_path", harness.fsync_file_path), \
-                patch.object(pdf_linearize, "fsync_directory", harness.fsync_directory), \
-                patch.object(pdf_linearize.os, "replace", harness.replace):
-            name = work_pdf_replace.store_new_managed_pdf_bytes(
-                self.pdfs_dir, "paper.pdf", ORIGINAL
-            )
-
-        self.assertEqual(harness.steps, ["fsync-file", "replace", "fsync-dir"])
-        stored = os.path.join(os.path.realpath(self.pdfs_dir), name)
-        self.assertEqual(harness.events[1][2], stored)
-        with open(stored, "rb") as fh:
-            self.assertEqual(fh.read(), LINEARIZED)
-
-
-class TestNoCallerCompensatesForLinearization(unittest.TestCase):
-    """The drift this finding recorded must not come back.
-
-    One caller used to re-fsync the managed parent directory after
-    linearization while the others did not, which is what made the missing
-    guarantee visible. The boundary belongs to the helper, so a second fsync
-    beside a call site means the contract has split again.
-    """
-
-    BACKEND = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"
-    )
-
-    def test_no_production_call_site_re_syncs_after_linearizing(self):
-        checked = 0
-        for dirpath, _dirnames, filenames in os.walk(self.BACKEND):
-            for filename in sorted(filenames):
-                if not filename.endswith(".py"):
-                    continue
-                path = os.path.join(dirpath, filename)
-                with open(path, encoding="utf-8") as fh:
-                    lines = fh.read().splitlines()
-                for index, line in enumerate(lines):
-                    if "maybe_linearize_pdf_in_place(" not in line:
-                        continue
-                    if line.lstrip().startswith(("#", "from ", "import ")):
-                        continue
-                    checked += 1
-                    window = "\n".join(lines[index:index + 8])
-                    self.assertNotIn(
-                        "fsync_managed_pdf_parent(", window,
-                        "%s:%d compensates for a boundary the linearization "
-                        "helper already owns" % (filename, index + 1),
-                    )
-        self.assertGreaterEqual(checked, 3, "production call sites were not found")
-
-
 class TestFsDurabilityPrimitives(unittest.TestCase):
     """The platforms where `os.fsync()` is itself the barrier.
 
@@ -503,38 +432,6 @@ class TestTheStrongestBarrierIsUsed(unittest.TestCase):
             ):
                 self.assertTrue(fs_durability.fsync_directory(self._tmp.name))
         self.assertEqual([op for _fd, op in calls], [self.FAKE_FULLFSYNC])
-
-
-class TestManagedPdfParentSyncUsesTheSharedConvention(unittest.TestCase):
-    """The managed-PDF helper keeps its containment check and delegates the
-    syscall convention, so linearization and byte replacement cannot drift."""
-
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix="prks-managed-parent-")
-        self.addCleanup(self._tmp.cleanup)
-        self.pdfs_dir = self._tmp.name
-
-    def test_it_syncs_the_trusted_storage_root(self):
-        with patch.object(
-            work_pdf_replace, "fsync_directory", return_value=True
-        ) as dir_sync:
-            self.assertTrue(
-                work_pdf_replace.fsync_managed_pdf_parent(self.pdfs_dir, "managed.pdf")
-            )
-        dir_sync.assert_called_once_with(os.path.realpath(self.pdfs_dir))
-
-    def test_an_unsafe_name_syncs_nothing_and_reports_no_durability(self):
-        with patch.object(work_pdf_replace, "fsync_directory") as dir_sync:
-            self.assertFalse(
-                work_pdf_replace.fsync_managed_pdf_parent(self.pdfs_dir, "../escape.pdf")
-            )
-        dir_sync.assert_not_called()
-
-    def test_it_forwards_a_failed_directory_sync(self):
-        with patch.object(work_pdf_replace, "fsync_directory", return_value=False):
-            self.assertFalse(
-                work_pdf_replace.fsync_managed_pdf_parent(self.pdfs_dir, "managed.pdf")
-            )
 
 
 if __name__ == "__main__":

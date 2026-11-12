@@ -97,7 +97,7 @@ _TEST_GATE_PG_AGG_DOCS_BODY = (
 # The backend parity job (#625): the same pinned install and exactly
 # ``scripts/test-postgres --parity``. Both steps or neither.
 _TEST_GATE_PARITY_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies for parity"
-_TEST_GATE_PARITY_RUN_STEP = "Run SQLite and PostgreSQL backend parity legs"
+_TEST_GATE_PARITY_RUN_STEP = "Run the backend parity tests on PostgreSQL"
 # (install step, run step, the run step's exact argv)
 _TEST_GATE_PG_PAIRS = (
     (_TEST_GATE_PG_INSTALL_STEP, _TEST_GATE_PG_RUN_STEP, ("scripts/test-postgres",)),
@@ -1517,7 +1517,7 @@ class RepoGateLiveTests(unittest.TestCase):
             "          python -m pip install --isolated --disable-pip-version-check "
             '"--only-binary=:all:"\n'
             '          "psycopg==3.3.6"\n'
-            "      - name: Run SQLite and PostgreSQL backend parity legs\n"
+            "      - name: Run the backend parity tests on PostgreSQL\n"
             f"        run: {run}\n"
         )
 
@@ -1542,7 +1542,7 @@ class RepoGateLiveTests(unittest.TestCase):
 
     def test_test_gate_parity_steps_come_as_one_pair(self):
         lone_run = (
-            "      - name: Run SQLite and PostgreSQL backend parity legs\n"
+            "      - name: Run the backend parity tests on PostgreSQL\n"
             "        run: scripts/test-postgres --parity\n"
         )
         with self.assertRaisesRegex(ValueError, r"PostgreSQL job needs exactly one"):

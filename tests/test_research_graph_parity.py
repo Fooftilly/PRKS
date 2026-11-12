@@ -2,11 +2,10 @@
 
 Each side builds the same Research network (Concepts with a hierarchy,
 Positions, Arguments with targets and citations, Works with Research Notes
-and Authors) one command at a time. The SQLite sides read through
-``PRKSResearchIndex`` (kept as ``server.py`` keeps it: ``sync_work`` after
-a note, ``remove_*`` after a delete) and its ``build_graph``
-(``ResearchGraphBuilder``); the
-``postgres`` leg reads through ``PostgresResearchIndex`` after its
+and Authors) one command at a time. The SQLite side is the recording of
+``PRKSResearchIndex`` (``sync_work`` after a note, ``remove_*`` after a
+delete) and its ``build_graph`` (``tests/parity_reference.py``); the
+facade reads through ``PostgresResearchIndex`` after its
 ``research.reindex_work`` jobs ran. Results must be equal once generated
 ids become labels. Edges are compared as sets: their order is by node id,
 and the ids differ per side. Inputs avoid the documented differences
@@ -18,7 +17,6 @@ isolation).
 
 from __future__ import annotations
 
-import inspect
 import os
 import re
 import sys
@@ -35,11 +33,8 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend import research_graph
 from backend.research_graph import GraphTooLargeError
-from backend.research_index import PRKSResearchIndex
-from backend.research_network import save_work_notes
-from backend.storage.config import StorageConfig
 from tests.parity_reference import reference_for
-from tests.backend_parity import POSTGRES, parametrize_backends
+from tests.backend_parity import parametrize_backends
 from tests.test_arguments_parity import ArgumentParityTestCase, ArgumentSide
 
 Pair = tuple[str, str]
@@ -59,31 +54,25 @@ class ResearchReadParityTests(ArgumentParityTestCase):
         self.ids: dict[str, Pair] = {}
         self.indexes: dict[int, Any] = {
             id(self.leg): self._leg_index(),
-            id(self.ref): reference_for(
-                self, lambda: PRKSResearchIndex(storage=StorageConfig.for_testing(os.path.join(self.tmp, "ref"))),
-                name="index"),
+            id(self.ref): reference_for(self, name="index"),
         }
 
     def _leg_index(self) -> Any:
-        if self.parity_backend == POSTGRES:
-            from backend.pg_facade.research_index import PostgresResearchIndex
+        from backend.pg_facade.research_index import PostgresResearchIndex
 
-            return PostgresResearchIndex(self.leg.db.parity_library._database)
-        return PRKSResearchIndex(storage=StorageConfig.for_testing(os.path.join(self.tmp, "leg")))
+        return PostgresResearchIndex(self.leg.db._database)
 
     def on_postgres(self, side: ArgumentSide) -> bool:
-        return side is self.leg and self.parity_backend == POSTGRES
+        return side is self.leg
 
     def run_jobs(self) -> None:
-        """Run the leg's queued reindex jobs (none on SQLite, which indexes inline)."""
-        if self.parity_backend != POSTGRES:
-            return
+        """Run the facade's queued reindex jobs (SQLite indexed inline)."""
         from backend.domain.research import reindex  # noqa: F401  registers research.reindex_work
         from backend.jobs import queue
         from backend.jobs.runner import Outcome, run_job
         from tests.pg.jobs_fixtures import LEASE
 
-        database = self.leg.db.parity_library._database
+        database = self.leg.db._database
         while (job := queue.claim(database, "parity-worker", lease=LEASE)) is not None:
             self.assertIs(run_job(database, job, lease=LEASE), Outcome.SUCCEEDED)
 
@@ -110,11 +99,8 @@ class ResearchReadParityTests(ArgumentParityTestCase):
             text = template.format(**{label: ids[side is self.ref] for label, ids in self.ids.items()})
             if self.on_postgres(side):
                 side.db.update_work_metadata(wid, {"text_content": text})
-            elif side is self.ref:
-                side.db.apply("backend.research_network:save_work_notes", side.db, wid, text)
-                self.indexes[id(side)].sync_work(wid, text, side.db)
             else:
-                save_work_notes(side.db, wid, text)
+                side.db.apply("backend.research_network:save_work_notes", side.db, wid, text)
                 self.indexes[id(side)].sync_work(wid, text, side.db)
         self.run_jobs()
 
@@ -271,19 +257,6 @@ class ResearchReadParityTests(ArgumentParityTestCase):
 
 
 class AdapterShapeTests(unittest.TestCase):
-    def test_the_postgres_reads_keep_the_sqlite_index_signatures(self) -> None:
-        from backend.pg_facade.research_index import PostgresResearchIndex
-
-        mirrored = [name for name in vars(PostgresResearchIndex) if not name.startswith("_")]
-        self.assertEqual(sorted(mirrored), [
-            "argument_backlinks", "argument_mention_counts", "build_graph", "concept_backlinks",
-            "concept_mention_counts", "mention_count_for_argument", "mention_count_for_concept",
-            "remove_argument_mentions", "remove_concept_mentions", "sync_work", "work_research_refs"])
-        for name in mirrored:
-            mine = list(inspect.signature(getattr(PostgresResearchIndex, name)).parameters)
-            theirs = list(inspect.signature(getattr(PRKSResearchIndex, name)).parameters)
-            self.assertEqual(mine, theirs, name)
-
     def test_every_index_call_the_server_makes_is_mirrored(self) -> None:
         """``server.py`` reaches the index only through ``research_index.<name>``; PostgreSQL has each."""
         from backend.pg_facade.research_index import PostgresResearchIndex

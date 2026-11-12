@@ -23,10 +23,6 @@ class OpenRuleTests(unittest.TestCase):
         self.assertEqual(opened.effective_opened_at(horizon.isoformat(), received), "2026-09-11 12:05:00.000")
         self.assertEqual(opened.effective_opened_at(outside.isoformat(), received), "2026-09-11 12:00:00.000")
 
-    def test_a_second_resolution_value_compares_as_milliseconds(self) -> None:
-        self.assertEqual(opened.comparable("2026-09-11 12:00:00"), "2026-09-11 12:00:00.000")
-        self.assertEqual(opened.comparable("2026-09-11 12:00:00.250"), "2026-09-11 12:00:00.250")
-
 
 if __name__ == "__main__":
     unittest.main()

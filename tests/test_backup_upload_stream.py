@@ -24,8 +24,8 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-import backend.backup_restore as upload
-from backend.backup_restore import RestoreError, backup_max_upload_bytes, stream_upload_to_file
+import backend.domain.maintenance.upload as upload
+from backend.domain.maintenance.upload import RestoreError, backup_max_upload_bytes, stream_upload_to_file
 
 
 class _Reader:

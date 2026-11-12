@@ -1,9 +1,8 @@
 """Search family of the PostgreSQL transition facade (L-S-1).
 
 Owned by the Search lane (``docs/postgresql-architecture.md`` §15.2): Work
-search, catalogue filters and Saved View execution. Each ported method keeps
-the ``PRKSDatabase`` signature and return shape and is registered by one
-line, ``@ported`` from :mod:`backend.pg_facade.registry`, directly above it.
+search, catalogue filters and Saved View execution. Each method keeps the signature and return shape of the
+SQLite library it replaced.
 
 Each method runs in one read transaction, so its id sets and the summaries
 it returns come from one snapshot. The matching itself is
@@ -16,7 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
-from backend.pg_facade.registry import FacadeMixin, ported
+from backend.pg_facade.registry import FacadeMixin
 
 if TYPE_CHECKING:
     from backend.domain.identity.library_scope import LibraryScope
@@ -49,20 +48,14 @@ class SearchMixin(FacadeMixin):
             raise RuntimeError("this PostgreSQL library has no data root")
         finish_work_summary_rows(rows, self._storage.pdfs_dir)
         return rows
-
-    @ported
     def work_ids_matching_author(self, author: str) -> List[str]:
         from backend.domain.search import queries
 
         return self._search_read(lambda scope: queries.author_work_ids(scope, author))
-
-    @ported
     def work_ids_matching_publisher(self, pub: str) -> List[str]:
         from backend.domain.search import queries
 
         return self._search_read(lambda scope: queries.publisher_work_ids(scope, pub))
-
-    @ported
     def search_works(
         self,
         search_term: str,
@@ -96,8 +89,6 @@ class SearchMixin(FacadeMixin):
         else:
             ids = queries.by_recency(scope, sorted(allowed or ()))
         return self._summaries(scope, ids)
-
-    @ported
     def search_works_any(self, term: str) -> List[dict]:
         """One term, OR-ed across the keyword search, the author filter and the publisher filter.
 
@@ -118,8 +109,6 @@ class SearchMixin(FacadeMixin):
         extra = (set(queries.author_work_ids(scope, term))
                  | set(queries.publisher_work_ids(scope, term))) - seen
         return self._summaries(scope, ids + queries.by_recency(scope, sorted(extra)))
-
-    @ported
     def get_works_by_tag_name(self, tag_name: str) -> List[dict]:
         """The Works tagged with the Tag whose name or alias is ``tag_name``, newest first."""
         from backend.domain.search import queries

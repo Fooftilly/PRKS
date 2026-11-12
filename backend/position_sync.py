@@ -46,100 +46,7 @@ def canonical_wire(field, value):
     return research_rules._optional_markdown(value, max_len=research_rules.POSITION_DESCRIPTION_MAX)
 
 
-def _revision(conn, scope_type, scope_id):
-    row = conn.execute(
-        "SELECT revision FROM sync_entity_revisions WHERE scope_type = ? AND scope_id = ?",
-        (scope_type, scope_id)).fetchone()
-    return row[0] if row else 0
-
-
-def get_revision(conn, position_id, field):
-    return _revision(conn, FIELD_SCOPE_TYPE, scope_key(position_id, field))
-
-
-def _advance(conn, scope_type, scope_id):
-    conn.execute(
-        """INSERT INTO sync_entity_revisions (scope_type, scope_id, revision)
-           VALUES (?, ?, 1) ON CONFLICT (scope_type, scope_id)
-           DO UPDATE SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP""",
-        (scope_type, scope_id))
-
-
-def current_field(conn, position_id, field):
-    row = conn.execute(
-        "SELECT %s FROM positions WHERE id = ?" % field, (position_id,)).fetchone()
-    if row is None:
-        return None
-    return "" if row[0] is None else str(row[0])
-
-
-def set_field_on_conn(conn, position_id, field, value):
-    """Write one Position field and advance its revision together."""
-    if field not in FIELD_SET:
-        raise ResearchError("invalid_field", "Not an editable Position field.")
-    desired = canonical_wire(field, value)
-    current = current_field(conn, position_id, field)
-    if current is None:
-        raise ResearchError("not_found", "Position not found.", 404)
-    revision = get_revision(conn, position_id, field)
-    if current == desired:
-        return False, revision
-    conn.execute(
-        "UPDATE positions SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?" % field,
-        (desired, position_id))
-    _advance(conn, FIELD_SCOPE_TYPE, scope_key(position_id, field))
-    return True, revision + 1
-
-
-def insert_position_on_conn(conn, position_id, name, description=""):
-    """The one Position construction primitive. Every path goes through it.
-
-    A Position created with a name and a description has not "changed" twice, so
-    no revision is advanced here -- construction is not mutation.
-    """
-    clean_name = canonical_wire("name", name)
-    clean_description = canonical_wire("description", description)
-    conn.execute("INSERT INTO positions (id, name, description) VALUES (?, ?, ?)",
-                 (position_id, clean_name, clean_description))
-    return position_id
-
-
-def delete_position_on_conn(conn, position_id):
-    """Remove a Position, or refuse. Returns `(deleted, refusal_code)`.
-
-    The protection is the ordinary endpoint's and is unchanged: a Position an
-    Argument still targets cannot be deleted, because deleting it would leave
-    that Argument aimed at nothing.
-    """
-    if conn.execute("SELECT 1 FROM positions WHERE id = ?", (position_id,)).fetchone() is None:
-        return False, None
-    used = conn.execute(
-        "SELECT 1 FROM argument_target_positions WHERE position_id = ? LIMIT 1",
-        (position_id,)).fetchone()
-    if used:
-        return False, "POSITION_IN_USE"
-    conn.execute("DELETE FROM positions WHERE id = ?", (position_id,))
-    return True, None
-
-
-def get_position_state_on_conn(conn, position_id):
-    """Field revisions for one Position. Revisions only -- the Position detail
-    already carries both values."""
-    if conn.execute("SELECT 1 FROM positions WHERE id = ?", (position_id,)).fetchone() is None:
-        return None
-    return {
-        "position_id": position_id,
-        "fields": {field: {"revision": get_revision(conn, position_id, field)}
-                   for field in sorted(FIELDS)},
-    }
-
-
 # ---- handlers -------------------------------------------------------------
-
-def _position_row(conn, position_id):
-    row = conn.execute(
-        "SELECT id, name, description FROM positions WHERE id = ?", (position_id,)).fetchone()
-    return dict(row) if row is not None else None
 
 
 def validate_create(op):
@@ -159,21 +66,6 @@ def validate_create(op):
         raise ValueError("INVALID_ENVELOPE") from None
 
 
-def apply_create(db, conn, op, received_at):
-    position_id = op["entity_id"]
-    payload = op["payload"]
-    result = {"position_id": position_id}
-    existing = _position_row(conn, position_id)
-    if existing is not None:
-        # Ids are permanent and distributed, so a duplicate delivery of the
-        # same creation is idempotent rather than a refusal.
-        result.update(code="ACKNOWLEDGED", changed=False, position=existing)
-        return 200, result
-    insert_position_on_conn(conn, position_id, payload["name"], payload["description"])
-    result.update(code="ACKNOWLEDGED", changed=True, position=_position_row(conn, position_id))
-    return 200, result
-
-
 def validate_field(op):
     payload = op["payload"]
     if set(payload) != {"field", "value"}:
@@ -189,33 +81,6 @@ def validate_field(op):
         raise ValueError("INVALID_BASE_REVISION")
 
 
-def apply_field(db, conn, op, received_at):
-    from backend import work_metadata_sync as meta
-
-    position_id = op["entity_id"]
-    field = op["payload"]["field"]
-    desired = canonical_wire(field, op["payload"]["value"])
-    result = {"position_id": position_id, "field": field}
-    current = current_field(conn, position_id, field)
-    if current is None:
-        result["code"] = "ENTITY_NOT_FOUND"
-        return 404, result
-    revision = get_revision(conn, position_id, field)
-    base = op["base_revision"]
-    if base > revision:
-        result.update(code="FUTURE_REVISION", current_revision=revision,
-                      current_value=current, requested_value=desired)
-        return 400, meta.fit_terminal_result(result, current, desired)
-    if base < revision and current != desired:
-        result.update(code="REVISION_CONFLICT", current_revision=revision,
-                      current_value=current, requested_value=desired)
-        return 409, meta.fit_terminal_result(result, current, desired)
-    changed, after = set_field_on_conn(conn, position_id, field, desired)
-    result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed,
-                  value_omitted=True)
-    return 200, result
-
-
 def validate_delete(op):
     if op["payload"] != {}:
         raise ValueError("INVALID_ENVELOPE")
@@ -223,22 +88,3 @@ def validate_delete(op):
         raise ValueError("INVALID_BASE_REVISION")
 
 
-def apply_delete(db, conn, op, received_at):
-    position_id = op["entity_id"]
-    result = {"position_id": position_id}
-    deleted, refusal = delete_position_on_conn(conn, position_id)
-    if refusal:
-        result["code"] = refusal
-        return 409, result
-    result.update(code="ACKNOWLEDGED", changed=bool(deleted))
-    return 200, result
-
-
-def _handler(validate_fn, apply_fn):
-    return type("_Handler", (), {"validate": staticmethod(validate_fn),
-                                 "apply": staticmethod(apply_fn)})()
-
-
-CREATE_HANDLER = _handler(validate_create, apply_create)
-FIELD_HANDLER = _handler(validate_field, apply_field)
-DELETE_HANDLER = _handler(validate_delete, apply_delete)
