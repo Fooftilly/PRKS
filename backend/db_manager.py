@@ -45,6 +45,7 @@ from backend.domain.saved_views.rules import (
     saved_view_api_row,
 )
 from backend.domain.settings.rules import (
+    APP_SETTING_MAX_LEN,
     _prks_merge_bibtex_export_fields_patch,
     _prks_parse_bibtex_export_fields_json,
 )
@@ -634,7 +635,7 @@ class PRKSDatabase:
         return [dict(row) for row in cur.fetchall()]
 
     # --- App settings (shared across all clients of this database) ---
-    _PRKS_APP_SETTING_MAX_LEN = 500
+    _PRKS_APP_SETTING_MAX_LEN = APP_SETTING_MAX_LEN
 
     def get_app_settings_map(self) -> Dict[str, str]:
         rows = self.execute_query("SELECT key, value FROM app_settings", ())

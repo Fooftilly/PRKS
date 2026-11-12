@@ -1,6 +1,4 @@
-from backend import work_note_sync, work_role_sync, work_source_sync
-from backend.startup_profile import phase as startup_phase
-from backend.sync_protocol import process_operation
+from backend import work_note_sync, work_source_sync
 import http.server
 import socketserver
 import json
@@ -16,20 +14,16 @@ import logging
 import ipaddress
 import threading
 from contextlib import nullcontext
-from dataclasses import replace
+from typing import TYPE_CHECKING
 from email.message import Message
 from urllib.parse import urlparse, parse_qs, quote, unquote
 from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend.db_manager import PRKSDatabase, prune_orphan_pdf_thumbnails
 from backend.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
-    prks_thumb_cache_safe_wid,
     prks_thumb_cache_stem,
-    prks_person_image_cache_path,
-    prks_person_image_legacy_bin_path,
     prks_delete_person_image_cache,
 )
 from backend.domain.people.errors import MissingPersonError
@@ -41,14 +35,12 @@ from backend.services import work_pdf_replace
 from backend.text_index import (
     PRKSTextIndex,
     get_text_index,
-    reconcile_at_startup,
     replace_text_index,
     reset_text_index,
 )
 from backend.research_index import (
     PRKSResearchIndex,
     get_research_index,
-    reconcile_research_index_at_startup,
     replace_research_index,
     reset_research_index,
 )
@@ -79,7 +71,6 @@ from backend.api_contract.positions import (
     PositionUpdateRequest,
     parse_position_request,
 )
-from backend.api_contract.processing_files import ProcessingFile
 from backend.api_contract.publishers import (
     PublisherAliasRequest,
     PublisherCreateRequest,
@@ -88,9 +79,7 @@ from backend.api_contract.publishers import (
 )
 from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError
-from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.derived_cache_publish import publish_derived_cache_bytes
-from backend.storage import paths
 from backend.storage.config import StorageConfig
 from backend.storage.root_binding import assert_config_matches_bound_root
 from backend.log_safety import (
@@ -116,32 +105,21 @@ from backend.performance import (
     set_status,
     snapshot as performance_snapshot,
 )
-from backend.work_deletion import delete_work as delete_library_work
-from backend.work_deletion import retry_pending_pdf_cleanup_at_startup
 from backend.backup_restore import (
-    BackupError,
     RestoreError,
     backup_max_upload_bytes,
-    cleanup_expired_backup_jobs,
-    cleanup_stale_staging,
-    discard_temp_path,
-    new_staging_upload_path,
-    require_restore_upload_space,
-    run_backup_with_progress,
-    stage_restore,
     stream_upload_to_file,
-    take_ready_backup,
-    apply_restore,
 )
 from backend.person_image import (
     PersonImageUrlError,
-    decode_and_transcode,
     fetch_and_prepare,
     identify_cached_portrait_subtype,
     normalize_person_image_url,
-    read_legacy_portrait_bytes,
 )
 from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
+
+if TYPE_CHECKING:
+    from backend.pg_facade import PostgresLibrary
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -168,8 +146,7 @@ os.makedirs(frontend_dir, exist_ok=True)
 _bound_storage: StorageConfig | None = None
 pdfs_dir: str | None = None
 thumbs_dir: str | None = None
-processing_dir: str | None = None
-db: PRKSDatabase | None = None
+db: "PostgresLibrary | None" = None
 text_index: PRKSTextIndex | None = None
 research_index: PRKSResearchIndex | None = None
 
@@ -389,50 +366,22 @@ def _validate_listen_port(port: int) -> None:
         )
 
 
-def bind_storage(config: StorageConfig, *, library_database=None) -> StorageConfig:
-    """Bind ``config``'s root and the Library store the routes use.
+def bind_storage(config: StorageConfig, *, library_database) -> StorageConfig:
+    """Bind ``config``'s root and the PostgreSQL Library the routes use.
 
-    ``library_database`` (a ``backend.db.database.Database``) binds the
-    PostgreSQL Library instead of the SQLite store under the root
-    (``PRKS_LIBRARY_BACKEND=postgres``, ``backend.library_backend``): the
-    facade and its research and text index adapters, and no SQLite file or
-    legacy processing inbox is opened or created.
+    ``library_database`` (a ``backend.db.database.Database``) is the
+    Library's database: the routes use its facade and its research and text
+    index adapters (PG-C2 #641: PostgreSQL is the only Library store).
     """
     # Publishing a binding for a root this process does not hold the
     # single-process lease on would defeat that lease (storage-architecture
     # §12). Only enforced once the process entry opened a root.
     assert_config_matches_bound_root(config.root)
-    if library_database is not None:
-        return _publish_binding(config, *_postgres_library(config, library_database))
-    processing_local = config.processing_dir
-    try:
-        os.makedirs(processing_local, exist_ok=True)
-    except OSError:
-        if not config.processing_fallback_allowed:
-            raise
-        # Fallback is only allowed for the development-default root, so derive
-        # it from the bound root: anchored, it stays beneath the leased target.
-        processing_local = paths.processing_prod_fallback(config.root)
-        os.makedirs(processing_local, exist_ok=True)
-    if processing_local != config.processing_dir:
-        config = replace(
-            config,
-            processing_dir=processing_local,
-            processing_fallback_allowed=False,
-        )
-
-    os.makedirs(config.pdfs_dir, exist_ok=True)
-    os.makedirs(config.thumbs_dir, exist_ok=True)
-
-    db_local = PRKSDatabase(storage=config, schema_path="backend/db_schema.sql")
-    candidate = PRKSTextIndex(storage=config)
-    research_candidate = PRKSResearchIndex(storage=config)
-    return _publish_binding(config, db_local, candidate, research_candidate)
+    return _publish_binding(config, *_postgres_library(config, library_database))
 
 
 def _postgres_library(config: StorageConfig, database):
     """The PostgreSQL facade and its index adapters for ``database`` (PG-C1 #640)."""
-    # Imported only here, so the SQLite runtime never loads psycopg.
     from backend.pg_facade import PostgresLibrary
     from backend.pg_facade.research_index import PostgresResearchIndex
     from backend.pg_facade.text_index import PostgresTextIndex
@@ -445,20 +394,12 @@ def _postgres_library(config: StorageConfig, database):
     )
 
 
-def serves_postgres_library() -> bool:
-    """Whether the bound Library is the PostgreSQL facade (``PRKS_LIBRARY_BACKEND=postgres``)."""
-    from backend.pg_facade import PostgresLibrary
-
-    return isinstance(db, PostgresLibrary)
-
-
 def _publish_binding(config: StorageConfig, db_local, candidate, research_candidate) -> StorageConfig:
-    global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index, research_index
+    global _bound_storage, pdfs_dir, thumbs_dir, db, text_index, research_index
     previous_published = (
         _bound_storage,
         pdfs_dir,
         thumbs_dir,
-        processing_dir,
         db,
         text_index,
         research_index,
@@ -477,7 +418,6 @@ def _publish_binding(config: StorageConfig, db_local, candidate, research_candid
         _bound_storage = config
         pdfs_dir = config.pdfs_dir
         thumbs_dir = config.thumbs_dir
-        processing_dir = config.processing_dir
         db = db_local
         text_index = candidate
         research_index = research_candidate
@@ -494,7 +434,6 @@ def _publish_binding(config: StorageConfig, db_local, candidate, research_candid
             _bound_storage,
             pdfs_dir,
             thumbs_dir,
-            processing_dir,
             db,
             text_index,
             research_index,
@@ -532,7 +471,7 @@ def _served_pdf_path(path: str) -> str | None:
     pdf_path = _safe_pdf_path_for_route(path)
     if pdf_path is None or not os.path.exists(pdf_path):
         return None
-    if serves_postgres_library() and not db._holds_managed_pdf(os.path.basename(pdf_path)):
+    if not db._holds_managed_pdf(os.path.basename(pdf_path)):
         return None
     return pdf_path
 
@@ -546,11 +485,8 @@ def _stored_work_file_path(work_id: str) -> str:
     On PostgreSQL that is its primary Asset's: there is no ``works.file_path``
     column, and changing it is not ported (``update_work_metadata`` refuses).
     """
-    if serves_postgres_library():
-        fields = db.get_primary_thumbnail_fields(work_id)
-        return str((fields or {}).get("file_path") or "")
-    rows = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
-    return (rows[0].get("file_path") or "") if rows else ""
+    fields = db.get_primary_thumbnail_fields(work_id)
+    return str((fields or {}).get("file_path") or "")
 
 
 def _create_postgres_work(file_path: str, upload: tuple[str, bytes] | None, fields: dict) -> str:
@@ -571,18 +507,24 @@ def _create_postgres_work(file_path: str, upload: tuple[str, bytes] | None, fiel
     return db._add_work_with_pdf(name, write, **fields)
 
 
+def _update_postgres_work_metadata(work_id: str, fields: dict) -> None:
+    """``PATCH /api/works/{id}`` metadata on the PostgreSQL Library.
+
+    Never with ``file_path``: the PATCH refuses a changed one (501) and drops
+    an unchanged echo, and the Library refuses it too (``NotPortedError``),
+    so no existing managed file is adopted here.
+    """
+    db.update_work_metadata(work_id, {k: v for k, v in fields.items() if k != "file_path"})
+
+
 def _delete_work(work_id: str, *, keep_managed_pdf: bool = False) -> None:
     """Delete a Work and its derived state on the bound Library.
 
     On PostgreSQL the delete records its files' cleanup claims in its own
     transaction and the orphan sweep removes the bytes (§11.2); the text and
     Research indexes are the database's. Only the Work's thumbnails, derived
-    files under the root, are removed here. On SQLite
-    ``work_deletion.delete_work`` does the whole cleanup.
+    files under the root, are removed here.
     """
-    if not serves_postgres_library():
-        delete_library_work(db, text_index, work_id, keep_managed_pdf=keep_managed_pdf)
-        return
     deleted = db.delete_work_record(work_id, claim_pdf=not keep_managed_pdf)
     if deleted is None or not thumbs_dir:
         return
@@ -654,35 +596,8 @@ def _prks_pixmap_to_card_webp_bytes(pix) -> bytes | None:
     return _prks_pil_to_card_webp_bytes(img)
 
 
-def _prks_pil_to_jpeg_bytes(img, quality: int = 82) -> bytes | None:
-    """JPEG fallback when WebP encode is unavailable."""
-    from io import BytesIO
-
-    try:
-        from PIL import Image
-    except Exception:
-        return None
-    try:
-        if img.mode == "RGBA":
-            bg = Image.new("RGB", img.size, (255, 255, 255))
-            bg.paste(img, mask=img.split()[3])
-            img = bg
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
-        buf = BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True)
-        out = buf.getvalue()
-        return out if out else None
-    except Exception:
-        return None
 
 
-def _prks_write_person_image_cache(cache_path: str, body: bytes) -> None:
-    publish_derived_cache_bytes(
-        os.path.dirname(cache_path),
-        os.path.basename(cache_path),
-        body,
-    )
 
 
 def _prks_pixmap_to_jpeg_bytes(pix, quality: int = 82) -> bytes | None:
@@ -777,18 +692,6 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
 _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
 _SAVE_TOKEN_LOCK = threading.Lock()
-_PDF_MATERIALIZATION_LOCKS_GUARD = threading.Lock()
-_PDF_MATERIALIZATION_LOCKS = {}
-
-
-def _pdf_materialization_lock_for(work_id: str) -> threading.Lock:
-    """Per-Work lock so validate → replace → mark cannot race another ACK."""
-    with _PDF_MATERIALIZATION_LOCKS_GUARD:
-        lock = _PDF_MATERIALIZATION_LOCKS.get(work_id)
-        if lock is None:
-            lock = threading.Lock()
-            _PDF_MATERIALIZATION_LOCKS[work_id] = lock
-        return lock
 
 
 # Work creation and source synchronization share ONE parser, in the source
@@ -929,7 +832,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         )
         if mode is None:
             return nullcontext()
-        if mode == MODE_BACKUP and serves_postgres_library():
+        if mode == MODE_BACKUP:
             # The worker writes a PostgreSQL backup from one snapshot; nothing
             # here needs writes held off while the browser follows it.
             return nullcontext()
@@ -941,8 +844,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def _acting_for_request(self):
         """Bind the admitted RequestContext for the route (PostgreSQL facade calls act for it).
 
-        Nothing is bound without ``PRKS_AUTH``: the SQLite runtime has no
-        actor, and ``PRKSDatabase`` takes none.
+        Nothing is bound for a server started without ``PRKS_AUTH`` (only
+        tests start one): it admits no actor.
         """
         ctx = getattr(self, "_prks_request_context", None)
         if ctx is None:
@@ -992,8 +895,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """Authentication admission for an ``/api/`` request (L-ID-1 #626).
 
         True to dispatch the route; False when the request has been answered.
-        Without ``PRKS_AUTH`` (the SQLite runtime) only the existing Origin
-        check applies, to mutations. With it, ``backend.api.session`` answers
+        Without ``PRKS_AUTH`` (a test server only; ``prks_app`` always starts
+        identity) only the Origin check applies, to mutations. With it, ``backend.api.session`` answers
         the identity routes and admits every other route only for a live
         session with the route's capability and, for a Library mutation, the
         Library's current epoch.
@@ -1023,7 +926,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 request_host=self._prks_request_host,
                 parse_origin=parse_request_origin,
                 read_json=read_json,
-                route_fences_epoch=serves_postgres_library(),
+                route_fences_epoch=True,
             ),
         )
         if isinstance(outcome, session_api.Admitted):
@@ -1216,8 +1119,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         This never invokes API session admission or returns configuration.
         ``/readyz`` answers 200 only when the server carries a readiness
         check (``backend.readiness``: pool, schema, setup, paired root and
-        reconciled start generation) and it passes; the SQLite runtime has
-        none, so it stays not ready.
+        reconciled start generation) and it passes; a server started without
+        one stays not ready.
         """
         if path == '/healthz':
             ready = True
@@ -1303,7 +1206,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self._prks_unread_body = upload
             if not self._prks_admit(parsed_path):
                 return
-            if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+            if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX):
                 # A JSON body is read before the Library gate, as every other
                 # POST does: a client that stalls mid-body must not hold the
                 # restore's exclusive gate. ``stage`` streams its own body.
@@ -1317,9 +1220,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._handle_postgres_backup_post(parsed_path.path, backup_body)
                     except Exception as exc:
                         self._send_internal_error(exc)
-                return
-            if parsed_path.path == '/api/backups/stage':
-                self._handle_backup_stage(parsed_path)
                 return
             if upload:
                 with self._library_access(parsed_path), self._acting_for_request():
@@ -1360,25 +1260,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
             if data is _JSON_BODY_ABSENT:
                 data = {}
-            if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
-                if serves_postgres_library():
-                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
-                    # Processing queue (/api/processing-items) instead.
-                    self.send_error(404, "API endpoint not found")
-                    return
-                pf_id = path.split('/')[-1]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    row = db.update_processing_file(pf_id, data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                # Domain already committed; do not dump_response here (see
-                # docs/api-contract-boundary.md).
-                self.send_json(200, row)
-            elif path.startswith('/api/works/') and path.endswith('/roles'):
+            if path.startswith('/api/works/') and path.endswith('/roles'):
                 parts = path.split('/')
                 if len(parts) != 5 or parts[4] != 'roles':
                     self.send_error(404, "API endpoint not found")
@@ -1428,7 +1310,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 file_path_changing = "file_path" in body and (
                     str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
                 )
-                if file_path_changing and serves_postgres_library():
+                if file_path_changing:
                     # Adopting another file is not ported. Refuse before any
                     # part of the PATCH (a folder move, notes) commits, so a
                     # 501 never hides an applied change.
@@ -1442,9 +1324,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': str(e)})
                         return
                 if body:
-                    if "file_path" in body and not file_path_changing:
-                        # An unchanged echo never rewrites the stored path.
-                        body.pop("file_path", None)
+                    # An unchanged echo never rewrites the stored path.
+                    body.pop("file_path", None)
                     notes_present = "text_content" in body
                     notes_text = body.pop("text_content", None)
                     if notes_present:
@@ -1462,66 +1343,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                                 safe_error_type(e),
                             )
                     if body:
-                        # PATCH can assign `file_path` (it is in
-                        # `update_work_metadata`'s allowed set), so a real
-                        # path change is an ownership-claiming path: hold the
-                        # cleanup lock and prove the contained file still
-                        # exists before commit. An unchanged echo was popped
-                        # above and never reaches this rewrite.
-                        # Released-PDF claims (old strong basenames) are
-                        # recorded inside update_work_metadata's transaction;
-                        # filesystem cleanup runs after the adoption lock
-                        # releases so it can take the old basename's lock.
-                        claimed_old = ()
                         try:
-                            with (
-                                work_pdf_replace.managed_pdf_adoption_guard(
-                                    pdfs_dir, body.get("file_path")
-                                )
-                                if file_path_changing
-                                else nullcontext()
-                            ) as adopted_name:
-                                # Guard yields the cleanup/serving basename;
-                                # persist only the exact ownership spelling.
-                                if adopted_name:
-                                    body["file_path"] = f"/api/pdfs/{adopted_name}"
-                                claimed_old = (
-                                    db.update_work_metadata(w_id, body) or ()
-                                )
-                        except work_pdf_replace.ManagedPdfStoreError as e:
-                            self.send_json(e.http_status, {'error': e.message})
-                            return
+                            _update_postgres_work_metadata(w_id, body)
                         except ValueError as e:
                             # A refused length is the caller's mistake, not a
                             # server fault: say so rather than 500.
                             self.send_json(400, {'error': str(e)})
                             return
-                        if file_path_changing:
-                            # Strong basenames are claimed above; weak aliases
-                            # mint nothing but may unblock a deferred stem
-                            # claim. Always run the post-retarget cleanup pass
-                            # (empty claimed_old still wakes pending retry).
-                            from backend.work_deletion import (
-                                cleanup_released_managed_pdfs,
-                            )
-                            try:
-                                cleanup_released_managed_pdfs(db, claimed_old)
-                            except Exception as e:
-                                # Metadata-only: never log work ids / paths /
-                                # exception text (CodeQL log-injection + privacy).
-                                LOGGER.warning(
-                                    "work_patch_pdf_cleanup_failed error_type=%s",
-                                    safe_error_type(e),
-                                )
-                    if file_path_changing:
-                        try:
-                            text_index.sync_work(w_id, _stored_work_file_path(w_id))
-                        except Exception as e:
-                            LOGGER.warning(
-                                "work_patch_text_index_failed work_id=%s error_type=%s",
-                                safe_log_id(w_id),
-                                safe_error_type(e),
-                            )
                 self.send_json(200, {'status': 'updated'})
             elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
                 pl_id = path.split('/')[-1]
@@ -2060,22 +1888,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "PDF not found")
             elif processing_api.handle_head(self, db, path):
                 return
-            elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
-                if serves_postgres_library():
-                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
-                    # Processing queue (/api/processing-items) instead.
-                    self.send_error(404, "API endpoint not found")
-                    return
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'pdf':
-                    pf_id = parts[3]
-                    pdf_path = db.get_processing_file_pdf_path(pf_id)
-                    if pdf_path and os.path.exists(pdf_path):
-                        self._send_pdf_bytes(pdf_path, head_only=True)
-                    else:
-                        self.send_error(404, "PDF not found")
-                else:
-                    self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(405, "Method Not Allowed")
         except Exception as exc:
@@ -2127,77 +1939,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_person_profile_image(self, person_id: str) -> None:
-        if serves_postgres_library():
-            self._send_postgres_person_portrait(person_id)
-            return
-        row = db.get_person(person_id)
-        if not row:
-            self.send_error(404, "Person not found")
-            return
-        url = (row.get("image_url") or "").strip()
-        if not url:
-            self.send_error(404, "Profile image not available")
-            return
-
-        cache_path = prks_person_image_cache_path(
-            person_id, url, _bound_storage.people_dir
-        )
-        legacy_bin = prks_person_image_legacy_bin_path(
-            person_id, _bound_storage.people_dir
-        )
-
-        def read_cache_file(path: str) -> bytes:
-            try:
-                with open(path, "rb") as fp:
-                    return fp.read()
-            except OSError:
-                return b""
-
-        def drop_file(path: str) -> None:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-        body = read_cache_file(cache_path)
-        if body:
-            subtype = identify_cached_portrait_subtype(body)
-            if subtype:
-                self._send_person_profile_image_bytes(body, subtype)
-                return
-            drop_file(cache_path)
-
-        if os.path.isfile(legacy_bin):
-            legacy_body = read_legacy_portrait_bytes(legacy_bin)
-            encoded = (
-                decode_and_transcode(legacy_body, None) if legacy_body else None
-            )
-            if encoded is not None:
-                out, subtype = encoded
-                try:
-                    _prks_write_person_image_cache(cache_path, out)
-                    drop_file(legacy_bin)
-                except OSError:
-                    pass
-                self._send_person_profile_image_bytes(out, subtype, max_age=3600)
-                return
-            drop_file(legacy_bin)
-
-        prepared = fetch_and_prepare(url)
-        if prepared is None:
-            LOGGER.info(
-                "portrait_fetch_failed request_id=%s",
-                safe_log_id(self._prks_request_id),
-            )
-            self.send_error(404, "Profile image not available")
-            return
-        try:
-            _prks_write_person_image_cache(cache_path, prepared.body)
-        except OSError:
-            pass
-        self._send_person_profile_image_bytes(
-            prepared.body, prepared.subtype, max_age=3600
-        )
+        self._send_postgres_person_portrait(person_id)
+        return
 
     def _send_postgres_person_portrait(self, person_id: str) -> None:
         """Serve the Person's portrait from the PostgreSQL Library's ``portraits`` objects.
@@ -2251,8 +1994,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def _handle_job_diagnostics(self):
         """Owner-only job diagnostics (§12.4); the route exists only with ``PRKS_AUTH``.
 
-        ``backend.api.session`` admitted the request for ADMIN_LIBRARY. The
-        SQLite runtime has no jobs, so it answers like any unknown route.
+        ``backend.api.session`` admitted the request for ADMIN_LIBRARY. A
+        server started without jobs answers like any unknown route.
         """
         jobs = getattr(self.server, "prks_jobs", None)
         if jobs is None:
@@ -2988,42 +2731,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(bibtex.encode())
             elif path == '/api/settings':
                 self.send_json(200, db.get_app_settings_response())
-            elif path == '/api/backups/download' and serves_postgres_library():
-                self._handle_postgres_backup_download((query.get('token') or [''])[0])
-            elif path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
-                self.send_error(404, "API endpoint not found")
             elif path == '/api/backups/download':
-                token = (query.get('token') or [''])[0]
-                self._handle_backup_download(token=token)
-            elif path == '/api/processing-files':
-                if serves_postgres_library():
-                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
-                    # Processing queue (/api/processing-items) instead.
-                    self.send_error(404, "API endpoint not found")
-                    return
-                rescan_raw = (query.get('rescan') or [''])[0]
-                rescan = str(rescan_raw).strip().lower() in ('1', 'true', 'yes')
-                if rescan:
-                    data = db.scan_processing_files()
-                else:
-                    data = db.get_processing_files(include_imported=False)
-                self.send_json(200, dump_response(ProcessingFile, data))
-            elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
-                if serves_postgres_library():
-                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
-                    # Processing queue (/api/processing-items) instead.
-                    self.send_error(404, "API endpoint not found")
-                    return
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'pdf':
-                    pf_id = parts[3]
-                    pdf_path = db.get_processing_file_pdf_path(pf_id)
-                    if pdf_path and os.path.exists(pdf_path):
-                        self._send_pdf_bytes(pdf_path)
-                    else:
-                        self.send_error(404, "PDF not found")
-                else:
-                    self.send_error(404, "API endpoint not found")
+                self._handle_postgres_backup_download((query.get('token') or [''])[0])
+            elif path.startswith(_BACKUP_ROUTE_PREFIX):
+                self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -3032,9 +2743,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def handle_api_post(self, parsed_path, data=_JSON_BODY_REJECTED):
         path = parsed_path.path
         try:
-            if path == '/api/backups/stage':
-                self._handle_backup_stage(parsed_path)
-                return
             if data is _JSON_BODY_REJECTED:
                 data = self._read_json_body()
                 if data is _JSON_BODY_REJECTED:
@@ -3043,54 +2751,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if json_body_absent:
                 data = {}
             if path == '/api/sync/operations':
-                if serves_postgres_library():
-                    self._handle_postgres_sync_operation(data)
-                    return
-                status, result = process_operation(db, data)
-                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
-                        data.get("operation") == work_note_sync.RESEARCH_OPERATION):
-                    # Canonical note + ledger committed before this derived
-                    # best-effort projection. Re-read current text so replaying
-                    # an old op can never restore an old index snapshot.
-                    try:
-                        current = db.get_work(data.get("entity_id"))
-                        if current:
-                            research_index.sync_work(
-                                data.get("entity_id"), current.get("text_content") or "", db)
-                            # Compact preview/link map for the live Work entity.
-                            # Body stays omitted; refs are derived and bounded.
-                            result["research_refs"] = research_index.work_research_refs(
-                                data.get("entity_id"), db)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "research_index_sync_failed work_id=%s error_type=%s",
-                            safe_log_id(data.get("entity_id")), safe_error_type(e))
-                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
-                        data.get("operation") == "DELETE_WORK"):
-                    if result.get("changed"):
-                        from backend.work_deletion import cleanup_after_work_delete
-                        # file_path is present only on the first ACK (ephemeral
-                        # apply return). Replay ledgers omit it. When supplied,
-                        # cleanup re-checks current Work references — never
-                        # trusts a deletion-time managed_pdf_still_referenced.
-                        cleanup_after_work_delete(
-                            db, text_index, data.get("entity_id"),
-                            file_path=result.get("file_path") or "",
-                            existed=True,
-                        )
-                    # Paths are not durable client state; strip before the wire.
-                    result = {
-                        "code": result["code"],
-                        "work_id": result["work_id"],
-                        "changed": result["changed"],
-                    }
-                self.send_json(status, result)
-                return
-            if path == '/api/backups/progress':
-                self._handle_backup_progress()
-                return
-            if path == '/api/backups/restore':
-                self._handle_backup_restore(data)
+                self._handle_postgres_sync_operation(data)
                 return
 
             if path == '/api/diagnostics/performance/reset':
@@ -3157,99 +2818,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 summary = text_index.reconcile_all(db, force=force)
                 self.send_json(200, {"status": "ok", **summary})
             elif path == '/api/works/linearize-existing-pdfs':
-                if serves_postgres_library():
-                    # Managed PDFs on PostgreSQL are immutable stored objects;
-                    # rewriting them in place is not ported.
-                    self._send_not_ported("Linearizing existing PDFs is not ported to PostgreSQL yet.")
-                    return
-                unlinearized_only = bool(data.get("unlinearized_only", True))
-                rows = db.execute_query("SELECT id, file_path FROM works WHERE file_path LIKE '/api/pdfs/%'")
-                unique_paths = {}
-                for row in rows:
-                    filename = managed_pdf_filename(str(row.get("file_path") or ""))
-                    if not filename:
-                        continue
-                    abs_path = _safe_pdf_path_in_pdfs_dir(filename)
-                    if not abs_path:
-                        continue
-                    unique_paths[abs_path] = True
-
-                processed = 0
-                changed = 0
-                already_linearized = 0
-                skipped = 0
-                failed = 0
-                for abs_path in sorted(unique_paths.keys()):
-                    processed += 1
-                    if not os.path.exists(abs_path):
-                        skipped += 1
-                        continue
-                    if unlinearized_only and is_pdf_linearized(abs_path):
-                        already_linearized += 1
-                        continue
-                    did_change, reason = maybe_linearize_pdf_in_place(abs_path, context="settings-bulk")
-                    LOGGER.info(
-                        "pdf_linearize_result context=settings-bulk changed=%s reason=%s",
-                        "true" if did_change else "false",
-                        safe_log_label(reason),
-                    )
-                    if did_change:
-                        changed += 1
-                    elif reason in ("disabled", "missing-qpdf", "missing-file"):
-                        skipped += 1
-                    elif reason == "ok":
-                        changed += 1
-                    else:
-                        failed += 1
-                self.send_json(
-                    200,
-                    {
-                        "status": "ok",
-                        "processed": processed,
-                        "changed": changed,
-                        "already_linearized": already_linearized,
-                        "skipped": skipped,
-                        "failed": failed,
-                        "unlinearized_only": unlinearized_only,
-                    },
-                )
-            elif path.startswith('/api/processing-files/') and path.endswith('/import'):
-                if serves_postgres_library():
-                    # The legacy inbox is the SQLite Library's (§11.5): PostgreSQL has the
-                    # Processing queue (/api/processing-items) instead.
-                    self.send_error(404, "API endpoint not found")
-                    return
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'import':
-                    pf_id = parts[3]
-                    try:
-                        out = db.import_processing_file(pf_id)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    try:
-                        work_id = str(out.get("work_id") or "").strip()
-                        if work_id:
-                            row = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
-                            fp = (row[0].get("file_path") or "").strip() if row else ""
-                            text_index.sync_work(work_id, fp)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "processing_import_text_index_failed processing_file_id=%s error_type=%s",
-                            safe_log_id(pf_id),
-                            safe_error_type(e),
-                        )
-                    # Domain already committed; do not dump_response here (see
-                    # docs/api-contract-boundary.md).
-                    self.send_json(200, out)
-                else:
-                    self.send_error(404, "API endpoint not found")
+                # Managed PDFs on PostgreSQL are immutable stored objects;
+                # rewriting them in place is not ported.
+                self._send_not_ported("Linearizing existing PDFs is not ported to PostgreSQL yet.")
+                return
             elif path == '/api/works':
                 file_path = data.get('file_path', '')
-                # Set only when this request uploads bytes, so the rejection
-                # path below can tell "we just minted this" from "the caller
-                # pointed at an existing managed PDF".
-                stored_name = None
                 source_kind = (data.get('source_kind') or '').strip().lower()
                 source_url = (data.get('source_url') or '').strip()
 
@@ -3296,22 +2870,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    if serves_postgres_library():
-                        # The facade stores the bytes as objects and adopts
-                        # them in its create (objects.ingest, §10, §11.2).
-                        postgres_upload = (str(data['file_name']), decoded_pdf)
-                    else:
-                        # Minting, containment, exclusive create and
-                        # linearization belong to the managed-PDF service;
-                        # this adapter only maps the outcome onto a response.
-                        try:
-                            stored_name = work_pdf_replace.store_new_managed_pdf_bytes(
-                                pdfs_dir, data['file_name'], decoded_pdf
-                            )
-                        except work_pdf_replace.ManagedPdfStoreError as exc:
-                            self.send_json(exc.http_status, {'error': exc.message})
-                            return
-                        file_path = f"/api/pdfs/{stored_name}"
+                    # The facade stores the bytes as objects and adopts
+                    # them in its create (objects.ingest, §10, §11.2).
+                    postgres_upload = (str(data['file_name']), decoded_pdf)
 
                 provider = (data.get('provider') or '').strip().lower()
                 provider_id = (data.get('provider_id') or '').strip()
@@ -3389,55 +2950,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     thumb_page=data.get('thumb_page'),
                     private_notes=data.get('private_notes', ''),
                 )
-                if serves_postgres_library():
-                    # No adoption lock or discard here: the facade checks an
-                    # adopted file under the actor's edit right, and bytes a
-                    # refused create stored are the orphan sweep's (§11.2).
-                    try:
-                        w_id = _create_postgres_work(file_path, postgres_upload, work_fields)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                else:
-                    # A caller may point a new Work at an EXISTING managed PDF
-                    # instead of uploading one, so the commit that claims
-                    # ownership is held under the same per-basename lock
-                    # cleanup takes, and re-checks that the bytes still exist
-                    # under that lock. An upload needs no guard: it minted its
-                    # own unique name.
-                    try:
-                        with (
-                            work_pdf_replace.managed_pdf_adoption_guard(
-                                pdfs_dir, file_path
-                            )
-                            if not stored_name
-                            else nullcontext()
-                        ) as adopted_name:
-                            # Non-canonical but resolving spellings (outer
-                            # whitespace, …) share cleanup's lock identity;
-                            # store only the exact /api/pdfs/<name> form.
-                            if adopted_name:
-                                file_path = f"/api/pdfs/{adopted_name}"
-                            w_id = db.add_work(file_path=file_path, **work_fields)
-                    except work_pdf_replace.ManagedPdfStoreError as e:
-                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                        self.send_json(e.http_status, {'error': e.message})
-                        return
-                    except ValueError as e:
-                        # The upload is stored before the row exists, so a
-                        # refused create would otherwise leave a PDF nothing
-                        # references.
-                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    except Exception:
-                        # A refusal is not the only exit from this window:
-                        # add_work reaches SQLite, so a locked database or a
-                        # failed commit leaves the same orphan. The service
-                        # keeps the file unless it can prove no Work
-                        # references it.
-                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                        raise
+                # No adoption lock or discard here: the facade checks an
+                # adopted file under the actor's edit right, and bytes a
+                # refused create stored are the orphan sweep's (§11.2).
+                try:
+                    w_id = _create_postgres_work(file_path, postgres_upload, work_fields)
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
                 try:
                     text_index.sync_work(w_id, file_path)
                 except Exception as e:
@@ -3449,7 +2969,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # Undo this create: a PDF this request uploaded goes with it;
                 # existing bytes it only adopted were never its to remove.
                 def undo_create():
-                    _delete_work(w_id, keep_managed_pdf=not (stored_name or postgres_upload))
+                    _delete_work(w_id, keep_managed_pdf=not postgres_upload)
 
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
@@ -3823,40 +3343,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
 
-                    if serves_postgres_library():
-                        status, body = self._replace_postgres_work_pdf(w_id, pdf_bytes, claimed_set_rev)
-                        if status == 200 and save_token:
-                            with _SAVE_TOKEN_LOCK:
-                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                        self.send_json(status, body)
-                        return
-
-                    # Existence before lock: unknown IDs must not grow
-                    # _PDF_MATERIALIZATION_LOCKS. Re-check under the Work lock
-                    # inside replace_managed_work_pdf for deletion races.
-                    pre = db.execute_query(
-                        "SELECT 1 AS ok FROM works WHERE id=?", (w_id,)
-                    )
-                    if not pre:
-                        self.send_json(404, {'error': 'Work not found'})
-                        return
-
-                    mat_lock = _pdf_materialization_lock_for(w_id)
-                    with mat_lock:
-                        outcome = work_pdf_replace.replace_managed_work_pdf(
-                            db,
-                            work_id=w_id,
-                            pdf_bytes=pdf_bytes,
-                            pdfs_dir=pdfs_dir,
-                            text_index=text_index,
-                            claimed_set_rev=claimed_set_rev,
-                        )
-                        # save_token is HTTP bookkeeping only — record after a
-                        # successful byte write, never for empty/failed replaces.
-                        if outcome.get('wrote_pdf') and save_token:
-                            with _SAVE_TOKEN_LOCK:
-                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                        self.send_json(outcome['status'], outcome['body'])
+                    status, body = self._replace_postgres_work_pdf(w_id, pdf_bytes, claimed_set_rev)
+                    if status == 200 and save_token:
+                        with _SAVE_TOKEN_LOCK:
+                            _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
+                    self.send_json(status, body)
+                    return
                 else:
                     self.send_error(400, "No file_b64 provided")
             elif path.startswith('/api/works/') and path.endswith('/annotations'):
@@ -3916,89 +3408,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def _handle_backup_progress(self) -> None:
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-
-        def write_line(payload: dict) -> None:
-            body = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
-            self.wfile.write(body)
-            self.wfile.flush()
-
-        try:
-            run_backup_with_progress(_bound_storage, write_line)
-        except Exception as exc:
-            LOGGER.error(
-                "backup_progress_failed reason=internal error_type=%s request_id=%s",
-                safe_error_type(exc),
-                safe_log_id(self._prks_request_id),
-            )
-            try:
-                write_line(
-                    {
-                        "phase": "failed",
-                        "percent": 0,
-                        "error": "Backup could not be created.",
-                        "reason": "internal",
-                    }
-                )
-            except Exception:
-                return
-
-    def _handle_backup_download(self, token: str = "") -> None:
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
-        archive_path = None
-        try:
-            token = (token or "").strip()
-            if not token:
-                self.send_json(
-                    400,
-                    {
-                        "error": "Backup is not available.",
-                        "reason": "unknown_token",
-                        "request_id": self._prks_request_id,
-                    },
-                )
-                return
-            archive_path, filename, _warnings = take_ready_backup(token)
-            file_size = os.path.getsize(archive_path)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header(
-                "Content-Disposition",
-                f'attachment; filename="{filename}"',
-            )
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(file_size))
-            self.end_headers()
-            with open(archive_path, "rb") as handle:
-                while True:
-                    chunk = handle.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-        except BackupError as exc:
-            self.send_json(
-                exc.http_status,
-                {
-                    "error": exc.message,
-                    "reason": exc.reason,
-                    "request_id": self._prks_request_id,
-                },
-            )
-        finally:
-            if archive_path:
-                try:
-                    os.remove(archive_path)
-                except OSError:
-                    pass
 
     def _validate_backup_stage_headers(self) -> int | None:
         types = self.headers.get_all("Content-Type") or []
@@ -4025,7 +3434,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
     def _replace_postgres_work_pdf(self, work_id: str, pdf_bytes: bytes,
                                    claimed_set_rev: object) -> tuple[int, dict]:
-        """``POST /api/works/{id}/pdf`` on the PostgreSQL Library: SQLite's statuses and bodies.
+        """``POST /api/works/{id}/pdf`` on the PostgreSQL Library.
 
         The facade checks the Work (and a materialization claim) for an actor
         who may edit, stores the bytes under fresh keys and adopts them in one
@@ -4045,7 +3454,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 result = db._materialize_work_pdf(work_id, write, claimed_set_rev)
         except LookupError:
             # The facade refuses a missing Work and a Work without managed
-            # PDF bytes alike; answer each as SQLite does.
+            # PDF bytes alike; answer each with its own 404.
             if db.get_work(work_id) is None:
                 return 404, {"error": "Work not found"}
             return 404, {"error": "Work has no managed PDF"}
@@ -4093,9 +3502,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
         ``stage`` is dispatched before its body is read and streams the
         archive itself; every earlier answer closes the connection. The other
-        routes' JSON ``data`` was read before the Library gate was taken. The SQLite
-        backup service is never reached here, so a restore can only ever
-        replace the PostgreSQL Library (``backend.api.maintenance``).
+        routes' JSON ``data`` was read before the Library gate was taken. A
+        restore replaces the PostgreSQL Library (``backend.api.maintenance``).
         """
         from backend.api import maintenance as maintenance_api
 
@@ -4205,86 +3613,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """501 ``not_ported``: a route the PostgreSQL Library does not serve yet."""
         self.send_json(501, {"error": message, "code": "not_ported", "request_id": self._prks_request_id})
 
-    def _handle_backup_stage(self, parsed_path=None) -> None:
-        content_length = self._validate_backup_stage_headers()
-        if content_length is None:
-            return
-        if parsed_path is None:
-            parsed_path = urlparse(self.path)
-        max_bytes = backup_max_upload_bytes()
-        with self._library_access(parsed_path):
-            if _bound_storage is None:
-                self._send_internal_error()
-                return
-            upload_path = None
-            try:
-                require_restore_upload_space(_bound_storage, content_length)
-                upload_path = new_staging_upload_path(_bound_storage)
-                stream_upload_to_file(
-                    self.rfile,
-                    upload_path,
-                    expected_length=content_length,
-                    max_bytes=max_bytes,
-                )
-                staged = stage_restore(_bound_storage, upload_path)
-                self.send_json(
-                    200,
-                    {
-                        "token": staged.token,
-                        "verified": True,
-                        "summary": staged.summary,
-                        "warnings": staged.warnings,
-                    },
-                )
-            except RestoreError as exc:
-                self.send_json(
-                    exc.http_status,
-                    {
-                        "error": exc.message,
-                        "reason": exc.reason,
-                        "request_id": self._prks_request_id,
-                    },
-                )
-            except Exception as exc:
-                self._send_internal_error(exc)
-            finally:
-                if upload_path:
-                    discard_temp_path(upload_path)
 
-    def _handle_backup_restore(self, data) -> None:
-        if serves_postgres_library():
-            # The PostgreSQL Library's restore is _handle_postgres_backup_post's,
-            # dispatched before this; a SQLite restore must never run beside it.
-            self._send_not_ported("The SQLite restore does not serve the PostgreSQL Library.")
-            return
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
-        if not isinstance(data, dict):
-            self.send_json(400, {"error": "JSON object body required"})
-            return
-        token = data.get("token")
-        confirm = data.get("confirm")
-        if not isinstance(token, str) or not token.strip():
-            self.send_json(400, {"error": "token is required"})
-            return
-        try:
-            out = apply_restore(
-                _bound_storage,
-                token.strip(),
-                confirm if isinstance(confirm, str) else "",
-                rebind=bind_storage,
-            )
-            self.send_json(200, out)
-        except RestoreError as exc:
-            self.send_json(
-                exc.http_status,
-                {
-                    "error": exc.message,
-                    "reason": exc.reason,
-                    "request_id": self._prks_request_id,
-                },
-            )
 
     def send_json(self, status, context, etag=None, precondition_checked=False):
         if etag and status == 200 and not precondition_checked and self._prks_if_none_match(etag):
@@ -4329,37 +3658,6 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     allow_reuse_address = True
 
 
-def _sqlite_startup_maintenance():
-    """The SQLite store's start-up reconcilers; the PostgreSQL Library has its own jobs."""
-    with startup_phase("startup_thumbnail_cleanup"):
-        try:
-            n = prune_orphan_pdf_thumbnails(db)
-            if n:
-                LOGGER.info("thumbnail_prune_complete pruned=%s", n)
-        except Exception as e:
-            LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
-    # Bounded, and ordered with the other reconcilers: a managed PDF whose
-    # removal failed (or was interrupted) before this process started is the
-    # one post-delete side effect no rebuild can find on its own, because the
-    # Work row that named it is gone.
-    with startup_phase("startup_pdf_cleanup"):
-        retry_pending_pdf_cleanup_at_startup(db)
-    with startup_phase("startup_text_reconcile"):
-        try:
-            reconcile_at_startup(db, text_index)
-        except Exception as e:
-            LOGGER.warning("text_index_reconcile_failed error_type=%s", safe_error_type(e))
-    with startup_phase("startup_research_reconcile"):
-        try:
-            reconcile_research_index_at_startup(db, research_index)
-        except Exception as e:
-            LOGGER.warning("research_index_reconcile_failed error_type=%s", safe_error_type(e))
-    with startup_phase("startup_staging_cleanup"):
-        try:
-            cleanup_stale_staging(_bound_storage)
-            cleanup_expired_backup_jobs(_bound_storage)
-        except Exception as e:
-            LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
 
 
 def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
@@ -4370,17 +3668,15 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
-    if not serves_postgres_library():
-        _sqlite_startup_maintenance()
     with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
         httpd.prks_access_gate = LibraryAccessGate()
         # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
-        # keeps the SQLite runtime's behavior.
+        # only for test servers (prks_app always starts identity).
         httpd.prks_auth = auth
         # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
-        # embedded worker and the job diagnostics. None for the SQLite runtime.
+        # embedded worker and the job diagnostics. None only for test servers.
         httpd.prks_jobs = jobs
         # GET /readyz (backend.readiness.PostgresReadiness); None keeps it 503.
         httpd.prks_readiness = readiness

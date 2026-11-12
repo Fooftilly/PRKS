@@ -462,6 +462,9 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
     # every Asset under the per-object lock (§7.4, §11.2), so the SQLite
     # basename lock has nothing to protect there.
     ("backend/server.py", "_create_postgres_work"): "PostgreSQL create",
+    # The PostgreSQL Work PATCH drops file_path before the write, and the
+    # Library refuses one (NotPortedError): nothing existing is adopted.
+    ("backend/server.py", "_update_postgres_work_metadata"): "PostgreSQL PATCH, no file_path",
 }
 # Dict methods that may (re)write a guarded fields dict's file_path entry.
 _DICT_MUTATORS = frozenset({"__ior__", "__setitem__", "setdefault", "update"})

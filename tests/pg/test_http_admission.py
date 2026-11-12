@@ -25,8 +25,8 @@ from tests.pg.http_fixtures import HttpAuthTestCase, Response
 
 class AdmissionTestCase(HttpAuthTestCase):
     def tags(self) -> int:
-        """How many tags the SQLite store holds (it is shared by the class's tests)."""
-        return len(self.server_module.db.get_all_tags())
+        """How many tags the test's Library holds."""
+        return self.run_sql("SELECT count(*) AS n FROM prks.tags WHERE library_id = %s", (self.lib,))[0]["n"]
 
     def assert_refused(self, res: Response, status: int, code: str) -> None:
         self.assertEqual(res.status, status, res.raw)
@@ -500,20 +500,3 @@ class LoopbackOwnerTests(AdmissionTestCase):
                 refused = admit(path, flag)
                 assert isinstance(refused, session_api.Reply)
                 self.assertEqual((refused.status, refused.body["code"]), (409, "LIBRARY_EPOCH_CHANGED"))
-
-
-class SqliteRuntimeTests(AdmissionTestCase):
-    """Without PRKS_AUTH the application behaves exactly as before."""
-
-    def test_no_authentication_and_the_old_origin_rule(self) -> None:
-        self.serve(auth=None)
-        before = self.tags()
-        res = self.call("POST", "/api/tags", body={"name": "plain"}, origin=None)
-        self.assertEqual(res.status, 200, res.raw)
-        self.assertEqual(res.header("PRKS-Library-Epoch"), [])
-        self.assertEqual(self.tags(), before + 1)
-        self.assertEqual(self.call("GET", "/api/tags").status, 200)
-        refused = self.call("POST", "/api/tags", body={"name": "x"}, origin="http://evil.example")
-        self.assertEqual(refused.status, 403)
-        self.assertNotEqual(self.call("POST", "/api/login", body={}).status, 200)
-        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.login_attempts"), [{"n": 0}])

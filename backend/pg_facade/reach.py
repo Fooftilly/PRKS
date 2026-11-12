@@ -107,8 +107,6 @@ SQLITE_ONLY: frozenset[tuple[str, str]] = frozenset({
     ("services/work_pdf_replace.py", "discard_unowned_managed_pdf"),
     # The SQLite restore; PostgreSQL restores through backend.api.maintenance.
     ("backup_restore.py", "apply_restore"),
-    # SQLite start-up reconcilers; PostgreSQL runs its own jobs.
-    ("server.py", "_sqlite_startup_maintenance"),
 })
 
 # SQLite sync handlers' ``apply``: bound at module level into the module's

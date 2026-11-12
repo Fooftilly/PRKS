@@ -30,8 +30,7 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
 
         self.server = server_module
         published = (server_module._bound_storage, server_module.pdfs_dir, server_module.thumbs_dir,
-                     server_module.processing_dir, server_module.db, server_module.text_index,
-                     server_module.research_index)
+                     server_module.db, server_module.text_index, server_module.research_index)
         self.addCleanup(self._restore, published, self._current(get_text_index),
                         self._current(get_research_index))
 
@@ -44,7 +43,7 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
 
     def _restore(self, published: tuple[Any, ...], index: Any, research: Any) -> None:
         module = self.server
-        (module._bound_storage, module.pdfs_dir, module.thumbs_dir, module.processing_dir, module.db,
+        (module._bound_storage, module.pdfs_dir, module.thumbs_dir, module.db,
          module.text_index, module.research_index) = published
         replace_text_index(index) if index is not None else reset_text_index()
         replace_research_index(research) if research is not None else reset_research_index()

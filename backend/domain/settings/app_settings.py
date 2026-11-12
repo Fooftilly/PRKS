@@ -1,11 +1,12 @@
 """The Library's application settings: read and patch (L-O-1 #633).
 
-The rules are ``backend/db_manager.py``'s, imported rather than copied: the
+The rules are :mod:`backend.domain.settings.rules`, shared with the SQLite
+runtime until PG-C2 deletes it: the
 stored BibTeX export profile is parsed by ``_prks_parse_bibtex_export_fields_json``
 (missing or invalid → every field on; unknown keys ignored), a patch of it
 is merged by ``_prks_merge_bibtex_export_fields_patch`` (a partial patch keeps
 the other fields; an unknown field or a non-boolean is refused), and a value
-is at most ``PRKSDatabase._PRKS_APP_SETTING_MAX_LEN`` characters. Top-level
+is at most ``APP_SETTING_MAX_LEN`` characters. Top-level
 keys the API does not know are ignored, as SQLite does.
 
 What moves:
@@ -28,8 +29,8 @@ from __future__ import annotations
 import json
 from typing import Any, LiteralString
 
-from backend.db_manager import PRKSDatabase
 from backend.domain.settings.rules import (
+    APP_SETTING_MAX_LEN,
     PRKS_BIBTEX_EXPORT_FIELDS_DEFAULT,
     _prks_merge_bibtex_export_fields_patch,
     _prks_parse_bibtex_export_fields_json,
@@ -38,7 +39,7 @@ from backend.domain.identity.library_scope import LibraryScope
 
 ANNOTATION_AUTHOR = "annotation_author"
 BIBTEX_EXPORT_FIELDS = "bibtex_export_fields"
-MAX_LEN = PRKSDatabase._PRKS_APP_SETTING_MAX_LEN
+MAX_LEN = APP_SETTING_MAX_LEN
 
 _MAP_SQL: LiteralString = "SELECT key, value FROM prks.library_settings WHERE library_id = %(library_id)s"
 _UPSERT_SQL: LiteralString = """

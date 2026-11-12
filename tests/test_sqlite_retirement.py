@@ -13,8 +13,13 @@ precise reason it has none (``obsolete``)::
 While the SQLite module exists its tests and the listing must match exactly,
 so a test cannot be retired unlisted or listed without existing. Once PG-C2
 deletes the module, the listing stays as the record, and every replacement it
-names must still exist: deleting a replacement fails here. Tests are found by
-parsing the source, so no module is imported and no database is opened.
+names must still exist: deleting a replacement fails here.
+
+A module that stays (a PostgreSQL module that also held a few SQLite-runtime
+tests) records the tests retired from it in ``<module>.partial.json`` with
+``"partial": true``: each listed test must be gone from the module, and the
+same rules for replacements and reasons apply. Tests are found by parsing
+the source, so no module is imported and no database is opened.
 """
 
 from __future__ import annotations
@@ -71,7 +76,9 @@ class RetirementManifestTests(unittest.TestCase):
 
     def test_each_entry_names_replacements_or_a_reason(self) -> None:
         for name, manifest in _manifests():
-            self.assertEqual(name, os.path.basename(str(manifest["module"]))[:-3] + ".json")
+            suffix = ".partial.json" if manifest.get("partial") else ".json"
+            self.assertEqual(name, os.path.basename(str(manifest["module"]))[:-3] + suffix)
+            self.assertTrue(set(manifest) <= {"module", "tests", "partial"}, set(manifest))
             for test_id, entry in dict(manifest["tests"]).items():  # type: ignore[arg-type]
                 with self.subTest(manifest=name, test=test_id):
                     self.assertIsInstance(entry, dict)
@@ -91,15 +98,26 @@ class RetirementManifestTests(unittest.TestCase):
                         self.assertTrue(path.startswith("tests/") and os.path.exists(
                             os.path.join(_PROJECT_DIR, path)), path)
                         self.assertIn(test, _tests_in(path))
-                        self.assertNotEqual(path, manifest["module"])
+                        if not manifest.get("partial"):
+                            self.assertNotEqual(path, manifest["module"])
 
     def test_a_listed_module_that_still_exists_matches_its_listing(self) -> None:
         for name, manifest in _manifests():
             module = str(manifest["module"])
-            if not os.path.exists(os.path.join(_PROJECT_DIR, module)):
+            if manifest.get("partial") or not os.path.exists(os.path.join(_PROJECT_DIR, module)):
                 continue
             with self.subTest(manifest=name):
                 self.assertEqual(set(dict(manifest["tests"])), set(_tests_in(module)))  # type: ignore[arg-type]
+
+    def test_a_partially_retired_module_no_longer_has_its_listed_tests(self) -> None:
+        for name, manifest in _manifests():
+            if not manifest.get("partial"):
+                continue
+            module = str(manifest["module"])
+            with self.subTest(manifest=name):
+                self.assertTrue(os.path.exists(os.path.join(_PROJECT_DIR, module)), module)
+                self.assertTrue(dict(manifest["tests"]))  # type: ignore[arg-type]
+                self.assertFalse(set(dict(manifest["tests"])) & set(_tests_in(module)))  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

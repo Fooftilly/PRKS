@@ -958,7 +958,8 @@ class TestLeaseInProcess(RootTestCase):
         self.assertIs(root_binding.active_bound_root(), bound)
         root_binding.assert_config_matches_bound_root(root)
         with self.assertRaises(StorageRootRefused) as ctx:
-            server.bind_storage(StorageConfig.for_testing(other))
+            # The lease is checked before the Library's database is touched.
+            server.bind_storage(StorageConfig.for_testing(other), library_database=object())
         self.assertEqual(ctx.exception.reason, "root_not_leased")
         self.assertFalse(os.path.exists(other))
         bound.release()

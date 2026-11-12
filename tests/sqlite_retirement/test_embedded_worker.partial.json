@@ -1,0 +1,12 @@
+{
+  "module": "tests/pg/test_embedded_worker.py",
+  "partial": true,
+  "tests": {
+    "EndpointTests.test_the_sqlite_runtime_has_no_such_route": {
+      "replaced_by": [
+        "tests/pg/test_embedded_worker.py::EndpointTests.test_a_server_without_auth_or_jobs_has_no_such_route"
+      ],
+      "note": "Renamed: the same assertion, now against a server without PRKS_AUTH in front of the PostgreSQL Library."
+    }
+  }
+}

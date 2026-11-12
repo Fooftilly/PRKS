@@ -14,44 +14,17 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 import backend.server as server_module
-from backend.server import PORT, bind_storage, run_server
+from backend.server import PORT, run_server
 from backend.storage.config import StorageConfig
-from backend.text_index import get_text_index, reset_text_index
 from prks_app import build_parser
 
 
 def _capture_bind():
-    try:
-        previous_index = get_text_index()
-    except RuntimeError:
-        previous_index = None
-    return (
-        server_module._bound_storage,
-        server_module.pdfs_dir,
-        server_module.thumbs_dir,
-        server_module.processing_dir,
-        server_module.db,
-        server_module.text_index,
-        previous_index,
-    )
+    return server_module._bound_storage
 
 
 def _restore_bind(snapshot):
-    (
-        server_module._bound_storage,
-        server_module.pdfs_dir,
-        server_module.thumbs_dir,
-        server_module.processing_dir,
-        server_module.db,
-        server_module.text_index,
-        previous_index,
-    ) = snapshot
-    if previous_index is None:
-        reset_text_index()
-    else:
-        from backend.text_index import replace_text_index
-
-        replace_text_index(previous_index)
+    server_module._bound_storage = snapshot
 
 
 def _parse_host_argv(*argv):
@@ -102,7 +75,8 @@ class TestListenServerBind(unittest.TestCase):
     def setUp(self):
         self._prev = _capture_bind()
         self._tmpdir = tempfile.mkdtemp(prefix="prks-listen-bind-")
-        bind_storage(StorageConfig.for_testing(self._tmpdir))
+        # ``run_server`` only needs a bound root; the Library is not opened here.
+        server_module._bound_storage = StorageConfig.for_testing(self._tmpdir)
 
     def tearDown(self):
         _restore_bind(self._prev)
