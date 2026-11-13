@@ -2,8 +2,8 @@
 
 These call ``backend.api.saved_views`` with a fake handler — no threaded
 HTTP server — so the controller boundary stays testable without
-``server.py`` lifecycle. They run on SQLite and, in the backend parity leg
-(#625), against the PostgreSQL facade (``tests/backend_parity.py``).
+``server.py`` lifecycle. They run on PostgreSQL (``tests/backend_parity.py``),
+the handler's request context being the actor the test is bound to.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
+from backend.pg_facade.context import current_context
 from backend.storage.config import StorageConfig
 from tests.backend_parity import BackendParityTestCase, parametrize_backends
 
@@ -29,6 +30,11 @@ from tests.backend_parity import BackendParityTestCase, parametrize_backends
 class _FakeHandler:
     def __init__(self):
         self.calls = []
+
+    @property
+    def _prks_request_context(self):
+        """The admitted request's context: the actor this test is bound to."""
+        return current_context()
 
     def send_json(self, status, body, etag=None, precondition_checked=False):
         self.calls.append(

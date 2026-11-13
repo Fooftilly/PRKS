@@ -24,7 +24,9 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
 from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
+from backend.pg_facade.context import current_context
 from tests.backend_parity import parametrize_backends
+from tests.library_adapter import SavedViewCommandsOver, route_commands_over
 from tests.test_tags_parity import TagParityTestCase, TagSide
 
 _SV = re.compile(r"\bSV-[0-9A-F]{32}\b")
@@ -49,6 +51,11 @@ class ViewSide(TagSide):
 class _Handler:
     def __init__(self) -> None:
         self.calls: list[tuple[int, Any]] = []
+
+    @property
+    def _prks_request_context(self) -> Any:
+        """The admitted request's context: the actor this test is bound to."""
+        return current_context()
 
     def send_json(self, status: int, body: Any, etag: Any = None, precondition_checked: bool = False) -> None:
         self.calls.append((status, body))
@@ -152,7 +159,13 @@ class SavedViewFacadeParityTests(SavedViewParityTestCase):
         def run(method: str, path: str, *body: Any) -> int:
             for index, (side, handler) in enumerate(zip(self.sides(), handlers)):
                 target = path.replace("<id>", created[index]) if created else path
-                self.assertTrue(getattr(saved_views_api, f"handle_{method}")(handler, side.db, target, *body))
+                route = getattr(saved_views_api, f"handle_{method}")
+                if side is self.leg:
+                    self.assertTrue(route(handler, side.db, target, *body))
+                    continue
+                # The reference replays SQLite's calls by name: the route's commands become them.
+                with route_commands_over(saved_views_api, SavedViewCommandsOver(side.db)):
+                    self.assertTrue(route(handler, side.db, target, *body))
             mine, theirs = handlers[0].calls[-1], handlers[1].calls[-1]
             self.assertEqual(self.leg.normal(mine), self.ref.normal(theirs), (method, path))
             return mine[0]

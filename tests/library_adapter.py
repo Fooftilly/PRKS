@@ -17,7 +17,8 @@ gone (the last PG-C3 PR), this class stops extending it.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+import contextlib
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
 
 from backend.pg_facade import PostgresLibrary
 from backend.pg_facade.context import current_context
@@ -170,3 +171,70 @@ class TestLibrary(PostgresLibrary):
         from backend.domain.works import wiki_links
 
         return self._query(lambda scope: wiki_links.render(scope, text))
+
+    # -- Saved Views (PG-C3 PR 1: ``backend/api/saved_views.py`` calls the commands) --
+
+    def get_saved_views(self) -> List[dict]:
+        from backend.domain.saved_views import commands
+
+        return commands.all_views(self.database, current_context())
+
+    def get_saved_view(self, view_id: str) -> Optional[dict]:
+        from backend.domain.saved_views import commands
+
+        return commands.view(self.database, current_context(), view_id)
+
+    def create_saved_view(self, name: Any, search: Any) -> dict:
+        from backend.domain.saved_views import commands
+
+        return commands.create(self.database, current_context(), name, search)
+
+    def update_saved_view(self, view_id: str, *, name: Any = None, search: Any = None) -> dict:
+        from backend.domain.saved_views import commands
+
+        return commands.update(self.database, current_context(), view_id, name=name, search=search)
+
+    def delete_saved_view(self, view_id: str) -> None:
+        from backend.domain.saved_views import commands
+
+        commands.delete(self.database, current_context(), view_id)
+
+
+class SavedViewCommandsOver:
+    """``backend.domain.saved_views.commands`` answered by a Library's old method names.
+
+    A parity test drives ``backend/api/saved_views.py`` on both sides. The
+    reference side replays SQLite's recorded calls by method name, so there
+    the route's commands are patched to this (:func:`route_commands_over`):
+    each command becomes the ``PRKSDatabase`` call it replaced, and the
+    database and context the route passes are not used.
+    """
+
+    def __init__(self, library: Any) -> None:
+        self._library = library
+
+    def all_views(self, _db: Any, _ctx: Any) -> Any:
+        return self._library.get_saved_views()
+
+    def view(self, _db: Any, _ctx: Any, view_id: Any) -> Any:
+        return self._library.get_saved_view(view_id)
+
+    def create(self, _db: Any, _ctx: Any, name: Any, search: Any) -> Any:
+        return self._library.create_saved_view(name, search)
+
+    def update(self, _db: Any, _ctx: Any, view_id: Any, *, name: Any = None, search: Any = None) -> Any:
+        return self._library.update_saved_view(view_id, name=name, search=search)
+
+    def delete(self, _db: Any, _ctx: Any, view_id: Any) -> None:
+        self._library.delete_saved_view(view_id)
+
+
+@contextlib.contextmanager
+def route_commands_over(route_module: Any, commands: Any) -> Iterator[None]:
+    """Run ``route_module`` with its commands (``_commands()``) replaced by ``commands`` (a ``*CommandsOver``)."""
+    kept = route_module._commands
+    route_module._commands = lambda: commands
+    try:
+        yield
+    finally:
+        route_module._commands = kept

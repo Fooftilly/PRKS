@@ -1,6 +1,6 @@
 """Saved Views on PostgreSQL: what parity cannot show (L-O-1 #633).
 
-``tests/test_saved_views_parity.py`` proves the facade returns SQLite's JSON
+``tests/test_saved_views_parity.py`` proves the commands return SQLite's JSON
 and refusals. These tests cover what only PostgreSQL has: names compared by
 identity key, the unique index as the backstop of a name race, Library
 isolation and reader refusals, timestamps, the rollback of a failed write,
