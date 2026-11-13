@@ -99,6 +99,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/people/persons.py",
     "backend/domain/people/groups.py",
     "backend/domain/people/publishers.py",
+    "backend/domain/people/publisher_commands.py",
     "backend/domain/people/queries.py",
     "backend/domain/people/roles.py",
     "backend/domain/organization/__init__.py",

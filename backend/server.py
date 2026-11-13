@@ -31,6 +31,7 @@ from backend.domain.works.rules import BulkWorkError, effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
+from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.services import work_pdf_replace
 from backend.domain.research.rules import ResearchError
@@ -58,12 +59,6 @@ from backend.api_contract.positions import (
     PositionSyncState,
     PositionUpdateRequest,
     parse_position_request,
-)
-from backend.api_contract.publishers import (
-    PublisherAliasRequest,
-    PublisherCreateRequest,
-    PublisherDeleted,
-    PublisherInUse,
 )
 from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError
@@ -1611,25 +1606,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(404, {'error': 'alias not found'})
                 else:
                     self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/publishers/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    publisher_id = parts[3]
-                    alias = (query_params.get('alias') or [''])[0]
-                    alias = unquote(alias)
-                    if not alias.strip():
-                        self.send_json(400, {'error': 'missing alias'})
-                        return
-                    if db.delete_publisher_alias(publisher_id, alias):
-                        self.send_json(200, dump_response(PublisherDeleted, {'status': 'deleted'}))
-                    else:
-                        self.send_json(404, {'error': 'alias not found'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/publishers/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
-                db.delete_publisher(p_id)
-                self.send_json(200, dump_response(PublisherDeleted, {'status': 'deleted'}))
+            elif publishers_api.handle_delete(self, db, path, query_params):
+                return
             elif path.startswith('/api/tags/') and len(path.split('/')) == 4:
                 t_id = path.split('/')[-1]
                 try:
@@ -2654,13 +2632,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/publishers':
-                used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
-                if used_only:
-                    data = db.get_publishers_in_use()
-                    self.send_json(200, dump_response(PublisherInUse, data))
-                else:
-                    self.send_json(200, [])
+            elif publishers_api.handle_get(self, db, path, query):
+                return
             elif path.startswith('/api/pdfs/'):
                 pdf_path = _served_pdf_path(path)
                 if pdf_path:
@@ -3147,35 +3120,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, out)
-            elif path == '/api/publishers':
-                request, err = parse_request(PublisherCreateRequest, data)
-                if err is not None or request is None:
-                    self.send_json(400, err)
-                    return
-                try:
-                    # Domain already committed on return; send its dict as is
-                    # (docs/api-contract-boundary.md).
-                    out = db.add_publisher(request.name)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, out)
-            elif path.startswith('/api/publishers/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    publisher_id = parts[3]
-                    request, err = parse_request(PublisherAliasRequest, data)
-                    if err is not None or request is None:
-                        self.send_json(400, err)
-                        return
-                    try:
-                        db.add_publisher_alias(publisher_id, request.alias.strip())
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            elif publishers_api.handle_post(self, db, path, data):
+                return
             elif path.startswith('/api/works/') and path.endswith('/opened'):
                 # Explicit "the user opened this Work" event, with server-now
                 # as this caller's event time. GET /api/works/:id is a pure

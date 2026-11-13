@@ -211,6 +211,33 @@ class TestLibrary(PostgresLibrary):
 
         commands.patch(self.database, current_context(), data)
 
+    # -- publishers (PG-C3 PR 3: ``backend/api/publishers.py`` calls the commands) --
+
+    def add_publisher(self, name: str) -> Dict[str, Any]:
+        from backend.domain.people import publisher_commands
+
+        return publisher_commands.create(self.database, current_context(), name)
+
+    def add_publisher_alias(self, publisher_id: str, alias: str) -> None:
+        from backend.domain.people import publisher_commands
+
+        publisher_commands.add_alias(self.database, current_context(), publisher_id, alias)
+
+    def delete_publisher_alias(self, publisher_id: str, alias: str) -> bool:
+        from backend.domain.people import publisher_commands
+
+        return publisher_commands.delete_alias(self.database, current_context(), publisher_id, alias)
+
+    def delete_publisher(self, publisher_id: str) -> None:
+        from backend.domain.people import publisher_commands
+
+        publisher_commands.delete(self.database, current_context(), publisher_id)
+
+    def get_publishers_in_use(self) -> List[Dict[str, Any]]:
+        from backend.domain.people import publisher_commands
+
+        return publisher_commands.in_use(self.database, current_context())
+
 
 class SavedViewCommandsOver:
     """``backend.domain.saved_views.commands`` answered by a Library's old method names.

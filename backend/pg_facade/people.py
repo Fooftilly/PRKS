@@ -1,7 +1,7 @@
 """People family of the PostgreSQL transition facade (L-P-1).
 
 Owned by the People lane (``docs/postgresql-architecture.md`` §15.2):
-persons, roles, person groups and publishers. Each method keeps the signature and return shape of the
+persons, roles and person groups. Each method keeps the signature and return shape of the
 SQLite library it replaced.
 
 A method acts for the bound
@@ -11,17 +11,18 @@ snapshot, commands in one ``library_command`` transaction. The domain
 modules (and so psycopg) are imported inside the methods.
 
 Ported here: Persons and their profile fields, Person Groups with their
-hierarchy and members, and publishers (L-P-1 PR 2); Work-Person roles, a
+hierarchy and members (L-P-1 PR 2); Work-Person roles, a
 Person's ``works`` and, through ``backend.domain.works.queries``, the Work
-projection's people fields (PR 3). Differences from SQLite, each
+projection's people fields (PR 3). Publishers moved to
+``backend/domain/people/publisher_commands`` with their routes
+(``backend/api/publishers.py``, PG-C3 #642). Differences from SQLite, each
 deliberate:
 
-- Names (groups, publishers, the parent-name lookup) compare by
+- Names (groups, the parent-name lookup) compare by
   ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``.
 - ``aliases`` is stored as rows and reads back joined by ``", "``, one
   spelling per identity key; profile fields and descriptions are ``""``,
   never NULL; a portrait URL is normalized on create too.
-- A new publisher may not be named like another publisher's alias.
 - A deleted group's or Person's scopes advance (tombstones): every field
   scope, never-edited ones included, and every membership pair it ever had.
 - A role names an existing Work and Person: ``add_role`` and
@@ -382,26 +383,3 @@ class PeopleMixin(FacadeMixin):
         return _command(self, lambda scope: roles.set_role(
             scope, roles.Role(work_id, person_id, role_type), False))
 
-    # -- Publishers -------------------------------------------------------------
-    def add_publisher(self, name: str) -> Dict[str, Any]:
-        from backend.domain.people import publishers
-
-        new_id = _new_id("R")
-        return _command(self, lambda scope: publishers.create_publisher(scope, new_id, name))
-    def add_publisher_alias(self, publisher_id: str, alias: str) -> None:
-        from backend.domain.people import publishers
-
-        new_id = _new_id("M")
-        _command(self, lambda scope: publishers.add_alias(scope, new_id, publisher_id, alias))
-    def delete_publisher_alias(self, publisher_id: str, alias: str) -> bool:
-        from backend.domain.people import publishers
-
-        return _command(self, lambda scope: publishers.delete_alias(scope, publisher_id, alias))
-    def delete_publisher(self, publisher_id: str) -> None:
-        from backend.domain.people import publishers
-
-        _command(self, lambda scope: publishers.delete_publisher(scope, publisher_id))
-    def get_publishers_in_use(self) -> List[dict]:
-        from backend.domain.people import publishers
-
-        return _read(self, publishers.publishers_in_use)
