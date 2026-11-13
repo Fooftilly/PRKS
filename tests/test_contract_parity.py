@@ -601,13 +601,14 @@ class ContractParityTests(unittest.TestCase):
         people = ts_const_string_array(read(_PEOPLE_ROLES), "PEOPLE_ROLES")
         self.assertEqual(people, PEOPLE_ROLE_TYPES)
 
-        processing = read("frontend/js/components/processing-files.js")
-        self.assertIn("window.PRKS_PEOPLE_ROLES", processing)
-        self.assertNotRegex(
-            processing,
-            r"const\s+PRKS_PROCESSING_ROLE_TYPES\s*=\s*\[",
-            "Processing must not keep a second hard-coded role array",
-        )
+        # The path-based inbox page that kept a copy of this subset is gone
+        # (PG-C2 #641); no frontend module may bring a second array back.
+        for path in ("frontend/js/app.js", "frontend/js/ui.js"):
+            self.assertNotRegex(
+                read(path),
+                r"const\s+PRKS_PROCESSING_ROLE_TYPES\s*=\s*\[",
+                "Processing must not keep a second hard-coded role array",
+            )
 
         upload_ui = read("frontend/js/ui.js")
         self.assertIn("window.PRKS_PEOPLE_ROLES", upload_ui)

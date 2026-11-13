@@ -26,8 +26,10 @@ class FrontendTagsPageTests(unittest.TestCase):
         self.assertIn("async function prksReloadTagsVocabulary(", app)
         self.assertIn("window.prksVueDismissRoute(ctx)", app)
         processing = app[processing_at:search_at]
-        self.assertIn("prksLoadProcessingInbox(routeSignal)", processing)
-        self.assertIn("prksPresentVueProcessing", processing)
+        # PostgreSQL's upload queue is the only Processing page (PG-C2 #641).
+        self.assertIn("prksPresentVueRoute(ctx, contentDiv, 'processing-queue'", processing)
+        self.assertNotIn("prksLoadProcessingInbox", app)
+        self.assertNotIn("prksPresentVueProcessing", app)
         self.assertNotIn("prksRenderProcessingFilesPageWithFetch", processing)
 
     def test_legacy_module_keeps_canonical_writes_only(self):

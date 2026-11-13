@@ -331,7 +331,7 @@ FEATURES = {
         "selectors": ("tests.e2e.test_publishers_route_surface",),
     },
     "processing": {
-        "description": "Files for Processing route, mounted in its tab root",
+        "description": "Processing queue route, mounted in its tab root",
         "selectors": ("tests.e2e.test_app.TabContextHostRootTests",),
     },
     "postgres-library": {
@@ -713,18 +713,6 @@ AFFECTED_RULES = (
         "note": "Vue Publishers page (#302 R3) → publishers, because test_publishers_route_surface opens #/publishers. Shared route-surface stays unmapped (CI full).",
     },
     {
-        "name": "processing-vue",
-        "paths": ("frontend-app/src/features/processing/**",),
-        "exclude_paths": (
-            "frontend-app/**/*.stories.ts",
-            "frontend-app/**/*.stories.tsx",
-            "frontend-app/**/*.stories.vue",
-            "frontend-app/**/*.stories.js",
-        ),
-        "features": ("processing",),
-        "note": "Vue Processing Files inbox (#302 R3) → processing, because TabContextHostRootTests opens #/processing-files in its tab root. Shared route-surface stays unmapped (CI full).",
-    },
-    {
         "name": "processing-queue-vue",
         "paths": ("frontend-app/src/features/processing-queue/**",),
         "exclude_paths": (
@@ -733,8 +721,8 @@ AFFECTED_RULES = (
             "frontend-app/**/*.stories.vue",
             "frontend-app/**/*.stories.js",
         ),
-        "features": ("postgres-library",),
-        "note": "Vue Processing queue (PostgreSQL Library, PG-C1 #640) → postgres-library, because test_postgres_library_flows drives #/processing-files on the PostgreSQL leg.",
+        "features": ("postgres-library", "processing"),
+        "note": "Vue Processing queue (PG-C1 #640; the only Processing page since PG-C2 #641) → postgres-library, because test_postgres_library_flows drives #/processing-files, and processing, because TabContextHostRootTests opens #/processing-files in its tab root.",
     },
     {
         "name": "concepts-vue",

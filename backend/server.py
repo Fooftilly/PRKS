@@ -40,7 +40,6 @@ from backend.api_contract.openapi import (
     job_diagnostics_openapi_document,
     performance_diagnostics_openapi_document,
     positions_openapi_document,
-    processing_files_openapi_document,
     processing_items_openapi_document,
     publishers_openapi_document,
     saved_views_openapi_document,
@@ -2416,8 +2415,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, publishers_openapi_document())
             elif path == '/api/openapi/saved-views.json':
                 self.send_json(200, saved_views_openapi_document())
-            elif path == '/api/openapi/processing-files.json':
-                self.send_json(200, processing_files_openapi_document())
             elif path == '/api/openapi/processing-items.json':
                 self.send_json(200, processing_items_openapi_document())
             elif path == '/api/positions':

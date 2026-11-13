@@ -134,8 +134,8 @@ class TestSafeRoute(unittest.TestCase):
             "/api/persons/:id/profile-image",
         )
         self.assertEqual(
-            safe_route("/api/processing-files/abc/pdf"),
-            "/api/processing-files/:id/pdf",
+            safe_route("/api/processing-items/abc/pdf"),
+            "/api/processing-items/:id/pdf",
         )
         self.assertEqual(
             safe_route("/api/playlists/private-playlist/items/work-id"),
@@ -179,8 +179,8 @@ class TestSafeRoute(unittest.TestCase):
             "/api/openapi/saved-views.json",
         )
         self.assertEqual(
-            safe_route("/api/openapi/processing-files.json"),
-            "/api/openapi/processing-files.json",
+            safe_route("/api/openapi/processing-items.json"),
+            "/api/openapi/processing-items.json",
         )
         self.assertEqual(safe_route("/api/argument-verdicts"), "/api/argument-verdicts")
         self.assertEqual(safe_route("/api/research-graph"), "/api/research-graph")
@@ -188,6 +188,8 @@ class TestSafeRoute(unittest.TestCase):
 
     def test_unknown_api_fails_closed(self):
         self.assertEqual(safe_route("/api/not-a-real-family/secret"), "/api/:unknown")
+        # The retired path-based inbox (PG-C2 #641) is no longer a known family.
+        self.assertEqual(safe_route("/api/processing-files/secret.pdf/pdf"), "/api/:unknown")
         self.assertEqual(safe_route("/api/works/W-ABC/secret-suffix"), "/api/:unknown")
         self.assertNotIn("secret", safe_route("/api/not-a-real-family/secret"))
 

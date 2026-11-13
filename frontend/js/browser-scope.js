@@ -40,7 +40,7 @@
  *
  * Library content. A confirmed session answer (at start, or a later
  * same-scope `verify()`) also names which runtime
- * holds the Library's content (`libraryContent()`: 'sqlite' or 'postgres').
+ * holds the Library's content (`libraryContent()`: 'postgres', the only runtime).
  * A scope bound from the offline record names none (null), so a caller that
  * needs it treats an offline page as not knowing.
  *
@@ -129,9 +129,9 @@
         return typeof value === 'string' && EPOCH_PATTERN.test(value) ? value : null;
     }
 
-    /** Which runtime holds the Library's content ('sqlite' or 'postgres'), or null. */
+    /** Which runtime holds the Library's content ('postgres'), or null for anything else. */
     function contentOf(value) {
-        return value === 'sqlite' || value === 'postgres' ? value : null;
+        return value === 'postgres' ? value : null;
     }
 
     /** Orders two canonical epochs (they may exceed a double's integers). */

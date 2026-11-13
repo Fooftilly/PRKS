@@ -1118,8 +1118,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         (SET_FOLDER_FIELD for `private_notes`, #534). Everywhere else must
         also go through a wrapper — never a raw /api/folders mutation.
         """
-        for name in ("app.js", "components/folders.js", "components/processing-files.js",
-                     "components/works.js", "ui.js"):
+        for name in ("app.js", "components/folders.js", "components/works.js", "ui.js"):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
                 # A write is a /api/folders URL paired with a mutating method.

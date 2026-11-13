@@ -154,27 +154,27 @@ function prksPaintProcessingNavBadge() {
 
 /**
  * Which runtime holds the Library's content: 'postgres' (the Processing page
- * is the upload queue, `/api/processing-items`), 'sqlite' (the path-based
- * inbox), or null while it is not known.
+ * is the upload queue, `/api/processing-items`), or null while it is not
+ * known. PostgreSQL is the only runtime (PG-C2 #641); the path-based SQLite
+ * inbox is gone.
  *
- * A page with no bound scope is the SQLite runtime's (no `PRKS_AUTH`, so no
- * session to bind). A bound page knows the content only from a confirmed
- * session answer: one bound offline asks the session again (`verify()`), so
- * it learns the content once PRKS answers, without a reload. Until then it is
- * null, and callers show neither Processing page rather than guess one.
+ * A page with no bound scope has no signed-in session, so the content is not
+ * known. A bound page knows it only from a confirmed session answer: one bound
+ * offline asks the session again (`verify()`), so it learns the content once
+ * PRKS answers, without a reload. Until then it is null, and callers show no
+ * Processing page rather than guess.
  */
 async function prksLibraryContentMode() {
     const scope = window.prksBrowserScope;
-    if (!scope || typeof scope.resolve !== 'function' || typeof scope.libraryContent !== 'function') return 'sqlite';
+    if (!scope || typeof scope.resolve !== 'function' || typeof scope.libraryContent !== 'function') return null;
     try {
         const bound = await scope.resolve();
-        if (!bound) return 'sqlite';
+        if (!bound) return null;
         if (!scope.libraryContent() && typeof scope.verify === 'function') await scope.verify();
     } catch (_e) {
         return null;
     }
-    const content = scope.libraryContent();
-    return content === 'postgres' || content === 'sqlite' ? content : null;
+    return scope.libraryContent() === 'postgres' ? 'postgres' : null;
 }
 
 async function prksRefreshProcessingNavBadge(options) {
@@ -187,25 +187,14 @@ async function prksRefreshProcessingNavBadge(options) {
         return;
     }
     const mode = await prksLibraryContentMode();
-    if (!mode) {
-        // Not confirmed yet: no count is known for either Processing page.
+    if (mode !== 'postgres') {
+        // Not confirmed yet: no queue count is known.
         prksSetProcessingAttentionCount(null);
         return;
     }
-    if (mode === 'postgres') {
-        if (typeof window.prksProcessingQueueCount !== 'function') return;
-        try {
-            prksSetProcessingAttentionCount(await window.prksProcessingQueueCount({ signal: opts.signal }));
-        } catch (_e) {
-            prksSetProcessingAttentionCount(null);
-        }
-        return;
-    }
-    const records = window.prksProcessingRecords;
-    if (!records) return;
+    if (typeof window.prksProcessingQueueCount !== 'function') return;
     try {
-        const rows = await records.inbox({ rescan: !!opts.rescan, signal: opts.signal });
-        prksSetProcessingAttentionCount(rows.length);
+        prksSetProcessingAttentionCount(await window.prksProcessingQueueCount({ signal: opts.signal }));
     } catch (_e) {
         prksSetProcessingAttentionCount(null);
     }
@@ -246,14 +235,14 @@ async function prksRefreshSyncQueueCue() {
 
 function initPrksNavAttentionBadges() {
     prksPaintProcessingNavBadge();
-    void prksRefreshProcessingNavBadge({ rescan: false });
+    void prksRefreshProcessingNavBadge();
     void prksRefreshSyncQueueCue();
     if (!window.__prksNavAttentionSubscribed) {
         window.__prksNavAttentionSubscribed = true;
         if (typeof prksOfflineRuntimeSubscribe === 'function') {
             prksOfflineRuntimeSubscribe(function (state) {
                 if (state === 'online') {
-                    void prksRefreshProcessingNavBadge({ rescan: false });
+                    void prksRefreshProcessingNavBadge();
                     void prksRefreshSyncQueueCue();
                 } else {
                     prksSetProcessingAttentionCount(null);
@@ -2341,107 +2330,6 @@ function prksPresentVueResearchGraph(ctx, contentDiv, detail) {
 }
 
 /**
- * Mount the Vue Processing inbox in this pane.
- * `detail.files` is already a `prksProcessingRecords.inbox({ rescan: true })` read.
- * People and folders are the catalogs the cards search. Vue does not fetch.
- * The preview iframe is released before this host is replaced.
- */
-function prksPresentVueProcessing(ctx, contentDiv, detail) {
-    window.__prksProcessingPeople = Array.isArray(detail.people) ? detail.people : [];
-    if (typeof window.prksProcessingReleaseResources === 'function') {
-        window.prksProcessingReleaseResources(ctx);
-    }
-    prksPresentVueRoute(ctx, contentDiv, 'processing-files', detail);
-}
-
-/**
- * Rescan the inbox and repaint this owner only. `resume.visibleCount` keeps
- * the loaded window. A generation that is no longer current does not paint
- * and does not move the nav badge. A failed read returns the message and
- * leaves the painted inbox and sidebar count alone. An empty successful
- * read still paints the empty state.
- */
-async function prksReloadProcessingFiles(ctx, generation, resume) {
-    if (!ctx || typeof ctx.isCurrent !== 'function' || !ctx.isCurrent(generation)) return false;
-    const route = ctx.lastResolvedRoute || ctx.route;
-    if (!route || route.name !== 'processing-files') return false;
-    const loaded = await prksLoadProcessingInbox(null, true);
-    if (!ctx.isCurrent(generation)) return false;
-    const live = ctx.lastResolvedRoute || ctx.route;
-    if (!live || live.name !== 'processing-files' || !ctx.root || !ctx.root.isConnected) return false;
-    const readError = loaded.filesError || loaded.peopleError || loaded.foldersError;
-    if (readError) return readError;
-    ctx.routeSidebar = { pendingCount: loaded.items.length };
-    if (typeof prksSetProcessingAttentionCount === 'function') {
-        prksSetProcessingAttentionCount(loaded.items.length);
-    }
-    if (!ctx.isCurrent(generation)) return false;
-    prksPresentVueProcessing(ctx, ctx.root, {
-        files: loaded.items,
-        people: loaded.people,
-        folders: loaded.folders,
-        roleTypes: typeof window.prksProcessingRoleTypes === 'function' ? window.prksProcessingRoleTypes() : [],
-        domPrefix: typeof window.prksProcessingDomPrefix === 'function' ? window.prksProcessingDomPrefix(ctx) : 'prks-pf',
-        generation: generation,
-        resume: resume || null,
-    });
-    if (
-        typeof prksTabContextIsFocused === 'function' &&
-        prksTabContextIsFocused(ctx) &&
-        typeof updatePanelContent === 'function'
-    ) {
-        updatePanelContent('details');
-    }
-    return true;
-}
-
-/**
- * One inbox load: the rescan through the Processing records service, plus the
- * people and folders the cards pick from. With `trackErrors`, each failed read
- * returns its message; an aborted read is not a failure.
- */
-async function prksLoadProcessingInbox(signal, trackErrors) {
-    const request = signal ? { signal: signal } : {};
-    const peopleOwner = {};
-    const foldersOwner = {};
-    const peopleRequest = Object.assign({}, request);
-    const folderRequest = Object.assign({}, request);
-    if (trackErrors) {
-        peopleRequest.errorOwner = peopleOwner;
-        folderRequest.errorOwner = foldersOwner;
-    }
-    const records = window.prksProcessingRecords;
-    const filesFallback = 'Could not load files for processing.';
-    let filesError = '';
-    const filesRead = records
-        ? records.inbox({ rescan: true, signal: signal || undefined }).catch(function (err) {
-              if (!prksAbortFallback(err)) filesError = records.actionMessage(err, filesFallback);
-              return [];
-          })
-        : Promise.resolve([]);
-    const [items, people, folders] = await Promise.all([
-        filesRead,
-        typeof fetchPersons === 'function' ? fetchPersons(peopleRequest) : Promise.resolve([]),
-        typeof fetchFolders === 'function' ? fetchFolders(folderRequest) : Promise.resolve([]),
-    ]);
-    function failureMessage(owner, fallback) {
-        if (!trackErrors || typeof prksConsumeApiError !== 'function') return '';
-        const failure = prksConsumeApiError(owner);
-        return failure ? (failure.message || fallback) : '';
-    }
-    return {
-        items: Array.isArray(items) ? items : [],
-        people: Array.isArray(people) ? people : [],
-        folders: Array.isArray(folders) ? folders : [],
-        filesError: trackErrors ? filesError : '',
-        peopleError: failureMessage(peopleOwner, 'Could not load people.'),
-        foldersError: failureMessage(foldersOwner, 'Could not load folders.'),
-    };
-}
-
-window.prksReloadProcessingFiles = prksReloadProcessingFiles;
-
-/**
  * The one read behind Search and Saved View detail. Membership is the
  * server's (`fetchSearch`), and the response is never cached. A pending local
  * edit is not on the server yet, so the rows are overlaid with
@@ -3573,36 +3461,17 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
             case 'processing-files': {
                 const contentMode = await prksLibraryContentMode();
                 if (stale()) return;
-                // Unconfirmed: the route error view (with Retry), never the
-                // other runtime's Processing page.
-                if (!contentMode) throw new Error('The Library content is not confirmed yet.');
-                if (contentMode === 'postgres') {
-                    // The queue page reads its items and moves the badge itself.
-                    const folders = typeof fetchFolders === 'function'
-                        ? await fetchFolders({ signal: routeSignal })
-                        : [];
-                    if (stale()) return;
-                    prksPresentVueRoute(ctx, contentDiv, 'processing-queue', {
-                        folders: Array.isArray(folders) ? folders : [],
-                        docTypes: Array.isArray(window.PRKS_DOC_TYPES) ? window.PRKS_DOC_TYPES : [],
-                        generation: generation,
-                    });
-                    break;
-                }
-                const loaded = await prksLoadProcessingInbox(routeSignal);
+                // Unconfirmed: the route error view (with Retry), never a
+                // guessed page.
+                if (contentMode !== 'postgres') throw new Error('The Library content is not confirmed yet.');
+                // The queue page reads its items and moves the badge itself.
+                const folders = typeof fetchFolders === 'function'
+                    ? await fetchFolders({ signal: routeSignal })
+                    : [];
                 if (stale()) return;
-                publishSidebar({ pendingCount: loaded.items.length });
-                if (stale()) return;
-                if (typeof prksSetProcessingAttentionCount === 'function') {
-                    prksSetProcessingAttentionCount(loaded.items.length);
-                }
-                if (stale()) return;
-                prksPresentVueProcessing(ctx, contentDiv, {
-                    files: loaded.items,
-                    people: loaded.people,
-                    folders: loaded.folders,
-                    roleTypes: typeof window.prksProcessingRoleTypes === 'function' ? window.prksProcessingRoleTypes() : [],
-                    domPrefix: typeof window.prksProcessingDomPrefix === 'function' ? window.prksProcessingDomPrefix(ctx) : 'prks-pf',
+                prksPresentVueRoute(ctx, contentDiv, 'processing-queue', {
+                    folders: Array.isArray(folders) ? folders : [],
+                    docTypes: Array.isArray(window.PRKS_DOC_TYPES) ? window.PRKS_DOC_TYPES : [],
                     generation: generation,
                 });
                 break;

@@ -8,23 +8,72 @@ model here: its metadata travels in headers (``backend/api/processing.py``).
 The draft PATCH passes the JSON object to the domain, which keeps only the
 draft fields it knows, stringifies and trims their values, and refuses an
 unknown folder, person, tag, role type, or draft status. ``status`` is the
-legacy spelling of ``status_draft``, as in the SQLite inbox.
+legacy spelling of ``status_draft``. The role and tag models keep the names
+the retired path-based inbox gave them, so the published schema is unchanged.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.api_contract.processing_files import (
-    DraftValue,
-    ProcessingDraftStatus,
-    ProcessingFileRole,
-    ProcessingFileRoleInput,
-    ProcessingFileTag,
-    ProcessingFileTagInput,
-    SkippedEntry,
-)
+ProcessingDraftStatus = Literal["Planned", "In Progress", "Completed", "Paused", "Not Started"]
+
+# The domain stringifies and trims every non-null draft value it keeps,
+# arrays and objects included.
+DraftValue = str | int | float | bool | None | list[Any] | dict[str, Any]
+
+# A role or tag entry that is not an object is skipped by the domain.
+SkippedEntry = str | int | float | bool | None | list[Any]
+
+
+class ProcessingFileRole(BaseModel):
+    """A staged person role, in inbox order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    person_id: str
+    person_name: str
+    role_type: str
+    order_index: int
+
+
+class ProcessingFileTag(BaseModel):
+    """A staged tag."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    # Tag columns are nullable with defaults.
+    color: str | None
+    created_at: str | None
+
+
+class ProcessingFileRoleInput(BaseModel):
+    """A staged role as the endpoint accepts it.
+
+    An item without a person or role type is skipped. A duplicate
+    person/role pair keeps its first position.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    person_id: DraftValue = None
+    role_type: DraftValue = Field(
+        default=None,
+        description="A People role type (domain-checked).",
+    )
+
+
+class ProcessingFileTagInput(BaseModel):
+    """A staged tag as the endpoint accepts it. ``tag_id`` is read when ``id`` is empty."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: DraftValue = None
+    tag_id: DraftValue = None
+
 
 ProcessingItemStatus = Literal["ready", "imported", "deleted"]
 

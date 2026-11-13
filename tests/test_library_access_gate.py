@@ -71,15 +71,10 @@ class RequestAccessModeTests(unittest.TestCase):
         self.assertEqual(request_access_mode("POST", "/api/new-endpoint"), "mutation")
 
     def test_exceptions(self):
-        self.assertEqual(request_access_mode("GET", "/api/processing-files"), "read")
-        self.assertEqual(
-            request_access_mode("GET", "/api/processing-files", "rescan=1"),
-            "mutation",
-        )
-        self.assertEqual(
-            request_access_mode("GET", "/api/processing-files", "rescan=true"),
-            "mutation",
-        )
+        # The path-based inbox's rescan wrote while it read; it is gone
+        # (PG-C2 #641), so no query makes a GET a mutation any more.
+        self.assertEqual(request_access_mode("GET", "/api/processing-files", "rescan=1"), "read")
+        self.assertEqual(request_access_mode("GET", "/api/processing-items", "rescan=true"), "read")
         self.assertEqual(
             request_access_mode("GET", "/api/persons/P-1/profile-image"),
             "mutation",

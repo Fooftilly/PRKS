@@ -1,4 +1,7 @@
-"""Work, Folder, and Processing tag pickers share one combobox keyboard model."""
+"""Work and Folder tag pickers share one combobox keyboard model.
+
+(The path-based Processing inbox card shared it too; it left with the SQLite
+runtime, PG-C2 #641.)"""
 from __future__ import annotations
 
 import os
@@ -27,11 +30,6 @@ class ComboboxKeysTests(unittest.TestCase):
         sw = _read(os.path.join(_ROOT, "frontend", "sw.js"))
         self.assertLess(html.index("/js/combobox-keys.js"), html.index("/js/ui.js"))
         self.assertIn("'/js/combobox-keys.js'", sw)
-        card = _read(os.path.join(
-            _ROOT, "frontend-app", "src", "features", "processing", "ProcessingFileCard.vue",
-        ))
-        self.assertIn("prksBindComboboxKeys", card)
-        self.assertIn("enterCreates: true", card)
 
 
 if __name__ == "__main__":

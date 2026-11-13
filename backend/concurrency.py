@@ -2,7 +2,7 @@
 
 Ordinary reads may overlap. Canonical mutations are serialized. Backup blocks
 mutations but permits reads. Restore is exclusive against all active-storage
-access. SQLite connections stay per-operation; this module does not open them.
+access. This module opens no database connection.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import threading
 from contextlib import contextmanager
 from typing import Callable, Iterator
-from urllib.parse import parse_qs
 
 MODE_READ = "read"
 MODE_MUTATION = "mutation"
@@ -19,14 +18,6 @@ MODE_RESTORE = "restore"
 
 _MUTATING_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 _READ_METHODS = frozenset({"GET", "HEAD"})
-_TRUTHY = frozenset({"1", "true", "yes"})
-
-
-def _query_flag(query: str, name: str) -> bool:
-    if not query:
-        return False
-    raw = (parse_qs(query, keep_blank_values=True).get(name) or [""])[0]
-    return str(raw).strip().lower() in _TRUTHY
 
 
 def request_access_mode(method: str, path: str, query: str = "") -> str | None:
@@ -37,8 +28,6 @@ def request_access_mode(method: str, path: str, query: str = "") -> str | None:
     if not path.startswith("/api/"):
         return None
     if method in _READ_METHODS:
-        if path == "/api/processing-files" and _query_flag(query, "rescan"):
-            return MODE_MUTATION
         if path.startswith("/api/persons/") and path.endswith("/profile-image"):
             return MODE_MUTATION
         if path.startswith("/api/works/") and path.endswith("/thumbnail"):
