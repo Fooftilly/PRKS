@@ -8467,30 +8467,6 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
     padding-right: 0;
 }
 
-.prks-processing-card__section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-sm);
-    min-width: 0;
-}
-
-.prks-processing-card__section-title {
-    margin: 0 0 2px 0;
-    font-size: var(--text-xs);
-    font-weight: 600;
-    color: var(--text-secondary);
-    letter-spacing: 0.02em;
-}
-
-.prks-processing-card__title-row label,
-.prks-processing-card__status-field label {
-    display: block;
-}
-
-.prks-processing-card__status-field {
-    margin-top: 0;
-}
-
 .prks-processing-card .prks-work-upload-status-field {
     margin-top: 0;
 }
@@ -8535,34 +8511,9 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
     min-width: 0;
 }
 
-.prks-processing-card__more {
-    margin-top: 8px;
-    border-top: 1px solid var(--line);
-    padding-top: 8px;
-}
-
-.prks-processing-card__more > summary {
-    cursor: pointer;
-    color: var(--text-secondary);
-    font-weight: 600;
-}
-
-.prks-processing-card__more-body {
-    margin-top: 8px;
-    display: grid;
-    gap: var(--space-sm);
-}
-
 .prks-processing-card__actions.form-actions {
     margin-top: 0;
     flex-wrap: wrap;
-}
-
-.prks-processing-card__message {
-    margin: 0;
-    width: 100%;
-    flex: 1 1 100%;
-    font-size: var(--text-sm);
 }
 
 /* Processing card: equal-width status + role segmented controls */
