@@ -1988,8 +1988,35 @@ class OfflineFoundationTests(unittest.TestCase):
             try:
                 page.wait_for_selector(".CodeMirror-hints .CodeMirror-hint", timeout=8000)
             except Exception as exc:
+                # The pdf-annotation case fails rarely (about 1 run in 100
+                # locally) and has not reproduced with logging on. Record the
+                # editor and hint state the dropdown depends on, so the next
+                # CI failure says which input was missing.
+                state = page.evaluate(
+                    """() => {
+                        const ctx = window.prksGetFocusedTabContext();
+                        const cm = ctx.getResource('workNotes').editor.codemirror;
+                        const cur = cm.getCursor();
+                        let hints = null;
+                        try {
+                            hints = window.prksGetPdfAnnotationHintList(ctx).length;
+                        } catch (e) {
+                            hints = String(e);
+                        }
+                        return {
+                            pdfHints: hints,
+                            lineBeforeCursor: cm.getLine(cur.line).slice(0, cur.ch),
+                            editorFocused: cm.hasFocus(),
+                            readOnly: cm.getOption('readOnly'),
+                            completionActive: !!(cm.state && cm.state.completionActive),
+                            connectivity: typeof prksOfflineRuntimeState === 'function'
+                                ? prksOfflineRuntimeState() : null,
+                        };
+                    }"""
+                )
                 raise AssertionError(
-                    "%s autocomplete dropdown never appeared after typing %r" % (label, trigger_text)
+                    "%s autocomplete dropdown never appeared after typing %r; state: %r"
+                    % (label, trigger_text, state)
                 ) from exc
             text_with_dropdown_open = notes_text()
 
