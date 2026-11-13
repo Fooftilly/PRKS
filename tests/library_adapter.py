@@ -211,6 +211,73 @@ class TestLibrary(PostgresLibrary):
 
         commands.patch(self.database, current_context(), data)
 
+    # -- Tags (PG-C3 PR 4: ``backend/api/tags.py`` calls the commands) --
+
+    def add_tag(self, name: str, color: str = "#6d6cf7") -> Dict[str, Any]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.create(self.database, current_context(), name, color)
+
+    def add_tag_alias(self, tag_id: str, alias: str) -> None:
+        from backend.domain.organization import tag_commands
+
+        tag_commands.add_alias(self.database, current_context(), tag_id, alias)
+
+    def delete_tag_alias(self, tag_id: str, alias: str) -> bool:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.delete_alias(self.database, current_context(), tag_id, alias)
+
+    def merge_tags_into(self, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.merge(self.database, current_context(), source_tag_id, target_tag_id)
+
+    def delete_tag(self, tag_id: str) -> Dict[str, Any]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.delete(self.database, current_context(), tag_id)
+
+    def get_all_tags(self) -> List[Dict[str, Any]]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.all_tags(self.database, current_context())
+
+    def get_tags_in_use(self) -> List[Dict[str, Any]]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.in_use(self.database, current_context())
+
+    def add_tag_to_work(self, work_id: str, tag_id: str) -> None:
+        from backend.domain.organization import tag_commands
+
+        tag_commands.tag_work(self.database, current_context(), work_id, tag_id)
+
+    def remove_tag_from_work(self, work_id: str, tag_id: str) -> None:
+        from backend.domain.organization import tag_commands
+
+        tag_commands.untag_work(self.database, current_context(), work_id, tag_id)
+
+    def get_work_tag_options(self, work_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.work_options(self.database, current_context(), work_id)
+
+    def add_tag_to_folder(self, folder_id: str, tag_id: str) -> None:
+        from backend.domain.organization import tag_commands
+
+        tag_commands.tag_folder(self.database, current_context(), folder_id, tag_id)
+
+    def remove_tag_from_folder(self, folder_id: str, tag_id: str) -> None:
+        from backend.domain.organization import tag_commands
+
+        tag_commands.untag_folder(self.database, current_context(), folder_id, tag_id)
+
+    def get_folder_tag_options(self, folder_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import tag_commands
+
+        return tag_commands.folder_options(self.database, current_context(), folder_id)
+
     # -- publishers (PG-C3 PR 3: ``backend/api/publishers.py`` calls the commands) --
 
     def add_publisher(self, name: str) -> Dict[str, Any]:
