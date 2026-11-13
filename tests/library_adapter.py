@@ -557,6 +557,49 @@ class TestLibrary(PostgresLibrary):
 
         return person_commands.clear_portrait(self.database, current_context(), person_id)
 
+    # -- Concepts (PG-C3 PR 10: ``backend/api/concepts.py`` calls the commands) --
+
+    def list_concepts(self) -> List[Dict[str, Any]]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.catalog(self.database, current_context())
+
+    def get_concept(self, concept_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.detail(self.database, current_context(), concept_id)
+
+    def create_concept(self, name: Any, description: Any = "") -> Dict[str, Any]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.create(self.database, current_context(), name, description)
+
+    def update_concept(self, concept_id: str, *, name: Any = None, description: Any = None) -> Dict[str, Any]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.update(self.database, current_context(), concept_id, name=name,
+                                       description=description)
+
+    def replace_concept_aliases(self, concept_id: str, aliases: Any) -> Dict[str, Any]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.replace_aliases(self.database, current_context(), concept_id, aliases)
+
+    def replace_concept_parents(self, concept_id: str, parent_ids: Any) -> Dict[str, Any]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.replace_parents(self.database, current_context(), concept_id, parent_ids)
+
+    def delete_concept(self, concept_id: str) -> None:
+        from backend.domain.research import concept_commands
+
+        concept_commands.delete(self.database, current_context(), concept_id)
+
+    def get_concept_sync_state(self, concept_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.research import concept_commands
+
+        return concept_commands.sync_state(self.database, current_context(), concept_id)
+
     # -- Person Groups (PG-C3 PR 7: ``backend/api/person_groups.py`` calls the commands) --
 
     def add_person_group_with_parent_options(self, name: str, parent_id: Optional[str] = None,
