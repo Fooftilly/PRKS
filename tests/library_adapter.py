@@ -278,6 +278,63 @@ class TestLibrary(PostgresLibrary):
 
         return tag_commands.folder_options(self.database, current_context(), folder_id)
 
+    # -- Playlists (PG-C3 PR 5: ``backend/api/playlists.py`` calls the commands) --
+
+    def add_playlist(self, title: str, description: str = "", original_url: str = "") -> str:
+        from backend.domain.organization import playlist_commands
+
+        return playlist_commands.create(self.database, current_context(), title, description, original_url)
+
+    def update_playlist(self, playlist_id: str, fields: Dict[str, Any]) -> None:
+        from backend.domain.organization import playlist_commands
+
+        playlist_commands.update(self.database, current_context(), playlist_id, fields)
+
+    def delete_playlist(self, playlist_id: str) -> None:
+        from backend.domain.organization import playlist_commands
+
+        playlist_commands.delete(self.database, current_context(), playlist_id)
+
+    def get_all_playlists(self) -> List[Dict[str, Any]]:
+        from backend.domain.organization import playlist_commands
+
+        return playlist_commands.catalog(self.database, current_context())
+
+    def etag_playlists_catalog(self, rows: List[Dict[str, Any]]) -> str:
+        from backend.etags import etag_for_representation
+
+        return etag_for_representation("playlists", rows)
+
+    def get_playlist(self, playlist_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import playlist_commands
+
+        return playlist_commands.detail(self.database, current_context(), playlist_id, self._pdfs_dir())
+
+    def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
+        from backend.domain.organization import playlist_commands
+
+        playlist_commands.add_item(self.database, current_context(), playlist_id, work_id, position)
+
+    def remove_work_from_playlist(self, playlist_id: str, work_id: str) -> None:
+        from backend.domain.organization import playlist_commands
+
+        playlist_commands.remove_item(self.database, current_context(), playlist_id, work_id)
+
+    def reorder_playlist(self, playlist_id: str, work_ids: List[str]) -> None:
+        from backend.domain.organization import playlist_commands
+
+        playlist_commands.reorder(self.database, current_context(), playlist_id, work_ids)
+
+    def get_playlist_sync_state(self, playlist_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import playlist_commands
+
+        return playlist_commands.sync_state(self.database, current_context(), playlist_id)
+
+    def get_work_playlist_state(self, work_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import playlist_commands
+
+        return playlist_commands.work_state(self.database, current_context(), work_id)
+
     # -- publishers (PG-C3 PR 3: ``backend/api/publishers.py`` calls the commands) --
 
     def add_publisher(self, name: str) -> Dict[str, Any]:

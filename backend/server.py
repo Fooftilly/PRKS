@@ -31,6 +31,7 @@ from backend.domain.works.rules import BulkWorkError, effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
+from backend.api import playlists as playlists_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.api import tags as tags_api
@@ -1302,10 +1303,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             self.send_json(400, {'error': str(e)})
                             return
                 self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
-                pl_id = path.split('/')[-1]
-                db.update_playlist(pl_id, data)
-                self.send_json(200, {'status': 'updated'})
+            elif playlists_api.handle_patch(self, db, path, data):
+                return
             elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
                 p_id = path.split('/')[-1]
                 group_ids = data.pop('group_ids', None)
@@ -1555,19 +1554,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 w_id = path.split('/')[-1]
                 _delete_work(w_id)
                 self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
-                pl_id = path.split('/')[-1]
-                db.delete_playlist(pl_id)
-                self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/playlists/') and '/items/' in path:
-                # /api/playlists/{id}/items/{work_id}
-                parts = path.split('/')
-                if len(parts) == 6 and parts[4] == 'items':
-                    pl_id, w_id = parts[3], parts[5]
-                    db.remove_work_from_playlist(pl_id, w_id)
-                    self.send_json(200, {'status': 'removed'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            elif playlists_api.handle_delete(self, db, path):
+                return
             elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
                 f_id = path.split('/')[-1]
                 try:
@@ -1923,20 +1911,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/playlists':
-                data = db.get_all_playlists()
-                etag = db.etag_playlists_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
-                pl_id = path.split('/')[-1]
-                data = db.get_playlist(pl_id)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Playlist not found")
+            elif playlists_api.handle_get(self, db, path):
+                return
             elif path.startswith('/api/works/') and path.endswith('/thumbnail'):
                 # /api/works/{id}/thumbnail?page=N
                 parts = path.split('/')
@@ -2457,29 +2433,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/playlists/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY: the three field revisions and the ORDER
-                # revision. The playlist detail already carries its items in
-                # order, so echoing them here would make a second cached copy.
-                data = db.get_playlist_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Playlist not found"})
-                else:
-                    etag = db.etag_for_representation("playlist-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/playlist-state') and len(path.split('/')) == 5:
-                data = db.get_work_playlist_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-playlist-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif playlists_api.handle_work_state(self, db, path):
+                return
             elif path.startswith('/api/persons/') and path.endswith('/group-state') and len(path.split('/')) == 5:
                 # Membership revisions for one Person, including tombstones:
                 # a pair this device once removed has a revision, and adding it
@@ -2866,7 +2821,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 playlist_id = (data.get('playlist_id') or '').strip()
                 if playlist_id:
                     try:
-                        db.add_work_to_playlist(playlist_id, w_id, None)
+                        playlists_api.add_item(self, db, playlist_id, w_id)
                     except Exception as exc:
                         # best-effort: do not fail work creation if playlist link fails
                         LOGGER.warning(
@@ -2878,50 +2833,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         )
 
                 self.send_json(200, {'id': w_id})
-            elif path == '/api/playlists':
-                pl_id = db.add_playlist(
-                    title=data.get('title', '') or '',
-                    description=data.get('description', '') or '',
-                    original_url=data.get('original_url', '') or '',
-                )
-                self.send_json(200, {'id': pl_id})
-            elif path.startswith('/api/playlists/') and path.endswith('/items'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'items':
-                    pl_id = parts[3]
-                    w_id = (data.get('work_id') or '').strip()
-                    if not w_id:
-                        self.send_json(400, {'error': 'work_id is required'})
-                        return
-                    try:
-                        pos_raw = data.get('position', None)
-                        pos = int(pos_raw) if pos_raw is not None and str(pos_raw).strip() != '' else None
-                    except Exception:
-                        pos = None
-                    try:
-                        db.add_work_to_playlist(pl_id, w_id, pos)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/playlists/') and path.endswith('/reorder'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'reorder':
-                    pl_id = parts[3]
-                    work_ids = data.get('work_ids', [])
-                    if not isinstance(work_ids, list):
-                        self.send_json(400, {'error': 'work_ids must be a JSON array'})
-                        return
-                    try:
-                        db.reorder_playlist(pl_id, [str(x) for x in work_ids])
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'reordered'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            elif playlists_api.handle_post(self, db, path, data):
+                return
             elif path == '/api/folders':
                 try:
                     f_id = db.add_folder(

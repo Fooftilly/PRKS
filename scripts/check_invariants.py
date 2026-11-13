@@ -107,6 +107,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/organization/lifecycle.py",
     "backend/domain/organization/links.py",
     "backend/domain/organization/playlists.py",
+    "backend/domain/organization/playlist_commands.py",
     "backend/domain/organization/tags.py",
     "backend/domain/organization/tag_commands.py",
     "backend/domain/research/__init__.py",
