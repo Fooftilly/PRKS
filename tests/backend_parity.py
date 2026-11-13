@@ -8,7 +8,7 @@ library object from :meth:`BackendParityTestCase.open_library`::
         def setUp(self):
             self.db = self.open_library(StorageConfig.for_testing(tmpdir))
 
-The library is :class:`backend.pg_facade.PostgresLibrary` over its own
+The library is :class:`tests.library_adapter.TestLibrary` over its own
 harness-created database (one per test, cloned from the migrated template),
 acting for a signed-in owner of a fresh Library. The SQLite side these tests
 compared against is a recording since PG-C2 deleted SQLite
@@ -36,7 +36,7 @@ class BackendParityTestCase(unittest.TestCase):
     def open_library(self, storage: Any) -> Any:
         """The facade over ``storage`` (a ``StorageConfig``) and a fresh database, dropped after the test."""
         from backend.db import Database, DatabaseConfig
-        from backend.pg_facade import PostgresLibrary
+        from tests.library_adapter import TestLibrary
         from backend.pg_facade import context as facade_context
         from tests.pg.facade_context import provision_actor
         from tests.pg.harness import get_harness
@@ -52,7 +52,7 @@ class BackendParityTestCase(unittest.TestCase):
         # signed-in owner of a fresh Library, bound until the test ends.
         actor = provision_actor(database)
         self.addCleanup(facade_context.unbind, facade_context.bind(actor.context))
-        return PostgresLibrary(database, storage=storage)
+        return TestLibrary(database, storage=storage)
 
 
 P = TypeVar("P", bound=BackendParityTestCase)

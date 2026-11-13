@@ -30,7 +30,7 @@ from backend.domain.objects import lifecycle, portraits
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.people import persons
 from backend.person_image import PortraitImage, decode_and_transcode
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
@@ -519,7 +519,7 @@ class RestartTests(PortraitTestCase):
         self.cache(person_id, second)
         db = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(db.close)
-        library = PostgresLibrary(db, storage=self.storage)
+        library = TestLibrary(db, storage=self.storage)
         self.assertEqual(library._person_portrait(person_id)["body"], second.body)
         self.assertEqual(self.claims(), {old})
         self.assertEqual(lifecycle.retry_claims(db, self.objects), {Settled.REMOVED: 1})

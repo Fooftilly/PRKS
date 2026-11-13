@@ -3,7 +3,7 @@
 ``server.py`` reaches Research records only through its bound ``db`` and
 mentions and the graph only through its bound ``research_index``, and with
 ``PRKS_AUTH`` it binds the admitted :class:`RequestContext` for the route.
-These tests bind :class:`~backend.pg_facade.PostgresLibrary` and
+These tests bind :class:`~tests.library_adapter.TestLibrary` and
 :class:`~backend.pg_facade.research_index.PostgresResearchIndex` there (the
 way the cutover will), sign in over HTTP, and check that the routes answer
 from PostgreSQL with today's statuses, bodies and refusal codes: Concept,
@@ -22,7 +22,7 @@ from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.pg_facade.research_index import PostgresResearchIndex
 from tests.pg.facade_context import provision_actor
@@ -40,7 +40,7 @@ class ResearchHttpTestCase(HttpAuthTestCase):
         module = self.server_module
         previous = (module.db, module.research_index)
         self.addCleanup(self._restore, previous)
-        self.facade = PostgresLibrary(self.db, storage=module._bound_storage)
+        self.facade = TestLibrary(self.db, storage=module._bound_storage)
         module.db = self.facade
         module.research_index = PostgresResearchIndex(self.db)
         self.serve()

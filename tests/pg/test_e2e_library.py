@@ -157,11 +157,11 @@ class PostgresLibraryLegTests(unittest.TestCase):
         current = {row["work_id"]: row["current"] for row in states}
         self.assertIs(current.get(ids["work_a"]), True, "the index is the current note's")
 
-    def test_the_seeds_call_only_ported_facade_methods(self) -> None:
+    def test_the_seeds_call_only_methods_the_test_library_has(self) -> None:
         import ast
 
-        from backend.pg_facade import PostgresLibrary
         from tests.e2e import fixtures
+        from tests.library_adapter import TestLibrary
 
         with open(fixtures.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
@@ -171,7 +171,7 @@ class PostgresLibraryLegTests(unittest.TestCase):
             and isinstance(node.func.value, ast.Name) and node.func.value.id == "db"
         }
         self.assertTrue(called)
-        self.assertEqual(sorted(name for name in called if not hasattr(PostgresLibrary, name)), [])
+        self.assertEqual(sorted(name for name in called if not hasattr(TestLibrary, name)), [])
 
     def test_the_people_seeds_fill_the_postgresql_library(self) -> None:
         from tests.e2e import fixtures

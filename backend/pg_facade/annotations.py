@@ -129,8 +129,8 @@ class AnnotationsMixin(FacadeMixin):
         from backend.pdf_annotations import parse_annotations_json
 
         items = parse_annotations_json(annotations_json)
-        return self.sync_work_annotations(work_id, items, base_set_revision=base_set_revision)
-    def sync_work_annotations(
+        return self._sync_work_annotations(work_id, items, base_set_revision=base_set_revision)
+    def _sync_work_annotations(
         self,
         work_id: str,
         items: List[dict],
@@ -140,30 +140,6 @@ class AnnotationsMixin(FacadeMixin):
         from backend.domain.annotations import operations
 
         return _command(self, lambda scope: operations.replace_all(scope, work_id, items, base_set_revision))
-    def accept_work_pdf_materialization_claim(self, work_id: str, claimed_revision):
-        from backend.domain.annotations import materialize
-
-        accepted = _read(self, lambda scope: materialize.check_claim(scope, work_id, claimed_revision))
-        if isinstance(accepted, str):
-            _raise_refused(accepted)
-        return accepted
-    def mark_work_pdf_materialized_if_claim_current(self, work_id: str, claimed_revision):
-        from backend.domain.annotations import materialize
-
-        storage = self._annotation_objects()
-        confirmed = _read(self, lambda scope: materialize.confirm(scope, storage, work_id, claimed_revision))
-        if isinstance(confirmed, str):
-            _raise_refused(confirmed)
-        return confirmed
-    def mark_work_pdf_materialized(self, work_id: str, *, at_revision=None):
-        from backend.domain.annotations import materialize
-
-        marked = _command(self, lambda scope: materialize.lower(scope, work_id, at_revision))
-        if marked == materialize.NOT_FOUND:
-            return 0  # SQLite marks nothing and answers 0 for a missing Work
-        if isinstance(marked, str):
-            _raise_refused(marked)
-        return marked
 
     def _materialize_work_pdf(self, work_id: str, write: Writer, claimed_revision: Any) -> dict[str, Any]:
         """Store the viewer's rendered PDF and make it the Work's bytes at ``claimed_revision``.

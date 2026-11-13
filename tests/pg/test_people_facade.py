@@ -344,10 +344,10 @@ class DeletionTests(PeopleFacadeTestCase):
                          [(work, "Author")])
 
     def test_a_person_without_works_reads_without_a_data_root(self) -> None:
-        from backend.pg_facade import PostgresLibrary
+        from tests.library_adapter import TestLibrary
 
         person = self.library.add_person("Ann", "Lee")
-        bare = PostgresLibrary(self.db)
+        bare = TestLibrary(self.db)
         self.assertEqual(bare.get_person(person)["works"], [])
         self.link_role(person)
         # Finishing a Work summary needs the PDF directory.

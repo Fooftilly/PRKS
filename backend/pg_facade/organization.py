@@ -185,10 +185,6 @@ class OrganizationMixin(FacadeMixin):
         if not deleted:
             raise ValueError("tag not found")
         return {"status": "deleted", **affected}
-    def resolve_tag_id_by_label(self, label: str) -> Optional[str]:
-        from backend.domain.organization import tags
-
-        return _read(self, lambda scope: tags.resolve_label(scope, label))
     def get_all_tags(self) -> List[dict]:
         from backend.domain.organization import tags
 
@@ -197,10 +193,6 @@ class OrganizationMixin(FacadeMixin):
         from backend.domain.organization import tags
 
         return _read(self, tags.tags_in_use)
-    def etag_tags_all(self) -> str:
-        from backend.etags import etag_for_representation
-
-        return etag_for_representation("tags", self.get_all_tags())
 
     # -- Work and Folder tags ---------------------------------------------------
     def add_tag_to_work(self, work_id: str, tag_id: str):
@@ -215,10 +207,6 @@ class OrganizationMixin(FacadeMixin):
         from backend.domain.organization import links
 
         return _read(self, lambda scope: links.options(scope, links.WORK, work_id))
-    def get_work_tags(self, work_id: str) -> List[dict]:
-        from backend.domain.organization import links
-
-        return _read(self, lambda scope: links.tags_of(scope, links.WORK, work_id))
     def add_tag_to_folder(self, folder_id: str, tag_id: str):
         from backend.domain.organization import links
 
@@ -232,10 +220,6 @@ class OrganizationMixin(FacadeMixin):
         from backend.domain.organization import links
 
         return _read(self, lambda scope: links.options(scope, links.FOLDER, folder_id))
-    def get_folder_tags(self, folder_id: str) -> List[dict]:
-        from backend.domain.organization import links
-
-        return _read(self, lambda scope: links.tags_of(scope, links.FOLDER, folder_id))
 
     # -- Folders ----------------------------------------------------------------
     def ensure_default_uncategorized_folder_id(self) -> str:
@@ -545,10 +529,6 @@ class OrganizationMixin(FacadeMixin):
         _command(self, lambda scope: views.delete(scope, vid))
 
     # -- Application settings -----------------------------------------------------
-    def get_app_settings_map(self) -> Dict[str, str]:
-        from backend.domain.settings import app_settings
-
-        return _read(self, app_settings.settings_map)
     def get_app_settings_response(self) -> Dict[str, Any]:
         from backend.domain.settings import app_settings
 

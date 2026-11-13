@@ -24,7 +24,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import queries
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import Actor, provision_actor
@@ -52,7 +52,7 @@ class WorksFacadeTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         self.storage = StorageConfig.for_testing(tmp)
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
-        self.library = PostgresLibrary(self.db, storage=self.storage)
+        self.library = TestLibrary(self.db, storage=self.storage)
         self.actor = provision_actor(self.db)
         self.bind(self.actor.context)
 
@@ -144,7 +144,7 @@ class ActorTests(WorksFacadeTestCase):
             with facade_context.acting_as(reader):
                 return call()
 
-        with mock.patch.object(PostgresLibrary, "_managed_file",
+        with mock.patch.object(TestLibrary, "_managed_file",
                                side_effect=AssertionError("file touched")) as touched:
             for path in (existing, missing):
                 with self.assertRaises(facade_context.NoRequestContext):
@@ -395,7 +395,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0,
                                           pool_max=2))
         self.addCleanup(self.db.close)
-        self.library = PostgresLibrary(self.db, storage=self.storage)
+        self.library = TestLibrary(self.db, storage=self.storage)
         self.assertEqual(self.library.get_all_works()[0]["created_at"], "2026-06-01 10:00:00")
 
     def harness_db_name(self) -> str:

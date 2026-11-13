@@ -1,6 +1,6 @@
 """Persons, Person Groups and publishers: the PostgreSQL facade returns SQLite's JSON (L-P-1 #632).
 
-Each test runs the same calls on :class:`backend.pg_facade.PostgresLibrary`
+Each test runs the same calls on :class:`tests.library_adapter.TestLibrary`
 and on the recorded SQLite ``PRKSDatabase``, and compares the results after
 replacing generated ids, timestamps and ETag digests
 (``tests/people_parity_helpers.py``). Inputs avoid the

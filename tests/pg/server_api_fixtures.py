@@ -1,6 +1,6 @@
 """A signed-in owner talking to a PRKS server bound to the PostgreSQL Library (PG-C2 #641).
 
-``ServerApiTestCase`` binds :class:`~backend.pg_facade.PostgresLibrary`, its
+``ServerApiTestCase`` binds :class:`~tests.library_adapter.TestLibrary`, its
 text index and its research index to the server module the way the PostgreSQL runtime does,
 serves it on a free loopback port in session mode, and signs the owner in.
 ``get``/``send`` carry the session and, for a mutation, the Library epoch, so
@@ -21,7 +21,7 @@ from backend.domain.search import text as search_text
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.pg_facade.research_index import PostgresResearchIndex
 from backend.pg_facade.text_index import PostgresTextIndex
@@ -42,7 +42,7 @@ class ServerApiTestCase(HttpAuthTestCase):
         self.storage = module._bound_storage
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
-        self.facade = PostgresLibrary(self.db, storage=self.storage)
+        self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
         module.text_index = PostgresTextIndex(self.db)
         module.research_index = PostgresResearchIndex(self.db)
