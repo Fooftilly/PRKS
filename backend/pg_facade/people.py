@@ -10,7 +10,7 @@ A method acts for the bound
 snapshot, commands in one ``library_command`` transaction. The domain
 modules (and so psycopg) are imported inside the methods.
 
-Ported here: Work-Person roles, a Person's ``works`` and, through
+Ported here: Work-Person roles and, through
 ``backend.domain.works.queries``, the Work projection's people fields (L-P-1
 PR 3). PG-C3 #642 moved Publishers to
 ``backend/domain/people/publisher_commands`` (``backend/api/publishers.py``),
