@@ -199,6 +199,18 @@ class TestLibrary(PostgresLibrary):
 
         commands.delete(self.database, current_context(), view_id)
 
+    # -- application settings (PG-C3 PR 2: ``backend/api/settings.py`` calls the commands) --
+
+    def get_app_settings_response(self) -> Dict[str, Any]:
+        from backend.domain.settings import commands
+
+        return commands.response(self.database, current_context())
+
+    def patch_app_settings(self, data: Any) -> None:
+        from backend.domain.settings import commands
+
+        commands.patch(self.database, current_context(), data)
+
 
 class SavedViewCommandsOver:
     """``backend.domain.saved_views.commands`` answered by a Library's old method names.
@@ -227,6 +239,19 @@ class SavedViewCommandsOver:
 
     def delete(self, _db: Any, _ctx: Any, view_id: Any) -> None:
         self._library.delete_saved_view(view_id)
+
+
+class SettingsCommandsOver:
+    """``backend.domain.settings.commands`` answered by a Library's old method names (see :class:`SavedViewCommandsOver`)."""
+
+    def __init__(self, library: Any) -> None:
+        self._library = library
+
+    def response(self, _db: Any, _ctx: Any) -> Any:
+        return self._library.get_app_settings_response()
+
+    def patch(self, _db: Any, _ctx: Any, data: Any) -> None:
+        self._library.patch_app_settings(data)
 
 
 @contextlib.contextmanager
