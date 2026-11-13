@@ -303,7 +303,8 @@ class TestLibrary(PostgresLibrary):
     def get_folder(self, folder_id: str) -> Optional[Dict[str, Any]]:
         from backend.domain.organization import folder_commands
 
-        return folder_commands.detail(self.database, current_context(), folder_id, self._pdfs_dir())
+        return folder_commands.detail(self.database, current_context(), folder_id,
+                                       None if self.storage is None else self.storage.pdfs_dir)
 
     def get_folder_work_ids(self, folder_id: str) -> List[str]:
         from backend.domain.organization import folder_commands
@@ -380,7 +381,8 @@ class TestLibrary(PostgresLibrary):
     def get_playlist(self, playlist_id: str) -> Optional[Dict[str, Any]]:
         from backend.domain.organization import playlist_commands
 
-        return playlist_commands.detail(self.database, current_context(), playlist_id, self._pdfs_dir())
+        return playlist_commands.detail(self.database, current_context(), playlist_id,
+                                       None if self.storage is None else self.storage.pdfs_dir)
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
         from backend.domain.organization import playlist_commands

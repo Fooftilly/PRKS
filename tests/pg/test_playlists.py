@@ -224,6 +224,17 @@ class DeleteTests(PlaylistTestCase):
         self.assertEqual([item["id"] for item in self.library.get_playlist(playlist_id)["items"]], [kept])
         self.library.delete_playlist(playlist_id)
 
+    def test_a_missing_playlist_reads_as_missing_without_a_data_root(self) -> None:
+        from tests.library_adapter import TestLibrary
+
+        member, = self.works("Member")
+        playlist_id = self.add("Listed", member)
+        bare = TestLibrary(self.db)
+        self.assertIsNone(bare.get_playlist("PL-missing"))
+        # Finishing a Work summary needs the PDF directory.
+        with self.assertRaisesRegex(RuntimeError, "no data root"):
+            bare.get_playlist(playlist_id)
+
 
 class IsolationTests(PlaylistTestCase):
     def test_another_librarys_playlists_are_invisible(self) -> None:

@@ -59,11 +59,13 @@ def catalog(db: Database, ctx: RequestContext) -> list[dict[str, Any]]:
     return library_query(db, ctx, folders.catalog)
 
 
-def detail(db: Database, ctx: RequestContext, folder_id: str, pdfs_dir: str) -> Optional[dict[str, Any]]:
+def detail(db: Database, ctx: RequestContext, folder_id: str,
+           pdfs_dir: Optional[str]) -> Optional[dict[str, Any]]:
     """One Folder with its children, parent, Works and Tags, or ``None``.
 
     The Works' file sizes are read from ``pdfs_dir`` after the snapshot, as
-    every Work summary's are.
+    every Work summary's are; a Library without a data root (``None``) can
+    still answer that one is missing.
     """
 
     def read(scope: LibraryScope) -> Optional[dict[str, Any]]:
@@ -79,6 +81,8 @@ def detail(db: Database, ctx: RequestContext, folder_id: str, pdfs_dir: str) -> 
 
     found = library_query(db, ctx, read)
     if found is not None:
+        if pdfs_dir is None:
+            raise RuntimeError("this PostgreSQL library has no data root")
         finish_work_summary_rows(found["works"], pdfs_dir)
     return found
 

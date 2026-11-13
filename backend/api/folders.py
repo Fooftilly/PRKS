@@ -51,10 +51,9 @@ def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
     return db.database, ctx
 
 
-def _pdfs_dir(db: Any) -> str:
-    if db.storage is None:
-        raise RuntimeError("this PostgreSQL library has no data root")
-    return db.storage.pdfs_dir
+def _pdfs_dir(db: Any) -> Optional[str]:
+    """The data root's PDF directory; ``None`` when the Library has none (the command decides)."""
+    return None if db.storage is None else db.storage.pdfs_dir
 
 
 def _item_id(path: str) -> Optional[str]:
