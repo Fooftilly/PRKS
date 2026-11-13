@@ -4,9 +4,9 @@ GET answers the Library's settings; PATCH checks the body is a JSON object,
 applies the patch through ``backend/domain/settings/commands`` for the
 admitted request's context, and answers the settings as they now are. A
 refused key is ``400`` with its message. The commands open the transactions,
-so authorization (a patch needs ``ADMIN_LIBRARY``; ``backend/api/session.py``
-also admits only that), maintenance and the epoch fence stay in
-``library_command`` and ``library_query``.
+so authorization stays in ``library_query`` and ``library_command`` (a patch
+needs ``ADMIN_LIBRARY``; ``backend/api/session.py`` also admits only that),
+and a patch's maintenance and epoch fence in ``library_command``.
 
 ``server.py`` calls these handlers after host/origin, JSON body size, and
 library-access checks. Each ``handle_*`` returns ``True`` when the path is

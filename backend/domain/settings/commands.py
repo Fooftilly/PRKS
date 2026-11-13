@@ -1,10 +1,10 @@
 """The application settings for one actor: what ``backend/api/settings.py`` calls (PG-C3 #642).
 
 A read runs in one :func:`~backend.domain.identity.library_scope.library_query`
-snapshot (``READ_LIBRARY``); a patch is one
-:func:`~backend.domain.identity.library_scope.library_command` transaction
-needing ``ADMIN_LIBRARY`` (§9.4), so both are authorized and fenced by
-maintenance and the epoch. Refusals are ``ValueError`` (a refused key) and
+snapshot, authorized for ``READ_LIBRARY`` (reads are not fenced by epoch);
+a patch is one :func:`~backend.domain.identity.library_scope.library_command`
+transaction needing ``ADMIN_LIBRARY`` (§9.4), fenced by maintenance and the
+epoch. Refusals are ``ValueError`` (a refused key) and
 ``AccessRefused``.
 """
 
