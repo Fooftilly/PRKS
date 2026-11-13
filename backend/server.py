@@ -33,6 +33,7 @@ from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
+from backend.api import tags as tags_api
 from backend.services import work_pdf_replace
 from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
@@ -1575,50 +1576,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(409, {'error': str(e)})
                     return
                 self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/works/') and '/tags/' in path:
-                # /api/works/{id}/tags/{tag_id}
-                parts = path.split('/')
-                if len(parts) < 6:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                db.remove_tag_from_work(parts[3], parts[5])
-                self.send_json(200, {'status': 'removed'})
-            elif path.startswith('/api/folders/') and '/tags/' in path:
-                # /api/folders/{id}/tags/{tag_id}
-                parts = path.split('/')
-                if len(parts) < 6:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                db.remove_tag_from_folder(parts[3], parts[5])
-                self.send_json(200, {'status': 'removed'})
-            elif path.startswith('/api/tags/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    tag_id = parts[3]
-                    alias = (query_params.get('alias') or [''])[0]
-                    alias = unquote(alias)
-                    if not alias.strip():
-                        self.send_json(400, {'error': 'missing alias'})
-                        return
-                    if db.delete_tag_alias(tag_id, alias):
-                        self.send_json(200, {'status': 'deleted'})
-                    else:
-                        self.send_json(404, {'error': 'alias not found'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            elif tags_api.handle_delete(self, db, path, query_params):
+                return
             elif publishers_api.handle_delete(self, db, path, query_params):
                 return
-            elif path.startswith('/api/tags/') and len(path.split('/')) == 4:
-                t_id = path.split('/')[-1]
-                try:
-                    result = db.delete_tag(t_id)
-                    self.send_json(200, result)
-                except ValueError as e:
-                    msg = str(e)
-                    if 'not found' in msg.lower():
-                        self.send_json(404, {'error': msg})
-                    else:
-                        self.send_json(400, {'error': msg})
             elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
                 p_id = path.split('/')[-1]
                 try:
@@ -2205,18 +2166,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
-                data = db.get_work_tag_options(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    self.send_json(200, data, etag=db.etag_for_representation("work-tag-options", data))
-            elif path.startswith('/api/folders/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
-                data = db.get_folder_tag_options(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Folder not found"})
-                else:
-                    self.send_json(200, data, etag=db.etag_for_representation("folder-tag-options", data))
+            elif tags_api.handle_get(self, db, path, query):
+                return
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 data = db.get_work(w_id)
@@ -2620,18 +2571,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             if extra_ids:
                                 data.extend(db.get_work_summaries_by_ids_ordered(extra_ids))
                 self.send_json(200, data)
-            elif path == '/api/tags':
-                used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
-                if used_only:
-                    data = db.get_tags_in_use()
-                    self.send_json(200, data)
-                else:
-                    data = db.get_all_tags()
-                    etag = db.etag_for_representation("tags", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
             elif publishers_api.handle_get(self, db, path, query):
                 return
             elif path.startswith('/api/pdfs/'):
@@ -3092,34 +3031,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     death_date=data.get('death_date', '') or '',
                 )
                 self.send_json(200, {'id': p_id})
-            elif path == '/api/tags/merge':
-                sid = (data.get('source_tag_id') or '').strip()
-                tid = (data.get('target_tag_id') or '').strip()
-                try:
-                    out = db.merge_tags_into(sid, tid)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'merged', **out})
-            elif path.startswith('/api/tags/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    tag_id = parts[3]
-                    try:
-                        db.add_tag_alias(tag_id, (data.get('alias') or '').strip())
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path == '/api/tags':
-                try:
-                    out = db.add_tag(data.get('name'), data.get('color', '#6d6cf7'))
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, out)
+            elif tags_api.handle_post(self, db, path, data):
+                return
             elif publishers_api.handle_post(self, db, path, data):
                 return
             elif path.startswith('/api/works/') and path.endswith('/opened'):
@@ -3143,10 +3056,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "Work not found")
                     return
                 self.send_json(200, {'status': 'opened'})
-            elif path.startswith('/api/works/') and path.endswith('/tags'):
-                w_id = path.split('/')[3]
-                db.add_tag_to_work(w_id, data.get('tag_id'))
-                self.send_json(200, {'status': 'added'})
             elif path.startswith('/api/folders/') and path.endswith('/works'):
                 parts = path.split('/')
                 if len(parts) == 5 and parts[4] == 'works':
@@ -3169,10 +3078,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, {'status': 'added'})
                 else:
                     self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/folders/') and path.endswith('/tags'):
-                f_id = path.split('/')[3]
-                db.add_tag_to_folder(f_id, data.get('tag_id'))
-                self.send_json(200, {'status': 'added'})
             elif path == '/api/roles':
                 p_id = (data.get('person_id') or '').strip()
                 w_id = (data.get('work_id') or '').strip()

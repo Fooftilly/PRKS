@@ -1,25 +1,25 @@
 """Organization family of the PostgreSQL transition facade (L-O-1).
 
 Owned by the Organization lane (``docs/postgresql-architecture.md`` §15.2):
-tags, folders and playlists. Each method keeps the signature and return shape of the
+folders and playlists. Each method keeps the signature and return shape of the
 SQLite library it replaced.
 
 A method acts for the bound
 :class:`~backend.domain.identity.request_context.RequestContext` (see
 :mod:`backend.pg_facade.works`): reads run in one ``library_query``
 snapshot, commands in one ``library_command`` transaction, SERIALIZABLE
-where §7.1 lists the command (a Tag merge, and every add to its peer
-tables: a Tag, an alias, a Work or Folder tag; and filing a Work in a
-Folder or a Playlist, peer tables of the Work merge). The domain modules (and so
+where §7.1 lists the command (filing a Work in a Folder or a Playlist,
+peer tables of the Work merge). The domain modules (and so
 psycopg) are imported inside the methods.
 
-Ported here: Tags, their aliases, delete and merge, Work and Folder tags,
-and their tag-option revision states (L-O-1 PR 2); Folders, their
+Ported here: Folders, their
 hierarchy and fields, the Folder a Work is in, and their revision states
 (PR 3); Playlists, their fields, membership and order, and their revision
-states (PR 4). Saved Views (PR 5) and the application settings (PR 6) left
-the facade in PG-C3: ``backend/api/saved_views.py`` and
-``backend/api/settings.py`` call their domain ``commands``. Differences from
+states (PR 4). Tags with their aliases, delete, merge and Work and Folder
+Tags (L-O-1 PR 2), Saved Views (PR 5) and the application settings (PR 6)
+left the facade in PG-C3: ``backend/api/tags.py``,
+``backend/api/saved_views.py`` and ``backend/api/settings.py`` call their
+domain commands. Differences from
 SQLite, each deliberate:
 
 - Names, aliases and Folder titles compare by
@@ -108,87 +108,7 @@ def _new_id(prefix: str) -> str:
 
 
 class OrganizationMixin(FacadeMixin):
-    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4)."""
-
-    # -- Tags -------------------------------------------------------------------
-    def add_tag(self, name: str, color: str = "#6d6cf7") -> Dict[str, Any]:
-        from backend.domain.organization import tags
-
-        new_id = _new_id("T")
-        return _command(self, lambda scope: tags.add_tag(scope, new_id, name, color), serializable=True)
-    def add_tag_alias(self, tag_id: str, alias: str) -> None:
-        from backend.domain.organization import tags
-
-        alias_id = _new_id("L")
-        _command(self, lambda scope: tags.add_alias(scope, alias_id, tag_id, alias), serializable=True)
-    def delete_tag_alias(self, tag_id: str, alias: str) -> bool:
-        from backend.domain.organization import tags
-
-        return _command(self, lambda scope: tags.delete_alias(scope, tag_id, alias))
-    def merge_tags_into(self, source_tag_id: str, target_tag_id: str) -> Dict[str, Any]:
-        """Move all links from source tag to target, drop source row, add source name as alias of target."""
-        from backend.domain.organization import tags
-
-        from backend.db.errors import ConstraintViolationError
-
-        alias_id = _new_id("L")
-
-        def run(scope: LibraryScope) -> Dict[str, Any]:
-            return tags.merge(scope, source_tag_id, target_tag_id, alias_id)
-
-        try:
-            return _command(self, run, serializable=True)
-        except ConstraintViolationError as error:
-            # A link committed during the wait, by a writer that is not
-            # SERIALIZABLE: decide again with it visible, once.
-            if error.constraint not in tags.LINK_KEYS:
-                raise
-            return _command(self, run, serializable=True)
-    def delete_tag(self, tag_id: str) -> Dict[str, Any]:
-        from backend.domain.organization import tags
-
-        tid = (tag_id or "").strip()
-        if not tid:
-            raise ValueError("tag_id is required")
-        deleted, affected = _command(self, lambda scope: tags.delete_tag(scope, tid))
-        if not deleted:
-            raise ValueError("tag not found")
-        return {"status": "deleted", **affected}
-    def get_all_tags(self) -> List[dict]:
-        from backend.domain.organization import tags
-
-        return _read(self, tags.all_tags)
-    def get_tags_in_use(self) -> List[dict]:
-        from backend.domain.organization import tags
-
-        return _read(self, tags.tags_in_use)
-
-    # -- Work and Folder tags ---------------------------------------------------
-    def add_tag_to_work(self, work_id: str, tag_id: str):
-        from backend.domain.organization import links
-
-        _command(self, lambda scope: links.edit(scope, links.WORK, work_id, tag_id, True), serializable=True)
-    def remove_tag_from_work(self, work_id: str, tag_id: str):
-        from backend.domain.organization import links
-
-        _command(self, lambda scope: links.edit(scope, links.WORK, work_id, tag_id, False))
-    def get_work_tag_options(self, work_id: str):
-        from backend.domain.organization import links
-
-        return _read(self, lambda scope: links.options(scope, links.WORK, work_id))
-    def add_tag_to_folder(self, folder_id: str, tag_id: str):
-        from backend.domain.organization import links
-
-        _command(self, lambda scope: links.edit(scope, links.FOLDER, folder_id, tag_id, True),
-                 serializable=True)
-    def remove_tag_from_folder(self, folder_id: str, tag_id: str):
-        from backend.domain.organization import links
-
-        _command(self, lambda scope: links.edit(scope, links.FOLDER, folder_id, tag_id, False))
-    def get_folder_tag_options(self, folder_id: str):
-        from backend.domain.organization import links
-
-        return _read(self, lambda scope: links.options(scope, links.FOLDER, folder_id))
+    """Folders and Work filing (L-O-1 PR 3), Playlists (PR 4)."""
 
     # -- Folders ----------------------------------------------------------------
     def ensure_default_uncategorized_folder_id(self) -> str:
