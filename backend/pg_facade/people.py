@@ -290,10 +290,6 @@ class PeopleMixin(FacadeMixin):
         return _read(self, lambda scope: groups.person_group_state(scope, person_id))
 
     # -- Roles ------------------------------------------------------------------
-    def has_work_role(self, person_id: str, work_id: str, role_type: str) -> bool:
-        from backend.domain.people import roles
-
-        return _read(self, lambda scope: roles.has_role(scope, work_id, person_id, role_type))
     def add_role(
         self,
         person_id: str,
@@ -319,16 +315,7 @@ class PeopleMixin(FacadeMixin):
             roles.set_role(scope, role, True, credit_name)
 
         _command(self, run, serializable=True)
-    def insert_initial_role(self, work_id: str, person_id: str, role_type: str,
-                            order_index: int = 0, credit_name: str = "") -> None:
-        """A relationship a new Work is born with. Creates no revision."""
-        from backend.domain.people import roles
-
-        wanted = [roles.InitialRole(person_id, role_type, int(order_index), credit_name or "")]
-        _command(self, lambda scope: roles.insert_initial_roles(scope, work_id, wanted,
-                                                                skip_invalid=False),
-                 serializable=True)
-    def missing_person_ids(self, person_ids) -> List[str]:
+    def _missing_person_ids(self, person_ids) -> List[str]:
         from backend.domain.people import roles
 
         wanted = [str(p).strip() for p in (person_ids or []) if str(p or "").strip()]
@@ -339,7 +326,7 @@ class PeopleMixin(FacadeMixin):
         from backend.domain.people.rules import eligible_initial_roles
 
         eligible = eligible_initial_roles(roles)
-        return self.missing_person_ids(p for _i, p, _t, _c in eligible)
+        return self._missing_person_ids(p for _i, p, _t, _c in eligible)
     def insert_initial_roles(self, work_id: str, roles) -> int:
         """All the relationships a new Work is born with, in one transaction."""
         from backend.domain.people import roles as role_domain
@@ -355,10 +342,6 @@ class PeopleMixin(FacadeMixin):
         from backend.domain.people import roles
 
         return _read(self, lambda scope: roles.next_order_index(scope, work_id))
-    def get_work_roles(self, work_id: str) -> List[dict]:
-        from backend.domain.people import roles
-
-        return _read(self, lambda scope: roles.work_roles(scope, work_id))
     def get_work_roles_state(self, work_id: str) -> Optional[dict]:
         from backend.domain.people import roles
 

@@ -26,7 +26,6 @@ LANE_MIXINS = {
     "OrganizationMixin",
     "ResearchMixin",
     "AnnotationsMixin",
-    "ProcessingMixin",
     "SearchMixin",
 }
 # The HTTP adapter: the modules that hold the bound Library as ``db``.
@@ -85,6 +84,16 @@ class AdapterSurfaceTests(unittest.TestCase):
         self.assertIn("get_work", calls)
         missing = {name: sorted(files) for name, files in calls.items() if not hasattr(PostgresLibrary, name)}
         self.assertEqual(missing, {})
+
+    def test_the_adapter_reaches_every_public_facade_member(self):
+        # PG-C3 (#642): the facade holds only what a route still calls. A
+        # method only tests call belongs in tests/library_adapter.py, and a
+        # family whose routes call the domain directly leaves the facade.
+        calls = adapter_library_calls()
+        handle = {"database", "storage"}
+        unreached = sorted(name for name in dir(PostgresLibrary)
+                           if not name.startswith("_") and name not in handle and name not in calls)
+        self.assertEqual(unreached, [])
 
 
 if __name__ == "__main__":

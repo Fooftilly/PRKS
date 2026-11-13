@@ -1,7 +1,7 @@
 """``DELETE /api/works/{id}`` served from PostgreSQL (PG-C2 #641).
 
 ``server._delete_work`` deletes the Work through the bound
-:class:`~backend.pg_facade.PostgresLibrary`: the delete records the cleanup
+:class:`~tests.library_adapter.TestLibrary`: the delete records the cleanup
 claims of its files in its own transaction (§11.2) and the text rows go with
 the Work. Only the Work's thumbnails, derived files under the root, are
 removed by the request, best effort: a thumbnail that cannot be removed is
@@ -18,7 +18,7 @@ from unittest.mock import patch
 from backend.derived_caches import prks_thumb_cache_stem
 from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.pg_facade.text_index import PostgresTextIndex
 from tests.pg.http_fixtures import HttpAuthTestCase
@@ -33,7 +33,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
-        self.facade = PostgresLibrary(self.db, storage=self.storage)
+        self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
         module.text_index = PostgresTextIndex(self.db)
         self.serve()

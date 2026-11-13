@@ -114,7 +114,7 @@ class WorksMixin(FacadeMixin):
         return self._read(read)
 
     # -- ids and ETags ----------------------------------------------------------
-    def generate_id(self, prefix: str) -> str:
+    def _generate_id(self, prefix: str) -> str:
         from backend.entity_ids import generate
 
         return generate(prefix)
@@ -126,16 +126,6 @@ class WorksMixin(FacadeMixin):
         return derive(label, rows)
     def etag_works_catalog(self, rows: List[dict]) -> str:
         return self.etag_for_representation("works", rows)
-    def etag_recent_works(self) -> str:
-        from backend.domain.works import queries
-
-        count, newest = self._read(queries.recent_etag_parts)
-        return f'W/"prks-recent-{count}-{newest}"'
-    def etag_recently_added_works(self) -> str:
-        from backend.domain.works import queries
-
-        count, newest = self._read(queries.recently_added_etag_parts)
-        return f'W/"prks-recently-added-{count}-{newest}"'
 
     # -- create -----------------------------------------------------------------
     def add_work(self, title: str, status: str = 'Not Started', abstract: str = "",
@@ -220,15 +210,15 @@ class WorksMixin(FacadeMixin):
         bibliographic["urldate"] = (fields["urldate"] or "").strip() or None
         stream = isinstance(asset.source, commands.Stream) if asset is not None else False
         new = commands.NewWork(
-            work_id=self.generate_id("W"),
-            manifestation_id=self.generate_id("MF"),
+            work_id=self._generate_id("W"),
+            manifestation_id=self._generate_id("MF"),
             title=fields["title"],
             status=fields["status"],
             abstract=fields["abstract"],
             author_text=fields["author_text"],
             bibliographic=bibliographic,
             citation_url=None if stream else (url or "").strip() or None,
-            asset_id=self.generate_id("AS") if asset is not None else None,
+            asset_id=self._generate_id("AS") if asset is not None else None,
             asset=asset,
             research_note=fields["text_content"],
             private_note=(fields["private_notes"] or "").strip() or None,
@@ -339,16 +329,6 @@ class WorksMixin(FacadeMixin):
                                    extra=("created_at", "publisher", "folder_id"))
             for core in cores
         ])
-    def get_recent_works(self, limit: int = 30) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        cores = self._read(lambda scope: queries.works_by_opened(scope, limit))
-        return self._finish([projection.work_summary(core, with_folder=False) for core in cores])
-    def get_recently_added_works(self, limit: int = 50) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        cores = self._read(lambda scope: queries.works_by_created(scope, limit))
-        return self._finish([projection.work_summary(core) for core in cores])
     def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
         from backend.domain.works import projection, queries
 
@@ -492,15 +472,6 @@ class WorksMixin(FacadeMixin):
         return request.result()
 
     # -- wiki links (L-W-2) -------------------------------------------------------
-    def resolve_wiki_links(self, text: str) -> str:
-        """``PRKSDatabase.resolve_wiki_links`` on PostgreSQL: the same renderer, read in one snapshot.
-
-        Targets resolve against this Library only (``backend.domain.works.wiki_links``),
-        so a Work or Person of another Library renders as unresolved.
-        """
-        from backend.domain.works import wiki_links
-
-        return self._read(lambda scope: wiki_links.render(scope, text))
 
     # -- BibTeX (L-W-2) -----------------------------------------------------------
     def generate_bibtex(self, work_id: str) -> str:

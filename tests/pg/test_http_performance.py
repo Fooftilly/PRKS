@@ -23,7 +23,7 @@ from unittest.mock import patch
 from psycopg_pool import PoolTimeout
 
 from backend import performance
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade.text_index import PostgresTextIndex
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_search_text import pdf_bytes
@@ -98,7 +98,7 @@ class PerformanceHttpTests(HttpAuthTestCase):
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
-        self.facade = PostgresLibrary(self.db, storage=self.storage)
+        self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
         module.text_index = PostgresTextIndex(self.db)
         self.serve()

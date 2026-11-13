@@ -26,7 +26,7 @@ _POSTGRES_LIBRARY = None
 
 @contextmanager
 def seeding_into(library):
-    """Run the seeds inside this block against ``library`` (a bound ``PostgresLibrary``)."""
+    """Run the seeds inside this block against ``library`` (a bound ``tests.library_adapter.TestLibrary``)."""
     global _POSTGRES_LIBRARY
     previous, _POSTGRES_LIBRARY = _POSTGRES_LIBRARY, library
     try:

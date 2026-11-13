@@ -1,6 +1,6 @@
 """Work create and reads: the PostgreSQL facade returns SQLite's JSON (L-W-1 #628).
 
-Each test runs the same calls on :class:`backend.pg_facade.PostgresLibrary`
+Each test runs the same calls on :class:`tests.library_adapter.TestLibrary`
 and on the recorded SQLite ``PRKSDatabase`` (``tests/parity_reference.py``),
 then compares the two results after replacing what differs by construction:
 generated ids (each becomes a label naming its Work) and the current time

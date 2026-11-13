@@ -11,7 +11,8 @@ The facade is the temporary boundary between the HTTP adapter and the
 domain, kept on purpose after the PostgreSQL cutover (PG-C2 #641). It is
 the strangler seam of §5.5, not the target: PG-C3 (#642, v0.9.0) moves
 route families to call domain commands and queries directly, one family per
-PR, and the facade shrinks until it is gone. Its method names and shapes
+PR, and the facade shrinks until it is gone. It holds only what a route
+still calls; a method only tests call lives in ``tests/library_adapter.py``. Its method names and shapes
 follow the retired SQLite ``PRKSDatabase``; the per-family modules list
 where PostgreSQL deliberately differs.
 """
@@ -23,7 +24,6 @@ from typing import TYPE_CHECKING
 from backend.pg_facade.annotations import AnnotationsMixin
 from backend.pg_facade.organization import OrganizationMixin
 from backend.pg_facade.people import PeopleMixin
-from backend.pg_facade.processing import ProcessingMixin
 from backend.pg_facade.registry import FacadeMixin, NotPortedError
 from backend.pg_facade.research import ResearchMixin
 from backend.pg_facade.search import SearchMixin
@@ -40,7 +40,6 @@ class PostgresLibrary(
     OrganizationMixin,
     ResearchMixin,
     AnnotationsMixin,
-    ProcessingMixin,
     SearchMixin,
 ):
     """The library object of one PostgreSQL database and data root."""

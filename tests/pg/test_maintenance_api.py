@@ -23,7 +23,7 @@ from backend.domain.maintenance import staged
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity.authorization import AccessRefused, Refusal
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import provision_actor
 from tests.pg.harness import PostgresHarness, get_harness
@@ -45,7 +45,7 @@ class MaintenanceApiTests(unittest.TestCase):
         self.addCleanup(self.db.close)
         self.root = tempfile.mkdtemp(prefix="prks-pg-maint-")
         self.addCleanup(shutil.rmtree, self.root, True)
-        self.library = PostgresLibrary(self.db, storage=StorageConfig.for_testing(self.root))
+        self.library = TestLibrary(self.db, storage=StorageConfig.for_testing(self.root))
         self.owner = provision_actor(self.db)
 
     def test_a_reader_may_not_stage_restore_or_download(self) -> None:

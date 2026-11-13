@@ -1,7 +1,7 @@
 """``/api/search`` served from PostgreSQL (L-S-1 #637; the route seam PG-C1 #640 binds).
 
 ``server.py`` searches through its bound ``db`` and its bound
-``text_index``. These tests bind :class:`~backend.pg_facade.PostgresLibrary`
+``text_index``. These tests bind :class:`~tests.library_adapter.TestLibrary`
 and :class:`~backend.pg_facade.text_index.PostgresTextIndex` there (the way
 the cutover will), sign in over HTTP, and check the route's modes: keyword
 search with author and publisher filters, the Tag filter, any mode with the
@@ -22,7 +22,7 @@ from backend.domain.search import text as search_text
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.pg_facade.text_index import PostgresTextIndex
 from backend.storage.objects import LocalFilesystemStorage
@@ -38,7 +38,7 @@ class SearchHttpTests(HttpAuthTestCase):
         previous = (module.db, module.text_index)
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
-        self.facade = PostgresLibrary(self.db, storage=self.storage)
+        self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
         module.text_index = PostgresTextIndex(self.db)
         self.serve()

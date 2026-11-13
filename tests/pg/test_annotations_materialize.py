@@ -32,7 +32,7 @@ from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObjec
 from backend.domain.works import commands
 from backend.entity_ids import generate
 from backend.pdf_materialization import STALE_CODE
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.pg_facade import context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, AnnotationTestCase, annotation
@@ -566,7 +566,7 @@ class RestartTests(MaterializeTestCase):
         self.db.close()
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
-        library = PostgresLibrary(self.db, storage=self.storage)
+        library = TestLibrary(self.db, storage=self.storage)
         status = library.get_work_pdf_materialization(work_id)
         self.assertEqual((status["canonical_annotation_set_revision"], status["materialized_pdf_annotation_revision"],
                           status["stale"]), (canonical + 1, canonical, True))
