@@ -12,6 +12,7 @@ if _PROJECT_DIR not in sys.path:
 
 from backend.storage import paths
 from backend.storage.config import StorageConfig
+from backend.storage.errors import StorageRootError
 
 
 @contextmanager
@@ -80,10 +81,6 @@ class TestStoragePaths(unittest.TestCase):
                 os.path.join(_PROJECT_DIR, "data_testing", "prks_data_testing.db"),
             )
             self.assertEqual(cfg.thumbs_dir, os.path.join(_PROJECT_DIR, "data_testing", "thumbs"))
-            self.assertEqual(
-                cfg.processing_dir,
-                os.path.join(_PROJECT_DIR, "data_testing", "for_processing"),
-            )
             self.assertEqual(cfg.root, os.path.join(_PROJECT_DIR, "data_testing"))
 
     def test_explicit_relative_storage_is_normalized_once(self):
@@ -122,16 +119,33 @@ class TestStoragePaths(unittest.TestCase):
             self.assertEqual(cfg.configured_root, "/data2")
             self.assertEqual(cfg.pdfs_dir, os.path.join("/data2", "pdfs"))
 
-    def test_processing_dir_guard_type_and_message(self):
-        with _env(testing="1", storage=None, processing="/data"):
-            with self.assertRaises(RuntimeError) as ctx:
-                StorageConfig.from_env()
-            self.assertIn(
-                "refusing to use PRKS_FOR_PROCESSING_DIR under /data",
-                str(ctx.exception),
-            )
-        with _env(testing="1", storage=None, processing="/data2"):
-            self.assertEqual(StorageConfig.from_env().processing_dir, "/data2")
+    def test_a_set_for_processing_dir_is_refused_whatever_its_value(self):
+        # PG-C2 #641: Files for Processing is an upload queue, so the inbox
+        # override chooses nothing; a stale setting stops the process with an
+        # actionable message instead of leaving PDFs in that directory unread.
+        for testing in ("1", None):
+            for value in ("/data2", "/data/for_processing", "", "  "):
+                with self.subTest(testing=testing, value=value):
+                    with _env(testing=testing, storage=None, processing=value):
+                        with self.assertRaises(StorageRootError) as ctx:
+                            StorageConfig.from_env()
+                    self.assertEqual(ctx.exception.reason, "retired_setting")
+                    self.assertIn("PRKS_FOR_PROCESSING_DIR is no longer read", ctx.exception.message)
+                    self.assertIn("Files for Processing page", ctx.exception.message)
+        # An explicit mapping is checked the same way, and one without it is not refused.
+        with self.assertRaises(StorageRootError):
+            StorageConfig.from_env(environ={"PRKS_TESTING": "1", "PRKS_FOR_PROCESSING_DIR": "/tmp/inbox"})
+        self.assertEqual(
+            StorageConfig.from_env(environ={"PRKS_TESTING": "1"}).mode, "testing"
+        )
+
+    def test_the_snapshot_has_no_processing_inbox(self):
+        with _env(testing="1", storage=None):
+            cfg = StorageConfig.from_env()
+        for name in ("processing_dir", "processing_fallback_allowed"):
+            self.assertFalse(hasattr(cfg, name), name)
+        for name in ("derive_processing_dir", "processing_prod_fallback", "PROCESSING_PROD_PREFERRED"):
+            self.assertFalse(hasattr(paths, name), name)
 
     def test_prks_testing_normalization(self):
         for value in ("1", "true", "TRUE", " yes "):
@@ -184,7 +198,6 @@ class TestStorageConfig(unittest.TestCase):
         self.assertEqual(cfg.db_path, "/tmp/prks-test/prks_data.db")
         self.assertNotIn("prks_data_testing.db", cfg.db_path)
         self.assertEqual(cfg.pdfs_dir, "/tmp/prks-test/pdfs")
-        self.assertEqual(cfg.processing_dir, "/tmp/prks-test/for_processing")
         self.assertEqual(cfg.log_file, "/tmp/prks-test/prks-errors.log")
 
     def test_for_testing_ignores_env_overrides(self):
@@ -198,7 +211,6 @@ class TestStorageConfig(unittest.TestCase):
         ):
             cfg = StorageConfig.for_testing("/tmp/prks-test")
         self.assertEqual(cfg.root, "/tmp/prks-test")
-        self.assertEqual(cfg.processing_dir, "/tmp/prks-test/for_processing")
         self.assertEqual(cfg.log_file, "/tmp/prks-test/prks-errors.log")
 
     def test_from_env_and_for_testing_refuse_data(self):
@@ -226,45 +238,15 @@ class TestStorageConfig(unittest.TestCase):
         cfg = StorageConfig.for_testing("/data2")
         self.assertEqual(cfg.mode, "testing")
         self.assertEqual(cfg.configured_root, "/data2")
-        self.assertEqual(cfg.processing_dir, os.path.join("/data2", "for_processing"))
+        self.assertEqual(cfg.pdfs_dir, os.path.join("/data2", "pdfs"))
 
-    def test_from_env_log_and_processing_overrides(self):
+    def test_from_env_log_override(self):
         from backend.storage.config import StorageConfig
 
-        with _env(
-            testing="1",
-            storage=None,
-            processing="/tmp/inbox",
-            log_file="/tmp/custom.log",
-        ):
+        with _env(testing="1", storage=None, log_file="/tmp/custom.log"):
             cfg = StorageConfig.from_env()
-        self.assertEqual(cfg.processing_dir, "/tmp/inbox")
         self.assertEqual(cfg.log_file, "/tmp/custom.log")
         self.assertEqual(cfg.root, os.path.join(_PROJECT_DIR, "data_testing"))
-        self.assertFalse(cfg.processing_fallback_allowed)
-
-    def test_default_production_processing_allows_fallback(self):
-        from backend.storage.config import StorageConfig
-
-        with _env(testing=None, storage=None):
-            cfg = StorageConfig.from_env()
-        self.assertEqual(cfg.mode, "production")
-        self.assertIsNone(cfg.configured_root)
-        self.assertEqual(cfg.processing_dir, paths.PROCESSING_PROD_PREFERRED)
-        self.assertTrue(cfg.processing_fallback_allowed)
-
-    def test_explicit_processing_override_disallows_fallback(self):
-        from backend.storage.config import StorageConfig
-
-        with _env(
-            testing=None,
-            storage=None,
-            processing=paths.PROCESSING_PROD_PREFERRED,
-        ):
-            cfg = StorageConfig.from_env()
-        self.assertEqual(cfg.mode, "production")
-        self.assertEqual(cfg.processing_dir, paths.PROCESSING_PROD_PREFERRED)
-        self.assertFalse(cfg.processing_fallback_allowed)
 
     def test_snapshot_ignores_later_env_changes(self):
         from backend.storage.config import StorageConfig
@@ -275,15 +257,12 @@ class TestStorageConfig(unittest.TestCase):
         with _env(
             testing="",
             storage="/tmp/changed",
-            processing="/tmp/inbox",
             log_file="/tmp/changed.log",
         ):
             self.assertEqual(cfg.mode, "testing")
             self.assertEqual(cfg.configured_root, expected)
             self.assertEqual(cfg.db_path, os.path.join(expected, "prks_data.db"))
-            self.assertEqual(
-                cfg.processing_dir, os.path.join(expected, "for_processing")
-            )
+            self.assertEqual(cfg.pdfs_dir, os.path.join(expected, "pdfs"))
             self.assertEqual(cfg.log_file, os.path.join(expected, "prks-errors.log"))
 
     def test_testing_refuses_repo_data_root(self):
@@ -310,18 +289,6 @@ class TestStorageConfig(unittest.TestCase):
         self.assertEqual(cfg.configured_root, repo_data2)
         cfg = StorageConfig.for_testing(repo_data2)
         self.assertEqual(cfg.root, repo_data2)
-
-    def test_testing_processing_override_cannot_use_production_trees(self):
-        repo_data_proc = os.path.join(_PROJECT_DIR, "data", "for_processing")
-        with _env(testing="1", storage=None, processing=repo_data_proc):
-            with self.assertRaises(RuntimeError) as ctx:
-                StorageConfig.from_env()
-            self.assertIn("PRKS_FOR_PROCESSING_DIR", str(ctx.exception))
-        with _env(testing="1", storage=None, processing="/data/for_processing"):
-            with self.assertRaises(RuntimeError) as ctx:
-                StorageConfig.from_env()
-            self.assertIn("PRKS_FOR_PROCESSING_DIR", str(ctx.exception))
-            self.assertIn("under /data", str(ctx.exception))
 
     def test_testing_log_override_cannot_use_production_trees(self):
         cases = (

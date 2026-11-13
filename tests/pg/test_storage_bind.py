@@ -58,8 +58,9 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
     def test_the_binding_opens_no_sqlite_file_and_no_inbox(self) -> None:
         config = StorageConfig.for_testing(self.root())
         self.bind_root(config)
+        # The SQLite-era inbox directory (``for_processing/``) is not made either.
         for path in (config.db_path, config.index_db_path, config.research_index_db_path,
-                     config.processing_dir):
+                     os.path.join(config.root, "for_processing")):
             self.assertFalse(os.path.exists(path), path)
         self.assertTrue(os.path.isdir(config.thumbs_dir))
 

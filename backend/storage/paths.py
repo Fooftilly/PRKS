@@ -9,7 +9,6 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")
 _TEXT_INDEX_DB_NAME = "prks_text_index.db"
 _RESEARCH_INDEX_DB_NAME = "prks_research_index.db"
 _PRODUCTION_STORAGE = "/data"
-PROCESSING_PROD_PREFERRED = "/data/for_processing"
 
 
 def repo_root() -> str:
@@ -141,22 +140,6 @@ def derive_people_dir(*, testing: bool, configured_root: Optional[str]) -> str:
     return os.path.join(_REPO_ROOT, "data", "people")
 
 
-def derive_processing_dir(
-    *,
-    testing: bool,
-    configured_root: Optional[str],
-    processing_override: str,
-) -> str:
-    configured = (processing_override or "").strip()
-    if configured:
-        return configured
-    if configured_root:
-        return os.path.join(configured_root, "for_processing")
-    if testing:
-        return os.path.join(_REPO_ROOT, "data_testing", "for_processing")
-    return PROCESSING_PROD_PREFERRED
-
-
 def derive_index_db_path(root: str) -> str:
     return os.path.join(root, _TEXT_INDEX_DB_NAME)
 
@@ -171,14 +154,3 @@ def derive_log_file(*, root: str, log_override: str) -> str:
         return configured
     return os.path.join(root, "prks-errors.log")
 
-
-def processing_prod_fallback(root: Optional[str] = None) -> str:
-    """The repo inbox used when ``/data/for_processing`` cannot be created.
-
-    The fallback applies only to the development-default root, ``<repo>/data``.
-    Pass that root as bound (anchored to the leased resolved root) so the inbox
-    stays beneath it even when ``<repo>/data`` is a link (storage-architecture
-    §7.3); without it the repository spelling is used.
-    """
-    base = root if root is not None else os.path.join(_REPO_ROOT, "data")
-    return os.path.join(base, "for_processing")
