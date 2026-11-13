@@ -52,9 +52,12 @@ jobs:
             if git fetch --no-tags --depth=1 origin "$PRKS_PR_BASE_SHA"; then
               # The PR checkout is untrusted: use the reviewed classifier from
               # the immutable base, not the PR's possibly modified selector.
+              # --scope postgres skips these jobs for any A/M Markdown-only PR
+              # (the PostgreSQL suites read no Markdown); a base classifier
+              # without that option exits non-zero and so runs full tests.
               if base_classifier="$(mktemp)"; then
                 if git show "$PRKS_PR_BASE_SHA:scripts/ci/docs_only.py" > "$base_classifier"; then
-                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA")" || decision=false
+                  decision="$(python "$base_classifier" --base "$PRKS_PR_BASE_SHA" --scope postgres)" || decision=false
                   if [[ "$decision" == "true" ]]; then
                     docs_only=true
                   fi
@@ -187,6 +190,7 @@ jobs:
 
   postgres-helpers-shards:
     # Independent disposable PostgreSQL per deterministic test-module slice.
+    # Skipped only when every change is an added/modified Markdown file.
     # Missing/failed classifier always falls back to all database tests.
     needs: docs-only-plan
     if: >-

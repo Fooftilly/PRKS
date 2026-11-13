@@ -118,6 +118,15 @@ _TEST_GATE_DOCS_RUNS = {
     ),
 }
 _TEST_GATE_PG_SCOPE_PLAN_STEP = "Classify docs-only scope for PostgreSQL jobs (fail closed)"
+# Same fail-closed classifier as the unit job, but the wider Markdown-only
+# scope: the PostgreSQL suites read no repository Markdown.
+_TEST_GATE_PG_SCOPE_PLAN_RUN = (
+    "|",
+    _TEST_GATE_DOCS_RUNS["Classify documentation-only PR (fail closed)"][1].replace(
+        '--base \"$PRKS_PR_BASE_SHA\")\"',
+        '--base \"$PRKS_PR_BASE_SHA\" --scope postgres)\"',
+    ),
+)
 _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
     {
         _TEST_GATE_APPROVED_INSTALL_STEP,
@@ -491,9 +500,7 @@ def assert_test_gate_single_run_step_allowed(
         if style != "|" or _test_gate_run_body_without_shell_comments(body) != expected:
             raise ValueError("unreviewed PostgreSQL helper shard aggregator command")
     if name == _TEST_GATE_PG_SCOPE_PLAN_STEP:
-        expected_style, expected_body = _TEST_GATE_DOCS_RUNS[
-            "Classify documentation-only PR (fail closed)"
-        ]
+        expected_style, expected_body = _TEST_GATE_PG_SCOPE_PLAN_RUN
         normalized = (
             _test_gate_run_body_without_shell_comments(body)
             if style == "|" else body.strip()
