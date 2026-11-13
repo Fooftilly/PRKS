@@ -6477,7 +6477,10 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         self._assert_people_invalidated(page, server, before)
 
     def _save_person_profile(self, page, person_id, field, value):
-        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+        # Await the route render: when the page already shows this Person the
+        # hash check below passes at once, and a click on the panel while the
+        # same-Person refresh is still rendering is lost when it commits.
+        page.evaluate("async id => { await window.prksNavigate('#/people/' + id); }", person_id)
         page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Edit profile").click()
