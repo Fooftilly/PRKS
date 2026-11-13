@@ -649,6 +649,39 @@ class BrowserScopeTests(unittest.TestCase):
         page.close()
         self.assert_owner_draft_kept()
 
+    def test_a_browser_without_a_session_signs_in_on_the_page(self):
+        """PG-C2 #641: the page offers sign-in; a wrong password is refused, the right one reloads signed in."""
+        page = self.context.new_page()
+        PageCollector(page, self.server.origin)
+        page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        dialog = page.locator("#prks-sign-in")
+        dialog.wait_for(state="visible")
+        self.assertEqual(dialog.get_attribute("role"), "dialog")
+        self.assertEqual(page.evaluate("() => document.activeElement && document.activeElement.id"), "prks-sign-in-login")
+        self.assertTrue(page.evaluate(
+            "() => Array.from(document.body.children)"
+            ".filter((el) => !el.id.startsWith('prks-sign-in')).every((el) => el.inert)"))
+        page.keyboard.press("Escape")
+        self.assertTrue(dialog.is_visible(), "Escape must not close the sign-in dialog")
+
+        page.fill("#prks-sign-in-login", OWNER_LOGIN)
+        page.fill("#prks-sign-in-password", "not the password")
+        page.keyboard.press("Enter")
+        error = page.locator("#prks-sign-in-error")
+        error.wait_for(state="visible")
+        self.assertEqual(error.inner_text(), "The login or password is not right.")
+        self.assertEqual(page.input_value("#prks-sign-in-password"), "")
+        self.assertEqual(page.input_value("#prks-sign-in-login"), OWNER_LOGIN)
+
+        page.fill("#prks-sign-in-password", PASSWORD)
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            page.click("#prks-sign-in button[type=submit]")
+        page.wait_for_selector(".prks-folder-library")
+        self.assertEqual(page.locator("#prks-sign-in").count(), 0)
+        owner = page.evaluate("async () => { const s = await prksBrowserScope.resolve(); return s && s.userId; }")
+        self.assertTrue(owner)
+        self.assertFalse(page.evaluate("() => prksBrowserScope.needsSignIn()"))
+
     def test_without_a_session_recovery_stores_nothing(self):
         page = self.context.new_page()
         page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")

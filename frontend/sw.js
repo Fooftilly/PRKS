@@ -145,6 +145,7 @@
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
         '/js/browser-scope.js',
+        '/js/sign-in.js',
         '/vendor/idb/idb.min.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
