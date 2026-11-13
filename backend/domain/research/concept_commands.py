@@ -11,7 +11,7 @@ lost a key to a concurrent writer on that index runs once more, reads the
 winner and refuses with the rule's own ``ResearchError``. Refusals are
 SQLite's ``ResearchError`` codes, messages and statuses, and
 ``AccessRefused``; the differences from SQLite are listed in
-:mod:`backend.pg_facade.research`.
+:mod:`backend.domain.research`.
 
 The index is kept by the database (a note save enqueues
 ``research.reindex_work``) and its reads join the live Concepts, so a

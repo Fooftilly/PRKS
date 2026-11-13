@@ -17,7 +17,6 @@ AFFECTING_PATHS = {
     "DESIGN.md",
     "backend/pg_facade/works.py",
     "backend/research_graph.py",
-    "backend/pg_facade/research.py",
     "backend/server.py",
     "backend/services/work_pdf_replace.py",
     "requirements-dev.txt",

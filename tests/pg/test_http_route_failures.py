@@ -28,23 +28,13 @@ from backend.db.errors import (
     UnmappedDatabaseError,
 )
 from backend.domain.identity.authorization import AccessRefused, Refusal
-from backend.domain.research import concept_commands, position_commands
+from backend.domain.research import argument_commands, concept_commands, position_commands
 from tests.pg.test_http_research import ResearchHttpTestCase
 
 
 class RouteFailureTests(ResearchHttpTestCase):
-    def interfere(self, method: str, before: Callable[[], None]) -> None:
-        """Run ``before`` when the route calls the facade's ``method``, then the method itself."""
-        original = getattr(self.facade, method)
-
-        def wrapped(*args: Any, **kwargs: Any) -> Any:
-            before()
-            return original(*args, **kwargs)
-
-        setattr(self.facade, method, wrapped)
-
     def interfere_command(self, module: Any, name: str, before: Callable[[], None]) -> None:
-        """Run ``before`` when a moved route calls ``module.name`` (PG-C3 #642), then the command."""
+        """Run ``before`` when the route calls the command ``module.name``, then the command."""
         original = getattr(module, name)
 
         def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -54,12 +44,6 @@ class RouteFailureTests(ResearchHttpTestCase):
         patcher = mock.patch.object(module, name, wrapped)
         patcher.start()
         self.addCleanup(patcher.stop)
-
-    def raises(self, method: str, error: BaseException) -> None:
-        def fail() -> None:
-            raise error
-
-        self.interfere(method, fail)
 
     def concept_names(self) -> list[str]:
         return [row["name"] for row in self.run_sql("SELECT name FROM prks.concepts ORDER BY name")]
@@ -98,7 +82,10 @@ class RouteFailureTests(ResearchHttpTestCase):
         self.assertNotIn(self.lib, res.text)
 
     def test_a_transient_database_error_is_503_with_retry_after(self) -> None:
-        self.raises("list_arguments", RetryTransactionError(sqlstate="40001"))
+        def fail() -> None:
+            raise RetryTransactionError(sqlstate="40001")
+
+        self.interfere_command(argument_commands, "catalog_with_mentions", fail)
         res = self.get("/api/arguments")
         self.assertEqual((res.status, res.body["code"]), (503, "RETRY"), res.raw)
         self.assertEqual(res.header("Retry-After"), ["1"])

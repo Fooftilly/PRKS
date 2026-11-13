@@ -28,17 +28,18 @@ Differences from SQLite, each deliberate:
 The index is kept by the database, never by its reader: a note save
 enqueues ``research.reindex_work`` in its own transaction, and the reads
 join the live Concepts, Arguments and Works. So the maintenance calls
-``server.py`` makes after a change (``sync_work``, ``remove_concept_mentions``,
-``remove_argument_mentions``) are accepted with ``PRKSResearchIndex``'s
-signatures and do nothing; no SQLite index write runs against PostgreSQL.
+``PRKSResearchIndex`` took after a change (``sync_work``,
+``remove_concept_mentions``, ``remove_argument_mentions``) are accepted with
+its signatures and do nothing; no route makes them any more (PG-C3 #642:
+the Concept, Position and Argument routes and the Research Note save call
+``backend/domain/research/*_commands``, whose reads take their mentions in
+the same snapshot), and the recorded parity tests replay them.
 ``remove_work`` and ``reconcile_all`` have no counterpart (no route calls
 them through the bound index; a full rebuild is L-S-1's).
 
-``server.py`` reaches these reads only through its bound ``research_index``
-(and the Research routes their records only through its bound ``db``), so
-binding this class and :class:`~backend.pg_facade.PostgresLibrary` there,
-with the admitted :class:`RequestContext` bound per request, serves the
-Research routes from PostgreSQL.
+``server.py`` reaches the Work's Research refs and the graph through its
+bound ``research_index``, with the admitted :class:`RequestContext` bound
+per request.
 """
 
 from __future__ import annotations
