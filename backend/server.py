@@ -30,6 +30,7 @@ from backend.domain.works.rules import BulkWorkError, effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
+from backend.api import concepts as concepts_api
 from backend.api import folders as folders_api
 from backend.api import person_groups as person_groups_api
 from backend.api import persons as persons_api
@@ -1282,21 +1283,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif processing_api.handle_patch(self, db, path, data):
                 return
-            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
-                cid = unquote(path.split('/')[-1])
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.update_concept(
-                        cid,
-                        name=data.get('name') if 'name' in data else None,
-                        description=data.get('description') if 'description' in data else None,
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
+            elif concepts_api.handle_patch(self, db, path, data):
+                return
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
                 req, err = parse_position_request(PositionUpdateRequest, data)
@@ -1363,36 +1351,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             if data is _JSON_BODY_ABSENT:
                 data = {}
             parts = path.split('/')
-            if (
-                path.startswith('/api/concepts/')
-                and len(parts) == 5
-                and parts[4] == 'parents'
-            ):
-                cid = unquote(parts[3])
-                parent_ids = data.get('parent_ids') if isinstance(data, dict) else None
-                if parent_ids is None and isinstance(data, list):
-                    parent_ids = data
-                try:
-                    item = db.replace_concept_parents(cid, parent_ids)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
-            elif (
-                path.startswith('/api/concepts/')
-                and len(parts) == 5
-                and parts[4] == 'aliases'
-            ):
-                cid = unquote(parts[3])
-                aliases = data.get('aliases') if isinstance(data, dict) else None
-                if aliases is None and isinstance(data, list):
-                    aliases = data
-                try:
-                    item = db.replace_concept_aliases(cid, aliases)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
+            if concepts_api.handle_put(self, db, path, data):
+                return
             elif (
                 path.startswith('/api/arguments/')
                 and len(parts) == 5
@@ -1466,22 +1426,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif processing_api.handle_delete(self, db, path):
                 return
-            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
-                cid = unquote(path.split('/')[-1])
-                try:
-                    db.delete_concept(cid)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                try:
-                    research_index.remove_concept_mentions(cid)
-                except Exception as e:
-                    LOGGER.warning(
-                        "research_index_cleanup_failed concept_id=%s error_type=%s",
-                        safe_log_id(cid),
-                        safe_error_type(e),
-                    )
-                self.send_json(200, {'status': 'deleted'})
+            elif concepts_api.handle_delete(self, db, path):
+                return
             elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
                 pid = unquote(path.split('/')[-1])
                 try:
@@ -2039,21 +1985,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(e.http_status, body)
                     return
                 self.send_json(200, snapshot.to_dict())
-            elif path == '/api/concepts':
-                items = db.list_concepts()
-                counts = research_index.concept_mention_counts()
-                for item in items:
-                    item['mention_count'] = int(counts.get(item['id'], 0))
-                self.send_json(200, items)
-            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
-                cid = unquote(path.split('/')[-1])
-                item = db.get_concept(cid)
-                if not item:
-                    self.send_json(404, {'error': 'Concept not found.'})
-                    return
-                item['mention_count'] = research_index.mention_count_for_concept(cid)
-                item['mentions'] = research_index.concept_backlinks(cid, db)
-                self.send_json(200, item)
+            elif concepts_api.handle_get(self, db, path):
+                return
             elif path == '/api/openapi.json' or path == '/api/openapi/positions.json':
                 # Vertical-slice OpenAPI for Positions (#180 / #45). Additive;
                 # not yet the full PRKS surface.
@@ -2138,21 +2071,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/concepts/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # Revisions, plus the two AGGREGATE values. A field revision is
-                # a number, but an identity and a hierarchy are sets: a client
-                # measuring an edit against them needs what it last
-                # acknowledged, and the Concept detail carries `parents` as
-                # objects rather than ids.
-                data = db.get_concept_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Concept not found"})
-                else:
-                    etag = db.etag_for_representation("concept-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif concepts_api.handle_sync_state(self, db, path):
+                return
             elif playlists_api.handle_work_state(self, db, path):
                 return
             elif person_groups_api.handle_person_state(self, db, path):
@@ -2540,18 +2460,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif processing_api.handle_post(self, db, path, data):
                 return
-            elif path == '/api/concepts':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.create_concept(
-                        data.get('name'), data.get('description', '') or ''
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(201, item)
+            elif concepts_api.handle_post(self, db, path, data):
+                return
             elif path == '/api/positions':
                 req, err = parse_position_request(PositionCreateRequest, data)
                 if err is not None:

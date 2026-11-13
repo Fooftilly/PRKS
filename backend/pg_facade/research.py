@@ -11,15 +11,16 @@ snapshot, commands in one READ COMMITTED ``library_command`` transaction
 (§7.1: a Concept's uniqueness is decided by its key index). The domain
 modules (and so psycopg) are imported inside the methods.
 
-Ported here: Concepts, their aliases and hierarchy, and their revision
-state (L-R-1 PR 2), through :mod:`backend.domain.research.concepts`;
-Positions, Arguments and Stances with their targets, citations, verdicts
+Ported here: Positions, Arguments and Stances with their targets, citations, verdicts
 and revision state (PR 3), through :mod:`backend.domain.research.positions`
 and :mod:`backend.domain.research.arguments`; and the Work PATCH's
 Research Note save, ``save_work_notes`` (PR 7, through
 :mod:`backend.domain.works.notes`). Refusals are SQLite's
-``ResearchError`` codes, messages and statuses. Differences from SQLite,
-each deliberate:
+``ResearchError`` codes, messages and statuses. Concepts, their aliases
+and hierarchy, and their revision state (L-R-1 PR 2) moved with their
+routes to ``backend/domain/research/concept_commands``
+(``backend/api/concepts.py``, PG-C3 #642). Differences from SQLite across
+the Research family, each deliberate:
 
 - Names and aliases compare by ``prks.identity_key`` (§8.1), which is
   ``normalize_concept_key``; resolution reads the ``concept_keys`` index
@@ -104,44 +105,7 @@ def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T], *, serializa
 
 
 class ResearchMixin(FacadeMixin):
-    """Concepts (L-R-1 PR 2); Positions, Arguments and Stances (PR 3)."""
-    def list_concepts(self) -> List[dict]:
-        from backend.domain.research import concepts
-
-        return _read(self, concepts.catalog)
-    def get_concept(self, concept_id: str) -> Optional[dict]:
-        from backend.domain.research import concepts
-
-        cid = (concept_id or "").strip()
-        if not cid:
-            return None
-        return _read(self, lambda scope: concepts.detail(scope, cid))
-    def create_concept(self, name, description: str = "") -> dict:
-        from backend.domain.research import concepts
-        from backend.entity_ids import generate
-
-        new_id = generate("C")
-        return _command(self, lambda scope: concepts.create(scope, new_id, name, description))
-    def update_concept(self, concept_id: str, *, name=None, description=None) -> dict:
-        from backend.domain.research import concepts
-
-        return _command(self, lambda scope: concepts.update(scope, concept_id, name, description))
-    def replace_concept_aliases(self, concept_id: str, aliases) -> dict:
-        from backend.domain.research import concepts
-
-        return _command(self, lambda scope: concepts.replace_aliases(scope, concept_id, aliases))
-    def replace_concept_parents(self, concept_id: str, parent_ids) -> dict:
-        from backend.domain.research import concepts
-
-        return _command(self, lambda scope: concepts.replace_parents(scope, concept_id, parent_ids))
-    def delete_concept(self, concept_id: str) -> None:
-        from backend.domain.research import concepts
-
-        _command(self, lambda scope: concepts.remove(scope, concept_id))
-    def get_concept_sync_state(self, concept_id: str) -> Optional[dict]:
-        from backend.domain.research import concepts
-
-        return _read(self, lambda scope: concepts.sync_state(scope, concept_id))
+    """Positions, Arguments and Stances (L-R-1 PR 3) and the Work PATCH's note save."""
     def list_positions(self) -> List[dict]:
         from backend.domain.research import positions
 
