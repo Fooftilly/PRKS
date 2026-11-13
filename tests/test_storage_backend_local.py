@@ -341,7 +341,8 @@ class TestLocalSpecifics(LocalStorageTestCase):
         # running app does not construct yet, the PostgreSQL workers' object
         # maintenance, which a SQLite root never gets, and the Processing
         # queue's routes, which answer only with a PostgreSQL library bound
-        # (L-PR-1 #636), are the only other users.
+        # (L-PR-1 #636), and the Person routes' portrait objects (PG-C3 #642)
+        # are the only other users.
         import subprocess
 
         out = subprocess.run(
@@ -350,7 +351,8 @@ class TestLocalSpecifics(LocalStorageTestCase):
         )
         if out.returncode not in (0, 1):  # pragma: no cover - no git
             self.skipTest("git unavailable")
-        self.assertEqual(out.stdout.split(), ["backend/api/processing.py", "backend/domain/objects/jobs.py",
+        self.assertEqual(out.stdout.split(), ["backend/api/persons.py", "backend/api/processing.py",
+                                              "backend/domain/objects/jobs.py",
                                               "backend/pg_facade/annotations.py", "backend/pg_facade/works.py",
                                               "backend/storage/objects.py"])
 
