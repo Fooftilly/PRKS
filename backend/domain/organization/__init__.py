@@ -41,6 +41,42 @@ row's newest version only. The commands §7.1 lists as SERIALIZABLE (a merge,
 and every add to its peer tables: a Tag, an alias, a Work or Folder tag)
 keep the same locks: a lock that waited on a row the other transaction
 changed fails with ``40001`` there, and the retry reads the committed state.
+
+**Differences from SQLite**, each deliberate (the recorded parity tests
+avoid them). The commands that routes call are ``tag_commands``,
+``folder_commands`` and ``playlist_commands`` (PG-C3 #642; the facade's
+``OrganizationMixin`` is gone):
+
+- Names, aliases and Folder titles compare by
+  ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``: "Straße" and
+  "STRASSE", or "Λόγος" and "ΛΌΓΟΣ", are one name.
+- A name or alias over 200 UTF-8 bytes, or a name, alias or Folder field
+  holding NUL, is refused with ``ValueError`` (SQLite stores it); a blank
+  colour stores the default.
+- A link to a missing Work, Folder or Tag is refused with ``ValueError``
+  (SQLite's foreign key raises ``IntegrityError``), and so is filing a
+  missing Work into a Folder.
+- Filing a Work (``folder_commands.file_work``, SQLite's ``add_work_to_folder``) advances the Work's ``work-folder`` revision when it
+  files the Work: the Work exists unfiled before it, so filing it is a
+  change another device must see (SQLite writes no revision). Filing at
+  ``CREATE_WORK`` is construction and advances nothing on either backend.
+- ``folder_commands.ensure_uncategorized`` (SQLite's
+  ``ensure_default_uncategorized_folder_id``) returns the root Folder whose
+  title has the key of "Uncategorized" (SQLite fails to create one when a
+  root Folder holds the title in another case).
+- A Folder delete removes its Tag links and leaves every field and
+  Folder-Tag scope one revision on (SQLite cascades the links and leaves
+  the scopes), so a base observed before the delete is stale on a Folder
+  recreated under the id.
+- A Playlist delete leaves every field scope one revision on, and a Work
+  delete advances its Playlist's order revision (SQLite advances neither),
+  so a base observed before the delete is stale. A Playlist's empty
+  ``original_url`` is stored as ``''`` and read back as ``None``, as SQLite
+  stores it.
+- ``get_work_tags``, ``get_folder_tags``, ``get_related_folders_for_work``
+  and the affected-id lists of a delete or merge are ordered by id (SQLite
+  gives storage order); equal Folder titles, and Works of one Folder created
+  in the same second, are ordered by id.
 """
 
 from backend.db import register_constraint

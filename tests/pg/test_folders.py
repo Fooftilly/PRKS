@@ -252,6 +252,17 @@ class WorkDeleteTests(FolderTestCase):
         self.assertEqual(self.library.get_all_folders()[0]["work_count"], 0)
         self.library.delete_empty_folder(folder_id)
 
+    def test_a_missing_folder_reads_as_missing_without_a_data_root(self) -> None:
+        from tests.library_adapter import TestLibrary
+
+        folder_id = self.add("A")
+        self.library.move_work_to_folder(self.library.add_work("Filed"), folder_id)
+        bare = TestLibrary(self.db)
+        self.assertIsNone(bare.get_folder("F-missing"))
+        # Finishing a Work summary needs the PDF directory.
+        with self.assertRaisesRegex(RuntimeError, "no data root"):
+            bare.get_folder(folder_id)
+
 
 class IsolationTests(FolderTestCase):
     def test_another_librarys_folders_are_invisible(self) -> None:

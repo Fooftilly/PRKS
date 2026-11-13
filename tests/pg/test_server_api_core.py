@@ -15,6 +15,7 @@ from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
+from backend.api import folders as folders_api
 from backend.api import playlists as playlists_api
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
@@ -119,7 +120,7 @@ class CreateRefusalTests(ServerApiTestCase):
 
     def test_a_filing_refused_after_the_create_undoes_the_work_and_its_text(self) -> None:
         term = "RollbackPartialWorkTextZed"
-        with mock.patch.object(self.facade, "add_work_to_folder",
+        with mock.patch.object(folders_api, "file_work",
                                side_effect=ValueError("This file is already in another folder.")):
             res = self.send("POST", "/api/works", {"title": "Rollback Partial Work",
                                                   **self.upload_fields(f"Body contains {term}", "rollback.pdf")})
@@ -195,7 +196,7 @@ class CreateRefusalTests(ServerApiTestCase):
         self.refused(res, 409)
         folder = self.ok(self.send("POST", "/api/folders", {"title": "Adopt Folder Race", "description": ""}))["id"]
         folder_pdf = adopted("adopt-then-folder-race.pdf")
-        with mock.patch.object(self.facade, "add_work_to_folder",
+        with mock.patch.object(folders_api, "file_work",
                                side_effect=ValueError("The folder no longer exists.")):
             res = self.send("POST", "/api/works", {"title": "Adopt Folder Race", "folder_id": folder,
                                                   "file_path": "/api/pdfs/adopt-then-folder-race.pdf"})

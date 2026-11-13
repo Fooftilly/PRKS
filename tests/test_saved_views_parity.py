@@ -4,7 +4,7 @@ Each call runs on this leg's library and on a reference SQLite library
 holding the same Saved Views, and the results must be equal after generated
 ids and timestamps become labels; a refusal must carry the same message and
 HTTP status. The HTTP controller is compared too, status and body. Inputs
-avoid the documented difference (``backend/pg_facade/organization.py``):
+avoid the documented difference (``backend/domain/organization/__init__.py``):
 names differ beyond ASCII case.
 """
 

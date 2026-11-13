@@ -278,6 +278,79 @@ class TestLibrary(PostgresLibrary):
 
         return tag_commands.folder_options(self.database, current_context(), folder_id)
 
+    # -- Folders (PG-C3 PR 6: ``backend/api/folders.py`` calls the commands) --
+
+    def ensure_default_uncategorized_folder_id(self) -> str:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.ensure_uncategorized(self.database, current_context())
+
+    def add_folder(self, title: str, description: str = "", parent_id: Optional[str] = None) -> str:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.create(self.database, current_context(), title, description, parent_id)
+
+    def get_all_folders(self) -> List[Dict[str, Any]]:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.catalog(self.database, current_context())
+
+    def etag_folders_catalog(self, rows: Optional[List[Dict[str, Any]]] = None) -> str:
+        from backend.etags import etag_for_representation
+
+        return etag_for_representation("folders", self.get_all_folders() if rows is None else rows)
+
+    def get_folder(self, folder_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.detail(self.database, current_context(), folder_id,
+                                       None if self.storage is None else self.storage.pdfs_dir)
+
+    def get_folder_work_ids(self, folder_id: str) -> List[str]:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.member_work_ids(self.database, current_context(), folder_id)
+
+    def folder_exists(self, folder_id: str) -> bool:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.exists(self.database, current_context(), folder_id)
+
+    def update_folder_metadata(self, folder_id: str, fields: Dict[str, Any]) -> None:
+        from backend.domain.organization import folder_commands
+
+        folder_commands.update(self.database, current_context(), folder_id, fields)
+
+    def delete_empty_folder(self, folder_id: str) -> None:
+        from backend.domain.organization import folder_commands
+
+        folder_commands.delete(self.database, current_context(), folder_id)
+
+    def get_folder_sync_state(self, folder_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.sync_state(self.database, current_context(), folder_id)
+
+    def get_related_folders_for_work(self, work_id: str) -> List[Dict[str, Any]]:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.related(self.database, current_context(), work_id)
+
+    def add_work_to_folder(self, folder_id: str, work_id: str) -> None:
+        from backend.domain.organization import folder_commands
+
+        folder_commands.file_work(self.database, current_context(), folder_id, work_id)
+
+    def move_work_to_folder(self, work_id: str, folder_id: Optional[str]) -> None:
+        from backend.domain.organization import folder_commands
+
+        folder_commands.move_work(self.database, current_context(), work_id, folder_id)
+
+    def get_work_folder_state(self, work_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.organization import folder_commands
+
+        return folder_commands.work_state(self.database, current_context(), work_id)
+
     # -- Playlists (PG-C3 PR 5: ``backend/api/playlists.py`` calls the commands) --
 
     def add_playlist(self, title: str, description: str = "", original_url: str = "") -> str:
@@ -308,7 +381,8 @@ class TestLibrary(PostgresLibrary):
     def get_playlist(self, playlist_id: str) -> Optional[Dict[str, Any]]:
         from backend.domain.organization import playlist_commands
 
-        return playlist_commands.detail(self.database, current_context(), playlist_id, self._pdfs_dir())
+        return playlist_commands.detail(self.database, current_context(), playlist_id,
+                                       None if self.storage is None else self.storage.pdfs_dir)
 
     def add_work_to_playlist(self, playlist_id: str, work_id: str, position: Optional[int] = None) -> None:
         from backend.domain.organization import playlist_commands
