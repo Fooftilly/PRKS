@@ -6,6 +6,14 @@
 capability the Library documents as not available yet raises
 :class:`NotPortedError`. This package must not import psycopg (the
 persistence boundary keeps it in ``backend/db/`` and ``backend/domain/``).
+
+The facade is the temporary boundary between the HTTP adapter and the
+domain, kept on purpose after the PostgreSQL cutover (PG-C2 #641). It is
+the strangler seam of §5.5, not the target: PG-C3 (#642, v0.9.0) moves
+route families to call domain commands and queries directly, one family per
+PR, and the facade shrinks until it is gone. Its method names and shapes
+follow the retired SQLite ``PRKSDatabase``; the per-family modules list
+where PostgreSQL deliberately differs.
 """
 
 from __future__ import annotations
