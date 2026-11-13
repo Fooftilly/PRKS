@@ -181,7 +181,13 @@ class CatalogEtagTests(FreshnessTestCase):
         self.ok(self.send("POST", f"/api/playlists/{playlist_id}/items", {"work_id": second}))
         etag, body = self.moved("/api/playlists", etag, "membership")
         self.assertEqual(self.row(body, playlist_id)["item_count"], 2)
+        # A reorder touches ``updated_at`` (as SQLite's did), which the catalog
+        # shows to the second; its old test restored the stamp after the
+        # reorder, and so does this one, so only the order differs. Without it,
+        # a reorder landing in a later second than the add moves the ETag.
+        stamp = self.sql("SELECT updated_at FROM prks.playlists WHERE id = %s", (playlist_id,))[0]["updated_at"]
         self.ok(self.send("POST", f"/api/playlists/{playlist_id}/reorder", {"work_ids": [second, first]}))
+        self.sql("UPDATE prks.playlists SET updated_at = %s WHERE id = %s RETURNING id", (stamp, playlist_id))
         self.assertEqual(self.conditional("/api/playlists", etag)[0], 304)
         self.ok(self.send("PATCH", f"/api/playlists/{playlist_id}", {"description": "same-second notes"}))
         _, body = self.moved("/api/playlists", etag, "notes")
