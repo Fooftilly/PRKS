@@ -26,10 +26,11 @@ A different loopback port can be selected with `--port`. To make PRKS reachable 
 
 ```bash
 scripts/dev-postgres            # once: a local PostgreSQL 18 for testing, in Docker
+unset PRKS_DATABASE_URL         # if you exported your Library's URL above
 ./.venv/bin/python prks_app.py --testing
 ```
 
-Testing mode listens on `127.0.0.1:8070` by default and uses the `scripts/dev-postgres` database unless `PRKS_DATABASE_URL` is set; it refuses a database that is not marked for testing. On a fresh testing database every request acts as the owner (loopback only). Open `http://127.0.0.1:8070` in a browser. When `PRKS_STORAGE` is not set, it isolates data under `data_testing/`. It contains safety checks intended to prevent tests from binding to the normal repository `data/` tree.
+Testing mode listens on `127.0.0.1:8070` by default and uses the `scripts/dev-postgres` database unless `PRKS_DATABASE_URL` (or `PRKS_DATABASE_URL_FILE`) is set; it refuses a database that is not marked for testing, so a shell that still exports your regular Library's URL will not start it. Unset that variable first, or export the testing URL that `scripts/dev-postgres` prints. On a fresh testing database every request acts as the owner (loopback only). Open `http://127.0.0.1:8070` in a browser. When `PRKS_STORAGE` is not set, it isolates data under `data_testing/`. It contains safety checks intended to prevent tests from binding to the normal repository `data/` tree.
 
 Use testing mode for browser automation, demo data, screenshots, and destructive experiments.
 
