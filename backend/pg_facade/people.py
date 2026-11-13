@@ -10,13 +10,14 @@ A method acts for the bound
 snapshot, commands in one ``library_command`` transaction. The domain
 modules (and so psycopg) are imported inside the methods.
 
-Ported here: Persons and their profile fields, Person Groups with their
-hierarchy and members (L-P-1 PR 2); Work-Person roles, a
-Person's ``works`` and, through ``backend.domain.works.queries``, the Work
-projection's people fields (PR 3). Publishers moved to
+Ported here: Persons and their profile fields (L-P-1 PR 2); Work-Person
+roles, a Person's ``works`` and, through ``backend.domain.works.queries``, the
+Work projection's people fields (PR 3). Publishers moved to
 ``backend/domain/people/publisher_commands`` with their routes
-(``backend/api/publishers.py``, PG-C3 #642). Differences from SQLite, each
-deliberate:
+(``backend/api/publishers.py``), and Person Groups with their hierarchy and
+members to ``backend/domain/people/group_commands``
+(``backend/api/person_groups.py``), PG-C3 #642. Differences from SQLite (the
+Person Group ones hold for ``group_commands`` too), each deliberate:
 
 - Names (groups, the parent-name lookup) compare by
   ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``.
@@ -107,7 +108,7 @@ def _etag(label: str, rows: List[dict]) -> str:
 
 
 class PeopleMixin(FacadeMixin):
-    """Persons, Person Groups and publishers (L-P-1 PR 2)."""
+    """Persons and roles (L-P-1 PR 2 and 3)."""
 
     # -- Persons ----------------------------------------------------------------
     def add_person(
@@ -204,91 +205,6 @@ class PeopleMixin(FacadeMixin):
             raise ValueError("Cannot delete person with linked works.")
         if not deleted:
             raise ValueError("Person not found.")
-
-    # -- Person Groups ----------------------------------------------------------
-    def add_person_group_with_parent_options(
-        self,
-        name: str,
-        parent_id: Optional[str] = None,
-        parent_name: Optional[str] = None,
-        description: str = "",
-    ) -> str:
-        """Resolve or create the parent, then create the group, in one transaction."""
-        from backend.domain.people import groups
-
-        group_id, parent_new_id = _new_id("PG"), _new_id("PG")
-        n = (name or "").strip()
-        pn = (parent_name or "").strip()
-
-        def run(scope: LibraryScope) -> str:
-            if parent_id or pn:
-                groups.lock_hierarchy(scope)
-            if not parent_id and pn and groups.same_name(scope, pn, n):
-                raise ValueError("Parent group cannot have the same name as the new group.")
-            pid = parent_id or (groups.resolve_parent(scope, pn, parent_new_id) if pn else None)
-            return groups.insert_group(scope, group_id, n, pid or "", description or "")
-
-        return _command(self, run)
-    def update_person_group(self, group_id: str, fields: dict) -> None:
-        from backend import person_group_sync as rules
-        from backend.domain.people import groups
-
-        parent_new_id = _new_id("PG")
-
-        def run(scope: LibraryScope) -> None:
-            changes = dict(fields)
-            if "parent_name" in changes or "parent_id" in changes:
-                groups.lock_hierarchy(scope)
-            if groups.group(scope, group_id) is None:
-                raise ValueError("Group not found.")
-            if "parent_name" in changes:
-                raw = changes.pop("parent_name")
-                pn = str(raw).strip() if raw is not None else ""
-                changes["parent_id"] = groups.resolve_parent(scope, pn, parent_new_id) if pn else None
-            for field in rules.FIELDS:
-                if field in changes:
-                    value = changes[field]
-                    groups.set_field(scope, group_id, field,
-                                     "" if value in (None, False) else str(value))
-
-        _command(self, run)
-    def delete_person_group(self, group_id: str) -> None:
-        from backend.domain.people import groups
-
-        if not _command(self, lambda scope: groups.delete_group(scope, group_id)):
-            raise ValueError("Group not found.")
-    def get_all_person_groups(self) -> List[dict]:
-        from backend.domain.people import queries
-
-        return _read(self, queries.group_catalog)
-    def get_person_group(self, group_id: str) -> Optional[dict]:
-        from backend.domain.people import queries
-
-        return _read(self, lambda scope: queries.group_detail(scope, group_id))
-    def etag_person_groups_catalog(self, rows: List[dict]) -> str:
-        return _etag("person-groups", rows)
-    def add_person_to_group(self, person_id: str, group_id: str) -> None:
-        from backend.domain.people import groups
-
-        def run(scope: LibraryScope) -> None:
-            group_found, person_found = groups.lock_pair(scope, group_id, person_id)
-            if not group_found or not person_found:
-                raise ValueError("Person or group not found.")
-            groups.set_member(scope, group_id, person_id, True)
-
-        _command(self, run, serializable=True)
-    def remove_person_from_group(self, person_id: str, group_id: str) -> None:
-        from backend.domain.people import groups
-
-        _command(self, lambda scope: groups.set_member(scope, group_id, person_id, False))
-    def get_person_group_sync_state(self, group_id: str) -> Optional[dict]:
-        from backend.domain.people import groups
-
-        return _read(self, lambda scope: groups.group_state(scope, group_id))
-    def get_person_groups_state(self, person_id: str) -> Optional[dict]:
-        from backend.domain.people import groups
-
-        return _read(self, lambda scope: groups.person_group_state(scope, person_id))
 
     # -- Roles ------------------------------------------------------------------
     def add_role(

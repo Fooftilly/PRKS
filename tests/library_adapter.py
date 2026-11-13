@@ -436,6 +436,61 @@ class TestLibrary(PostgresLibrary):
 
         return publisher_commands.in_use(self.database, current_context())
 
+    # -- Person Groups (PG-C3 PR 7: ``backend/api/person_groups.py`` calls the commands) --
+
+    def add_person_group_with_parent_options(self, name: str, parent_id: Optional[str] = None,
+                                             parent_name: Optional[str] = None,
+                                             description: str = "") -> str:
+        from backend.domain.people import group_commands
+
+        return group_commands.create(self.database, current_context(), name, parent_id,
+                                     parent_name, description)
+
+    def update_person_group(self, group_id: str, fields: Dict[str, Any]) -> None:
+        from backend.domain.people import group_commands
+
+        group_commands.update(self.database, current_context(), group_id, fields)
+
+    def delete_person_group(self, group_id: str) -> None:
+        from backend.domain.people import group_commands
+
+        group_commands.delete(self.database, current_context(), group_id)
+
+    def get_all_person_groups(self) -> List[Dict[str, Any]]:
+        from backend.domain.people import group_commands
+
+        return group_commands.catalog(self.database, current_context())
+
+    def get_person_group(self, group_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import group_commands
+
+        return group_commands.detail(self.database, current_context(), group_id)
+
+    def etag_person_groups_catalog(self, rows: List[Dict[str, Any]]) -> str:
+        from backend.etags import etag_for_representation
+
+        return etag_for_representation("person-groups", rows)
+
+    def add_person_to_group(self, person_id: str, group_id: str) -> None:
+        from backend.domain.people import group_commands
+
+        group_commands.add_member(self.database, current_context(), group_id, person_id)
+
+    def remove_person_from_group(self, person_id: str, group_id: str) -> None:
+        from backend.domain.people import group_commands
+
+        group_commands.remove_member(self.database, current_context(), group_id, person_id)
+
+    def get_person_group_sync_state(self, group_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import group_commands
+
+        return group_commands.sync_state(self.database, current_context(), group_id)
+
+    def get_person_groups_state(self, person_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import group_commands
+
+        return group_commands.person_state(self.database, current_context(), person_id)
+
 
 class SavedViewCommandsOver:
     """``backend.domain.saved_views.commands`` answered by a Library's old method names.

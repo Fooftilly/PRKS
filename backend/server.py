@@ -32,6 +32,7 @@ from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.api import folders as folders_api
+from backend.api import person_groups as person_groups_api
 from backend.api import playlists as playlists_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
@@ -1340,14 +1341,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             safe_error_type(e),
                         )
                 self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
-                g_id = path.split('/')[-1]
-                try:
-                    db.update_person_group(g_id, data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'updated'})
+            elif person_groups_api.handle_patch(self, db, path, data):
+                return
             elif folders_api.handle_patch(self, db, path, data):
                 return
             elif settings_api.handle_patch(self, db, path, data):
@@ -1566,21 +1561,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_json(400, {'error': msg})
                     return
                 self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/person-groups/'):
-                parts = path.split('/')
-                # /api/person-groups/{group_id}/members/{person_id}
-                if len(parts) == 6 and parts[4] == 'members':
-                    db.remove_person_from_group(parts[5], parts[3])
-                    self.send_json(200, {'status': 'removed'})
-                elif len(parts) == 4:
-                    try:
-                        db.delete_person_group(parts[3])
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'deleted'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            elif person_groups_api.handle_delete(self, db, path):
+                return
             elif saved_views_api.handle_delete(self, db, path):
                 return
             elif processing_api.handle_delete(self, db, path):
@@ -2209,33 +2191,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_json_not_modified(etag)
                     return
                 self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/person-groups':
-                data = db.get_all_person_groups()
-                etag = db.etag_person_groups_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/person-groups/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY. The catalogue already carries every group's
-                # name, parent and description and the detail carries its
-                # members, so echoing values here would make a second copy.
-                data = db.get_person_group_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Group not found"})
-                else:
-                    etag = db.etag_for_representation("person-group-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
-                g_id = path.split('/')[-1]
-                data = db.get_person_group(g_id)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Group not found")
+            elif person_groups_api.handle_get(self, db, path):
+                return
             elif saved_views_api.handle_get(self, db, path):
                 return
             elif processing_api.handle_get(self, db, path, parsed_path.query):
@@ -2383,19 +2340,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(200, data, etag=etag, precondition_checked=True)
             elif playlists_api.handle_work_state(self, db, path):
                 return
-            elif path.startswith('/api/persons/') and path.endswith('/group-state') and len(path.split('/')) == 5:
-                # Membership revisions for one Person, including tombstones:
-                # a pair this device once removed has a revision, and adding it
-                # back is a mutation of that scope rather than a first write.
-                data = db.get_person_groups_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Person not found"})
-                else:
-                    etag = db.etag_for_representation("person-group-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif person_groups_api.handle_person_state(self, db, path):
+                return
             elif path.startswith('/api/persons/') and path.endswith('/profile-image'):
                 parts = path.split('/')
                 if len(parts) != 5:
@@ -2785,22 +2731,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif folders_api.handle_post(self, db, path, data):
                 return
-            elif path == '/api/person-groups':
-                pid = data.get('parent_id')
-                if pid == '':
-                    pid = None
-                pnamed = None if pid else data.get('parent_name')
-                try:
-                    g_id = db.add_person_group_with_parent_options(
-                        name=data.get('name', ''),
-                        parent_id=pid,
-                        parent_name=pnamed,
-                        description=data.get('description', '') or '',
-                    )
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                else:
-                    self.send_json(200, {'id': g_id})
+            elif person_groups_api.handle_post(self, db, path, data):
+                return
             elif saved_views_api.handle_post(self, db, path, data):
                 return
             elif processing_api.handle_post(self, db, path, data):
@@ -2851,18 +2783,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
                 self.send_json(201, item)
-            elif path.startswith('/api/person-groups/') and path.endswith('/members'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'members':
-                    g_id = parts[3]
-                    try:
-                        db.add_person_to_group(data.get('person_id', ''), g_id)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                    else:
-                        self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
             elif path == '/api/persons':
                 try:
                     image_url = normalize_person_image_url(data.get('image_url', '') or '')
