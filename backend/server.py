@@ -31,6 +31,7 @@ from backend.domain.works.rules import BulkWorkError, effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
+from backend.api import folders as folders_api
 from backend.api import playlists as playlists_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
@@ -1271,7 +1272,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 if 'folder_id' in body:
                     raw_folder = body.pop('folder_id')
                     try:
-                        db.move_work_to_folder(w_id, raw_folder)
+                        folders_api.move_work(self, db, w_id, raw_folder)
                     except ValueError as e:
                         self.send_json(400, {'error': str(e)})
                         return
@@ -1347,19 +1348,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
-                f_id = path.split('/')[-1]
-                # A rename stales every member Work's cached detail (it embeds
-                # folder_title), so collect the members BEFORE the write and
-                # report them -- membership cannot change in this request.
-                renames = isinstance(data, dict) and 'title' in data
-                member_ids = db.get_folder_work_ids(f_id) if renames else []
-                try:
-                    db.update_folder_metadata(f_id, data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'updated', 'member_work_ids': member_ids})
+            elif folders_api.handle_patch(self, db, path, data):
+                return
             elif settings_api.handle_patch(self, db, path, data):
                 return
             elif saved_views_api.handle_patch(self, db, path, data):
@@ -1556,14 +1546,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'status': 'deleted'})
             elif playlists_api.handle_delete(self, db, path):
                 return
-            elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
-                f_id = path.split('/')[-1]
-                try:
-                    db.delete_empty_folder(f_id)
-                except ValueError as e:
-                    self.send_json(409, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'deleted'})
+            elif folders_api.handle_delete(self, db, path):
+                return
             elif tags_api.handle_delete(self, db, path, query_params):
                 return
             elif publishers_api.handle_delete(self, db, path, query_params):
@@ -2216,24 +2200,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     )
                 else:
                     self.send_error(404, "API endpoint not found")
-            elif path == '/api/folders':
-                # The catalog IS the revision source (see etag_folders_catalog),
-                # so build it once and derive the ETag from it.
-                data = db.get_all_folders()
-                etag = db.etag_folders_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
-                f_id = path.split('/')[-1]
-                data = db.get_folder(f_id)
-                if data: self.send_json(200, data)
-                else: self.send_error(404, "Folder not found")
-            elif path.startswith('/api/works/') and path.endswith('/related_folders'):
-                w_id = path.split('/')[3]
-                data = db.get_related_folders_for_work(w_id)
-                self.send_json(200, data)
+            elif folders_api.handle_get(self, db, path):
+                return
             elif path == '/api/persons':
                 data = db.get_all_persons()
                 etag = db.etag_persons_catalog(data)
@@ -2366,28 +2334,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/folders/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY. The folder catalogue already carries every
-                # title, parent and description.
-                data = db.get_folder_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Folder not found"})
-                else:
-                    etag = db.etag_for_representation("folder-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/folder-state') and len(path.split('/')) == 5:
-                data = db.get_work_folder_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-folder-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif folders_api.handle_work_state(self, db, path):
+                return
             elif path.startswith('/api/positions/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
                 # REVISIONS ONLY: the Position detail already carries both
                 # values, and a second copy would be a second thing to keep
@@ -2655,7 +2603,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 requested_folder = (
                     str(requested_folder).strip() if requested_folder is not None else ""
                 )
-                if requested_folder and not db.folder_exists(requested_folder):
+                if requested_folder and not folders_api.exists(self, db, requested_folder):
                     self.send_json(404, {
                         'error': 'The selected folder no longer exists.',
                         'code': 'FOLDER_NOT_FOUND',
@@ -2787,15 +2735,15 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
                 if raw_folder:
                     try:
-                        db.add_work_to_folder(raw_folder, w_id)
+                        folders_api.file_work(self, db, raw_folder, w_id)
                     except ValueError as e:
                         undo_create()
                         self.send_json(409, {'error': str(e)})
                         return
                 else:
                     try:
-                        unc_id = db.ensure_default_uncategorized_folder_id()
-                        db.add_work_to_folder(unc_id, w_id)
+                        unc_id = folders_api.ensure_uncategorized(self, db)
+                        folders_api.file_work(self, db, unc_id, w_id)
                     except ValueError as e:
                         undo_create()
                         self.send_json(409, {'error': str(e)})
@@ -2835,17 +2783,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'id': w_id})
             elif playlists_api.handle_post(self, db, path, data):
                 return
-            elif path == '/api/folders':
-                try:
-                    f_id = db.add_folder(
-                        title=data.get('title', 'Untitled Folder'),
-                        description=data.get('description', ''),
-                        parent_id=data.get('parent_id'),
-                    )
-                except ValueError as e:
-                    self.send_json(409, {'error': str(e)})
-                else:
-                    self.send_json(200, {'id': f_id})
+            elif folders_api.handle_post(self, db, path, data):
+                return
             elif path == '/api/person-groups':
                 pid = data.get('parent_id')
                 if pid == '':
@@ -2969,28 +2908,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "Work not found")
                     return
                 self.send_json(200, {'status': 'opened'})
-            elif path.startswith('/api/folders/') and path.endswith('/works'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'works':
-                    f_id = parts[3]
-                    w_id = (data.get('work_id') or '').strip()
-                    if not w_id:
-                        self.send_json(400, {'error': 'work_id is required'})
-                        return
-                    if not db.folder_exists(f_id):
-                        self.send_json(404, {'error': 'Folder not found'})
-                        return
-                    if db.get_primary_thumbnail_fields(w_id) is None:
-                        self.send_json(404, {'error': 'Work not found'})
-                        return
-                    try:
-                        db.add_work_to_folder(f_id, w_id)
-                    except ValueError as e:
-                        self.send_json(409, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
             elif path == '/api/roles':
                 p_id = (data.get('person_id') or '').strip()
                 w_id = (data.get('work_id') or '').strip()

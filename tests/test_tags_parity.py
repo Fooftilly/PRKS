@@ -3,7 +3,7 @@
 Each call, and each Tag semantic operation, runs on this leg's library and
 on a reference SQLite library holding the same Works, Folders and Tags, and
 the results must be equal after generated ids and timestamps become labels.
-Inputs avoid the documented differences (``backend/pg_facade/organization.py``):
+Inputs avoid the documented differences (``backend/domain/organization/__init__.py``):
 names differ beyond ASCII case, lists of several generated ids are compared
 as sets, and no create reuses a deleted or merged id. Folders are seeded as
 rows on PostgreSQL: the Folder commands are a later slice.

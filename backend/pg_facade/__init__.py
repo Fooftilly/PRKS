@@ -22,7 +22,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from backend.pg_facade.annotations import AnnotationsMixin
-from backend.pg_facade.organization import OrganizationMixin
 from backend.pg_facade.people import PeopleMixin
 from backend.pg_facade.registry import FacadeMixin, NotPortedError
 from backend.pg_facade.research import ResearchMixin
@@ -37,7 +36,6 @@ if TYPE_CHECKING:
 class PostgresLibrary(
     WorksMixin,
     PeopleMixin,
-    OrganizationMixin,
     ResearchMixin,
     AnnotationsMixin,
     SearchMixin,

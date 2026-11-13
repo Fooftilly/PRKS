@@ -3,7 +3,7 @@
 Each call, and each Folder semantic operation, runs on this leg's library
 and on a reference SQLite library holding the same Works and Folders, and
 the results must be equal after generated ids and timestamps become labels.
-Inputs avoid the documented differences (``backend/pg_facade/organization.py``):
+Inputs avoid the documented differences (``backend/domain/organization/__init__.py``):
 titles differ beyond ASCII case, a Work is filed by ``move_work_to_folder``
 (``add_work_to_folder`` advances a revision on PostgreSQL only) before a
 Work-Folder state is compared, no Folder is created again under a deleted

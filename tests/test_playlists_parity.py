@@ -3,7 +3,7 @@
 Each call, and each Playlist semantic operation, runs on this leg's library
 and on a reference SQLite library holding the same Works and Playlists, and
 the results must be equal after generated ids and timestamps become labels.
-Inputs avoid the documented differences (``backend/pg_facade/organization.py``):
+Inputs avoid the documented differences (``backend/domain/organization/__init__.py``):
 no Playlist is created again under a deleted id, a Playlist's revisions are
 not compared after a Work in it is deleted, and catalogs of Playlists the
 facade made in one second (which tie, and then order by their generated
