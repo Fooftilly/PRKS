@@ -30,7 +30,7 @@ from backend.log_safety import (
     safe_log_id,
     safe_route,
 )
-from backend.pdf_linearize import maybe_linearize_pdf_in_place
+from backend.pdf_linearize import linearize_pdf_to
 from backend.server import PRKSHandler
 
 
@@ -401,8 +401,9 @@ class TestQpdfPrivacy(unittest.TestCase):
                         return_value=completed,
                     ):
                         with _capture_formatted("prks.pdf") as records:
-                            changed, reason = maybe_linearize_pdf_in_place(
+                            changed, reason = linearize_pdf_to(
                                 pdf_path,
+                                os.path.join(tmp, "linearized.pdf"),
                                 context="work-create-upload",
                             )
         self.assertEqual((changed, reason), (False, "qpdf-failed"))
