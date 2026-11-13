@@ -11,15 +11,17 @@ snapshot, commands in one READ COMMITTED ``library_command`` transaction
 (§7.1: a Concept's uniqueness is decided by its key index). The domain
 modules (and so psycopg) are imported inside the methods.
 
-Ported here: Positions, Arguments and Stances with their targets, citations, verdicts
-and revision state (PR 3), through :mod:`backend.domain.research.positions`
-and :mod:`backend.domain.research.arguments`; and the Work PATCH's
+Ported here: Arguments and Stances with their targets, citations, verdicts
+and revision state (L-R-1 PR 3), through
+:mod:`backend.domain.research.arguments`; and the Work PATCH's
 Research Note save, ``save_work_notes`` (PR 7, through
 :mod:`backend.domain.works.notes`). Refusals are SQLite's
 ``ResearchError`` codes, messages and statuses. Concepts, their aliases
 and hierarchy, and their revision state (L-R-1 PR 2) moved with their
 routes to ``backend/domain/research/concept_commands``
-(``backend/api/concepts.py``, PG-C3 #642). Differences from SQLite across
+(``backend/api/concepts.py``), and Positions to
+``backend/domain/research/position_commands`` (``backend/api/positions.py``),
+PG-C3 #642. Differences from SQLite across
 the Research family, each deliberate:
 
 - Names and aliases compare by ``prks.identity_key`` (§8.1), which is
@@ -105,36 +107,7 @@ def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T], *, serializa
 
 
 class ResearchMixin(FacadeMixin):
-    """Positions, Arguments and Stances (L-R-1 PR 3) and the Work PATCH's note save."""
-    def list_positions(self) -> List[dict]:
-        from backend.domain.research import positions
-
-        return _read(self, positions.catalog)
-    def get_position(self, position_id: str) -> Optional[dict]:
-        from backend.domain.research import positions
-
-        pid = (position_id or "").strip()
-        if not pid:
-            return None
-        return _read(self, lambda scope: positions.detail(scope, pid))
-    def create_position(self, name, description: str = "") -> dict:
-        from backend.domain.research import positions
-        from backend.entity_ids import generate
-
-        new_id = generate("P")
-        return _command(self, lambda scope: positions.create(scope, new_id, name, description))
-    def update_position(self, position_id: str, *, name=None, description=None) -> dict:
-        from backend.domain.research import positions
-
-        return _command(self, lambda scope: positions.update(scope, position_id, name, description))
-    def delete_position(self, position_id: str) -> None:
-        from backend.domain.research import positions
-
-        _command(self, lambda scope: positions.remove(scope, position_id))
-    def get_position_sync_state(self, position_id: str) -> Optional[dict]:
-        from backend.domain.research import positions
-
-        return _read(self, lambda scope: positions.sync_state(scope, position_id))
+    """Arguments and Stances (L-R-1 PR 3) and the Work PATCH's note save."""
     def list_verdicts(self) -> List[dict]:
         from backend.domain.research import arguments
 

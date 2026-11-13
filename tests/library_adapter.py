@@ -600,6 +600,39 @@ class TestLibrary(PostgresLibrary):
 
         return concept_commands.sync_state(self.database, current_context(), concept_id)
 
+    # -- Positions (PG-C3 PR 11: ``backend/api/positions.py`` calls the commands) --
+
+    def list_positions(self) -> List[Dict[str, Any]]:
+        from backend.domain.research import position_commands
+
+        return position_commands.catalog(self.database, current_context())
+
+    def get_position(self, position_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.research import position_commands
+
+        return position_commands.detail(self.database, current_context(), position_id)
+
+    def create_position(self, name: Any, description: Any = "") -> Dict[str, Any]:
+        from backend.domain.research import position_commands
+
+        return position_commands.create(self.database, current_context(), name, description)
+
+    def update_position(self, position_id: str, *, name: Any = None, description: Any = None) -> Dict[str, Any]:
+        from backend.domain.research import position_commands
+
+        return position_commands.update(self.database, current_context(), position_id, name=name,
+                                        description=description)
+
+    def delete_position(self, position_id: str) -> None:
+        from backend.domain.research import position_commands
+
+        position_commands.delete(self.database, current_context(), position_id)
+
+    def get_position_sync_state(self, position_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.research import position_commands
+
+        return position_commands.sync_state(self.database, current_context(), position_id)
+
     # -- Person Groups (PG-C3 PR 7: ``backend/api/person_groups.py`` calls the commands) --
 
     def add_person_group_with_parent_options(self, name: str, parent_id: Optional[str] = None,
