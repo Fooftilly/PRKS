@@ -1,0 +1,38 @@
+{
+  "module": "tests/test_storage_paths.py",
+  "partial": true,
+  "tests": {
+    "TestStoragePaths.test_processing_dir_guard_type_and_message": {
+      "replaced_by": [
+        "tests/test_storage_paths.py::TestStoragePaths.test_a_set_for_processing_dir_is_refused_whatever_its_value"
+      ],
+      "note": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value. The testing-mode guard that refused an inbox under /data or <repo>/data is subsumed: no inbox value is accepted in any mode."
+    },
+    "TestStorageConfig.test_testing_processing_override_cannot_use_production_trees": {
+      "replaced_by": [
+        "tests/test_storage_paths.py::TestStoragePaths.test_a_set_for_processing_dir_is_refused_whatever_its_value"
+      ],
+      "note": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value. The testing-mode guard that refused an inbox under /data or <repo>/data is subsumed: no inbox value is accepted in any mode."
+    },
+    "TestStorageConfig.test_from_env_log_and_processing_overrides": {
+      "replaced_by": [
+        "tests/test_storage_paths.py::TestStorageConfig.test_from_env_log_override",
+        "tests/test_storage_paths.py::TestStoragePaths.test_a_set_for_processing_dir_is_refused_whatever_its_value"
+      ],
+      "note": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value. The log override half is kept as its own test."
+    },
+    "TestStorageConfig.test_default_production_processing_allows_fallback": {
+      "replaced_by": [
+        "tests/test_storage_paths.py::TestStoragePaths.test_the_snapshot_has_no_processing_inbox"
+      ],
+      "note": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value."
+    },
+    "TestStorageConfig.test_explicit_processing_override_disallows_fallback": {
+      "replaced_by": [
+        "tests/test_storage_paths.py::TestStoragePaths.test_a_set_for_processing_dir_is_refused_whatever_its_value",
+        "tests/test_storage_paths.py::TestStoragePaths.test_the_snapshot_has_no_processing_inbox"
+      ],
+      "note": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value."
+    }
+  }
+}

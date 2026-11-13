@@ -66,7 +66,7 @@ Contents:
 | S11 | Relational store | The data root holds file-backed data. In the SQLite era the database is one canonical component inside it. With PostgreSQL, database placement is connection configuration, and choosing or moving the data root never moves the database. |
 | S12 | Backend interface | It is small and blob-shaped: exclusive create, atomic replace, open for read, stat, idempotent delete, verify, and list for maintenance only. It is not a repository framework. Absolute paths are available only through a local-only extension that filesystem-specific infrastructure uses. |
 | S13 | Multi-step invariants | The backend guarantees single-operation atomicity. A multi-step invariant, such as reference-check-then-delete or hash compare-and-set, is coordinated above the backend by the catalogue transaction and a **key-scoped lock**. That lock is process-local today and must become cross-process before PRKS runs more than one process. |
-| S14 | Files for Processing | Under PostgreSQL, Files for Processing is a managed upload queue, not a directory (§9.4). Queued PDFs are `asset-objects` keys like Asset bytes. The SQLite processing inbox, its `PRKS_FOR_PROCESSING_DIR` override and every inbox rule below are SQLite-era only and are removed at the cutover. |
+| S14 | Files for Processing | Under PostgreSQL, Files for Processing is a managed upload queue, not a directory (§9.4). Queued PDFs are `asset-objects` keys like Asset bytes. The SQLite processing inbox, its `PRKS_FOR_PROCESSING_DIR` override and every inbox rule below are SQLite-era only. PG-C2 (#641) removed them: `StorageConfig` derives no inbox, `for_processing` is no longer a reserved name in a root, and a set `PRKS_FOR_PROCESSING_DIR` is refused at start (`retired_setting`). |
 
 ---
 
@@ -78,8 +78,10 @@ Contents:
 `StorageConfig.from_env()` in `prks_app.py`, before `recover_incomplete_restore()`
 and `bind_storage()`. Its fields are `mode`, `configured_root` (the raw
 `PRKS_STORAGE` value), `root`, `db_path`, `pdfs_dir`, `thumbs_dir`,
-`people_dir`, `processing_dir`, `index_db_path`, `research_index_db_path`,
-`log_file` and `processing_fallback_allowed`.
+`people_dir`, `index_db_path`, `research_index_db_path` and `log_file`.
+Until PG-C2 (#641) it also held `processing_dir` and
+`processing_fallback_allowed` for the SQLite inbox (S14); `from_env()` now
+refuses a set `PRKS_FOR_PROCESSING_DIR`.
 
 `backend/storage/paths.py` derives them:
 
@@ -90,7 +92,7 @@ and `bind_storage()`. Its fields are `mode`, `configured_root` (the raw
 | managed PDFs | `R/pdfs` | `<repo>/data/pdfs` | `<repo>/data_testing/pdfs` |
 | thumbnails | `R/thumbs` | `<repo>/data/thumbs` | `<repo>/data_testing/thumbs` |
 | portraits | `R/people` | `<repo>/data/people` | `<repo>/data_testing/people` |
-| processing inbox | `R/for_processing`, or `PRKS_FOR_PROCESSING_DIR` | `/data/for_processing`, falling back to `<repo>/data/for_processing` | `<repo>/data_testing/for_processing` |
+| processing inbox (SQLite era; removed in PG-C2, S14) | was `R/for_processing`, or `PRKS_FOR_PROCESSING_DIR` | was `/data/for_processing`, falling back to `<repo>/data/for_processing` | was `<repo>/data_testing/for_processing` |
 | text index | `<root>/prks_text_index.db` | same | same |
 | research index | `<root>/prks_research_index.db` | same | same |
 | error log | `<root>/prks-errors.log`, or `PRKS_LOG_FILE` | same | same |
@@ -168,9 +170,9 @@ holds a bare basename. #60 already made the right choice. #311 formalizes it.
   for development, and wrong as the default for an installed application (§6).
 - `/data/for_processing` is preferred when `PRKS_STORAGE` is unset, and it
   silently falls back to the repository. That is a Docker-shaped special case
-  inside a non-Docker default. Phase A **keeps** it, because Phase A promises
-  identical paths. It is not migrated later: the PostgreSQL cutover removes
-  the inbox altogether (S14, §9.4).
+  inside a non-Docker default. Phase A **kept** it, because Phase A promised
+  identical paths. It was not migrated: the PostgreSQL cutover (PG-C2 #641)
+  removed the inbox altogether (S14, §9.4).
 - Nothing records which library a root belongs to, so nothing can detect a
   wrong pairing of database and file root (§7.1).
 
@@ -279,7 +281,7 @@ needs streaming hash computation at ingest, which `put_new` provides (§10.2).
 | **Canonical relational (SQLite era only)** | `prks_data.db`, including `pending_pdf_cleanup`, the sync ledger and `app_settings` | yes | yes | never (except restore) |
 | **Durable operational** | root marker `prks-root.json`; restore and relocation journals under `.prks-maintenance/`; bootstrap config (**outside** the root) | no (the marker is recreated for a restore target, §7.1) | the marker is rewritten, and journals are per-operation | journals are removed only when their operation has completed |
 | **Operational logs** | `prks-errors.log*` | no | no (a new log starts in the new root) | rotation |
-| **User inbox (conditional; SQLite era only)** | `for_processing/`: files the user drops in for import, not yet managed. Removed at the PostgreSQL cutover (S14) | only when under the root (current rule) | only when under the root | never by storage code |
+| **User inbox (conditional; SQLite era only)** | `for_processing/`: files the user drops in for import, not yet managed. Removed at the PostgreSQL cutover (S14): a leftover `for_processing/` is the user's, walked like any other entry and not reserved | only when under the root (current rule) | only when under the root | never by storage code |
 | **Derived / rebuildable** | `thumbs/`, `prks_text_index.db*`, `prks_research_index.db*`, future caches and projections | no | no (rebuilt) | at any time |
 | **Temporary / staging** | `.prks-write-*.tmp`, `.linearized_*`, thumbnail temporaries, `.prks-maintenance/restore-staging`, `rollback`, `backup`, relocation staging | no | no | by the owning operation, or by the stale sweep |
 
@@ -312,7 +314,7 @@ artifact inside a canonical namespace directory.
 ├── prks_data.db              canonical relational  SQLite era only
 ├── pdfs/                     canonical             namespace asset-objects
 ├── people/                   canonical             namespace portraits
-├── for_processing/           user inbox            SQLite era only; conditional; may be outside via PRKS_FOR_PROCESSING_DIR
+├── for_processing/           user inbox            SQLite era only; removed in PG-C2 (S14)
 ├── thumbs/                   derived
 ├── prks_text_index.db*       derived
 ├── prks_research_index.db*   derived
@@ -446,9 +448,9 @@ Rules:
   root read-only, with "Set by the environment" or "Set on the command line",
   and in-app relocation is unavailable (S10). The UI could otherwise persist a
   choice that is silently ignored at the next start.
-- **Component overrides stay second-class.** `PRKS_FOR_PROCESSING_DIR` (SQLite
-  era only, S14) and `PRKS_LOG_FILE` keep working as deployment overrides for
-  non-canonical components. No override may place a **canonical** component outside the root.
+- **Component overrides stay second-class.** `PRKS_LOG_FILE` keeps working as
+  a deployment override for a non-canonical component; `PRKS_FOR_PROCESSING_DIR`
+  (SQLite era only) is refused since PG-C2 (S14). No override may place a **canonical** component outside the root.
   The existing backup check `canonical_path_outside_root` already refuses that.
 - **Containers.** The image sets `PRKS_STORAGE=/data` and mounts the volume
   there. The container's config directory is ephemeral and is never consulted
@@ -1729,10 +1731,9 @@ parallel configuration system:
   entry re-anchors every root-relative `StorageConfig` path beneath the leased
   `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
   cannot move database, PDF or index I/O to a root whose marker and lease were
-  never checked. `configured_root` keeps the configured spelling. The
-  development default's repository inbox fallback (used when
-  `/data/for_processing` cannot be created) is derived from the bound root
-  for the same reason.
+  never checked. `configured_root` keeps the configured spelling. (The
+  development default's repository inbox fallback was derived from the bound
+  root for the same reason until PG-C2 removed the inbox, S14.)
 - **V11 install directory.** A packaged build refuses any root inside the
   install directory. A source checkout refuses only the checkout itself or a
   root containing it, so existing self-hosted roots inside a checkout keep
@@ -1756,10 +1757,9 @@ parallel configuration system:
   lives in it), so the V9/V10 and durability warnings raised while opening are
   held and logged, with the path-free `storage_root_bound source=…` summary,
   once logging is set up; a refusal emits them immediately.
-- **Inbox for new sources.** A `config_file` or `platform_default` root uses
-  `<root>/for_processing`. No existing deployment has those sources; the
-  development default keeps `/data/for_processing` exactly (§1.2). All of
-  this is SQLite-era only (S14).
+- **Inbox for new sources.** Until PG-C2, a `config_file` or
+  `platform_default` root used `<root>/for_processing` and the development
+  default kept `/data/for_processing` (§1.2). PG-C2 removed the inbox (S14).
 - **Relocation records.** A marker in `fenced`, `staging` or `retired` state,
   or an `active` marker with a relocation role, is refused with the relocation
   ID and peer. A bootstrap `relocation` record with a known phase is parsed and

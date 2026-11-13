@@ -195,9 +195,6 @@ class TestNewAndAdoptedRoots(RootTestCase):
         def people_file(root):
             open(os.path.join(root, "people"), "w").close()
 
-        def inbox_file(root):
-            open(os.path.join(root, "for_processing"), "w").close()
-
         def text_index_dir(root):
             os.mkdir(os.path.join(root, "prks_text_index.db"))
 
@@ -223,7 +220,6 @@ class TestNewAndAdoptedRoots(RootTestCase):
             "maintenance_file": (maintenance_file, "db", "root_malformed"),
             "thumbs_file": (thumbs_file, "pdfs", "root_malformed"),
             "people_file": (people_file, "db", "root_malformed"),
-            "inbox_file": (inbox_file, "pdfs", "root_malformed"),
             "text_index_dir": (text_index_dir, "pdfs", "root_malformed"),
             "research_index_link": (research_index_link, "db", "root_contains_link"),
             "log_dir": (log_dir, "pdfs", "root_malformed"),
@@ -249,18 +245,15 @@ class TestNewAndAdoptedRoots(RootTestCase):
         config = StorageConfig.for_testing(root)
         names = root_binding.component_root_names(config)
         self.assertEqual(
-            names["component_dirs"], {"pdfs", "thumbs", "people", "for_processing"}
+            names["component_dirs"], {"pdfs", "thumbs", "people"}
         )
         self.assertEqual(
             names["component_files"],
             {"prks_text_index.db", "prks_research_index.db", "prks-errors.log"},
         )
         # Overrides placed outside the root reserve nothing in it.
-        moved = replace(
-            config, processing_dir=self.path("inbox"), log_file=self.path("errors.log")
-        )
+        moved = replace(config, log_file=self.path("errors.log"))
         names = root_binding.component_root_names(moved)
-        self.assertNotIn("for_processing", names["component_dirs"])
         self.assertNotIn("prks-errors.log", names["component_files"])
         # Plain components of the right type beside proof are still adopted.
         os.makedirs(os.path.join(root, "pdfs"))
@@ -628,16 +621,29 @@ class TestLinksAndFilesystems(RootTestCase):
             self.open(root)
         self.assertEqual(ctx.exception.reason, "root_contains_link")
 
-    def test_inbox_outside_the_root_is_not_this_roots_business(self):
-        root = self.path("lib")
-        inbox_target = self.path("inbox-real")
-        os.mkdir(inbox_target)
-        link = self.path("inbox-link")
-        _symlink_or_skip(self, inbox_target, link)
-        cfg = replace(StorageConfig.for_testing(root), processing_dir=link)
-        bound = root_binding.open_storage_root(cfg, register=False)
-        self._bound.append(bound)
-        self.assertTrue(bound.created)
+    def test_a_leftover_inbox_entry_is_not_a_reserved_name(self):
+        # PG-C2 #641: the SQLite processing inbox is gone, so ``for_processing``
+        # is no longer a component name. A leftover entry of either type is the
+        # user's, beside proof the root is still adopted, and it is left as it is.
+        for label, plant in (
+            ("file", lambda path: open(path, "w").close()),
+            ("directory", os.mkdir),
+        ):
+            with self.subTest(label):
+                root = self.path(f"lib-{label}")
+                os.makedirs(os.path.join(root, "pdfs"))
+                plant(os.path.join(root, "for_processing"))
+                bound = self.open(root)
+                self.assertTrue(bound.adopted)
+                self.assertEqual(
+                    os.path.isdir(os.path.join(root, "for_processing")), label == "directory"
+                )
+        # Without proof a leftover inbox alone is still not a library.
+        root = self.path("lib-inbox-only")
+        os.makedirs(os.path.join(root, "for_processing"))
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_foreign")
 
     def _other_device_for(self, target):
         real_lstat = root_binding._lstat
@@ -1378,14 +1384,12 @@ class TestRootSnapshot(RootTestCase):
     def test_anchoring_rewrites_only_root_relative_components(self):
         cfg = replace(
             StorageConfig.for_testing(self.path("lib")),
-            processing_dir="/srv/inbox",
             log_file="/var/log/prks.log",
         )
         anchored = cfg.anchored_to(self.path("real"))
         self.assertEqual(anchored.root, self.path("real"))
         for name in ("db_path", "pdfs_dir", "thumbs_dir", "people_dir", "index_db_path", "research_index_db_path"):
             self.assertTrue(getattr(anchored, name).startswith(self.path("real") + os.sep), name)
-        self.assertEqual(anchored.processing_dir, "/srv/inbox")
         self.assertEqual(anchored.log_file, "/var/log/prks.log")
 
     def test_process_entry_anchors_before_binding(self):

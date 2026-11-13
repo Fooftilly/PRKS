@@ -561,7 +561,7 @@ def _has_recoverable_maintenance_state(path: str) -> bool:
     return any(_is_plain_dir(os.path.join(path, name)) for name in RECOVERABLE_MAINTENANCE_DIRS)
 
 
-_COMPONENT_DIR_FIELDS = ("pdfs_dir", "thumbs_dir", "people_dir", "processing_dir")
+_COMPONENT_DIR_FIELDS = ("pdfs_dir", "thumbs_dir", "people_dir")
 _COMPONENT_FILE_FIELDS = ("index_db_path", "research_index_db_path", "log_file")
 
 
@@ -570,8 +570,7 @@ def component_root_names(config: Any) -> dict[str, frozenset[str]]:
 
     Read from the same ``StorageConfig`` the server binds, so a new component
     cannot drift out of :func:`classify_unmarked_root`. Overrides that place a
-    component elsewhere add nothing. The development inbox fallback counts when
-    it may be used.
+    component elsewhere add nothing.
     """
     root = os.path.abspath(config.root)
 
@@ -582,8 +581,6 @@ def component_root_names(config: Any) -> dict[str, frozenset[str]]:
         return os.path.basename(path) if _same_path(os.path.dirname(path), root) else None
 
     dir_paths = [getattr(config, name, None) for name in _COMPONENT_DIR_FIELDS]
-    if getattr(config, "processing_fallback_allowed", False):
-        dir_paths.append(paths.processing_prod_fallback(config.root))
     file_paths = [getattr(config, name, None) for name in _COMPONENT_FILE_FIELDS]
     return {
         "component_dirs": frozenset(n for n in map(top_level, dir_paths) if n is not None),
@@ -610,7 +607,7 @@ def classify_unmarked_root(
 
     A reserved name of the wrong type -- the database as a directory, link or
     non-SQLite file; ``.prks-maintenance`` or a component directory
-    (``component_dirs``: ``pdfs``, ``thumbs``, ``people``, the inbox) as
+    (``component_dirs``: ``pdfs``, ``thumbs``, ``people``) as
     anything but a plain directory; a component file (``component_files``:
     the index databases, the log) as anything but a plain file -- is
     ``foreign`` on its own, and next to otherwise valid proof it is refused
@@ -710,8 +707,8 @@ def _link_error(path: str) -> StorageRootRefused:
     return StorageRootRefused(
         "root_contains_link",
         f"{path} is a link. Nothing inside a storage root may be a link; the storage "
-        "root itself may be a link, and the inbox and log may be placed elsewhere "
-        "with PRKS_FOR_PROCESSING_DIR and PRKS_LOG_FILE.",
+        "root itself may be a link, and the log may be placed elsewhere with "
+        "PRKS_LOG_FILE.",
     )
 
 
