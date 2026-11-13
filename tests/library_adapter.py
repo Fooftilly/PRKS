@@ -436,6 +436,78 @@ class TestLibrary(PostgresLibrary):
 
         return publisher_commands.in_use(self.database, current_context())
 
+    # -- Persons (PG-C3 PR 8: ``backend/api/persons.py`` calls the commands) --
+
+    def add_person(self, first_name: str, last_name: str, aliases: str = "", about: str = "",
+                   image_url: str = "", link_wikipedia: str = "", link_stanford_encyclopedia: str = "",
+                   link_iep: str = "", links_other: str = "", birth_date: str = "",
+                   death_date: str = "", person_id: Optional[str] = None) -> str:
+        from backend.domain.people import person_commands
+
+        fields = {
+            "first_name": first_name, "last_name": last_name, "aliases": aliases, "about": about,
+            "image_url": image_url, "link_wikipedia": link_wikipedia,
+            "link_stanford_encyclopedia": link_stanford_encyclopedia, "link_iep": link_iep,
+            "links_other": links_other, "birth_date": birth_date, "death_date": death_date,
+        }
+        return person_commands.create(self.database, current_context(), fields, person_id)
+
+    def get_all_persons(self) -> List[Dict[str, Any]]:
+        from backend.domain.people import person_commands
+
+        return person_commands.catalog(self.database, current_context())
+
+    def get_person(self, person_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import person_commands
+
+        return person_commands.detail(self.database, current_context(), person_id,
+                                      None if self.storage is None else self.storage.pdfs_dir)
+
+    def etag_persons_catalog(self, rows: List[Dict[str, Any]]) -> str:
+        from backend.etags import etag_for_representation
+
+        return etag_for_representation("persons", rows)
+
+    def get_person_metadata_state(self, person_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import person_commands
+
+        return person_commands.metadata_state(self.database, current_context(), person_id)
+
+    def update_person_profile(self, person_id: str, fields: Dict[str, Any], group_ids: Any = None) -> None:
+        from backend.domain.people import person_commands
+
+        person_commands.update_profile(self.database, current_context(), person_id, fields, group_ids)
+
+    def delete_person_if_unlinked(self, person_id: str) -> None:
+        from backend.domain.people import person_commands
+
+        person_commands.delete_if_unlinked(self.database, current_context(), person_id)
+
+    def _portrait_objects(self) -> Any:
+        from backend.storage.objects import LocalFilesystemStorage
+
+        if self.storage is None:
+            raise RuntimeError("this PostgreSQL library has no data root")
+        return LocalFilesystemStorage.for_config(self.storage)
+
+    def _person_portrait(self, person_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import person_commands
+
+        return person_commands.portrait(self.database, current_context(), self._portrait_objects(),
+                                        person_id)
+
+    def _cache_person_portrait(self, person_id: str, prepare: Any = None) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import person_commands
+        from backend.person_image import fetch_and_prepare
+
+        return person_commands.cache_portrait(self.database, current_context(), self._portrait_objects(),
+                                              person_id, prepare or fetch_and_prepare)
+
+    def _clear_person_portrait(self, person_id: str) -> bool:
+        from backend.domain.people import person_commands
+
+        return person_commands.clear_portrait(self.database, current_context(), person_id)
+
     # -- Person Groups (PG-C3 PR 7: ``backend/api/person_groups.py`` calls the commands) --
 
     def add_person_group_with_parent_options(self, name: str, parent_id: Optional[str] = None,

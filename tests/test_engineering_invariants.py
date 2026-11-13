@@ -1389,6 +1389,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/people/persons.py",
                 "backend/domain/people/groups.py",
                 "backend/domain/people/group_commands.py",
+                "backend/domain/people/person_commands.py",
                 "backend/domain/people/publishers.py",
                 "backend/domain/people/publisher_commands.py",
                 "backend/domain/people/queries.py",

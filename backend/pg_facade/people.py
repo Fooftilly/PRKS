@@ -1,7 +1,7 @@
 """People family of the PostgreSQL transition facade (L-P-1).
 
 Owned by the People lane (``docs/postgresql-architecture.md`` §15.2):
-persons, roles and person groups. Each method keeps the signature and return shape of the
+roles. Each method keeps the signature and return shape of the
 SQLite library it replaced.
 
 A method acts for the bound
@@ -10,14 +10,15 @@ A method acts for the bound
 snapshot, commands in one ``library_command`` transaction. The domain
 modules (and so psycopg) are imported inside the methods.
 
-Ported here: Persons and their profile fields (L-P-1 PR 2); Work-Person
-roles, a Person's ``works`` and, through ``backend.domain.works.queries``, the
-Work projection's people fields (PR 3). Publishers moved to
-``backend/domain/people/publisher_commands`` with their routes
-(``backend/api/publishers.py``), and Person Groups with their hierarchy and
-members to ``backend/domain/people/group_commands``
-(``backend/api/person_groups.py``), PG-C3 #642. Differences from SQLite (the
-Person Group ones hold for ``group_commands`` too), each deliberate:
+Ported here: Work-Person roles and, through
+``backend.domain.works.queries``, the Work projection's people fields (L-P-1
+PR 3). PG-C3 #642 moved Publishers to
+``backend/domain/people/publisher_commands`` (``backend/api/publishers.py``),
+Person Groups with their hierarchy and members to
+``backend/domain/people/group_commands`` (``backend/api/person_groups.py``),
+and Persons with their profile fields and portraits to
+``backend/domain/people/person_commands`` (``backend/api/persons.py``).
+Differences from SQLite across the People family, each deliberate:
 
 - Names (groups, the parent-name lookup) compare by
   ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``.
@@ -49,7 +50,7 @@ Person Group ones hold for ``group_commands`` too), each deliberate:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, List, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
 from backend.pg_facade.registry import FacadeMixin
@@ -59,12 +60,6 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-_PROFILE_FIELDS = frozenset({
-    "first_name", "last_name", "aliases", "about", "image_url", "link_wikipedia",
-    "link_stanford_encyclopedia", "link_iep", "links_other", "birth_date", "death_date",
-})
-
-
 def _read(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
     from backend.domain.identity.library_scope import library_query
 
@@ -72,139 +67,18 @@ def _read(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
 
 
 def _command(library: FacadeMixin, fn: Callable[[LibraryScope], T], *, serializable: bool = False) -> T:
-    """One People command; a name lost to a concurrent rename reads as SQLite's refusal."""
+    """One role command."""
     from backend.db.database import Isolation
-    from backend.db.errors import ConstraintViolationError
     from backend.domain.identity.authorization import Capability
     from backend.domain.identity.library_scope import library_command
-    from backend.person_group_sync import GroupRuleError
 
     isolation = Isolation.SERIALIZABLE if serializable else Isolation.READ_COMMITTED
-    try:
-        return library_command(library._database, current_context(), Capability.EDIT_LIBRARY, fn,
-                               isolation=isolation)
-    except ConstraintViolationError as error:
-        if error.constraint == "person_groups_library_id_name_key_key":
-            raise GroupRuleError("NAME_TAKEN", "A group with this name already exists.") from error
-        raise
-
-
-def _new_id(prefix: str) -> str:
-    from backend.entity_ids import generate
-
-    return generate(prefix)
-
-
-def _pdfs_dir(library: FacadeMixin) -> str:
-    if library._storage is None:
-        raise RuntimeError("this PostgreSQL library has no data root")
-    return library._storage.pdfs_dir
-
-
-def _etag(label: str, rows: List[dict]) -> str:
-    from backend.etags import etag_for_representation
-
-    return etag_for_representation(label, rows)
+    return library_command(library._database, current_context(), Capability.EDIT_LIBRARY, fn,
+                           isolation=isolation)
 
 
 class PeopleMixin(FacadeMixin):
-    """Persons and roles (L-P-1 PR 2 and 3)."""
-
-    # -- Persons ----------------------------------------------------------------
-    def add_person(
-        self,
-        first_name: str,
-        last_name: str,
-        aliases: str = "",
-        about: str = "",
-        image_url: str = "",
-        link_wikipedia: str = "",
-        link_stanford_encyclopedia: str = "",
-        link_iep: str = "",
-        links_other: str = "",
-        birth_date: str = "",
-        death_date: str = "",
-        person_id: str | None = None,
-    ) -> str:
-        from backend.domain.people import persons
-        from backend.entity_ids import is_distributed
-
-        if person_id is None:
-            person_id = _new_id("P")
-        elif not is_distributed(person_id, "P"):
-            raise ValueError("invalid person id")
-        fields = persons.canonical_fields({
-            "first_name": first_name, "last_name": last_name, "aliases": aliases, "about": about,
-            "image_url": image_url, "link_wikipedia": link_wikipedia,
-            "link_stanford_encyclopedia": link_stanford_encyclopedia, "link_iep": link_iep,
-            "links_other": links_other, "birth_date": birth_date, "death_date": death_date,
-        })
-        new_id = person_id
-        _command(self, lambda scope: persons.create_person(scope, new_id, fields))
-        return new_id
-    def get_all_persons(self) -> List[dict]:
-        from backend.domain.people import queries
-
-        return _read(self, queries.person_catalog)
-    def get_person(self, person_id: str) -> Optional[dict]:
-        from backend.domain.works.rules import finish_work_summary_rows
-        from backend.domain.people import queries
-
-        person = _read(self, lambda scope: queries.person_detail(scope, person_id))
-        if person is None:
-            return None
-        # A Person with no Works needs no data root.
-        if person["works"]:
-            finish_work_summary_rows(person["works"], _pdfs_dir(self))
-        return person
-    def etag_persons_catalog(self, rows: List[dict]) -> str:
-        return _etag("persons", rows)
-    def get_person_metadata_state(self, person_id: str) -> Optional[dict]:
-        from backend.domain.people import persons
-
-        return _read(self, lambda scope: persons.field_state(scope, person_id))
-    def update_person_profile(self, person_id: str, fields: dict, group_ids=None) -> None:
-        """Profile fields and, when ``group_ids`` is a list, the exact group set, atomically."""
-        from backend.domain.people import persons
-
-        updates = {name: persons.canonical_field(name, value)
-                   for name, value in (fields or {}).items() if name in _PROFILE_FIELDS}
-        if group_ids is None:
-            if updates:
-                _command(self, lambda scope: persons.update_profile(scope, person_id, updates, None))
-            return
-        if not isinstance(group_ids, list):
-            raise ValueError("group_ids must be a JSON array")
-        clean: List[str] = []
-        for group_id in group_ids:
-            if not group_id or str(group_id) in clean:
-                continue
-            clean.append(str(group_id))
-
-        def run(scope: LibraryScope) -> None:
-            if not persons.update_profile(scope, person_id, updates, clean):
-                raise ValueError("Person not found.")
-
-        _command(self, run, serializable=True)
-    def delete_person_if_unlinked(self, person_id: str) -> None:
-        from backend.domain.people import persons
-
-        pid = (person_id or "").strip()
-        if not pid:
-            raise ValueError("Person not found.")
-        from backend.db.errors import ConstraintViolationError
-
-        try:
-            deleted, linked = _command(self, lambda scope: persons.delete_person(scope, pid),
-                                       serializable=True)
-        except ConstraintViolationError as error:
-            if error.constraint != "roles_person_fkey":
-                raise
-            deleted, linked = False, 1
-        if linked:
-            raise ValueError("Cannot delete person with linked works.")
-        if not deleted:
-            raise ValueError("Person not found.")
+    """Work-Person roles (L-P-1 PR 3)."""
 
     # -- Roles ------------------------------------------------------------------
     def add_role(
