@@ -5,9 +5,6 @@ Work-Person roles on PostgreSQL. The schema is
 ``backend/db/schema/110_people.sql``. The sync handlers are
 ``backend/sync/handlers/person.py``, ``person_group.py`` and ``work_role.py``.
 
-Nothing in the running application imports this package yet: SQLite stays
-the only backend until the cutover slices (§15.3).
-
 **Lock order.** Every People command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
 

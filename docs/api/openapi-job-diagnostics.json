@@ -31,7 +31,7 @@
             "description": "The session's role is not the Library owner."
           },
           "404": {
-            "description": "The SQLite runtime (no PRKS_AUTH) has no jobs."
+            "description": "The server runs without a jobs runtime (test servers only)."
           },
           "503": {
             "description": "The database cannot be read (unavailable).",

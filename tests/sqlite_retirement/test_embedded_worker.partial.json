@@ -4,9 +4,9 @@
   "tests": {
     "EndpointTests.test_the_sqlite_runtime_has_no_such_route": {
       "replaced_by": [
-        "tests/pg/test_embedded_worker.py::EndpointTests.test_a_server_without_auth_or_jobs_has_no_such_route"
+        "tests/pg/test_embedded_worker.py::EndpointTests.test_a_server_without_auth_refuses_the_route"
       ],
-      "note": "Renamed: the same assertion, now against a server without PRKS_AUTH in front of the PostgreSQL Library."
+      "note": "Renamed, then (PR 38) tightened: a server without PRKS_AUTH now fails closed, so the route answers 503 identity_not_started instead of 404."
     }
   }
 }

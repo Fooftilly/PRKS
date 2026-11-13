@@ -1,6 +1,6 @@
 """``CREATE_PERSON``, ``DELETE_PERSON`` and ``SET_PERSON_METADATA_FIELD`` on PostgreSQL (L-P-1 #632).
 
-Validated by the SQLite families' rules (``backend/person_sync.py``,
+Validated by the families' rules (``backend/person_sync.py``,
 ``backend/person_metadata_sync.py``) and decided by
 :mod:`backend.domain.people.persons`, the commands behind the facade.
 

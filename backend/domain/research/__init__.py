@@ -10,10 +10,6 @@ A Research Note's derived mentions are rebuilt by the
 mention reads; ``graph`` projects the Research Graph from the canonical
 tables and those mentions (read only).
 
-The running application imports only ``reindex`` (the jobs worker, to
-register its handler): SQLite stays the only backend until the cutover
-slices (§15.3).
-
 **Lock order.** Every Research command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
 

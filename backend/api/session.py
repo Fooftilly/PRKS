@@ -291,7 +291,7 @@ def _principal(auth: WebAuth, request: HttpRequest) -> Optional[ValidSession]:
         session = sessions.resolve_session(
             auth.db, cookie(request, SESSION_COOKIE), idle=auth.settings.idle, library_id=auth.library_id
         )
-    # The SQLite routes behind admission act on the one served Library's store.
+    # Every route behind admission acts on the one served Library.
     return session if session is not None and session.library_id == auth.library_id else None
 
 

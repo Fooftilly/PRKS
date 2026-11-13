@@ -27,10 +27,8 @@ Each command runs through :mod:`backend.domain.processing.commands` for the
 admitted :class:`~backend.domain.identity.request_context.RequestContext`, so
 it is authorized, maintenance-checked and epoch-fenced in its own
 transaction. ``AccessRefused`` and mapped database errors propagate to
-``server.py``, which answers them as every PostgreSQL route does. On the
-SQLite runtime no handler claims a path, and the server answers 404. The
-domain modules (and so psycopg) are imported only after a handler has found
-a PostgreSQL library: the SQLite runtime never loads psycopg.
+``server.py``, which answers them as every PostgreSQL route does. The
+domain modules are imported only once a handler has claimed a path.
 """
 
 from __future__ import annotations
@@ -92,11 +90,13 @@ def _route(path: str) -> Optional[tuple[str, str]]:
 
 
 def _library(handler: Any, db: Any) -> Any:
-    """The PostgreSQL library the route acts on; None on the SQLite runtime."""
+    """The PostgreSQL library the route acts on, for the admitted request's context."""
     from backend.pg_facade import PostgresLibrary
 
-    if getattr(handler, "_prks_request_context", None) is None or not isinstance(db, PostgresLibrary):
-        return None
+    if getattr(handler, "_prks_request_context", None) is None:
+        raise RuntimeError("a Processing route ran without an admitted request context")
+    if not isinstance(db, PostgresLibrary):
+        raise RuntimeError("the served Library is not a PostgresLibrary")
     return db
 
 
@@ -147,9 +147,9 @@ def _page_args(query: str) -> tuple[int, Optional[str]]:
 
 def handle_get(handler: Any, db: Any, path: str, query: str) -> bool:
     """The queue page, an item, or an item's PDF; False when the path is not this family's."""
-    library = _library(handler, db)
-    if library is None or not handles(path):
+    if not handles(path):
         return False
+    library = _library(handler, db)
     from backend.domain.processing import commands
 
     ctx = handler._prks_request_context
@@ -179,13 +179,10 @@ def handle_get(handler: Any, db: Any, path: str, query: str) -> bool:
 
 
 def handle_head(handler: Any, db: Any, path: str) -> bool:
-    """HEAD of an item's PDF; on the SQLite runtime every queue path is a 404, as for GET."""
+    """HEAD of an item's PDF; False when the path is not this family's."""
     if not handles(path):
         return False
     library = _library(handler, db)
-    if library is None:
-        handler.send_error(404, "API endpoint not found")
-        return True
     route = _route(path)
     if route is None or route[1] != "pdf":
         return False
@@ -257,9 +254,6 @@ def handle_upload(handler: Any, db: Any) -> None:
     Clears ``handler._prks_unread_body`` once the whole body has been read.
     """
     library = _library(handler, db)
-    if library is None:
-        handler.send_error(404, "API endpoint not found")
-        return
     from email.message import Message
 
     from backend.domain.objects.lifecycle import ObjectMissing
@@ -330,10 +324,10 @@ def handle_upload(handler: Any, db: Any) -> None:
 
 
 def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
-    library = _library(handler, db)
-    route = _route(path) if library is not None else None
+    route = _route(path)
     if route is None or route[1]:
         return False
+    library = _library(handler, db)
     from backend.domain.processing import commands, items
 
     if not isinstance(data, dict):
@@ -354,10 +348,10 @@ def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
 
 
 def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    library = _library(handler, db)
-    route = _route(path) if library is not None else None
+    route = _route(path)
     if route is None or route[1]:
         return False
+    library = _library(handler, db)
     from backend.domain.processing import commands, items
 
     try:
@@ -371,16 +365,13 @@ def handle_delete(handler: Any, db: Any, path: str) -> bool:
 
 def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
     """One import or a batch; the upload is :func:`handle_upload`'s."""
-    library = _library(handler, db)
-    if library is None:
-        return False
     if path == BATCH_IMPORT:
-        _import_batch(handler, library, data)
+        _import_batch(handler, _library(handler, db), data)
         return True
     route = _route(path)
     if route is None or route[1] != "import":
         return False
-    _import_one(handler, library, route[0])
+    _import_one(handler, _library(handler, db), route[0])
     return True
 
 

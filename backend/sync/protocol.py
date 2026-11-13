@@ -1,9 +1,9 @@
 """The semantic-operation ledger on PostgreSQL (``docs/postgresql-architecture.md`` §7.3).
 
-What every operation family shares, moved from ``backend/sync_protocol.py``
-without changing its meaning (``docs/local-first-sync.md``): the envelope is
-normalized by the same function, so the request hash of an operation is the
-same bytes on both backends; a malformed envelope or payload is refused
+What every operation family shares, moved from the retired SQLite
+``backend/sync_protocol.py`` without changing its meaning
+(``docs/local-first-sync.md``): the envelope is normalized by the same
+function, so the request hash of an operation is the same bytes it was; a malformed envelope or payload is refused
 before the ledger and never burns an ``op_id``; an exception is never
 ledgered; an ``op_id`` seen before replays its stored status and body, or is
 ``OP_ID_REUSE`` when the request differs; dependencies must be acknowledged
@@ -43,8 +43,8 @@ A ledger row records the Library and the user. An ``op_id`` stored for
 another Library or account is ``OP_ID_REUSE`` and never discloses its
 result, and the envelope's device must be one of the user's devices.
 
-Only the families registered at the bottom run here; any other operation
-the SQLite protocol accepts raises :class:`~backend.pg_facade.NotPortedError`.
+Only the operations registered at the bottom run; any other well-formed
+operation raises :class:`~backend.pg_facade.NotPortedError` (answered 501).
 """
 
 from __future__ import annotations
@@ -247,8 +247,8 @@ def _dependencies_satisfied(scope: LibraryScope, op: dict[str, Any]) -> bool:
     )
 
 
-# Registration is explicit, as in the SQLite protocol: the families PostgreSQL
-# accepts are readable in one place. Later lanes add theirs here.
+# Registration is explicit: the families the server accepts are readable in
+# one place.
 from backend.sync.handlers import (  # noqa: E402
     argument, concept, folder, pdf_annotation, person, person_group, playlist, position, tag, tag_link,
     work_lifecycle, work_metadata, work_notes, work_open, work_role, work_source,

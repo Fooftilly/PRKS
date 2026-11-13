@@ -4,9 +4,9 @@
   "tests": {
     "SqliteRuntimeTests.test_the_sqlite_runtime_has_no_queue": {
       "replaced_by": [
-        "tests/pg/test_http_processing.py::ServerWithoutAuthTests.test_a_server_without_auth_has_no_queue"
+        "tests/pg/test_http_processing.py::ServerWithoutAuthTests.test_a_server_without_auth_serves_no_queue_route"
       ],
-      "note": "Renamed: the same assertions, now against a server without PRKS_AUTH in front of the PostgreSQL Library."
+      "note": "Renamed, then (PR 38) tightened: a server without PRKS_AUTH now fails closed, so every queue route answers 503 identity_not_started instead of 404."
     }
   }
 }

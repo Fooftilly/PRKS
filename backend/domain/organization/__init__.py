@@ -10,9 +10,6 @@ the Playlist a Work is in (``playlists``) on PostgreSQL; Saved Views are
 ``backend/sync/handlers/tag.py``, ``tag_link.py``, ``folder.py`` and
 ``playlist.py``.
 
-Nothing in the running application imports this package yet: SQLite stays
-the only backend until the cutover slices (§15.3).
-
 **Lock order.** Every Tag command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
 

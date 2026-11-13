@@ -1,7 +1,7 @@
 """CREATE_PERSON: client-generated identity, same field contract as POST /api/persons.
 
 Construction, not mutation: `base_revision` is null, and the id in the envelope
-is the id SQLite stores. A replay of the same op_id is the ledger. A later
+is the id the Library stores. A replay of the same op_id is the ledger. A later
 envelope for an id that already exists acknowledges the stored row without
 overwriting it -- creation is not an update.
 """

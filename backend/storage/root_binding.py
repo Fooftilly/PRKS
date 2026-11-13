@@ -121,8 +121,9 @@ def is_top_level_os_metadata(name: str) -> bool:
 # V10 (startup): warn below this much free space. Choose/relocate enforce a
 # computed requirement in a later phase.
 LOW_FREE_SPACE_WARNING_BYTES = 1024 * 1024 * 1024
-# V9: filesystem types known with certainty to be network mounts, where SQLite
-# locking and WAL are unsafe for a live library (§7.4). Linux names come from
+# V9: filesystem types known with certainty to be network mounts, where the
+# root's file locks (root.lock, content.lock) and fsync ordering are not
+# reliable (§7.4). Linux names come from
 # /proc/mounts, macOS names from mount(8), and ``windows-remote`` is a UNC path
 # or a drive Windows reports as DRIVE_REMOTE.
 WINDOWS_REMOTE = "windows-remote"
@@ -163,10 +164,9 @@ UNMARKED_FOREIGN = "foreign"
 class BoundRoot:
     """A storage root this process has opened and holds the lease on.
 
-    The SQLite runtime holds ``root.lock`` exclusive. A web process paired
-    with PostgreSQL (``open_storage_root(paired=True)``) holds it shared,
-    beside its worker and ``migrate``, and holds the interim content lock
-    exclusive instead (``content_lock``).
+    A web process (``open_storage_root(paired=True)``) holds ``root.lock``
+    shared, beside its worker and ``migrate``, and holds the content lock
+    exclusive (``content_lock``).
     """
 
     root: str
@@ -934,10 +934,11 @@ def detect_filesystem_type(path: str, *, mounts_file: str = "/proc/mounts") -> O
 
 
 def check_filesystem_type(path: str) -> None:
-    """V9 (§7.4): refuse a live SQLite-era root on a filesystem known to be unsafe.
+    """V9 (§7.4): refuse a root on a filesystem known to be unsafe.
 
     A type known with certainty to be a network or network-backed FUSE mount
-    is refused; SQLite's WAL and locking are not reliable there. Any other
+    is refused; the root's file locks and fsync ordering are not reliable
+    there. Any other
     FUSE type is uncertain and only warned about, and so is a filesystem this
     platform cannot classify at all.
     """
@@ -950,8 +951,8 @@ def check_filesystem_type(path: str) -> None:
     if fs_type in NETWORK_FILESYSTEM_TYPES:
         raise StorageRootRefused(
             "root_network_filesystem",
-            f"The storage root is on a {fs_type} network filesystem. The live SQLite "
-            "library and its indexes are not safe there; use a local disk.",
+            f"The storage root is on a {fs_type} network filesystem, where its file "
+            "locks are not reliable; use a local disk.",
         )
     if fs_type.startswith("fuse"):
         LOGGER.warning("storage_root_uncertain_filesystem fs_type=%s", safe_fs_label(fs_type))
@@ -1051,8 +1052,7 @@ def acquire_shared_root_lease(root_real: str) -> SharedFileLock:
 
     Every process of one paired PostgreSQL instance holds the lease shared;
     relocation and the offline storage tools hold it exclusive, so they never
-    meet a root claim or a start-generation bump (§11.1). Not used by the
-    SQLite runtime, whose single process keeps the exclusive lease.
+    meet a root claim or a start-generation bump (§11.1).
     """
     maintenance = _ensure_maintenance_dir(root_real)
     try:
@@ -1072,11 +1072,10 @@ def acquire_shared_root_lease(root_real: str) -> SharedFileLock:
 
 
 def acquire_content_lock(root_real: str) -> ExclusiveFileLock:
-    """Take ``content.lock`` exclusive, without waiting (interim, until PG-C1).
+    """Take ``content.lock`` exclusive, without waiting (L-D-1 #630).
 
-    The paired web process holds it for its whole run, so at most one
-    process opens the root's SQLite content store while ``root.lock`` is
-    only held shared.
+    The web process holds it for its whole run, so at most one web process
+    serves a root while ``root.lock`` is only held shared.
     """
     maintenance = _ensure_maintenance_dir(root_real)
     try:
