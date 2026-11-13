@@ -8,6 +8,13 @@ that #60's Asset work consumes. The phases in
 Phase A maps onto the code, and the choices it made inside this design's
 latitude, are recorded in [§18](#18-phase-a-implementation-record).
 
+**Since PG-C2 (#641)** the Library database is PostgreSQL only: there is no
+`prks_data.db`, SQLite text or research index file, processing inbox or
+format-1 backup under the root any more, and managed PDFs and portraits are
+immutable objects written through `StorageBackend` (Phase B's object
+interface). Sections that describe those SQLite-era components and the
+`server.py` globals they used record the state this design audited.
+
 It follows the shape of [work-identity-model.md](work-identity-model.md): audit
 the code first, then decide. Every claim about current behavior was checked
 against `master` at `6ed603f` (schema version 17), not taken from issue text.
@@ -100,16 +107,16 @@ refuses a set `PRKS_FOR_PROCESSING_DIR`.
 
 Rebinding happens in `backend/server.py::bind_storage()`. It publishes the
 config, the DB wrapper, the text and research indexes, and the module globals
-`pdfs_dir`, `thumbs_dir` and `processing_dir`, and it rolls back to the
-previous binding if publication fails. Restore calls it through `RebindFn` after
+`pdfs_dir` and `thumbs_dir` (`processing_dir` until PG-C2 removed the inbox),
+and it rolls back to the previous binding if publication fails. Restore calls it through `RebindFn` after
 replacing components (`backup_restore.apply_restore`). Tests build roots with
 `StorageConfig.for_testing(root)`.
 
 Backup already classifies every `StorageConfig` path field
 (`backup_storage_inventory()`): canonical `db_path`, `pdfs_dir`, `people_dir`;
 derived `thumbs_dir`, `index_db_path`, `research_index_db_path`; operational
-`log_file`; conditional `processing_dir` (included only when it is under the
-root); container `root`, `configured_root`. `backend/AGENTS.md` requires every
+`log_file`; conditional `processing_dir` (included only when it was under the
+root; removed with the inbox in PG-C2, S14); container `root`, `configured_root`. `backend/AGENTS.md` requires every
 new persistent component to be classified there.
 
 ### 1.2 Assumptions: keep, or treat as migration debt

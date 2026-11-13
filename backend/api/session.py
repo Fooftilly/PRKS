@@ -1,7 +1,7 @@
 """HTTP authentication boundary (``docs/postgresql-architecture.md`` §9.3, §9.4, §10.4; L-ID-1 #626).
 
-Used only when ``PRKS_AUTH`` is set (:mod:`backend.domain.identity.web_start`);
-the SQLite application without it is unchanged. ``backend.server`` calls
+Every web process uses it (PG-C2 #641; ``PRKS_AUTH`` picks the mode,
+:mod:`backend.domain.identity.web_start`). ``backend.server`` calls
 :func:`handle` once for every ``/api/`` request, before any route runs, and
 either dispatches the route (:class:`Admitted`) or sends the :class:`Reply`.
 
@@ -37,11 +37,10 @@ Library command, and an ``<img>`` sends no epoch, so its context carries the
 epoch admission read and a restore since then fences the fill.
 
 The admission check runs in its own transaction and commits before the route
-runs: today's routes still write SQLite, so no PostgreSQL transaction spans
-their write. It is a gate in front of the route, not transactional
-authorization or epoch fencing of the route's write (see "What admission does
-not cover before the cutover" in ``docs/login-security.md``). Commands that move to PostgreSQL run inside ``library_command``
-themselves and are fenced up to their commit. As with every caller of these
+runs. The route's Library commands run inside ``library_command`` themselves
+and are fenced up to their commit; a refusal they raise is answered as
+admission answers it (:func:`route_failure`; "What admission covers" in
+``docs/login-security.md``). As with every caller of these
 helpers, the route owns its Library predicates (``library_scope`` trust
 boundary); nothing here scopes rows.
 

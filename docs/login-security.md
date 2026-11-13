@@ -1,9 +1,8 @@
 # Sign-in: attempt limits, login devices and sessions
 
-PostgreSQL deployments only (L-ID-1, #626; design in
-`docs/postgresql-architecture.md` §9.3). Sign-in is off unless `PRKS_AUTH` is
-set (see "Turning sign-in on" below); the SQLite application without it is
-unchanged. Code: `backend/domain/identity/login.py`, `login_limiter.py`,
+L-ID-1 (#626); design in `docs/postgresql-architecture.md` §9.3. Every web
+process signs requests in (PG-C2 #641): `PRKS_AUTH` chooses how (see
+"Sign-in modes" below). Code: `backend/domain/identity/login.py`, `login_limiter.py`,
 `sessions.py`, `secret_tokens.py` and `web_start.py`, and the HTTP boundary
 `backend/api/session.py`.
 
@@ -110,11 +109,11 @@ The `sessions.prune` job (when the job runtime arrives) deletes expired and
 revoked sessions, ended attempt windows and login-device tokens older than a
 year.
 
-## Turning sign-in on
+## Sign-in modes
 
 | Variable | Values |
 | --- | --- |
-| `PRKS_AUTH` | unset (no sign-in, the SQLite application as before), `session`, or `loopback-owner` |
+| `PRKS_AUTH` | `session` (the default), or `loopback-owner` (the default of `--testing`; a testing instance on a loopback bind only) |
 | `PRKS_DATABASE_URL` / `PRKS_DATABASE_URL_FILE` | the PostgreSQL database; required by both modes |
 | `PRKS_PUBLIC_ORIGIN` | the origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org` |
 
@@ -123,10 +122,10 @@ every PostgreSQL process (`docs/postgresql-architecture.md` §11.1): it refuses
 to start, with exit status 2, when the database belongs to another root, is a
 stale copy, is a testing database started without `--testing` (or the
 reverse), has no completed setup (`docs/admin-bootstrap.md`), or holds more than one
-Library (the SQLite store under the root holds one Library's content). The check
-holds the root's shared lease only while it runs; the server then takes the
-exclusive single-process lease as before, so `admin unlock-login` (which needs
-the shared lease) runs while the server is stopped.
+Library (0.8 serves one Library per instance). The web process then holds the
+root's lease shared for its whole run, beside `worker` and `migrate`, plus an
+exclusive content lock, so one web process serves a root
+(`docs/storage-architecture.md`).
 
 **`session`.** Every `/api/` route except the three below needs a
 `prks_session` cookie.
@@ -167,34 +166,23 @@ They are checked in this order, and the first failure answers:
 
 Admitted responses carry the Library's epoch in `PRKS-Library-Epoch`.
 
-### What admission does not cover before the cutover
+### What admission covers
 
-Until the SQLite-to-PostgreSQL cutover, a route's work still runs on the
-SQLite store. Admission is a separate PostgreSQL transaction that authorizes
-the request and checks the epoch, then **commits before** the SQLite route
-runs. It is a gate in front of the route, not transactional authorization of
-the route's write:
+Admission is its own transaction: it authorizes the request and checks the
+epoch, then commits before the route runs. The route's Library work then
+runs in its own `library_query` or `library_command` transactions, which
+authorize again and, for a command, check the epoch up to its commit:
 
-- A sign-out, a demotion, a removed membership or a disabled account that
-  commits after admission does not stop a request already admitted; it
-  applies from the next request. (In a PostgreSQL command, the same change
-  waits for the write in flight.)
-- The epoch fence covers only the moment of admission, and nothing on the
-  SQLite side advances the epoch: today's SQLite backup restore does not
-  change it, and the PostgreSQL restore that does (L-B-1) does not exist yet.
-  Once Library commands run inside `library_command`, the fence holds until
-  their commit.
-- Admission does not check which rows a route touches. The SQLite store has
-  one Library, so the server serves exactly one: it refuses to start with
-  several, and a session for any other Library is nobody (401).
+- A sign-out, a demotion, a removed membership, a disabled account, a
+  maintenance flag or a restore that commits after admission refuses the
+  route's next command; the server answers it as admission would
+  (`route_failure` in `backend/api/session.py`).
+- Admission does not check which rows a route touches; every command and
+  query owns its Library predicates (`library_scope`). The server serves
+  exactly one Library: it refuses to start with several, and a session for
+  any other Library is nobody (401).
 - The browser sends no device id, so device ownership is not part of HTTP
   admission yet.
-
-None of this is a fault of the gate; it is why `PRKS_AUTH` stays opt-in and
-off for production until the cutover (#614). Each Stage 2 lane moves its
-family's commands into `library_command`, and the cutover's switch (PG-C2,
-#641) removes the last SQLite route. From then on, every Library write runs
-inside the transaction that authorizes it and checks its epoch.
 
 ### Cross-site requests
 

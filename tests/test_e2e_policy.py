@@ -1094,7 +1094,7 @@ class AffectedMappingTests(unittest.TestCase):
     def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
         pg_paths = ["backend/db/schema/snapshot.json", "backend/db/schema/040_sync.sql"]
         for runtime in (
-            "prks_app.py", "backend/server.py", "backend/db_manager.py",
+            "prks_app.py", "backend/server.py", "backend/pg_facade/works.py",
             "backend/db/__init__.py", "backend/db/database.py",
             "backend/db/new_unknown_module.py", "backend/api/session.py",
             "backend/domain/identity/web_start.py",
@@ -1236,17 +1236,22 @@ class AffectedMappingTests(unittest.TestCase):
     def test_research_network_core_is_ci_full(self):
         # Shared Concepts/Positions/Arguments domain — do not under-test as
         # concepts-only; CI fail-closed to full.
-        path = "backend/research_network.py"
-        classified = policy.classify_affected_path(path)
-        self.assertEqual(classified["rules"], ["research-network-core"])
-        self.assertTrue(classified["ci_full"])
-        for feat in ("concepts", "positions", "arguments", "graph", "notes"):
-            self.assertIn(feat, classified["features"])
-        plan = policy.plan_ci_e2e([path])
-        self.assertEqual(plan["mode"], "full")
-        self.assertEqual(plan["features"], [])
-        self.assertIn("research_network.py", plan["reason"])
-        self.assertIn("research-network-core", plan["reason"])
+        for path in (
+            "backend/domain/research/concepts.py",
+            "backend/pg_facade/research.py",
+            "backend/pg_facade/research_index.py",
+        ):
+            with self.subTest(path=path):
+                classified = policy.classify_affected_path(path)
+                self.assertEqual(classified["rules"], ["research-network-core"])
+                self.assertTrue(classified["ci_full"])
+                for feat in ("concepts", "positions", "arguments", "graph", "notes"):
+                    self.assertIn(feat, classified["features"])
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertEqual(plan["features"], [])
+                self.assertIn(path.rsplit("/", 1)[-1], plan["reason"])
+                self.assertIn("research-network-core", plan["reason"])
 
     def test_ci_reason_path_token_strips_shell_metacharacters(self):
         nasty = 'frontend/js/evil"`$(id)`.js'
@@ -1272,7 +1277,7 @@ class AffectedMappingTests(unittest.TestCase):
             "scripts/ci/install_pinned_python.py",
             "requirements.txt",
             "requirements-dev.txt",
-            "backend/db_schema.sql",
+            "backend/server.py",
         ):
             with self.subTest(path=path):
                 plan = policy.plan_ci_e2e([path])

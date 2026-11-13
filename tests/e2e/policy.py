@@ -406,9 +406,6 @@ AFFECTED_RULES = (
             "frontend/index.html",
             "frontend/sw.js",
             "backend/server.py",
-            "backend/db_manager.py",
-            "backend/db_migrations.py",
-            "backend/db_schema.sql",
             "prks_app.py",
         ),
         "features": ("smoke", "shell", "tabs", "offline", "sync", "modals"),
@@ -458,14 +455,19 @@ AFFECTED_RULES = (
         ),
         "features": ("graph",),
     },
-    # Shared Concepts/Positions/Arguments domain module — CI always full so
+    # Shared Concepts/Positions/Arguments domain (PostgreSQL since PG-C2 #641;
+    # the SQLite research_network.py is deleted) — CI always full so
     # Position/Argument suites cannot be dropped by a concepts-only mapping.
     {
         "name": "research-network-core",
-        "paths": ("backend/research_network.py",),
+        "paths": (
+            "backend/domain/research/**",
+            "backend/pg_facade/research.py",
+            "backend/pg_facade/research_index.py",
+        ),
         "features": ("concepts", "positions", "arguments", "graph", "notes"),
         "ci_mode": "full",
-        "note": "research_network.py owns Concepts/Positions/Arguments (CI: full)",
+        "note": "domain/research owns Concepts/Positions/Arguments (CI: full)",
     },
     {
         "name": "concepts",
@@ -474,7 +476,6 @@ AFFECTED_RULES = (
             "frontend/js/concept-state.js",
             "backend/concept_sync.py",
             "backend/research_markup.py",
-            "backend/research_index.py",
         ),
         "features": ("concepts", "graph", "notes"),
     },

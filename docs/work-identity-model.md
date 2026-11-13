@@ -1,5 +1,7 @@
 # Work identity, editions, versions and Assets: design (#60)
 
+> **Implementation status (2026-11-13):** the Work → Manifestation → Asset model is implemented on PostgreSQL (`backend/db/schema/100_works.sql`, `backend/domain/works/`), the only Library backend since PG-C2 (#641). The SQLite schema-17 mirror, `migrate_v16_to_v17` and `backend/work_identity.py` described below were deleted with the SQLite runtime; read those sections as the record of that slice.
+
 
 > **Target-architecture compatibility note (2026-09-29):** this document remains the approved-in-direction Work → Manifestation → Asset domain design, but many migration/storage mechanics below are intentionally written against the **current SQLite + local-filesystem implementation**. Roadmaps #310 and #311 now define the accepted long-term direction: Library/user authorization boundaries, PostgreSQL as the expected canonical relational store, storage-backend abstraction, and a first-class user-configurable local data/library root. Treat SQLite triggers/table-rebuild details, current archive layout, and managed-basename mechanics as migration implementation choices unless a section explicitly states a domain invariant. Stable Work/Manifestation/Asset identity must not depend on a physical host path or on SQLite remaining permanent.
 

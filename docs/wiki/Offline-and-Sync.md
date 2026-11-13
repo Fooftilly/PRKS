@@ -8,7 +8,7 @@ sequenceDiagram
     participant UI as PRKS UI
     participant L as Durable local store
     participant S as PRKS server
-    participant DB as Canonical SQLite state
+    participant DB as Canonical PostgreSQL state
 
     U->>UI: Edit supported data
     UI->>L: Persist operation first
