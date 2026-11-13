@@ -15,6 +15,7 @@ from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
+from backend.api import playlists as playlists_api
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 
@@ -168,8 +169,7 @@ class CreateRefusalTests(ServerApiTestCase):
                  "LEFT JOIN prks.playlist_items i ON i.playlist_id = p.id WHERE p.id = %s GROUP BY p.updated_at")
         before = self.sql(state, (playlist,))
         with (mock.patch.object(self.facade, "missing_initial_role_person_ids", return_value=[]),
-              mock.patch.object(self.facade, "add_work_to_playlist",
-                                wraps=self.facade.add_work_to_playlist) as attach):
+              mock.patch.object(playlists_api, "add_item", wraps=playlists_api.add_item) as attach):
             res = self.send("POST", "/api/works", {
                 "title": "Playlist Race Work", "playlist_id": playlist,
                 "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}]})
