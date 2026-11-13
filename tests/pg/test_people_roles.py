@@ -1,7 +1,7 @@
 """Work-Person roles on PostgreSQL: scope, revisions, tombstones and locks (L-P-1 #632, PR 3).
 
 What SQLite has no counterpart for, or answers differently by design
-(``backend/pg_facade/people.py``): Manifestation-scoped roles, Library
+(``backend/domain/people/__init__.py``): Manifestation-scoped roles, Library
 isolation, the role decision table run against the domain commands, the
 tombstones a Work or Person delete leaves for a recreated id, and the §8.3
 Person row locks. Behaviour SQLite shares is compared directly in

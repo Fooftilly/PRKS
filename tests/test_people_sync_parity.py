@@ -5,7 +5,7 @@ a reference library holding the same People, and the two ``(status,
 result)`` pairs must be equal after ids and timestamps become labels; then
 the People and their revision states are compared. Client-minted ids are
 the same on both sides, and inputs avoid the documented differences
-(``backend/pg_facade/people.py``): a revision state is not compared where a
+(``backend/domain/people/__init__.py``): a revision state is not compared where a
 delete left a tombstone SQLite does not. ``CREATE_WORK``'s role filing composes with the
 Organization lane's folder filing (``tests/test_folders_parity.py``); its
 PostgreSQL tests are in ``tests/pg/test_people_sync.py`` and
@@ -187,7 +187,7 @@ class PeopleSyncParityTests(PeopleParityTestCase):
                 self.assertEqual(self.send_both("DELETE_PERSON", person_id, payload, base)[0], 400)
         self.same_states(group_ids=(group_id,))
         # The role scope is a documented difference: PostgreSQL tombstones
-        # every role scope naming a deleted Person (backend/pg_facade/people.py).
+        # every role scope naming a deleted Person (backend/domain/people/__init__.py).
         self.same_for("get_work_roles", work)
 
     # -- Person Groups ----------------------------------------------------------
@@ -281,7 +281,7 @@ class PeopleSyncParityTests(PeopleParityTestCase):
         self.assertEqual(self.send_both("DELETE_PERSON_GROUP", group_id, {}, 0)[0], 400)
         self.same_states(group_ids=(parent, child))
         # The membership pair is a documented difference: PostgreSQL advances
-        # a deleted group's pairs once more (backend/pg_facade/people.py).
+        # a deleted group's pairs once more (backend/domain/people/__init__.py).
         self.same_for("get_person", (ann, ann))
         self.same("get_all_person_groups")
 

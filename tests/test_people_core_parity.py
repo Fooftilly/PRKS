@@ -4,7 +4,7 @@ Each test runs the same calls on :class:`tests.library_adapter.TestLibrary`
 and on the recorded SQLite ``PRKSDatabase``, and compares the results after
 replacing generated ids, timestamps and ETag digests
 (``tests/people_parity_helpers.py``). Inputs avoid the
-documented differences (``backend/pg_facade/people.py``): aliases are
+documented differences (``backend/domain/people/__init__.py``): aliases are
 written in their canonical ``", "`` form and names differ in ASCII letters
 only where case matters.
 """
