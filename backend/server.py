@@ -24,7 +24,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
     prks_thumb_cache_stem,
-    prks_delete_person_image_cache,
 )
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import BulkWorkError, effective_source_kind
@@ -33,6 +32,7 @@ from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.api import folders as folders_api
 from backend.api import person_groups as person_groups_api
+from backend.api import persons as persons_api
 from backend.api import playlists as playlists_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
@@ -97,12 +97,7 @@ from backend.domain.maintenance.upload import (
     backup_max_upload_bytes,
     stream_upload_to_file,
 )
-from backend.person_image import (
-    PersonImageUrlError,
-    fetch_and_prepare,
-    identify_cached_portrait_subtype,
-    normalize_person_image_url,
-)
+from backend.person_image import identify_cached_portrait_subtype
 from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
 
 if TYPE_CHECKING:
@@ -1307,40 +1302,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, {'status': 'updated'})
             elif playlists_api.handle_patch(self, db, path, data):
                 return
-            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
-                group_ids = data.pop('group_ids', None)
-                image_url_changed = 'image_url' in data
-                if image_url_changed:
-                    try:
-                        data['image_url'] = normalize_person_image_url(data.get('image_url'))
-                    except PersonImageUrlError:
-                        self.send_json(400, {'error': 'Invalid image_url'})
-                        return
-                if group_ids is not None and not isinstance(group_ids, list):
-                    self.send_json(400, {'error': 'group_ids must be a JSON array'})
-                    return
-                # Metadata and memberships commit or roll back together, so an
-                # unknown group id cannot leave the profile half-updated. A
-                # failed request must not have changed canonical state -- that
-                # is what makes "failed mutation keeps its cache" sound.
-                try:
-                    db.update_person_profile(p_id, data, group_ids)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                if image_url_changed:
-                    # Disposable portrait cache, cleared only after the canonical
-                    # profile change committed; a failure here never fails the PATCH.
-                    try:
-                        prks_delete_person_image_cache(p_id, _bound_storage.people_dir)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "person_image_cache_cleanup_failed person_id=%s error_type=%s",
-                            safe_log_id(p_id),
-                            safe_error_type(e),
-                        )
-                self.send_json(200, {'status': 'updated'})
+            elif persons_api.handle_patch(self, db, path, data):
+                return
             elif person_groups_api.handle_patch(self, db, path, data):
                 return
             elif folders_api.handle_patch(self, db, path, data):
@@ -1547,20 +1510,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif publishers_api.handle_delete(self, db, path, query_params):
                 return
-            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
-                try:
-                    db.delete_person_if_unlinked(p_id)
-                except ValueError as e:
-                    msg = str(e)
-                    if 'not found' in msg.lower():
-                        self.send_json(404, {'error': msg})
-                    elif 'linked works' in msg.lower():
-                        self.send_json(409, {'error': msg})
-                    else:
-                        self.send_json(400, {'error': msg})
-                    return
-                self.send_json(200, {'status': 'deleted'})
+            elif persons_api.handle_delete(self, db, path):
+                return
             elif person_groups_api.handle_delete(self, db, path):
                 return
             elif saved_views_api.handle_delete(self, db, path):
@@ -1777,59 +1728,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-    def _send_person_profile_image(self, person_id: str) -> None:
-        self._send_postgres_person_portrait(person_id)
-        return
-
-    def _send_postgres_person_portrait(self, person_id: str) -> None:
-        """Serve the Person's portrait from the PostgreSQL Library's ``portraits`` objects.
-
-        A cached portrait is the immutable object the Person row names
-        (``portrait_locator``), so it is backed up, restored and cleaned up
-        with the Library. On a miss an editor fetches ``image_url`` and makes
-        it the cached portrait in one command, at the epoch admission read
-        (``backend.api.session``: an ``<img>`` sends none). A reader never
-        writes (§9.4): its miss serves the fetched bytes uncached, as does a
-        fill a restore fenced. Nothing is read from or written to
-        ``people_dir``.
-        """
-        from backend.domain.identity.authorization import AccessRefused, Refusal
-
-        row = db.get_person(person_id)
-        if not row:
-            self.send_error(404, "Person not found")
-            return
-        url = (row.get("image_url") or "").strip()
-        if not url:
-            self.send_error(404, "Profile image not available")
-            return
-        try:
-            cached = db._person_portrait(person_id)
-            if cached is not None:
-                self._send_person_profile_image_bytes(cached["body"], cached["subtype"])
-                return
-            # ``fetch_and_prepare`` is looked up when called, so the module's
-            # binding is the one used.
-            fresh = db._cache_person_portrait(person_id, lambda source: fetch_and_prepare(source))
-        except LookupError:
-            self.send_error(404, "Person not found")
-            return
-        except AccessRefused as exc:
-            # A reader may not fill the cache, and a restore since admission
-            # fences the fill: either way the image is served uncached.
-            if exc.refusal not in (Refusal.FORBIDDEN, Refusal.LIBRARY_EPOCH_CHANGED):
-                raise
-            prepared = fetch_and_prepare(url)
-            fresh = None if prepared is None else {"body": prepared.body, "subtype": prepared.subtype}
-        if fresh is None:
-            LOGGER.info(
-                "portrait_fetch_failed request_id=%s",
-                safe_log_id(self._prks_request_id),
-            )
-            self.send_error(404, "Profile image not available")
-            return
-        self._send_person_profile_image_bytes(fresh["body"], fresh["subtype"], max_age=3600)
 
     def _handle_job_diagnostics(self):
         """Owner-only job diagnostics (§12.4); the route exists only with ``PRKS_AUTH``.
@@ -2184,13 +2082,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "API endpoint not found")
             elif folders_api.handle_get(self, db, path):
                 return
-            elif path == '/api/persons':
-                data = db.get_all_persons()
-                etag = db.etag_persons_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif persons_api.handle_get(self, db, path):
+                return
             elif person_groups_api.handle_get(self, db, path):
                 return
             elif saved_views_api.handle_get(self, db, path):
@@ -2277,20 +2170,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 item['mentions'] = research_index.argument_backlinks(aid, db)
                 item['verdicts'] = db.list_verdicts()
                 self.send_json(200, item)
-            elif path.startswith('/api/persons/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY. The Person detail already carries every
-                # profile value and none of them has a length bound, so
-                # echoing them here would make a second copy of the whole
-                # biography in what this sends and what IndexedDB stores.
-                data = db.get_person_metadata_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Person not found"})
-                else:
-                    etag = db.etag_for_representation("person-metadata-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif persons_api.handle_metadata_state(self, db, path):
+                return
             elif folders_api.handle_work_state(self, db, path):
                 return
             elif path.startswith('/api/positions/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
@@ -2342,20 +2223,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif person_groups_api.handle_person_state(self, db, path):
                 return
-            elif path.startswith('/api/persons/') and path.endswith('/profile-image'):
-                parts = path.split('/')
-                if len(parts) != 5:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                p_id = unquote(parts[3])
-                self._send_person_profile_image(p_id)
-            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = unquote(path.split('/')[-1])
-                data = db.get_person(p_id)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Person not found")
+            elif persons_api.handle_detail(self, db, path):
+                return
             elif path == '/api/recent':
                 # Representation-derived ETag: the old probe keyed on
                 # COUNT + MAX(last_opened_at), which cannot see a re-open of a
@@ -2783,26 +2652,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                     return
                 self.send_json(201, item)
-            elif path == '/api/persons':
-                try:
-                    image_url = normalize_person_image_url(data.get('image_url', '') or '')
-                except PersonImageUrlError:
-                    self.send_json(400, {'error': 'Invalid image_url'})
-                    return
-                p_id = db.add_person(
-                    first_name=data.get('first_name', ''),
-                    last_name=data.get('last_name', ''),
-                    aliases=data.get('aliases', ''),
-                    about=data.get('about', ''),
-                    image_url=image_url,
-                    link_wikipedia=data.get('link_wikipedia', '') or '',
-                    link_stanford_encyclopedia=data.get('link_stanford_encyclopedia', '') or '',
-                    link_iep=data.get('link_iep', '') or '',
-                    links_other=data.get('links_other', '') or '',
-                    birth_date=data.get('birth_date', '') or '',
-                    death_date=data.get('death_date', '') or '',
-                )
-                self.send_json(200, {'id': p_id})
+            elif persons_api.handle_post(self, db, path, data):
+                return
             elif tags_api.handle_post(self, db, path, data):
                 return
             elif publishers_api.handle_post(self, db, path, data):

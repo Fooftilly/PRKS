@@ -71,7 +71,7 @@ class PortraitTests(ServerApiTestCase):
                       if n.startswith(prefix))
 
     def test_a_fetched_portrait_becomes_the_catalogued_object(self) -> None:
-        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=self.portrait):
             person_id = self.person("Object", "Portrait", "https://example.invalid/o.jpg")
             served = self.image(person_id)
         self.assertEqual((served.status, served.raw), (200, self.portrait.body))
@@ -89,7 +89,7 @@ class PortraitTests(ServerApiTestCase):
         with self.acting():
             stored = self.facade._cache_person_portrait(person_id, lambda _url: self.portrait)
         assert stored is not None
-        with mock.patch("backend.server.fetch_and_prepare", side_effect=AssertionError("must use the object")):
+        with mock.patch("backend.api.persons.fetch_and_prepare", side_effect=AssertionError("must use the object")):
             served = self.image(person_id)
         self.assertEqual((served.status, served.raw), (200, self.portrait.body))
 
@@ -97,7 +97,7 @@ class PortraitTests(ServerApiTestCase):
         person_id = self.person("Reader", "Portrait", "https://example.invalid/r.jpg")
         self.user("Reader", library=self.lib, role="reader")
         reader = self.session_cookie("Reader")
-        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=self.portrait):
             served = self.call("GET", f"/api/persons/{quote(person_id)}/profile-image", cookies=reader)
         self.assertEqual((served.status, served.raw), (200, self.portrait.body))
         self.assertIsNone(self.catalogued(person_id)["portrait_locator"], "a reader never writes")
@@ -108,7 +108,7 @@ class PortraitTests(ServerApiTestCase):
         assert encoded is not None
         later = PortraitImage(body=encoded[0], subtype=encoded[1])
         self.assertNotEqual(later.body, self.portrait.body)
-        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=self.portrait):
             person_id = self.person("Restored", "Portrait", "https://example.invalid/before.jpg")
             self.assertEqual(self.image(person_id).raw, self.portrait.body)
         out = tempfile.mkdtemp(prefix="prks-pg-portrait-backup-")
@@ -118,30 +118,30 @@ class PortraitTests(ServerApiTestCase):
                                       prks_version="0.8.0-test").path
         # After the backup the Person gets another portrait.
         self.ok(self.send("PATCH", f"/api/persons/{quote(person_id)}", {"image_url": "https://example.invalid/after.jpg"}))
-        with mock.patch("backend.server.fetch_and_prepare", return_value=later):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=later):
             self.assertEqual(self.image(person_id).raw, later.body)
         restore.restore_library(self.db.config.conninfo, objects, archive, self.lib,
                                 owner_user_id=self.owner, staging_dir=out)
-        with mock.patch("backend.server.fetch_and_prepare", side_effect=AssertionError("must use the object")):
+        with mock.patch("backend.api.persons.fetch_and_prepare", side_effect=AssertionError("must use the object")):
             served = self.image(person_id)
         self.assertEqual((served.status, served.raw), (200, self.portrait.body))
         self.assertEqual(self.catalogued(person_id)["portrait_sha256"],
                          hashlib.sha256(self.portrait.body).hexdigest())
 
     def test_a_portrait_is_served_and_stays_served_when_the_remote_fails(self) -> None:
-        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=self.portrait):
             person_id = self.person("Cache", "Portrait", "https://example.invalid/p.jpg")
             first = self.image(person_id)
         self.assertEqual(first.status, 200)
         self.assertIn("image/webp", first.header("Content-Type")[0])
         self.assertEqual((first.raw[:4], first.raw[8:12]), (b"RIFF", b"WEBP"))
-        with mock.patch("backend.server.fetch_and_prepare", return_value=None):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=None):
             again = self.image(person_id)
         self.assertEqual((again.status, again.raw), (200, first.raw))
 
     def test_a_new_image_url_is_fetched_again(self) -> None:
         fetch = mock.Mock(return_value=self.portrait)
-        with mock.patch("backend.server.fetch_and_prepare", fetch):
+        with mock.patch("backend.api.persons.fetch_and_prepare", fetch):
             person_id = self.person("Purge", "Portrait", "https://example.invalid/a.jpg")
             self.assertEqual(self.image(person_id).status, 200)
             self.ok(self.send("PATCH", f"/api/persons/{quote(person_id)}", {"image_url": "https://example.invalid/b.jpg"}))
@@ -158,13 +158,13 @@ class PortraitTests(ServerApiTestCase):
 
     def test_a_private_image_url_is_refused_on_edit_and_keeps_the_portrait(self) -> None:
         url = "https://example.invalid/ok.jpg"
-        with mock.patch("backend.server.fetch_and_prepare", return_value=self.portrait):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=self.portrait):
             person_id = self.person("Keep", "Cache", url)
             served = self.image(person_id).raw
         self.refused(self.send("PATCH", f"/api/persons/{quote(person_id)}", {"image_url": "http://192.168.1.10/x.jpg"}),
                      400)
         self.assertEqual(self.ok(self.get(f"/api/persons/{quote(person_id)}")).get("image_url"), url)
-        with mock.patch("backend.server.fetch_and_prepare", side_effect=AssertionError("must use the portrait")):
+        with mock.patch("backend.api.persons.fetch_and_prepare", side_effect=AssertionError("must use the portrait")):
             self.assertEqual(self.image(person_id).raw, served)
 
     def test_a_stored_loopback_image_url_is_never_connected_to(self) -> None:
@@ -183,7 +183,7 @@ class PortraitTests(ServerApiTestCase):
         person_id = self.person("Html", "Remote", "https://example.invalid/not-image")
         with mock.patch("backend.person_image._fetch_remote_response", return_value=(b"<html>nope</html>", "text/html")):
             self.assertEqual(self.image(person_id).status, 404)
-        with mock.patch("backend.server.fetch_and_prepare", return_value=None):
+        with mock.patch("backend.api.persons.fetch_and_prepare", return_value=None):
             self.assertEqual(self.image(person_id).status, 404)
 
 
