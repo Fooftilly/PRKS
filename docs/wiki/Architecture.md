@@ -1,12 +1,12 @@
 # Architecture
 
-PRKS is a local-first research application with a Python backend, SQLite persistence, managed files on disk, and a vanilla-JavaScript single-page frontend.
+PRKS is a local-first research application with a Python backend, PostgreSQL persistence, managed files on disk, and a vanilla-JavaScript single-page frontend.
 
 ```mermaid
 flowchart LR
     U[Browser / PWA] -->|HTTP / API| S[PRKS threaded HTTP server]
     S --> G[LibraryAccessGate]
-    G --> DB[(SQLite library)]
+    G --> DB[(PostgreSQL Library)]
     G --> F[Managed files]
     G --> I[Derived indexes / caches]
     U --> LS[(Browser local store)]
@@ -29,7 +29,7 @@ PRKS threaded HTTP server
   |
   +--> LibraryAccessGate / canonical mutation boundaries
   |
-  +--> SQLite database
+  +--> PostgreSQL database (web, worker and migrate processes share it)
   |
   +--> managed files (PDFs, person files)
   |
@@ -46,16 +46,17 @@ Important backend areas include:
 
 - `backend/server.py` — HTTP adapter lifecycle and method dispatch.
 - `backend/api/` — optional domain HTTP controllers extracted from `server.py` (parse/validate, invoke domain, map errors). First family: Saved Views.
-- `backend/db_manager.py` — database access and canonical persistence operations.
-- `backend/db_migrations.py` and `backend/db_schema.sql` — schema evolution and baseline schema.
+- `backend/pg_facade/` — the PostgreSQL Library facade the routes call.
+- `backend/domain/` — Library commands and queries by area (Works, People, Organization, Research, Search, objects, maintenance, identity).
+- `backend/db/` and `backend/db/schema/` — the connection pool, transaction helpers, and the schema files the `migrate` runner applies.
 - `backend/concurrency.py` — storage-access coordination.
-- `backend/*_sync.py` — durable operation families and canonical synchronization boundaries.
-- `backend/backup_restore.py` — verified backup and restore.
-- `backend/text_index.py` and `backend/research_index.py` — derived search/reference indexes.
+- `backend/sync/` and `backend/*_sync.py` — durable operation protocol, handlers, and the per-family rules.
+- `backend/domain/maintenance/` — verified backup (format 2) and restore.
+- `backend/jobs/` — the PostgreSQL job queue and worker (text extraction, derived rebuilds, object cleanup, backups).
 - `backend/pdf_*.py` — PDF annotation, adoption, materialization, and related services.
-- `backend/research_*.py` — research graph/network/index behavior.
+- `backend/research_*.py` — research graph and markup.
 
-SQLite connections are operation-scoped; PRKS does not rely on a general-purpose connection pool. Canonical writes are serialized through the application’s mutation boundary so thread-per-request HTTP does not become uncontrolled concurrent SQLite writing.
+PostgreSQL is the only Library store (PG-C2). Library writes run inside `library_command` transactions, which check the actor's capability and the Library epoch and take the Library maintenance lock; concurrency between requests and processes is handled by the database (row locks, advisory locks, SERIALIZABLE where a rule needs it), not by a process-local lock.
 
 ## Frontend boundaries
 
@@ -76,7 +77,7 @@ PRKS distinguishes data that must be preserved from data that can be rebuilt.
 
 Canonical examples:
 
-- the main SQLite library database;
+- the PostgreSQL Library database;
 - managed PDFs and managed person files;
 - durable operation state required for local-first reconciliation.
 

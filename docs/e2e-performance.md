@@ -52,9 +52,8 @@ speedup.
 The next proposed slice sets the embedded web server's
 `serve_forever(poll_interval=0.1)`, retaining the existing signal
 watcher, graceful job draining/lease release, listening-socket close,
-PostgreSQL drop and per-test isolation. SQLite-only server behavior is
-unchanged. The trade-off is more frequent inexpensive selector wakeups
-while idle. Existing PostgreSQL signal-and-worker lifecycle tests plus
+PostgreSQL drop and per-test isolation. The trade-off is more frequent
+inexpensive selector wakeups while idle. Existing PostgreSQL signal-and-worker lifecycle tests plus
 a targeted poll-interval contract cover shutdown semantics.
 
 **Validation:** after merging, compare a fresh fixed-configuration manual

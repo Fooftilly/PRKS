@@ -8,7 +8,7 @@ For a first run, start with [Getting Started](Getting-Started.md). For backup/re
 
 | Variable | Purpose |
 | -------- | ------- |
-| `PRKS_STORAGE` | If set, root directory for persistent data. Database: `$PRKS_STORAGE/prks_data.db`. PDFs: `$PRKS_STORAGE/pdfs/`. Thumbnails: `$PRKS_STORAGE/thumbs/`. |
+| `PRKS_STORAGE` | If set, the data root: managed PDFs in `$PRKS_STORAGE/pdfs/`, portraits in `people/`, thumbnails in `thumbs/`, plus the `prks-root.json` marker and `.prks-maintenance/`. The Library database is PostgreSQL (`PRKS_DATABASE_URL`), never a file in the root. |
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks. Port **8070**, `data_testing/` when `PRKS_STORAGE` is unset, and refusal of `/data` and the repository `data/` tree are described in [Testing mode](Getting-Started.md#testing-mode). |
 | `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
 | `PRKS_LOG_LEVEL` | Stderr log level. Default `INFO`. Changes volume, not what kinds of data may be logged. |
@@ -22,7 +22,7 @@ For a first run, start with [Getting Started](Getting-Started.md). For backup/re
 | `PRKS_TRUSTED_HOSTS` | Extra `Host` header names the server accepts, comma-separated, beyond `localhost`, IP literals and the bind host. Hostnames only: no port, scheme, path or wildcard. An invalid entry stops startup. |
 | `PRKS_PDF_LINEARIZE` | `1`/`true` or `0`/`false` turns PDF linearization on or off. Unset, it runs when `qpdf` is installed. |
 
-If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/prks_data.db`, `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
+If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
 
 Person profile images (`GET /api/persons/{id}/profile-image`) are optional. `image_url` must be a direct public HTTP/HTTPS URL (HTTPS preferred) that itself returns HTTP 200. PRKS does not follow redirects, and private/local/link-local targets are refused. Only static JPEG/PNG/WebP/GIF rasters are accepted. The download is size- and time-bounded; the image is decoded and transcoded (max 512px edge, usually WebP) before anything is cached. Original remote bytes are not kept. Local portrait upload is not part of this feature. Updating a valid `image_url` clears that person’s cached portraits.
 
@@ -36,7 +36,7 @@ These settings configure every PRKS process: PostgreSQL is the only Library back
 
 | Role | What it does |
 | ---- | ------------ |
-| `serve` | The web server. With `PRKS_AUTH` set, it uses PostgreSQL for accounts, sessions, the root pairing and jobs. |
+| `serve` | The web server. It keeps the Library, accounts, sessions, the root pairing and jobs in PostgreSQL, and every request is signed in (`PRKS_AUTH`). |
 | `migrate` | One-shot: applies the schema. Once setup is complete, it also runs the start check and moves the start generation forward, then exits. |
 | `worker` | Runs background jobs beside `serve`. |
 | `admin` | Admin commands such as `admin bootstrap` ([admin bootstrap](../admin-bootstrap.md)), `admin backup --library ID --out DIR` (a verified format-2 backup of one Library) and `admin restore --library ID --archive FILE --owner LOGIN` (restores it in place of the Library's contents; the Library's replaced files are kept, not deleted). Each command takes its own `--root`. |
@@ -47,7 +47,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 
 | Variable | Read by | Purpose |
 | -------- | ------- | ------- |
-| `PRKS_AUTH` | `serve` | Turns on PostgreSQL sign-in. `session` uses passwords and `prks_session` cookies. `loopback-owner` acts as the bootstrap owner on every request: it works only for a testing instance (`--testing`) bound to a loopback address, and it is never a default. Unset (the default), the SQLite application runs. |
+| `PRKS_AUTH` | `serve` | Turns on PostgreSQL sign-in. `session` uses passwords and `prks_session` cookies. `loopback-owner` acts as the bootstrap owner on every request: it works only for a testing instance (`--testing`) bound to a loopback address, and it is never a default outside `--testing`. Unset is `session` (with `--testing`, `loopback-owner`). |
 | `PRKS_DATABASE_URL` | all roles | PostgreSQL connection string. It is a secret: it never appears in errors or logs. Set this or `PRKS_DATABASE_URL_FILE`, never both. |
 | `PRKS_DATABASE_URL_FILE` | all roles | Path of a file holding the connection string (a Compose secret, `/run/secrets/prks_database_url`). Preferred over `PRKS_DATABASE_URL`. |
 | `PRKS_DB_POOL_MAX` | `serve`, `migrate` | Largest connection pool of the web process (and of `migrate`, which opens the same pool), at least 1. Default `10`. The worker's pool stays at `4`. |
@@ -133,9 +133,9 @@ The table lists API routes with:
 
 - **Calls** — how often the route ran in this measurement window (frequency, not just latency)
 - **Avg / P50 / P95 / Max** — duration in milliseconds. P50 and P95 are nearest-rank percentiles of the recent bounded sample (last 128 durations for that route), not a permanent historical distribution. Tiny samples are not statistically strong.
-- **DB** — measured DB share: instrumented `execute_query()` time divided by request time. This is directional, not profiler-grade SQL accounting. Some direct SQLite work is not included.
+- **DB** — measured DB share: time spent in PostgreSQL statements run through `backend/db/database.py` divided by request time. This is directional, not profiler-grade SQL accounting.
 
-Subsystem lines (PDF file stats, JSON encode, gzip, thumbnail render, PDF text search, text-index phases, and similar) use the same timing rules with fixed span names only. Text-index reconciliation reports `text_index_reconcile` plus `text_index_load_state`, `text_index_source_scan`, `text_index_extract`, `text_index_write`, and `text_index_fts_verify` when those phases ran.
+Subsystem lines (PDF file stats, JSON encode, gzip, thumbnail render, PDF text search, text-index phases, and similar) use the same timing rules with fixed span names only.
 
 Optional:
 
@@ -146,7 +146,7 @@ PRKS_PERF_LOG_SLOW=1
 
 Slow logs stay privacy-safe (`method`, templated `route`, status, durations, call counts, request id). They do not stop or timeout requests.
 
-Do not add indexes, caching, threading, or SQLite tuning solely because an endpoint looks expensive on paper. Measure first.
+Do not add indexes, caching, threading, or database tuning solely because an endpoint looks expensive on paper. Measure first.
 
 ## See also
 

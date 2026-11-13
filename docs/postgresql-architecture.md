@@ -1,5 +1,13 @@
 # PostgreSQL canonical backend for PRKS 1.0: design (#613)
 
+**Implementation status (2026-11-13).** PostgreSQL is the running and only
+Library backend: PG-C1 (#640) made it the web runtime and PG-C2 (#641)
+deleted the SQLite runtime, its schema, migrations, backup format 1 and the
+processing inbox. Text below that describes SQLite code (module names such as
+`db_manager.py` or `backup_restore.py`, format 1, the inbox) records the state
+this design was written against; that code no longer exists. Whether v0.8 is
+complete is decided by the #614 gates, not by this note.
+
 **Status: approved design (maintainer review of #619 at `7bb9545`,
 2026-10-12).** This is the design gate that #613 requires before any
 PostgreSQL implementation starts. It adds no code, schema, migration,

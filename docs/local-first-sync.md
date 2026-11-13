@@ -16,6 +16,15 @@ All of them commit to durable browser storage before the UI acts on them, surviv
 reloads and offline periods, and synchronize idempotently on reconnect. Other
 mutations still require the server.
 
+**Server storage.** This specification was written against the SQLite runtime,
+which PG-C2 (#641) deleted. The server now applies every family on PostgreSQL
+(`backend/sync/`: the ledger in `protocol.py`, one handler per family) with the
+same wire contract and the same per-family rules (`backend/*_sync.py`,
+`backend/sync_protocol.py`). Where a section below names a SQLite column,
+constraint, connection helper or function, read it as the rule the PostgreSQL
+handler keeps; `docs/postgresql-architecture.md` §7 is authoritative for how it
+is stored.
+
 The second family exists to prove the protocol is a protocol. Its semantics are
 deliberately unlike the first -- no concurrency control, no conflict UI, a
 different result set, and a different failure posture -- so anything the two

@@ -33,12 +33,12 @@ Pydantic **must not** own:
 - synchronization conflict semantics or revisions;
 - entity lifecycle / tombstones;
 - canonical mutation rules (uniqueness, cycles, IN_USE refusals);
-- SQLite transactions;
+- database transactions (`library_command` / `library_query`);
 - authorization / Origin policy;
 - research-domain normalization beyond JSON type checks.
 
-Those stay in `backend/*_sync.py`, `research_network.py`, `db_manager.py`, and
-related domain modules. The HTTP adapter (`backend/server.py` or a future
+Those stay in `backend/*_sync.py`, `backend/domain/` (with the `backend/pg_facade/`
+Library facade), and related domain modules. The HTTP adapter (`backend/server.py` or a future
 extracted controller) only parses, dispatches, maps status codes, and
 serializes.
 

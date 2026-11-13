@@ -107,8 +107,8 @@ rule contributes features** (union; prefer over-test). Skip rules apply only
 when no take rule matches. Unmapped production files fall back to **smoke**
 (not the full suite) locally; CI fails closed to **full**. Unmapped Python
 under `tests/e2e/` (support modules such as `inventory.py`) is treated the
-same way. Shared core (`app.js`, `server.py`, `db_manager.py`, …) and other
-`ci_mode: "full"` rules (for example `backend/research_network.py`) force full
+same way. Shared core (`app.js`, `server.py`, `prks_app.py`, …) and other
+`ci_mode: "full"` rules (for example `backend/domain/research/**`) force full
 in CI. Docs/unit-only paths select nothing. Add new production areas by editing
 `AFFECTED_RULES` and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E
 module by adding its module/class prefix to the right feature's `selectors`.
@@ -331,7 +331,7 @@ parallel with the matrix when required — never once per worker.
 
 Parallel execution relies on each E2E test keeping independent PRKS
 storage/database and browser-context state: a fresh `TemporaryDirectory`, a
-fresh SQLite seed copy and PostgreSQL database, a fresh port, and a fresh
+fresh PostgreSQL database, a fresh port, and a fresh
 browser context. Do not introduce
 fixed ports, shared writable temp files, shared test databases, a shared browser
 context, or cross-worker mutable globals.

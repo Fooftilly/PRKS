@@ -4,7 +4,7 @@ These rules apply to backend work in addition to the repository-root `AGENTS.md`
 
 ## Current persistence vs target architecture
 
-These rules describe the backend **implemented today**. SQLite, the current storage tree, and current sync protocol remain correctness constraints while those paths exist, but they are not permanent architecture mandates. Roadmap #310 accepts PostgreSQL as the expected long-term canonical relational store and a server architecture capable of authenticated multi-user/multi-library operation; #311 accepts storage-backend abstraction with a first-class configurable local data root. Preserve current behavior unless the task is an approved migration slice, while avoiding new domain boundaries that unnecessarily encode SQLite-only, single-owner, absolute-path, or process-local assumptions.
+These rules describe the backend **implemented today**. PostgreSQL is the only Library store (PG-C2 #641: the SQLite runtime, its schema and migrations are deleted; records of the retired SQLite tests are in `tests/sqlite_retirement/`). The current storage tree and sync protocol remain correctness constraints, but they are not permanent architecture mandates. Roadmap #310 accepts PostgreSQL as the expected long-term canonical relational store and a server architecture capable of authenticated multi-user/multi-library operation; #311 accepts storage-backend abstraction with a first-class configurable local data root. Preserve current behavior unless the task is an approved migration slice, while avoiding new domain boundaries that unnecessarily encode single-owner, absolute-path, or process-local assumptions. Do not reintroduce a SQLite Library path.
 
 ## Cross-domain contracts
 
@@ -22,7 +22,7 @@ Only shared protocol/coordinator changes that genuinely span many durable famili
 
 ### Research network / Research Graph
 
-Before changing `research_network.py`, `research_index.py`, `research_graph.py`, `research_markup.py`, or related research API/controllers, read the **Research network** and **Research Graph** sections in `frontend/AGENTS.md` (canonical DB/index/deletion/privacy invariants). Do not treat the derived research index or graph projection as authority for destructive mutation.
+Before changing `domain/research/`, `pg_facade/research.py`, `pg_facade/research_index.py`, `research_graph.py`, `research_markup.py`, or related research API/controllers, read the **Research network** and **Research Graph** sections in `frontend/AGENTS.md` (canonical DB/index/deletion/privacy invariants). Do not treat the derived research index or graph projection as authority for destructive mutation.
 
 ### Saved Views
 
@@ -46,7 +46,7 @@ Runtime performance metrics are aggregate and privacy-safe; never record request
 bodies/query strings, search terms, library metadata, filenames/paths, SQL params,
 or dynamic user labels.
 
-Do not add schema indexes, caching, threading or SQLite tuning solely because an
+Do not add schema indexes, caching, threading or database tuning solely because an
 endpoint appears theoretically expensive; use measured diagnostics first.
 
 Performance instrumentation must never be required for application correctness.
@@ -72,37 +72,37 @@ pairing (`instance_id`, `start_generation`, `start_token`;
 the exclusive `root.claim` lock) and `root_marker.bump_start_generation` change
 those fields, under the **shared** `root.lock`, and `write_marker` refuses to
 change them. The marker, the lease file, `root.claim` and the bootstrap
-config are operational and never backup payload. Production operations are not
-yet routed through `storage/objects.py` (Phase B); do not route them
-incidentally.
+config are operational and never backup payload. The PostgreSQL Library
+stores managed PDFs and portraits as immutable objects through
+`storage/objects.py` (`StorageBackend`, Phase B); new file-backed state goes
+through it too, never through raw paths under the root.
 
 ## Backup and restore
 
 Backup/restore code must never operate on production storage during tests.
 
-Do not add a persistent storage component without classifying it as canonical,
-derived, operational, or conditional in backup inventory.
+Library backup and restore are format 2 on PostgreSQL (`backend/domain/maintenance/`,
+`docs/postgresql-architecture.md` §11.3, §11.4; see the root `AGENTS.md`
+L-B-1 entry). Do not add a library-scoped table without classifying it in
+`domain/maintenance/tables.py` (`tests/pg/test_backup_tables.py` fails an
+unclassified one), and do not add a persistent component under the root
+without classifying it in the storage inventory (`docs/storage-architecture.md`).
 
-`thumbs/`, `prks_text_index.db`, and `prks_research_index.db` (including WAL/SHM) are derived. They are not
-required backup state and must be rebuilt after restore.
+`thumbs/` and the `derived` schema are derived and are not backup state. A
+committed restore enqueues `derived.rebuild` for the derived rows (search,
+extracted text, research index); thumbnails are cache files regenerated from
+the PDFs.
 
-Restore validation must complete before live canonical state is modified.
+Restore validation and staging (R0, R1) complete before anything another
+session can see changes. The replace is one SERIALIZABLE transaction (R4):
+a run that stops before it leaves the previous Library; only R4 commits the
+restored one. Objects the old catalogue named and the restored one does not
+get a `hold` claim and are never deleted automatically.
 
-Crash before committed restores the previous library. Only committed keeps
-the restored library.
-
-Restore journal writes, staged payload files and component renames follow the
-`backend/fs_durability.py` convention, because recovery has to hold after a
-machine crash and not only a process crash. A journal phase counts as persisted
-only once its contents are synced, the journal is replaced and the journal
-directory is synced; a component rename counts as completed only once every
-directory it changed -- both parents when the move crosses directories -- is
-synced; an extracted payload file is flushed before anything can rename it onto
-a canonical name. Never record a phase, and never clean up rollback material,
-whose durability boundary was refused. The commit record is the single
-exception: once it has been written, rolling back is the unsafe answer, so
-restore keeps the journal and the rollback tree and lets the next start resolve
-whichever phase survived.
+Backup archives and uploaded restore archives written under the root follow
+the `backend/fs_durability.py` convention (`domain/maintenance/backup.py`,
+`upload.py`): the file is flushed before it is renamed or used, and the
+directory is synced after a rename.
 
 Do not use `ZipFile.extractall()` on unvalidated backup input.
 
@@ -110,158 +110,59 @@ Do not log archive paths, PDF names, manifest contents, or raw restore errors.
 
 ## PDF text index
 
-`prks_text_index.db` is derived, never canonical.
-
-Any code path that changes a work's managed PDF identity must synchronize the
-text index or rely on the central reconciliation mechanism.
-
-Do not write extracted PDF text into the canonical main DB solely for search.
-On PostgreSQL, extracted text goes only into the `derived` schema
-(`derived.asset_text`, keyed by Asset and `content_sha256`), never into a
-`prks` table; a command that gives a managed-file Asset new bytes calls
-`backend.domain.search.text.content_changed` in its own transaction, and the
-`text.extract` job writes the row (`docs/postgresql-architecture.md` §8.3,
+Extracted PDF text is derived, never canonical. It goes only into the
+`derived` schema (`derived.asset_text`, keyed by Asset and `content_sha256`),
+never into a `prks` table; a command that gives a managed-file Asset new bytes
+calls `backend.domain.search.text.content_changed` in its own transaction, and
+the `text.extract` job writes the row (`docs/postgresql-architecture.md` §8.3,
 §16 decision 5).
 
-Do not add text-index files, or the `derived` schema, to backups.
+Do not add the `derived` schema to backups.
 
 Do not treat an extraction exception as a successful empty PDF.
 
 Do not preserve stale searchable text after the canonical PDF changes.
 
-Derived-index schema corruption may be repaired by recreating the index;
-canonical `prks_data.db` must never receive that treatment.
-
-Normal startup must not run a full FTS5 integrity-check on a healthy derived
-index. Strong FTS verification belongs to explicit rebuild/repair or when
-FTS is already marked suspect.
+Derived rows may be rebuilt from canonical state (`derived.rebuild`);
+`prks` tables never receive that treatment.
 
 ## Post-delete cleanup recovery
 
-Deleting a Work commits the canonical row first and does filesystem/derived
-cleanup afterwards. Do not make that one transaction: SQLite cannot make
-external side effects atomic, and holding a write transaction open across
-`os.remove()` trades a recoverable leak for a locked database.
+Deleting a Work, replacing its PDF, or anything else that stops naming an
+object commits the catalogue change first and removes bytes afterwards.
+`backend/domain/objects/lifecycle.py` owns the lifecycle
+(`docs/postgresql-architecture.md` §7.4, §11.2, §11.3); read its module
+docstring before changing it. The rules that must not be weakened:
 
-The four post-commit categories have **different** recovery models, and that
-asymmetry is deliberate -- do not unify them:
+- **A claim is recorded in the transaction that stops naming a key**
+  (`release`, in the caller's Library command), and by the orphan sweep for an
+  object nothing ever adopted. Recording never deletes. Claims store keys,
+  never absolute paths.
+- **Only `settle` deletes**, after re-reading every reference to the key
+  (from any Library: one data root serves them all) under the key's
+  `pg_advisory_xact_lock`, and it deletes the claim in that same transaction
+  once nothing is owed. An adopter takes the same lock, so either order is
+  safe.
+- **The reference check is three-valued.** `None` ("not known") deletes
+  nothing and settles nothing.
+- **A `hold` claim** (restore's replaced objects) is never settled
+  automatically, and a Library's claims are settled only while its objects
+  lock is free (a running backup holds it).
+- Retries and the orphan sweep are bounded, lease-fenced job passes
+  (`objects.cleanup`, `objects.sweep` in `backend/domain/objects/jobs.py`),
+  never an unbounded scan at startup.
 
-| Category | Recovery owner |
-| --- | --- |
-| text index | `text_index.reconcile_all()` (`removed_orphans`), at startup |
-| research index | `PRKSResearchIndex.reconcile_all()`, at startup |
-| thumbnails | `prune_orphan_pdf_thumbnails()`, at startup |
-| managed PDF | the durable claim below |
-
-The first three are derived and disposable: a stale row is a wrong search hit
-or a wasted cache file, and rebuilding from canonical state is both simpler and
-safer than per-artifact retry records. Do not give them retry rows.
-
-A managed PDF is different, and it is the only one that needs durable state:
-the bytes are private research material, and `works.file_path` -- the one thing
-that said which file belonged to that Work -- is destroyed by the very commit
-that precedes the cleanup. Nothing could reconstruct it afterwards.
-
-`pending_pdf_cleanup` (schema 16) is that record. Its lifecycle is bounded and
-has exactly one shape:
-
-- **Written** by `delete_work_record_on_conn()` **inside the Work-delete
-  transaction**, and only when no surviving row references the basename. That
-  placement is the point: a crash between the commit and `os.remove()` still
-  leaves a retryable claim. Only filesystem *work* stays outside the
-  transaction; the identity is recorded inside it.
-- **Stores a managed basename, never a path.** An absolute path would bind the
-  claim to one storage root and survive a restore into another. `filename` is
-  the primary key, so two Works sharing a PDF, a replay, or repeated retries
-  can never accumulate a second permanent row for the same bytes.
-- **Removed** only once the cleanup it owns is finished: the bytes are gone
-  (`os.remove()` succeeded, or `FileNotFoundError` -- already gone is the
-  successful terminal state), or a live Work now references the name so nothing
-  is owed. A failed removal, an unreadable catalogue and an uncontainable name
-  all keep the claim.
-- **Retried** by `retry_pending_pdf_cleanup()`: one bounded pass
-  (`PENDING_PDF_CLEANUP_RETRY_LIMIT`) at startup, after each Work deletion so
-  recovery does not require a restart, and after a restore rebinds a library
-  (which brings back both the claims and the bytes they describe, long after
-  startup ran). Never an unbounded startup scan, and never a general job queue.
-- **Selection rotates.** `last_attempt_at` is stamped on every claim a pass
-  tried and could not settle, and selection takes never-attempted claims first
-  and then the least recently attempted. Ordering by `recorded_at` alone let a
-  handful of permanently unsettleable claims fill every bounded pass and strand
-  every later orphan.
-
-Three safety rules are absolute:
-
-1. **Re-ask the live catalogue immediately before every retry deletion**, never
-   a deletion-time `managed_pdf_still_referenced` snapshot. A record only ever
-   says a file was orphaned once; the catalogue says whether it still is.
-2. **That check is three-valued.** `None` means the catalogue could not be
-   read, which is not `False` and not `True`: nothing is deleted and nothing is
-   settled, so the claim survives for a readable database later. A boolean that
-   failed closed would either strand orphans or discard a claim over a
-   transient error.
-3. **The check and the retirement are ONE transaction**
-   (`settle_claim_if_referenced()`). Retiring a claim by basename alone races
-   the deletion of the last referring Work: that deletion writes its claim
-   inside its own transaction, so a pass that observed the Work still alive
-   could erase the very claim the deletion depends on, and a failed unlink
-   would then have no durable record. Serialized, both orders are safe.
-
-Path containment is unchanged: `safe_pdf_path_under_dir()` remains the
-filesystem boundary, and a name it refuses is never resolved to a path.
-
-**The reference check and the unlink are not separable.** Both are held under
-the basename's shared `managed_pdf_path_lock()` -- the same lock the COW
-replace path takes -- because `POST /api/works` may point a new Work at an
-EXISTING managed PDF rather than uploading one. Without a shared guard, cleanup
-could decide a name is unreferenced and unlink it in the gap before that row
-commits ownership, leaving a live Work referencing bytes that are gone. The
-create path takes the same lock across its commit when it adopts a name it did
-not just mint; an upload needs no guard, because
-`store_new_managed_pdf_bytes()` mints a unique name and creates it exclusively.
-
-`pending_pdf_cleanup` lives in `prks_data.db` and is therefore canonical backup
-state, like the sync ledger -- it is operational rather than user-visible, but
-it must travel with the library it describes, because a restore brings back the
-same `pdfs/` tree. It is never a reason to delete bytes on its own: a restored
-claim is re-evaluated against the restored catalogue like any other.
-
-The HTTP and durable `DELETE_WORK` paths converge here. Both commit the row,
-both record the claim in that same transaction, and both run the same
-post-commit cleanup, so a replayed operation cannot create duplicate cleanup
-state -- the ledger replay carries no `file_path` at all, and the claim it
-would have written already exists.
+Derived state (search rows, research index rows, thumbnails) is disposable:
+rebuild it from canonical state instead of keeping retry records for it.
 
 ## Database schema changes
 
-`backend/db_schema.sql` describes the complete latest schema for fresh databases.
+Never ALTER/CREATE/DROP schema objects from feature/request code, and never
+swallow schema-runner failures. The SQLite schema, its migrations and the
+schema-change gate were deleted in PG-C2 (#641).
 
-Any schema/data change needed by an existing database requires:
-
-1. bump `LATEST_SCHEMA_VERSION`;
-2. add exactly one ordered migration;
-3. update `db_schema.sql` to the same final state;
-4. add fresh-DB and upgraded-DB tests.
-
-Never change schema only in `db_schema.sql`.
-`scripts/check_schema_change.py` (#190, Fast Static Analysis) enforces
-this per PR and requires every canonical table upserted with `ON CONFLICT`
-to be in `_CURRENT_TABLE_PKS`; see its docstring for codes and allowlist.
-
-Work identity (#60, schema 17, `docs/work-identity-model.md`): `works` is
-still the only authority for every field. `manifestations`/`assets` are a
-trigger-maintained projection of it (`legacy_work_*_mirror` views, one
-direction only); never write their mirrored columns, and never add readers of
-them outside the slice that moves authority. `validate_current_schema`
-compares every Slice A object by definition, so changing one needs a new
-migration, not an edit of `_V17_WORK_IDENTITY_SQL`.
-Never ALTER/CREATE/DROP schema objects from feature/request code.
-Never swallow migration DDL failures.
-Never manually bump `schema_version` before migration success.
-Migrations may modify SQLite state only, not managed filesystem data.
-
-PostgreSQL schema (#624, `docs/postgresql-architecture.md` §4.4; not the
-running backend yet): `backend/db/schema/NNN_name.sql` are pre-1.0 baseline
+PostgreSQL schema (#624, `docs/postgresql-architecture.md` §4.4):
+`backend/db/schema/NNN_name.sql` are pre-1.0 baseline
 files applied in order by `backend/db/migrate.py`, which records each file's
 SHA-256 and refuses a database whose applied file has since changed. Each lane
 edits only the files it owns (§15.2), schema-qualifies every name (the runner

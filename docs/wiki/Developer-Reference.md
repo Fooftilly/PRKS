@@ -150,17 +150,14 @@ A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tie
 | `backend/server.py` | Threaded stdlib HTTP server and handler: static frontend, method dispatch, shared transport (host/origin, body limits, JSON/ETags). |
 | `backend/api/` | Optional domain HTTP controllers extracted from `server.py` (parse/validate, invoke domain, map errors). First family: Saved Views. |
 | `backend/concurrency.py` | Process-local library access gate (reads, mutations, backup, restore). |
+| `backend/db/` | PostgreSQL pool, transaction helpers, error mapping, and the `migrate` schema runner over `backend/db/schema/`. |
+| `backend/pg_facade/` | The PostgreSQL Library facade the routes call. |
+| `backend/domain/` | Library commands and queries by area, identity and authorization, objects, backup/restore, search. |
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
 | `backend/performance.py` | In-memory API/DB/span performance diagnostics. |
-| `backend/db_manager.py` | SQLite access and business logic. |
 | `backend/pdf_annotations.py` | Canonical PDF annotation normalize/validate/reconstruct. |
-| `backend/db_migrations.py` | Ordered schema migrations and current-schema validation. |
-| `backend/backup_restore.py` | Verified library backup and restore. |
 | `backend/research_markup.py` | Authoritative `[[concept:]]` / `[[argument:]]` parser. |
-| `backend/research_network.py` | Concept, Position, and Argument/Stance domain. |
-| `backend/research_index.py` | Disposable derived note-reference index. |
-| `backend/db_schema.sql` | Complete latest schema for fresh databases. |
 | `frontend/` | Static SPA (HTML, CSS, legacy JS, committed Vue bundle), PWA assets. |
 | `frontend-app/` | Vue 3 + TypeScript source. Maintainer Node build only. |
 | `frontend/vue/` | Committed Vite production bundle served by the Python app. |
@@ -168,8 +165,8 @@ A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tie
 | `frontend/js/offline-store.js` | Disposable IndexedDB client cache (entities/lists/metadata). No DOM, no routing, no connectivity policy. |
 | `frontend/js/offline-runtime.js` | Online/offline/reconnecting state, read-through cache policy, offline coherence domains, mutation guard. No canonical persistence of its own. |
 | `frontend/sw.js` | Service worker: app-shell/static-asset availability plus a focused managed-PDF cache. Never queues API mutations. |
-| `data/` | Default production database and files (gitignored as appropriate). |
-| `data_testing/` | Test fixtures and isolated DB/PDFs for automated tests. |
+| `data/` | Default production data root: managed files only (gitignored). |
+| `data_testing/` | Default testing data root (the testing database is PostgreSQL). |
 | `tests/` | `unittest` modules. |
 
 ## Dependency consistency
