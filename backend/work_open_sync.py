@@ -24,7 +24,7 @@ MAX_CLIENT_FUTURE_SKEW_SECONDS = 300
 
 
 def format_moment(value):
-    """The one canonical sortable SQLite text form: UTC, millisecond precision.
+    """The one canonical sortable text form: UTC, millisecond precision.
 
     `YYYY-MM-DD HH:MM:SS.mmm` sorts lexicographically in chronological order,
     and keeps sorting correctly against the second-resolution values already in

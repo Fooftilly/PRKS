@@ -400,6 +400,7 @@ class EndpointTests(HttpAuthTestCase):
         self.assertEqual(res.status, 503)
         self.assertEqual(res.body, {"error": "unavailable", "code": "unavailable"})
 
-    def test_a_server_without_auth_or_jobs_has_no_such_route(self) -> None:
+    def test_a_server_without_auth_refuses_the_route(self) -> None:
         self.serve(auth=None)
-        self.assertEqual(self.call("GET", "/api/diagnostics/jobs").status, 404)
+        # Admission fails closed without identity, before any route is found.
+        self.assertEqual(self.call("GET", "/api/diagnostics/jobs").status, 503)

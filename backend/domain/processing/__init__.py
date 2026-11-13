@@ -5,12 +5,8 @@ they will become, and imported one transaction per item: ``items`` (reads,
 the draft edit, delete), ``uploads`` (the body into a fresh key, then the
 item), ``imports`` (the item into a Work) and ``commands`` (each operation
 for one actor, as the HTTP routes call it). The schema is
-``backend/db/schema/160_processing.sql``. The SQLite inbox directory, its
-scanner and its claims are not ported.
-
-Nothing in the running application reaches this package yet: SQLite stays
-the only backend until the cutover (§15.3), and the queue's frontend lands
-with PG-C1.
+``backend/db/schema/160_processing.sql``. The retired SQLite inbox
+directory, its scanner and its claims have no counterpart.
 
 **Lock order.**
 

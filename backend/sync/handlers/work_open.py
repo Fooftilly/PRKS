@@ -1,6 +1,6 @@
 """``MARK_WORK_OPENED`` on PostgreSQL: the open max-register (L-W-1 #628).
 
-The SQLite family's rules (``backend/work_open_sync.py``): an empty payload
+The family's rules (``backend/work_open_sync.py``): an empty payload
 and a null base, the event time clamped to arrival when it is too far in
 the future, and an acknowledgement carrying the Work's compact Recent row.
 The write is :func:`backend.domain.works.commands.mark_opened`, which the

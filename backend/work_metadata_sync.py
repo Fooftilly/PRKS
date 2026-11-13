@@ -265,9 +265,9 @@ def is_valid_field_value(field, value):
     value is acceptable: a value savable by one path and refused by another is
     the split contract moving a field to local-first exists to remove.
 
-    The SQLite CHECK constraint is a last line of defence, not the first: it
-    reports an IntegrityError rather than a field-specific refusal, and it
-    cannot tell the client which value it should have sent.
+    A database CHECK constraint is a last line of defence, not the first: it
+    reports a constraint violation rather than a field-specific refusal, and
+    it cannot tell the client which value it should have sent.
     """
     allowed = FIELD_ALLOWLISTS.get(field)
     if allowed is not None:
@@ -300,8 +300,8 @@ def within_limit(field, value):
 def canonical(value):
     """The one representation of a field value.
 
-    SQLite holds NULL for rows created before a field existed and "" for one a
-    user cleared; both mean "no value", so they compare equal. Whitespace is
+    NULL (a field never set) and "" (a field a user cleared) both mean
+    "no value", so they compare equal. Whitespace is
     NOT stripped -- that would make the sync path disagree with PATCH about
     what the user typed, and the column has never been normalized that way.
     """

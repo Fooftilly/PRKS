@@ -433,7 +433,7 @@ def job_diagnostics_openapi_document() -> dict[str, Any]:
                     },
                     "401": {"description": "No live session (not_authenticated)."},
                     "403": {"description": "The session's role is not the Library owner."},
-                    "404": {"description": "The SQLite runtime (no PRKS_AUTH) has no jobs."},
+                    "404": {"description": "The server runs without a jobs runtime (test servers only)."},
                     "503": {
                         "description": "The database cannot be read (unavailable).",
                         "content": {
@@ -831,9 +831,8 @@ PROCESSING_ITEMS_CONTRACT_VERSION = "0.1.0"
 def processing_items_openapi_document() -> dict[str, Any]:
     """OpenAPI 3.1 for the Processing queue (``docs/postgresql-architecture.md`` §11.5).
 
-    Served only by the PostgreSQL (``PRKS_AUTH``) runtime; the SQLite runtime
-    answers 404 on these paths. Every mutation needs the ``PRKS-Library-Epoch``
-    header (admission, ``backend/api/session.py``).
+    Every route needs an admitted session, and every mutation the
+    ``PRKS-Library-Epoch`` header (admission, ``backend/api/session.py``).
     """
     schemas: dict[str, Any] = {}
     for model in (

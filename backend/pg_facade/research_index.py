@@ -38,8 +38,7 @@ them through the bound index; a full rebuild is L-S-1's).
 (and the Research routes their records only through its bound ``db``), so
 binding this class and :class:`~backend.pg_facade.PostgresLibrary` there,
 with the admitted :class:`RequestContext` bound per request, serves the
-Research routes from PostgreSQL. Nothing in the running application binds
-them yet: choosing the backend at start is the cutover's (PG-C1, #640).
+Research routes from PostgreSQL.
 """
 
 from __future__ import annotations

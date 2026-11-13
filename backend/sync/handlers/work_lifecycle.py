@@ -1,6 +1,6 @@
 """``CREATE_WORK`` and ``DELETE_WORK`` on PostgreSQL (L-W-1 #628).
 
-The SQLite family's rules (``backend/work_lifecycle_sync.py``), imported:
+The family's rules (``backend/work_lifecycle_sync.py``), imported:
 construction is a video only, its payload is validated and canonicalized by
 ``canonical_create_payload``, and its source by ``_canonical_new_source``,
 the boundary ``add_work`` and ``SET_WORK_SOURCE`` share. A create of an id

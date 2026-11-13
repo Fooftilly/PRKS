@@ -737,8 +737,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             from backend.pg_facade.registry import NotPortedError
 
             if isinstance(exc, NotPortedError):
-                # A documented gap of the PostgreSQL Library, never a fault:
-                # nothing falls back to SQLite (PG-C1 #640).
+                # A documented gap of the PostgreSQL Library, never a fault
+                # and never a fallback (PG-C1 #640): 501.
                 self._send_not_ported(str(exc))
                 return
 
@@ -797,12 +797,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def _acting_for_request(self):
         """Bind the admitted RequestContext for the route (PostgreSQL facade calls act for it).
 
-        Nothing is bound for a server started without ``PRKS_AUTH`` (only
-        tests start one): it admits no actor.
+        Called only after :meth:`_prks_admit` admitted the request, which
+        always leaves a context: a route never runs without an actor.
         """
         ctx = getattr(self, "_prks_request_context", None)
         if ctx is None:
-            return nullcontext()
+            raise RuntimeError("an /api/ route ran without an admitted request context")
         from backend.pg_facade.context import acting_as
 
         return acting_as(ctx)
@@ -848,19 +848,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """Authentication admission for an ``/api/`` request (L-ID-1 #626).
 
         True to dispatch the route; False when the request has been answered.
-        Without ``PRKS_AUTH`` (a test server only; ``prks_app`` always starts
-        identity) only the Origin check applies, to mutations. With it, ``backend.api.session`` answers
-        the identity routes and admits every other route only for a live
-        session with the route's capability and, for a Library mutation, the
-        Library's current epoch.
+        ``backend.api.session`` answers the identity routes and admits every
+        other route only for a live session with the route's capability and,
+        for a Library mutation, the Library's current epoch. A server started
+        without identity (``prks_auth`` unset; ``prks_app`` always starts it)
+        fails closed: every ``/api/`` request is answered 503, never served
+        without an actor (PG-C2 #641).
         """
         self._prks_library_epoch = None
         self._prks_request_context = None
         method = (getattr(self, "command", "") or "").upper()
         auth = getattr(self.server, "prks_auth", None)
         if auth is None:
-            return method in ("GET", "HEAD") or self._validate_mutation_origin()
-        # Only an authenticated (PostgreSQL) process imports the identity code.
+            self._reject_request(503, "identity_not_started", "identity_not_started")
+            return False
         from backend.api import session as session_api
 
         def read_json():

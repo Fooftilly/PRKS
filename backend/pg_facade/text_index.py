@@ -25,9 +25,6 @@ does for the Research index:
   stored row's ``doc``. The startup reconcile has no counterpart either:
   the worker's search idle task runs the consistency count and the folding
   check (:class:`backend.domain.search.rebuild.SearchMaintenance`).
-
-Nothing in the running application binds this class yet: choosing the
-backend at start is the cutover's (PG-C1, #640).
 """
 
 from __future__ import annotations

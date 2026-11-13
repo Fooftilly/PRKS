@@ -526,10 +526,13 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
 
 
 class ServerWithoutAuthTests(HttpAuthTestCase):
-    def test_a_server_without_auth_has_no_queue(self) -> None:
-        """The queue's routes exist only with ``PRKS_AUTH`` (``prks_app`` always starts it)."""
+    def test_a_server_without_auth_serves_no_queue_route(self) -> None:
+        """Without identity (``prks_app`` always starts it) admission refuses every queue route: 503."""
         self.serve(auth=None)
-        self.assertEqual(self.call("GET", "/api/processing-items").status, 404)
+        self.assertEqual(self.call("GET", "/api/processing-items").status, 503)
         res = self.call("POST", "/api/processing-items", headers=[("Content-Type", "application/pdf")])
-        self.assertEqual(res.status, 404)
-        self.assertEqual(self.call("HEAD", f"/api/processing-items/{_MISSING}/pdf").status, 404)
+        self.assertEqual(res.status, 503)
+        self.assertEqual(self.call("HEAD", f"/api/processing-items/{_MISSING}/pdf").status, 503)
+        res = self.call("POST", f"/api/processing-items/{_MISSING}/import")
+        self.assertEqual(res.status, 503)
+        self.assertEqual(res.body, {"error": "identity_not_started"})

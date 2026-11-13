@@ -66,11 +66,9 @@ ROOT_LOCK_NAME = "root.lock"
 # The claim lock (§11.1): held exclusive by claim_root only, for one
 # read-check-write-read of an unclaimed marker. Lives beside root.lock.
 CLAIM_LOCK_NAME = "root.claim"
-# The content lock (L-D-1 #630): until the PostgreSQL cutover (PG-C1) the
-# Library's content is the SQLite store under the root, which one process at
-# a time may open. A web process paired with PostgreSQL holds root.lock
-# shared (beside its worker and migrate) and this lock exclusive for its
-# whole run. Lives beside root.lock; never touched by the SQLite runtime.
+# The content lock (L-D-1 #630): a web process holds root.lock shared
+# (beside its worker and migrate) and this lock exclusive for its whole run,
+# so one web process serves a root at a time. Lives beside root.lock.
 CONTENT_LOCK_NAME = "content.lock"
 MARKER_FORMAT = 1
 LAYOUT_VERSION = 1

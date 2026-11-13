@@ -28,10 +28,8 @@ web process, on its own ``worker`` connection pool:
   on the worker's own copy of the registry. A worker whose root was never
   bound runs without them.
 
-``PRKS_EMBEDDED_WORKER=0`` runs no worker here (a separate ``prks worker``
-runs the jobs once the cutover allows one beside ``web``). The SQLite
-runtime without ``PRKS_AUTH`` never imports this module, so it never loads
-psycopg.
+``PRKS_EMBEDDED_WORKER=0`` runs no worker here; a separate ``prks worker``
+beside ``web`` runs the jobs instead.
 
 :meth:`WebJobs.diagnostics` is the ``GET /api/diagnostics/jobs`` body
 (:class:`backend.api_contract.jobs.JobDiagnostics`): the embedded worker's

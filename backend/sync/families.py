@@ -65,7 +65,7 @@ class Handler(Protocol):
         ...
 
     def validate(self, op: dict[str, Any]) -> None:
-        """Raise ``ValueError(code)`` for what the family forbids (the SQLite rule)."""
+        """Raise ``ValueError(code)`` for what the family forbids (its rule module)."""
         ...
 
     def apply(self, scope: LibraryScope, op: dict[str, Any], received_at: datetime,

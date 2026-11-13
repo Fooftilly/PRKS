@@ -7,7 +7,7 @@ Parse path/body shape, invoke ``PRKSDatabase`` Saved View methods, map
 ``backend/api_contract/saved_views.py``: reads go through ``dump_response``;
 writes send the committed domain row without a post-commit dump (see
 docs/api-contract-boundary.md). Request field types stay domain refusals. Name/search normalization and SQL stay
-in ``db_manager`` — this module does not open transactions or touch SQLite.
+in ``backend/domain/saved_views`` — this module does not open transactions.
 
 ``server.py`` calls these handlers after host/origin, JSON body size, and
 library-access checks. Each ``handle_*`` returns ``True`` when the path belongs
