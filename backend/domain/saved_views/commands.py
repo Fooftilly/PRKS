@@ -1,9 +1,10 @@
 """The Saved View operations for one actor: what ``backend/api/saved_views.py`` calls (PG-C3 #642).
 
-Each runs its Library transaction through
-:func:`~backend.domain.identity.library_scope.library_query` or
-:func:`~backend.domain.identity.library_scope.library_command`, so every one
-is authorized and fenced by maintenance and the epoch. Refusals are
+A read runs in one :func:`~backend.domain.identity.library_scope.library_query`
+snapshot, authorized for ``READ_LIBRARY`` (reads are not fenced by epoch); a
+write is one :func:`~backend.domain.identity.library_scope.library_command`
+transaction needing ``EDIT_LIBRARY``, fenced by maintenance and the epoch.
+Refusals are
 :class:`~backend.domain.saved_views.rules.SavedViewError` (with its HTTP
 status) and ``AccessRefused``.
 

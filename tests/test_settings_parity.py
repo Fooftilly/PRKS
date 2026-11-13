@@ -2,9 +2,9 @@
 
 Each call runs on this leg's library and on a reference SQLite library
 holding the same settings, and the results must be equal; a refusal must
-carry the same message. ``/api/settings`` is compared too, through the
-route's own steps in ``backend/server.py`` (status and body). Inputs avoid
-the documented difference (``backend/pg_facade/organization.py``): no
+carry the same message. ``/api/settings`` is compared too, through
+``backend/api/settings.py`` itself (status and body). Inputs avoid
+the documented difference (``backend/domain/settings/app_settings.py``): no
 patch pairs a valid ``annotation_author`` with a refused
 ``bibtex_export_fields``, which SQLite half-commits and PostgreSQL refuses
 whole.
@@ -23,22 +23,44 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
+from backend.api import settings as settings_api
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
+from backend.pg_facade.context import current_context
+from tests.library_adapter import SettingsCommandsOver, route_commands_over
 from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase
 
 
-def _settings_route(db: Any, method: str, data: Any = None) -> tuple[int, Any]:
-    """``/api/settings`` as ``backend/server.py`` serves it (GET, and PATCH's body checks)."""
-    if method == "GET":
-        return 200, db.get_app_settings_response()
-    if not isinstance(data, dict):
-        return 400, {"error": "JSON object body required"}
-    try:
-        db.patch_app_settings(data)
-    except ValueError as error:
-        return 400, {"error": str(error)}
-    return 200, db.get_app_settings_response()
+class _Handler:
+    """The admitted request ``backend/api/settings.py`` answers: its context is the bound actor."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, Any]] = []
+
+    @property
+    def _prks_request_context(self) -> Any:
+        return current_context()
+
+    def send_json(self, status: int, body: Any, etag: Any = None, precondition_checked: bool = False) -> None:
+        self.calls.append((status, body))
+
+
+def _settings_route(db: Any, method: str, data: Any = None, *, reference: bool = False) -> tuple[int, Any]:
+    """``/api/settings`` through the production route module.
+
+    The reference replays SQLite's recorded calls by name, so on its side the
+    route's commands become those calls (``SettingsCommandsOver``).
+    """
+    handler = _Handler()
+    route = settings_api.handle_get if method == "GET" else settings_api.handle_patch
+    args = (handler, db, settings_api.PATH) if method == "GET" else (handler, db, settings_api.PATH, data)
+    if reference:
+        with route_commands_over(settings_api, SettingsCommandsOver(db)):
+            handled = route(*args)
+    else:
+        handled = route(*args)
+    assert handled, method
+    return handler.calls[-1]
 
 
 @parametrize_backends
@@ -103,7 +125,8 @@ class SettingsFacadeParityTests(PeopleParityTestCase):
         statuses = []
         for method, data in steps:
             with self.subTest(method=method, data=str(data)[:40]):
-                mine, theirs = (_settings_route(side.db, method, data) for side in self.sides())
+                mine = _settings_route(self.leg.db, method, data)
+                theirs = _settings_route(self.ref.db, method, data, reference=True)
                 self.assertEqual(mine, theirs)
                 statuses.append(mine[0])
         self.assertEqual(statuses, [200, 200, 200, 200, 200, 400, 400, 400, 400, 200])

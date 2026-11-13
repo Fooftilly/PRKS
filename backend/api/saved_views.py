@@ -9,8 +9,8 @@ admitted request's context on the served Library's database, map
 writes send the committed domain row without a post-commit dump (see
 docs/api-contract-boundary.md). Request field types stay domain refusals. Name/search normalization and SQL stay
 in ``backend/domain/saved_views``; the commands open the transactions, so
-authorization, maintenance and the epoch fence stay in ``library_command``
-and ``library_query``.
+authorization stays in ``library_query`` and ``library_command``, and a
+write's maintenance and epoch fence in ``library_command``.
 
 ``server.py`` calls these handlers after host/origin, JSON body size, and
 library-access checks. Each ``handle_*`` returns ``True`` when the path belongs

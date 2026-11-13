@@ -1438,6 +1438,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/saved_views/views.py",
                 "backend/domain/settings/__init__.py",
                 "backend/domain/settings/app_settings.py",
+                "backend/domain/settings/commands.py",
                 "backend/jobs/queue.py",
                 "backend/jobs/handlers.py",
                 "backend/jobs/runner.py",

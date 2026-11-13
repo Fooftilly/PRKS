@@ -31,6 +31,7 @@ from backend.domain.works.rules import BulkWorkError, effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
+from backend.api import settings as settings_api
 from backend.services import work_pdf_replace
 from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
@@ -1364,16 +1365,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(400, {'error': str(e)})
                     return
                 self.send_json(200, {'status': 'updated', 'member_work_ids': member_ids})
-            elif path == '/api/settings':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    db.patch_app_settings(data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, db.get_app_settings_response())
+            elif settings_api.handle_patch(self, db, path, data):
+                return
             elif saved_views_api.handle_patch(self, db, path, data):
                 return
             elif processing_api.handle_patch(self, db, path, data):
@@ -2681,8 +2674,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-Type', 'text/plain')
                 self.end_headers()
                 self.wfile.write(bibtex.encode())
-            elif path == '/api/settings':
-                self.send_json(200, db.get_app_settings_response())
+            elif settings_api.handle_get(self, db, path):
+                return
             elif path == '/api/backups/download':
                 self._handle_postgres_backup_download((query.get('token') or [''])[0])
             elif path.startswith(_BACKUP_ROUTE_PREFIX):
