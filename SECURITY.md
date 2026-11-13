@@ -40,6 +40,7 @@ Please do not publicly disclose an unresolved vulnerability before the maintaine
 Reports are especially useful when they involve issues such as:
 
 - unauthorized access to PRKS data beyond the documented deployment boundary;
+- bypasses of sign-in, sessions, sign-in attempt limits, or Library role checks;
 - bypasses of Host, Origin, path, upload, or storage-root validation;
 - path traversal or unintended filesystem access;
 - server-side request forgery or unsafe remote-resource handling;
@@ -50,9 +51,15 @@ Reports are especially useful when they involve issues such as:
 - security boundary failures in PDF, image, archive, or other untrusted-input processing;
 - vulnerabilities in bundled or runtime dependencies that materially affect PRKS.
 
-PRKS is currently a single-user application with **no built-in authentication**. Direct runs bind to loopback by default, and Docker Compose publishes to host loopback by default. Exposing PRKS directly to an untrusted network or the public Internet without an appropriate access-control layer is not a supported deployment model. A report that only states that an intentionally exposed PRKS instance can be accessed without logging in is therefore not, by itself, considered a vulnerability.
+PRKS authenticates every request. By default (`PRKS_AUTH=session`) every account signs in with a password, and every request is checked against the account's role in the Library (owner, editor or reader). The other mode, `loopback-owner`, acts as the owner without a password. The server starts it only for a disposable testing instance (`--testing`) bound to a loopback address, and answers only loopback peers. Sign-in is described in [docs/login-security.md](docs/login-security.md).
 
-A bypass of the documented network, Host, Origin, storage, or input-validation protections may still be a valid security issue and should be reported privately.
+Direct runs bind to loopback by default, and Docker Compose publishes to host loopback by default. PRKS serves plain HTTP. Exposing it beyond a trusted network is supported only behind an HTTPS reverse proxy, configured as the README and [Security and Operations](docs/wiki/Security-and-Operations.md) describe (`PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`).
+
+A bypass of sign-in, sessions, the sign-in attempt limits, the Library role checks or the cross-origin checks is a security issue and should be reported privately, as should a bypass of the documented network, Host, storage or input-validation protections. Reports that only show one of the following are not, by themselves, considered vulnerabilities:
+
+- a `loopback-owner` testing instance acting as its owner for loopback clients, as documented;
+- password guessing within the documented attempt limits;
+- an attack that needs PRKS exposed over plain HTTP, or behind a proxy configured other than as documented (for example a `PRKS_TRUSTED_PROXIES` entry that is not the proxy).
 
 ## Security Updates
 

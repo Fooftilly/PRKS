@@ -123,6 +123,8 @@ answers to the questions that needed an explicit choice.
 
 ## 1. Current-state inventory
 
+This section records PRKS as it was when this design was written, before 0.8. It is the baseline the design starts from, not a description of the current code. In particular, PRKS now authenticates every request (§9.3, `docs/login-security.md`).
+
 ### 1.1 Process and request path
 
 - **One process, one root.** `prks_app.py:75-101` runs the dependency gate,

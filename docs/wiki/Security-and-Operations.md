@@ -21,9 +21,9 @@ PRKS_TRUSTED_HOSTS=prks.home.arpa \
 docker compose up -d
 ```
 
-Malformed `PRKS_TRUSTED_HOSTS` entries refuse to start the server. This variable is for extra DNS hostnames on direct HTTP/LAN access, not reverse-proxy or HTTPS termination.
+Malformed `PRKS_TRUSTED_HOSTS` entries refuse to start the server. This variable is for extra DNS hostnames on direct HTTP/LAN access. Behind an HTTPS reverse proxy, set `PRKS_PUBLIC_ORIGIN` instead; its host is accepted without listing it here.
 
-The HTTP adapter validates `Host` on every request, rejects cross-origin state-changing `/api/` requests when `Origin` is supplied (`Origin: null` included), and requires `application/json` for JSON POST/PATCH bodies. Missing `Origin` remains allowed for local scripts and non-browser clients. PRKS does not send CORS headers and does not allow cross-origin API access.
+The HTTP adapter validates `Host` on every request and requires `application/json` for JSON POST/PATCH bodies. Every state-changing `/api/` request, sign-in included, must come from the PRKS page itself: `Origin` must be the expected origin (`Origin: null` is refused), or, without `Origin`, the browser must send `Sec-Fetch-Site: same-origin`. A script or other non-browser client that sends neither is refused. The expected origin is `PRKS_PUBLIC_ORIGIN` when set, otherwise the request's own `http` origin ([login security](https://github.com/Fooftilly/PRKS/blob/master/docs/login-security.md), "Cross-site requests"). PRKS does not send CORS headers and does not allow cross-origin API access.
 
 These controls reduce accidental/cross-origin access and DNS-rebinding risk; they complement sign-in rather than replace it. Exposure to the public Internet without HTTPS is still unsafe.
 
