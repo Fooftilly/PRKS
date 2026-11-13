@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import re
 import subprocess  # nosec B404 - fixed local test fixture commands
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.ci.check_docs_only import _anchors, check_markdown
-from scripts.ci.docs_only import changed_documentation, is_approved_markdown
+from scripts.ci.docs_only import (
+    POSTGRES_SCOPE,
+    changed_documentation,
+    is_approved_markdown,
+    is_postgres_irrelevant_markdown,
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -106,6 +112,85 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertEqual(result is not None, expected)
                 self.assertIsNone(changed_documentation(root, "not-a-valid-sha"))
 
+    def test_postgres_scope_accepts_only_plain_markdown(self):
+        approved = (
+            "AGENTS.md", "docs/AGENTS.md", "SECURITY.md", "README.md",
+            "docs/guide.md", "docs/wiki/Home.md", "backend/AGENTS.md",
+            ".github/pull_request_template.md",
+        )
+        rejected = (
+            "", "/README.md", "../README.md", "docs/../backend/a.md",
+            "docs//a.md", "docs\\a.md", "README.MD", "docs/a.markdown",
+            "backend/db/schema/999_x.sql", "tests/pg/test_a.py",
+            "tests/pg/search_ranking_baseline.json", "requirements.txt",
+            ".github/workflows/test-gate.yml", "scripts/test-postgres",
+        )
+        for path in approved:
+            with self.subTest(approved=path):
+                self.assertTrue(is_postgres_irrelevant_markdown(path))
+        for path in rejected:
+            with self.subTest(rejected=path):
+                self.assertFalse(is_postgres_irrelevant_markdown(path))
+
+    def test_postgres_scope_git_changes_fail_closed(self):
+        cases = (
+            ("root docs", {"README.md": "# Changed\n", "AGENTS.md": "New\n"}, True),
+            ("implementation docs", {"docs/guide.md": "# Updated\n"}, True),
+            ("new markdown", {"docs/new-page.md": "# New\n"}, True),
+            ("markdown with code", {
+                "docs/guide.md": "# Updated\n",
+                "backend/app.py": "print('changed')\n",
+            }, False),
+            ("code only", {"backend/app.py": "print('new')\n"}, False),
+            ("workflow", {".github/workflows/ci.yml": "name: CI\n"}, False),
+            ("empty", {}, False),
+        )
+        for label, changes, expected in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                base = _repo(root)
+                for path, body in changes.items():
+                    _write(root, path, body)
+                if changes:
+                    _git(root, "add", ".")
+                    _git(root, "commit", "-qm", "change")
+                result = changed_documentation(root, base, POSTGRES_SCOPE)
+                self.assertEqual(result is not None, expected)
+                self.assertIsNone(
+                    changed_documentation(root, "not-a-valid-sha", POSTGRES_SCOPE)
+                )
+                self.assertIsNone(changed_documentation(root, base, "unknown"))
+
+    def test_postgres_scope_refuses_deleted_or_renamed_markdown(self):
+        for kind in ("delete", "rename"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                base = _repo(root)
+                if kind == "delete":
+                    _git(root, "rm", "-q", "docs/guide.md")
+                else:
+                    _git(root, "mv", "docs/guide.md", "docs/other.md")
+                _git(root, "commit", "-qm", "change")
+                self.assertIsNone(changed_documentation(root, base, POSTGRES_SCOPE))
+
+    def test_cli_scope_defaults_narrow_and_rejects_unknown(self):
+        script = Path(__file__).resolve().parents[1] / "scripts/ci/docs_only.py"
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = _repo(root)
+            _write(root, "AGENTS.md", "Changed\n")
+            _git(root, "commit", "-qam", "change")
+
+            def run(*extra: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(  # nosec B603 - fixed interpreter and script
+                    [sys.executable, str(script), "--base", base, *extra],
+                    cwd=root, capture_output=True, text=True, check=False,
+                )
+
+            self.assertEqual(run().stdout.strip(), "false")
+            self.assertEqual(run("--scope", "postgres").stdout.strip(), "true")
+            self.assertNotEqual(run("--scope", "everything").returncode, 0)
+
     def test_deleted_or_renamed_markdown_is_not_safe_skip(self):
         for page in ("Glossary", "Getting-Started", "Offline-and-Sync"):
             for kind in ("delete", "rename"):
@@ -198,9 +283,22 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
                 "\n", 1
             )[1].rstrip()
 
+        def code(text: str) -> str:
+            return "\n".join(
+                line for line in text.splitlines()
+                if not line.lstrip().startswith("#")
+            )
+
+        # Identical fail-closed script; only the PostgreSQL jobs ask for the
+        # wider Markdown-only scope.
+        unit_call = 'python "$base_classifier" --base "$PRKS_PR_BASE_SHA")"'
+        plan_call = 'python "$base_classifier" --base "$PRKS_PR_BASE_SHA" --scope postgres)"'
+        unit_script = code(script(unit, "Classify documentation-only PR (fail closed)"))
+        self.assertIn(unit_call, unit_script)
+        self.assertNotIn("--scope", unit_script)
         self.assertEqual(
-            script(plan, "Classify docs-only scope for PostgreSQL jobs (fail closed)"),
-            script(unit, "Classify documentation-only PR (fail closed)"),
+            code(script(plan, "Classify docs-only scope for PostgreSQL jobs (fail closed)")),
+            unit_script.replace(unit_call, plan_call),
         )
         expected_guard = (
             "!cancelled() && github.event_name != 'schedule' && "
