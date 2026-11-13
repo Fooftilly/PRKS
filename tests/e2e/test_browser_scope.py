@@ -666,12 +666,25 @@ class BrowserScopeTests(unittest.TestCase):
 
         page.fill("#prks-sign-in-login", OWNER_LOGIN)
         page.fill("#prks-sign-in-password", "not the password")
+        held = []
+        page.route("**/api/login", lambda route: held.append(route))
         page.keyboard.press("Enter")
+        button = page.locator("#prks-sign-in button[type=submit]")
+        page.wait_for_function(
+            "() => document.querySelector('#prks-sign-in button[type=submit]').getAttribute('aria-busy') === 'true'")
+        self.assertTrue(button.is_disabled())
+        self.assertEqual(button.inner_text().strip(), "Signing in…")
+        self.assertEqual(len(held), 1)
+        held[0].continue_()
+        page.unroute("**/api/login")
         error = page.locator("#prks-sign-in-error")
         error.wait_for(state="visible")
         self.assertEqual(error.inner_text(), "The login or password is not right.")
         self.assertEqual(page.input_value("#prks-sign-in-password"), "")
         self.assertEqual(page.input_value("#prks-sign-in-login"), OWNER_LOGIN)
+        self.assertIsNone(button.get_attribute("aria-busy"))
+        self.assertTrue(button.is_enabled())
+        self.assertEqual(button.inner_text().strip(), "Sign in")
 
         page.fill("#prks-sign-in-password", PASSWORD)
         with page.expect_navigation(wait_until="domcontentloaded"):

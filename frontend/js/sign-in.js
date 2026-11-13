@@ -16,7 +16,8 @@
  * (DESIGN.md "Dialogs", "Fields and forms", "Buttons"). It has no close
  * control and ignores Escape: there is nothing behind it to return to. The
  * application behind it is `inert` while it is open, and its keyboard
- * handlers see no key (stopped at the window in the capture phase).
+ * handlers see no key (stopped at the window in the capture phase). Both are
+ * a documented DESIGN.md exception ("Documented exceptions": sign-in dialog).
  *
  * Messages are fixed text: the server's code chooses one; a password or
  * login is never logged or echoed.
@@ -143,6 +144,20 @@
             password.setAttribute('aria-invalid', invalid);
         }
 
+        // DESIGN.md "Interaction feedback contract": an awaited request shows
+        // its busy state on the button (`prksSetButtonBusy`, ui.js) before it
+        // starts, and a refused one restores it.
+        function setBusy(busy) {
+            const helper = (win && win.prksSetButtonBusy) || root.prksSetButtonBusy;
+            if (typeof helper === 'function') {
+                helper(button, busy, { busyLabel: 'Signing in…' });
+                return;
+            }
+            button.disabled = busy;
+            if (busy) button.setAttribute('aria-busy', 'true');
+            else button.removeAttribute('aria-busy');
+        }
+
         let pending = false;
         function submit() {
             if (pending) return Promise.resolve(null);
@@ -152,20 +167,24 @@
                 return Promise.resolve(null);
             }
             pending = true;
-            button.disabled = true;
+            setBusy(true);
             showError('');
-            return scope.signIn(login.value, password.value).then(function (result) {
-                if (result && result.ok) {
-                    reload();
+            return Promise.resolve()
+                .then(function () { return scope.signIn(login.value, password.value); })
+                .catch(function () { return { ok: false, error: 'unreachable' }; })
+                .then(function (result) {
+                    if (result && result.ok) {
+                        // The button stays busy until the page reloads.
+                        reload();
+                        return result;
+                    }
+                    pending = false;
+                    setBusy(false);
+                    password.value = '';
+                    showError(messageFor(result));
+                    password.focus();
                     return result;
-                }
-                pending = false;
-                button.disabled = false;
-                password.value = '';
-                showError(messageFor(result));
-                password.focus();
-                return result;
-            });
+                });
         }
         form.addEventListener('submit', function (event) {
             event.preventDefault();
