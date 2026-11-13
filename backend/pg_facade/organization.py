@@ -1,7 +1,7 @@
 """Organization family of the PostgreSQL transition facade (L-O-1).
 
 Owned by the Organization lane (``docs/postgresql-architecture.md`` §15.2):
-tags, folders, playlists, Saved Views and settings. Each method keeps the signature and return shape of the
+tags, folders, playlists and settings. Each method keeps the signature and return shape of the
 SQLite library it replaced.
 
 A method acts for the bound
@@ -17,10 +17,12 @@ Ported here: Tags, their aliases, delete and merge, Work and Folder tags,
 and their tag-option revision states (L-O-1 PR 2); Folders, their
 hierarchy and fields, the Folder a Work is in, and their revision states
 (PR 3); Playlists, their fields, membership and order, and their revision
-states (PR 4); Saved Views (PR 5); the application settings (PR 6). Differences from
+states (PR 4); the application settings (PR 6). Saved Views (PR 5) left the
+facade in PG-C3: ``backend/api/saved_views.py`` calls
+``backend.domain.saved_views.commands``. Differences from
 SQLite, each deliberate:
 
-- Names, aliases, Folder titles and Saved View names compare by
+- Names, aliases and Folder titles compare by
   ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``: "Straße" and
   "STRASSE", or "Λόγος" and "ΛΌΓΟΣ", are one name.
 - A name or alias over 200 UTF-8 bytes, or a name, alias or Folder field
@@ -113,25 +115,6 @@ def _command_deciding_titles(library: FacadeMixin, fn: Callable[[LibraryScope], 
         return _command(library, fn, serializable=serializable)
 
 
-def _saved_view_command(library: FacadeMixin, fn: Callable[[LibraryScope], T]) -> T:
-    """:func:`_command` for a writer of a Saved View name.
-
-    Every such writer holds the Library's Saved View lock, so the unique
-    index never decides; should another writer reach it, its refusal is
-    SQLite's 409.
-    """
-    from backend.db.errors import ConstraintViolationError
-    from backend.domain.saved_views.rules import SavedViewError
-    from backend.domain.saved_views import views
-
-    try:
-        return _command(library, fn)
-    except ConstraintViolationError as error:
-        if error.constraint != views.NAME_KEY:
-            raise
-        raise SavedViewError(views.NAME_TAKEN, 409) from None
-
-
 def _new_id(prefix: str) -> str:
     from backend.entity_ids import generate
 
@@ -139,7 +122,7 @@ def _new_id(prefix: str) -> str:
 
 
 class OrganizationMixin(FacadeMixin):
-    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4), Saved Views (PR 5), settings (PR 6)."""
+    """Tags, Work and Folder tags (L-O-1 PR 2), Folders and Work filing (PR 3), Playlists (PR 4), settings (PR 6)."""
 
     # -- Tags -------------------------------------------------------------------
     def add_tag(self, name: str, color: str = "#6d6cf7") -> Dict[str, Any]:
@@ -494,39 +477,6 @@ class OrganizationMixin(FacadeMixin):
 
         return _read(self, lambda scope: playlists.work_playlist_state(scope, work_id))
 
-    # -- Saved Views --------------------------------------------------------------
-    def get_saved_views(self) -> List[dict]:
-        from backend.domain.saved_views import views
-
-        return _read(self, views.all_views)
-    def get_saved_view(self, view_id: str) -> Optional[dict]:
-        from backend.domain.saved_views import views
-
-        vid = (view_id or "").strip()
-        if not vid:
-            return None
-        return _read(self, lambda scope: views.view(scope, vid))
-    def create_saved_view(self, name, search) -> dict:
-        from backend.domain.saved_views import views
-
-        view_id = _new_id("SV")
-        return _saved_view_command(self, lambda scope: views.create(scope, view_id, name, search))
-    def update_saved_view(self, view_id: str, *, name=None, search=None) -> dict:
-        from backend.domain.saved_views.rules import SavedViewError
-        from backend.domain.saved_views import views
-
-        vid = (view_id or "").strip()
-        if not vid:
-            raise SavedViewError(views.NOT_FOUND, 404)
-        return _saved_view_command(self, lambda scope: views.update(scope, vid, name, search))
-    def delete_saved_view(self, view_id: str) -> None:
-        from backend.domain.saved_views.rules import SavedViewError
-        from backend.domain.saved_views import views
-
-        vid = (view_id or "").strip()
-        if not vid:
-            raise SavedViewError(views.NOT_FOUND, 404)
-        _command(self, lambda scope: views.delete(scope, vid))
 
     # -- Application settings -----------------------------------------------------
     def get_app_settings_response(self) -> Dict[str, Any]:

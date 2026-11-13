@@ -2,12 +2,15 @@
 
 Cohesive CRUD for ``/api/saved-views`` and ``/api/saved-views/:id``.
 
-Parse path/body shape, invoke ``PRKSDatabase`` Saved View methods, map
+Parse path/body shape, run ``backend/domain/saved_views/commands`` for the
+admitted request's context on the served Library's database, map
 ``SavedViewError`` to HTTP status/JSON. The wire shape is
 ``backend/api_contract/saved_views.py``: reads go through ``dump_response``;
 writes send the committed domain row without a post-commit dump (see
 docs/api-contract-boundary.md). Request field types stay domain refusals. Name/search normalization and SQL stay
-in ``backend/domain/saved_views`` — this module does not open transactions.
+in ``backend/domain/saved_views``; the commands open the transactions, so
+authorization, maintenance and the epoch fence stay in ``library_command``
+and ``library_query``.
 
 ``server.py`` calls these handlers after host/origin, JSON body size, and
 library-access checks. Each ``handle_*`` returns ``True`` when the path belongs
@@ -23,6 +26,7 @@ from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.saved_views import SavedView, SavedViewDeleted
+from backend.domain.saved_views import commands
 from backend.domain.saved_views.rules import SavedViewError
 from backend.log_safety import safe_log_id, safe_log_label
 
@@ -45,18 +49,26 @@ def handles(path: str) -> bool:
     return path == COLLECTION or item_id(path) is not None
 
 
+def _actor(handler, db) -> tuple[Any, Any]:
+    """The served Library's database and the admitted request's context."""
+    ctx = getattr(handler, "_prks_request_context", None)
+    if ctx is None:
+        raise RuntimeError("a Saved View route ran without an admitted request context")
+    return db.database, ctx
+
+
 def _send_saved_view_error(handler, exc: SavedViewError) -> None:
     handler.send_json(int(exc.http_status), {"error": str(exc)})
 
 
 def handle_get(handler, db, path: str) -> bool:
     if path == COLLECTION:
-        handler.send_json(200, dump_response(SavedView, db.get_saved_views()))
+        handler.send_json(200, dump_response(SavedView, commands.all_views(*_actor(handler, db))))
         return True
     vid = item_id(path)
     if vid is None:
         return False
-    data = db.get_saved_view(vid)
+    data = commands.view(*_actor(handler, db), vid)
     if data:
         handler.send_json(200, dump_response(SavedView, data))
     else:
@@ -71,7 +83,7 @@ def handle_post(handler, db, path: str, data: Any) -> bool:
         handler.send_json(400, {"error": "JSON object body required"})
         return True
     try:
-        view = db.create_saved_view(data.get("name"), data.get("search"))
+        view = commands.create(*_actor(handler, db), data.get("name"), data.get("search"))
     except SavedViewError as e:
         _send_saved_view_error(handler, e)
         return True
@@ -97,8 +109,8 @@ def handle_patch(handler, db, path: str, data: Any) -> bool:
         handler.send_json(400, {"error": "Nothing to update."})
         return True
     try:
-        view = db.update_saved_view(
-            vid,
+        view = commands.update(
+            *_actor(handler, db), vid,
             name=data.get("name") if has_name else None,
             search=data.get("search") if has_search else None,
         )
@@ -119,7 +131,7 @@ def handle_delete(handler, db, path: str) -> bool:
     if vid is None:
         return False
     try:
-        db.delete_saved_view(vid)
+        commands.delete(*_actor(handler, db), vid)
     except SavedViewError as e:
         _send_saved_view_error(handler, e)
         return True
