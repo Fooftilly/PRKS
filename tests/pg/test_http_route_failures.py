@@ -28,7 +28,7 @@ from backend.db.errors import (
     UnmappedDatabaseError,
 )
 from backend.domain.identity.authorization import AccessRefused, Refusal
-from backend.domain.research import concept_commands
+from backend.domain.research import concept_commands, position_commands
 from tests.pg.test_http_research import ResearchHttpTestCase
 
 
@@ -83,7 +83,7 @@ class RouteFailureTests(ResearchHttpTestCase):
         self.assertEqual(self.concept_names(), ["Ethics"])
 
     def test_a_maintenance_flag_set_after_admission_is_maintenance(self) -> None:
-        self.interfere("create_position", lambda: self.run_sql(
+        self.interfere_command(position_commands, "create", lambda: self.run_sql(
             "UPDATE prks.libraries SET maintenance = 'restore', maintenance_run = %s WHERE id = %s",
             (uuid.uuid4(), self.lib)))
         res = self.send("POST", "/api/positions", {"name": "Thesis"})
@@ -105,7 +105,10 @@ class RouteFailureTests(ResearchHttpTestCase):
         self.assertEqual(res.header("PRKS-Library-Epoch"), [str(self.library_epoch())])
 
     def test_an_unmapped_database_error_stays_a_logged_500(self) -> None:
-        self.raises("list_positions", UnmappedDatabaseError(sqlstate="XX000"))
+        def fail() -> None:
+            raise UnmappedDatabaseError(sqlstate="XX000")
+
+        self.interfere_command(position_commands, "catalog", fail)
         res = self.get("/api/positions")
         self.assertEqual(res.status, 500, res.raw)
         self.assertEqual(res.body["error"], "internal_error")

@@ -118,6 +118,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/research/arguments.py",
     "backend/domain/research/concepts.py",
     "backend/domain/research/concept_commands.py",
+    "backend/domain/research/position_commands.py",
     "backend/domain/research/graph.py",
     "backend/domain/research/positions.py",
     "backend/domain/research/reindex.py",
