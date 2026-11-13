@@ -231,10 +231,10 @@ class SavedViewCommandsOver:
 
 @contextlib.contextmanager
 def route_commands_over(route_module: Any, commands: Any) -> Iterator[None]:
-    """Run ``route_module`` with its ``commands`` replaced by ``commands`` (a ``*CommandsOver``)."""
-    kept = route_module.commands
-    route_module.commands = commands
+    """Run ``route_module`` with its commands (``_commands()``) replaced by ``commands`` (a ``*CommandsOver``)."""
+    kept = route_module._commands
+    route_module._commands = lambda: commands
     try:
         yield
     finally:
-        route_module.commands = kept
+        route_module._commands = kept

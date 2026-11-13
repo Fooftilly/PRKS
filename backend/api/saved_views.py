@@ -26,7 +26,6 @@ from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.saved_views import SavedView, SavedViewDeleted
-from backend.domain.saved_views import commands
 from backend.domain.saved_views.rules import SavedViewError
 from backend.log_safety import safe_log_id, safe_log_label
 
@@ -49,6 +48,17 @@ def handles(path: str) -> bool:
     return path == COLLECTION or item_id(path) is not None
 
 
+def _commands() -> Any:
+    """``backend.domain.saved_views.commands``, imported when a route runs.
+
+    The served app loads no PostgreSQL module at import time
+    (``tests/test_e2e_policy.py``), as ``backend/api/processing.py`` defers its own.
+    """
+    from backend.domain.saved_views import commands
+
+    return commands
+
+
 def _actor(handler, db) -> tuple[Any, Any]:
     """The served Library's database and the admitted request's context."""
     ctx = getattr(handler, "_prks_request_context", None)
@@ -63,12 +73,12 @@ def _send_saved_view_error(handler, exc: SavedViewError) -> None:
 
 def handle_get(handler, db, path: str) -> bool:
     if path == COLLECTION:
-        handler.send_json(200, dump_response(SavedView, commands.all_views(*_actor(handler, db))))
+        handler.send_json(200, dump_response(SavedView, _commands().all_views(*_actor(handler, db))))
         return True
     vid = item_id(path)
     if vid is None:
         return False
-    data = commands.view(*_actor(handler, db), vid)
+    data = _commands().view(*_actor(handler, db), vid)
     if data:
         handler.send_json(200, dump_response(SavedView, data))
     else:
@@ -83,7 +93,7 @@ def handle_post(handler, db, path: str, data: Any) -> bool:
         handler.send_json(400, {"error": "JSON object body required"})
         return True
     try:
-        view = commands.create(*_actor(handler, db), data.get("name"), data.get("search"))
+        view = _commands().create(*_actor(handler, db), data.get("name"), data.get("search"))
     except SavedViewError as e:
         _send_saved_view_error(handler, e)
         return True
@@ -109,7 +119,7 @@ def handle_patch(handler, db, path: str, data: Any) -> bool:
         handler.send_json(400, {"error": "Nothing to update."})
         return True
     try:
-        view = commands.update(
+        view = _commands().update(
             *_actor(handler, db), vid,
             name=data.get("name") if has_name else None,
             search=data.get("search") if has_search else None,
@@ -131,7 +141,7 @@ def handle_delete(handler, db, path: str) -> bool:
     if vid is None:
         return False
     try:
-        commands.delete(*_actor(handler, db), vid)
+        _commands().delete(*_actor(handler, db), vid)
     except SavedViewError as e:
         _send_saved_view_error(handler, e)
         return True
