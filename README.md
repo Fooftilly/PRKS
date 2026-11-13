@@ -51,7 +51,7 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 ./.venv/bin/python prks_app.py admin bootstrap complete --root data --login alice
 ```
 
-The first command prints a one-time token; the second asks for it and for the owner's password. The waiting server then starts serving. Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and sign in.
+The first command prints a one-time token; the second asks for it and for the owner's password. The waiting server then starts serving. Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and sign in with that login and password.
 
 The process listens on **127.0.0.1:8080** only. Optional port (still loopback):
 
@@ -73,6 +73,7 @@ python prks_app.py --host 0.0.0.0
 
 ```bash
 scripts/dev-postgres            # once: a local PostgreSQL 18 for testing, in Docker
+unset PRKS_DATABASE_URL         # if you exported your Library's URL above
 python prks_app.py --testing
 ```
 

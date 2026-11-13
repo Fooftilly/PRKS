@@ -1283,6 +1283,7 @@ Each exception states the component, the rule being broken, why, and whether it 
 | Top-ribbon `.ribbon-btn` padding `7px 9px` | Control padding tokens | Ribbon fitting at narrow widths; not a second button type scale | Permanent |
 | Work `.page-header--work` padding `4px 6px` | Page-header padding | Workspace chrome tightness around the PDF/notes split | Permanent |
 | Component gallery fixture | Production inline-style policy | Gallery `<style>` and token/swatch inline styles are test-fixture layout only | Permanent |
+| Sign-in dialog (`#prks-sign-in`, `frontend/js/sign-in.js`) | Dialogs: Escape, backdrop and close through `requestModalClose`; a pristine modal closes; no per-modal key handler | It is what a signed-out browser sees, and nothing behind it can be used, so there is nothing to close back to. It has no close control and ignores Escape and the backdrop. It stops every `keydown` at the window in the capture phase, so the inert application's document-level shortcuts never run; typing, Tab and Enter keep their default action. A successful sign-in reloads the page | Permanent |
 | Future overlay shadow | `--shadow-*` is `none` | If a floating overlay later needs a shadow, document it here before shipping | Reserved |
 
 ---

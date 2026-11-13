@@ -12,6 +12,7 @@ const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..', '..');
 const scopeApi = require(path.join(rootDir, 'frontend/js/browser-scope.js'));
+const signInApi = require(path.join(rootDir, 'frontend/js/sign-in.js'));
 const sw = require(path.join(rootDir, 'frontend/sw.js'));
 const { createFakeIndexedDBFactory } = require(path.join(rootDir, 'tests/browser/lib/fake_indexeddb.js'));
 const { createPrksLocalStore } = require(path.join(rootDir, 'frontend/js/local-store.js'));
@@ -1059,10 +1060,74 @@ async function testEpoch() {
         String(changed.runtime.held()));
 }
 
+/** PG-C2 #641: a 401 at start offers sign-in; `signIn` posts the login and reports the answer. */
+async function testSignIn() {
+    const cases = [
+        ['a 401', status(401, { error: 'not_authenticated' }), true],
+        ['a 403', status(403, { error: 'forbidden' }), false],
+        ['a confirmed session', ok(SESSION_A), false],
+        ['an unreachable server', offline(), false],
+        ['a 503', status(503), false],
+    ];
+    for (const [label, answer, expected] of cases) {
+        const scope = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: sessionFetch([answer]) });
+        record('before resolve nothing asks for sign-in (' + label + ')', scope.needsSignIn() === false);
+        await scope.resolve();
+        record(label + (expected ? ' asks' : ' does not ask') + ' for sign-in', scope.needsSignIn() === expected);
+    }
+
+    const sent = [];
+    function loginFetch(answer) {
+        return function (url, init) {
+            if (url === '/api/session') return Promise.resolve(json({ error: 'not_authenticated' }, 401));
+            sent.push({ url: url, init: init });
+            return typeof answer === 'function' ? answer() : Promise.resolve(answer);
+        };
+    }
+    const good = scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(), fetchImpl: loginFetch(json({ signed_in: true }, 200)) });
+    const done = await good.signIn('alice', 'pw');
+    const req = sent[0];
+    record('a sign-in posts JSON to /api/login', !!req && req.url === '/api/login' && req.init.method === 'POST'
+        && req.init.headers['Content-Type'] === 'application/json'
+        && JSON.stringify(JSON.parse(req.init.body)) === JSON.stringify({ login: 'alice', password: 'pw' }));
+    record('a 200 sign-in is ok', done.ok === true);
+    record('a sign-in binds nothing (the page reloads)', good.current() === null);
+
+    const wrong = await scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(),
+        fetchImpl: loginFetch(json({ error: 'invalid_credentials' }, 401)) }).signIn('alice', 'bad');
+    record('a refused sign-in carries the server code', wrong.ok === false && wrong.error === 'invalid_credentials' && wrong.status === 401);
+    const throttled = await scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(),
+        fetchImpl: loginFetch(new Response(JSON.stringify({ error: 'throttled' }), { status: 429, headers: { 'Retry-After': '30' } })) }).signIn('a', 'b');
+    record('a throttled sign-in carries Retry-After', throttled.status === 429 && throttled.retryAfter === 30);
+    const odd = await scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(),
+        fetchImpl: loginFetch(new Response('nope', { status: 429, headers: { 'Retry-After': 'soon' } })) }).signIn('a', 'b');
+    record('a malformed answer is refused, with no Retry-After', odd.ok === false && odd.error === 'refused' && odd.retryAfter === null);
+    const down = await scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(),
+        fetchImpl: loginFetch(() => Promise.reject(new TypeError('Failed to fetch'))) }).signIn('a', 'b');
+    record('a sign-in the server never answers is unreachable', down.ok === false && down.error === 'unreachable');
+    const gateway = await scopeApi.createPrksBrowserScope({ indexedDB: createFakeIndexedDBFactory(),
+        fetchImpl: loginFetch(json({}, 502)) }).signIn('a', 'b');
+    record('a 502 sign-in is unreachable', gateway.error === 'unreachable');
+
+    const m = signInApi.prksSignInMessage;
+    record('wrong credentials have a fixed message', m({ ok: false, error: 'invalid_credentials', status: 401 }) === 'The login or password is not right.');
+    record('throttling names the wait', m({ ok: false, error: 'throttled', status: 429, retryAfter: 30 }) === 'Too many sign-in attempts. Try again in 30 seconds.');
+    record('throttling with one second is singular', m({ ok: false, error: 'throttled', status: 429, retryAfter: 1 }).endsWith('1 second.'));
+    record('throttling without a wait says later', m({ ok: false, status: 429, retryAfter: null }) === 'Too many sign-in attempts. Try again later.');
+    record('an unreachable server has its message', m({ ok: false, error: 'unreachable' }).startsWith('PRKS did not answer.'));
+    record('an unknown refusal never echoes the code', m({ ok: false, error: '<b>x</b>', status: 400 }) === 'PRKS could not sign you in. Try again.');
+    record('success has no message', m({ ok: true }) === '');
+
+    const fakeScope = (needs) => ({ resolve: () => Promise.resolve(null), needsSignIn: () => needs });
+    record('startSignIn without a scope shows nothing', (await signInApi.prksStartSignIn(null, {}, () => {})) === false);
+    record('startSignIn with a session shows nothing', (await signInApi.prksStartSignIn(fakeScope(false), {}, () => {})) === false);
+}
+
 async function main() {
     await testResolve();
     await testBoundedRead();
     await testSignOut();
+    await testSignIn();
     await testAnnounceAndLifecycle();
     await testVerify();
     await testStores();

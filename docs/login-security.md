@@ -136,6 +136,15 @@ exclusive content lock, so one web process serves a root
 | `GET /api/session` | 200 `{auth_mode, instance_id, user: {id, display_name}, library: {id, name, role, epoch}, expires_at}`, or 401 `not_authenticated` |
 | `POST /api/logout` | 200; the session is revoked and its cookie cleared |
 
+**The browser's sign-in page.** A page whose first `GET /api/session`
+answers 401 shows one sign-in dialog over the application
+(`frontend/js/sign-in.js`, through `prksBrowserScope.signIn`): Login,
+Password and Sign in. A refused sign-in shows a fixed message (wrong login or
+password, too many attempts with the `Retry-After` wait, PRKS not answering)
+and clears the password; a successful one reloads the page, so the browser
+scope and every store bind to that account from the start. An unreachable
+server, a page bound offline and `loopback-owner` never show it.
+
 **`loopback-owner`** is for development and local testing. Every request acts
 as the owner through an ordinary server-side session that never leaves the
 process; there is no login or logout. The server refuses to start in this

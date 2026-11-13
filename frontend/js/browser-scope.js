@@ -68,6 +68,7 @@
     'use strict';
 
     const SESSION_PATH = '/api/session';
+    const LOGIN_PATH = '/api/login';
     const LOGOUT_PATH = '/api/logout';
     const POINTER_DB_NAME = 'prks-browser-scope-v1';
     // Version 2 adds the worker's per-client bindings (`clients`); the worker
@@ -368,6 +369,8 @@
 
         let resolving = null;
         let bound = null;
+        // The page's first session read answered 401: nobody is signed in.
+        let signedOutAtStart = false;
         // The epoch this page bound with, and the highest seen since.
         let pageEpoch = null;
         let libraryContent = null;
@@ -441,6 +444,8 @@
                 })
                 .then(function (response) {
                     if (UNREACHABLE_STATUSES.indexOf(response.status) !== -1) return { kind: 'unreachable', scope: null };
+                    // 401: nobody is signed in here (the page offers sign-in, `needsSignIn()`).
+                    if (response.status === 401) return { kind: 'none', scope: null, signedOut: true };
                     if (!response.ok) return { kind: 'none', scope: null };
                     return response.json().then(function (body) {
                         const scope = scopeFromSession(body);
@@ -471,6 +476,7 @@
         function resolve() {
             if (resolving) return resolving;
             resolving = readSession().then(function (answer) {
+                signedOutAtStart = answer.kind === 'none' && answer.signedOut === true;
                 if (answer.kind === 'session') return answer;
                 if (answer.kind === 'unreachable') {
                     return pointer.read().catch(function () { return null; });
@@ -584,6 +590,40 @@
             });
         }
 
+        /**
+         * Password sign-in (`POST /api/login`). Resolves `{ ok: true }` once
+         * the server set the session cookie, or `{ ok: false, error, status,
+         * retryAfter }` (`error` is the server's code, or 'unreachable'). It binds nothing:
+         * the page reloads, so every store opens for the new scope from the
+         * start (a page's scope is fixed once resolved).
+         */
+        function signIn(login, password) {
+            return Promise.resolve().then(function () {
+                return fetchImpl(LOGIN_PATH, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ login: String(login || ''), password: String(password || '') }),
+                });
+            }).then(function (response) {
+                if (response && response.ok) return { ok: true };
+                if (!response || UNREACHABLE_STATUSES.indexOf(response.status) !== -1) {
+                    return { ok: false, error: 'unreachable', retryAfter: null };
+                }
+                const header = response.headers && typeof response.headers.get === 'function'
+                    ? response.headers.get('Retry-After') : null;
+                const seconds = /^[0-9]{1,6}$/.test(String(header || '')) ? Number(header) : null;
+                return Promise.resolve(response.json()).then(function (body) {
+                    const code = body && typeof body.error === 'string' ? body.error : 'refused';
+                    return { ok: false, error: code, status: response.status, retryAfter: seconds };
+                }, function () {
+                    return { ok: false, error: 'refused', status: response.status, retryAfter: seconds };
+                });
+            }, function () {
+                return { ok: false, error: 'unreachable', retryAfter: null };
+            });
+        }
+
         function onChannelMessage(data) {
             if (!data || data.type !== 'logged_out' || !bound || retired) return;
             if (data.key === bound.key) retire('logged_out');
@@ -627,7 +667,10 @@
         return {
             resolve: resolve,
             verify: verify,
+            signIn: signIn,
             signOut: signOut,
+            /** True once `resolve()` found nobody signed in (its session read answered 401). */
+            needsSignIn: function () { return signedOutAtStart && !bound && !retired; },
             dbName: dbName,
             current: function () { return retired ? null : bound; },
             pageEpoch: function () { return retired ? null : pageEpoch; },
