@@ -37,6 +37,7 @@ from backend.api import playlists as playlists_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.api import tags as tags_api
+from backend.api import work_roles as work_roles_api
 from backend.services import work_pdf_replace
 from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
@@ -1209,41 +1210,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
             if data is _JSON_BODY_ABSENT:
                 data = {}
-            if path.startswith('/api/works/') and path.endswith('/roles'):
-                parts = path.split('/')
-                if len(parts) != 5 or parts[4] != 'roles':
-                    self.send_error(404, "API endpoint not found")
-                    return
-                w_id = parts[3]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                person_id = (data.get('person_id') or '').strip()
-                role_type = (data.get('role_type') or '').strip()
-                oi_raw = data.get('order_index', 0)
-                try:
-                    order_index = int(oi_raw) if oi_raw is not None and str(oi_raw).strip() != '' else 0
-                except (TypeError, ValueError):
-                    self.send_json(400, {'error': 'order_index must be an integer'})
-                    return
-                if not person_id or not role_type:
-                    self.send_json(400, {'error': 'person_id and role_type are required'})
-                    return
-                credit_name = data.get('credit_name', '')
-                if credit_name is not None and not isinstance(credit_name, str):
-                    self.send_json(400, {'error': 'credit_name must be a string'})
-                    return
-                try:
-                    updated = db.update_role_credit_name(
-                        w_id, person_id, role_type, order_index, credit_name or ''
-                    )
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                if updated:
-                    self.send_json(200, {'status': 'updated'})
-                else:
-                    self.send_json(404, {'error': 'role link not found'})
+            if work_roles_api.handle_patch(self, db, path, data):
+                return
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 if not isinstance(data, dict):
@@ -1476,28 +1444,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         query_params = parse_qs(parsed_path.query)
         try:
-            if path.startswith('/api/works/') and path.endswith('/roles'):
-                # DELETE /api/works/{work_id}/roles?person_id=&role_type=&order_index=
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'roles':
-                    w_id = parts[3]
-                    person_id = (query_params.get('person_id') or [''])[0].strip()
-                    role_type = (query_params.get('role_type') or [''])[0].strip()
-                    oi_raw = (query_params.get('order_index') or ['0'])[0].strip()
-                    try:
-                        order_index = int(oi_raw) if oi_raw != '' else 0
-                    except ValueError:
-                        self.send_json(400, {'error': 'order_index must be an integer'})
-                        return
-                    if not person_id or not role_type:
-                        self.send_json(400, {'error': 'person_id and role_type are required'})
-                        return
-                    if db.delete_work_role(w_id, person_id, role_type, order_index):
-                        self.send_json(200, {'status': 'removed'})
-                    else:
-                        self.send_json(404, {'error': 'role link not found'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            if work_roles_api.handle_delete(self, db, path, query_params):
+                return
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
                 w_id = path.split('/')[-1]
                 _delete_work(w_id)
@@ -1990,22 +1938,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self._send_json_not_modified(etag)
                         return
                     self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/people-state') and len(path.split('/')) == 5:
-                # Relationship REVISIONS, including tombstones. The Work detail
-                # already carries the linked people themselves; duplicating
-                # Person objects here would double what every read costs for
-                # values the client already holds. A scope with a revision and
-                # no live relationship is what tells an offline device its own
-                # pending removal is current rather than stale.
-                data = db.get_work_roles_state(path.split("/")[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-people-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif work_roles_api.handle_get(self, db, path):
+                return
             elif tags_api.handle_get(self, db, path, query):
                 return
             elif path.startswith('/api/works/') and len(path.split('/')) == 4:
@@ -2430,7 +2364,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # after the Work was committed.
                 # Only roles creation would insert count: one it skips (no
                 # role type, unknown type) must not block the Work.
-                if db.missing_initial_role_person_ids(data.get('roles')):
+                if work_roles_api.missing_initial_person_ids(self, db, data.get('roles')):
                     self.send_json(409, {
                         'error': 'A person on this file has not finished saving yet.',
                         'code': 'PERSON_NOT_FOUND',
@@ -2568,7 +2502,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # transaction, which also re-checks every Person under the write
                 # lock, so a refusal leaves no role and no alias change behind.
                 try:
-                    db.insert_initial_roles(w_id, data.get('roles', []))
+                    work_roles_api.insert_initial(self, db, w_id, data.get('roles', []))
                 except MissingPersonError:
                     # Deleted after the up-front check: same outcome as that
                     # check, through the existing compensation.
@@ -2679,30 +2613,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "Work not found")
                     return
                 self.send_json(200, {'status': 'opened'})
-            elif path == '/api/roles':
-                p_id = (data.get('person_id') or '').strip()
-                w_id = (data.get('work_id') or '').strip()
-                r_type = (data.get('role_type') or '').strip()
-                if not p_id or not w_id or not r_type:
-                    self.send_json(400, {'error': 'person_id, work_id, and role_type are required'})
-                    return
-                credit_name = data.get('credit_name', '')
-                if credit_name is not None and not isinstance(credit_name, str):
-                    self.send_json(400, {'error': 'credit_name must be a string'})
-                    return
-                try:
-                    oi = db.next_role_order_index(w_id)
-                    db.add_role(
-                        p_id,
-                        w_id,
-                        r_type,
-                        order_index=oi,
-                        credit_name=credit_name or '',
-                    )
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'success'})
+            elif work_roles_api.handle_post(self, db, path, data):
+                return
             elif path.startswith('/api/works/') and path.endswith('/annotations/adopt'):
                 parts = path.split('/')
                 if len(parts) != 6 or parts[4] != 'annotations' or parts[5] != 'adopt':

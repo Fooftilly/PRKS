@@ -22,7 +22,6 @@ from backend.pg_facade import FacadeMixin, NotPortedError, PostgresLibrary
 
 LANE_MIXINS = {
     "WorksMixin",
-    "PeopleMixin",
     "ResearchMixin",
     "AnnotationsMixin",
     "SearchMixin",

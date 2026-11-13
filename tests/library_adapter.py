@@ -130,7 +130,56 @@ class TestLibrary(PostgresLibrary):
                    serializable=True)
 
     def missing_person_ids(self, person_ids: Any) -> List[str]:
-        return self._missing_person_ids(person_ids)
+        from backend.domain.people import role_commands
+
+        return role_commands.missing_person_ids(self.database, current_context(), person_ids)
+
+    # -- Work-Person roles (PG-C3 PR 9: ``backend/api/work_roles.py`` calls the commands) --
+
+    def add_role(self, person_id: str, work_id: str, role_type: str, order_index: int = 0,
+                 credit_name: str = "") -> None:
+        """A role on an existing Work, appended (``order_index`` is ignored)."""
+        from backend.domain.people import role_commands
+
+        del order_index
+        role_commands.add(self.database, current_context(), person_id, work_id, role_type, credit_name)
+
+    def missing_initial_role_person_ids(self, roles: Any) -> List[str]:
+        from backend.domain.people import role_commands
+
+        return role_commands.missing_initial_person_ids(self.database, current_context(), roles)
+
+    def insert_initial_roles(self, work_id: str, roles: Any) -> int:
+        from backend.domain.people import role_commands
+
+        return role_commands.insert_initial(self.database, current_context(), work_id, roles)
+
+    def next_role_order_index(self, work_id: str) -> int:
+        from backend.domain.people import role_commands
+
+        return role_commands.next_order_index(self.database, current_context(), work_id)
+
+    def get_work_roles_state(self, work_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.people import role_commands
+
+        return role_commands.work_state(self.database, current_context(), work_id)
+
+    def update_role_credit_name(self, work_id: str, person_id: str, role_type: str,
+                                order_index: int, credit_name: str) -> bool:
+        """The credit of an existing role (``order_index`` is ignored)."""
+        from backend.domain.people import role_commands
+
+        del order_index
+        return role_commands.update_credit(self.database, current_context(), work_id, person_id,
+                                           role_type, credit_name)
+
+    def delete_work_role(self, work_id: str, person_id: str, role_type: str,
+                         order_index: int = 0) -> bool:
+        """Remove one role (``order_index`` is ignored)."""
+        from backend.domain.people import role_commands
+
+        del order_index
+        return role_commands.remove(self.database, current_context(), work_id, person_id, role_type)
 
     def get_work_roles(self, work_id: str) -> List[dict]:
         from backend.domain.people import roles

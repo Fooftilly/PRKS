@@ -2,7 +2,7 @@
 
 :class:`PostgresLibrary` is the library object the HTTP adapter (``server.py``,
 ``api/``, ``services/``) calls: one mixin per family (``works.py``,
-``people.py``, ...), each delegating to domain commands and queries. A
+``research.py``, ...), each delegating to domain commands and queries. A
 capability the Library documents as not available yet raises
 :class:`NotPortedError`. This package must not import psycopg (the
 persistence boundary keeps it in ``backend/db/`` and ``backend/domain/``).
@@ -22,7 +22,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from backend.pg_facade.annotations import AnnotationsMixin
-from backend.pg_facade.people import PeopleMixin
 from backend.pg_facade.registry import FacadeMixin, NotPortedError
 from backend.pg_facade.research import ResearchMixin
 from backend.pg_facade.search import SearchMixin
@@ -35,7 +34,6 @@ if TYPE_CHECKING:
 
 class PostgresLibrary(
     WorksMixin,
-    PeopleMixin,
     ResearchMixin,
     AnnotationsMixin,
     SearchMixin,

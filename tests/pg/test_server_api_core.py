@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 from backend.api import folders as folders_api
 from backend.api import playlists as playlists_api
+from backend.api import work_roles as work_roles_api
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 
@@ -152,7 +153,7 @@ class CreateRefusalTests(ServerApiTestCase):
     def test_a_person_deleted_after_the_check_leaves_no_work_and_no_alias(self) -> None:
         person = self.ok(self.send("POST", "/api/persons", {"first_name": "Alias", "last_name": "Keeper"}))["id"]
         before = self.ok(self.get(f"/api/persons/{person}"))
-        with mock.patch.object(self.facade, "missing_initial_role_person_ids", return_value=[]):
+        with mock.patch.object(work_roles_api, "missing_initial_person_ids", return_value=[]):
             res = self.send("POST", "/api/works", {
                 "title": "Alias Rollback Work",
                 "roles": [{"person_id": person, "role_type": "Author", "credit_name": "A. Keeper"},
@@ -169,7 +170,7 @@ class CreateRefusalTests(ServerApiTestCase):
         state = ("SELECT p.updated_at, count(i.work_id) AS items FROM prks.playlists p "
                  "LEFT JOIN prks.playlist_items i ON i.playlist_id = p.id WHERE p.id = %s GROUP BY p.updated_at")
         before = self.sql(state, (playlist,))
-        with (mock.patch.object(self.facade, "missing_initial_role_person_ids", return_value=[]),
+        with (mock.patch.object(work_roles_api, "missing_initial_person_ids", return_value=[]),
               mock.patch.object(playlists_api, "add_item", wraps=playlists_api.add_item) as attach):
             res = self.send("POST", "/api/works", {
                 "title": "Playlist Race Work", "playlist_id": playlist,
@@ -189,7 +190,7 @@ class CreateRefusalTests(ServerApiTestCase):
             return path
 
         role_pdf = adopted("adopt-then-role-race.pdf")
-        with mock.patch.object(self.facade, "missing_initial_role_person_ids", return_value=[]):
+        with mock.patch.object(work_roles_api, "missing_initial_person_ids", return_value=[]):
             res = self.send("POST", "/api/works", {
                 "title": "Adopt Role Race", "file_path": "/api/pdfs/adopt-then-role-race.pdf",
                 "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}]})
