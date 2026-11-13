@@ -521,32 +521,14 @@ leaks.
 
 ## Implemented in this PR
 
-### Worker-local immutable seed snapshots
+### Worker-local immutable seed snapshots (retired)
 
-A seed function is now executed once per worker. Its completed storage tree is kept
-as a private immutable template. Every AppServer still receives a new
-TemporaryDirectory, but the template is copied into it instead of rebuilding the
-same SQLite/PDF/index fixture repeatedly. After the first build, templates are
-WAL-checkpointed and leftover `-wal`/`-shm` companions are removed **only when**
-`PRAGMA wal_checkpoint(TRUNCATE)` reports `busy=0`. A blocked/incomplete
-checkpoint **refuses** the snapshot (raises; nothing is inserted into the
-immutable seed cache) rather than caching a directory that may still have a
-live SQLite user. Finalize connects with `timeout=0` so a leaked writer fails
-immediately. Each build attempt uses a unique `mkdtemp` under the cache root
-so a leftover failed template cannot block a later retry (`FileExistsError` on
-a reused `seed-N` path — especially on Windows when an open handle blocks
-`rmtree`).
-
-The returned fixture ID dictionary is deep-copied too, so a test cannot mutate
-metadata used by another test.
-
-Disable this optimization for A/B measurement with:
-
-```bash
-python tests/e2e/run.py --no-seed-cache ...
-```
-
-The cache is process-local. Parallel workers never share a template or storage tree.
+The SQLite harness ran each seed function once per worker, kept the seeded
+storage tree as a private template and copied it into each test's storage root
+(`--no-seed-cache` / `PRKS_E2E_SEED_CACHE=0` turned that off for A/B runs).
+PG-C2 (#641) removed it: a PostgreSQL E2E server is seeded with rows in its own
+disposable database before it starts, so there is no file template to cache or
+clone, and the flag and variable are gone.
 
 ### Reduced motion in the common browser context (opt-in)
 
@@ -1033,7 +1015,6 @@ for a candidate policy**, not a proposed or deployed production fix.
 pay profiling overhead:
 
 - `seed_build`
-- `seed_clone`
 - `server_start` (inclusive: process spawn + real HTTP readiness)
   - `server_spawn` (launch the fresh PRKS subprocess)
   - `server_http_ready` (poll the real `/api/works` endpoint to readiness)
@@ -1057,7 +1038,6 @@ Example:
 
 ```bash
 python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile
-python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile --no-seed-cache
 ```
 
 Compare the same selection, commit, worker count and machine. Do not compare a
@@ -1115,13 +1095,13 @@ For a comparable measurement after this profiling change, manually run
 Its aggregate JSON report already carries all profile phase totals; no extra
 CI mode or artifact upload is needed.
 
-`--profile` and `--no-seed-cache` do **not** update `.tests/e2e-timings.json`
+`--profile` does **not** update `.tests/e2e-timings.json`
 (or last-failed history). Those files train ordinary-gate LPT sharding; writing
-instrumented or cache-off durations into them would poison later normal runs.
+instrumented durations into them would poison later normal runs.
 Profile/slowest output for the current run still prints as usual.
 
 The same applies when the run is configured through the environment instead of
-the flags: `PRKS_E2E_PROFILE=1` or `PRKS_E2E_SEED_CACHE=0` make the run
+the flags: `PRKS_E2E_PROFILE=1` or `PRKS_E2E_ROUTE_FASTPATH=1` make the run
 non-representative on their own, so the runner suppresses history persistence
 for them too and prints which benchmark mode is active. `tests/e2e/policy.py`
 (`benchmark_modes()`) makes that decision once, from the effective
@@ -2229,7 +2209,6 @@ For any optimization:
 Recommended first benchmark:
 
 ```bash
-python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile --no-seed-cache
 python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile
 ```
 

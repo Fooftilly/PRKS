@@ -2383,20 +2383,26 @@ class BenchmarkModeTests(unittest.TestCase):
 
     def test_default_environment_is_representative(self):
         self.assertEqual(policy.benchmark_modes({}), ())
-        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "1"}), ())
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
         self.assertEqual(policy.benchmark_modes({"PRKS_E2E_PROFILE": "0"}), ())
 
-    def test_profile_and_disabled_seed_cache_are_benchmark_modes(self):
+    def test_profile_and_route_fastpath_are_benchmark_modes(self):
         self.assertEqual(policy.benchmark_modes({"PRKS_E2E_PROFILE": "1"}), ("profile",))
         self.assertEqual(
-            policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "off"}), ("no-seed-cache",)
+            policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "on"}), ("route-fastpath",)
         )
         self.assertEqual(
             policy.benchmark_modes(
-                {"PRKS_E2E_PROFILE": "yes", "PRKS_E2E_SEED_CACHE": "false"}
+                {"PRKS_E2E_PROFILE": "yes", "PRKS_E2E_ROUTE_FASTPATH": "true"}
             ),
-            ("profile", "no-seed-cache"),
+            ("profile", "route-fastpath"),
         )
+
+    def test_the_retired_seed_cache_switch_is_not_a_benchmark_mode(self):
+        """Each server builds its own PostgreSQL seed; no seed cache is left to turn off."""
+        for value in ("0", "off", "false", "1"):
+            self.assertEqual(policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": value}), ())
+        self.assertFalse(hasattr(policy, "SEED_CACHE_ENV"))
 
     def test_fastpath_is_opt_in_and_never_trains_timing_history(self):
         self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
@@ -3176,7 +3182,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         "PRKS_E2E_BENCHMARK_RESULT": str(destination),
                         "PRKS_E2E_PROFILE": "1",
                         "PRKS_E2E_ROUTE_FASTPATH": fastpath,
-                        "PRKS_E2E_SEED_CACHE": "1",
                     },
                 ):
                     runner._write_serial_benchmark_result(result, 4.5678)
@@ -3216,7 +3221,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {
                 "PRKS_E2E_BENCHMARK_RESULT": str(destination),
                 "PRKS_E2E_PROFILE": "0",
-                "PRKS_E2E_SEED_CACHE": "1",
                 "PRKS_E2E_ROUTE_FASTPATH": "0",
             }):
                 with self.assertRaisesRegex(ValueError, "requires E2E profiling"):
@@ -3470,7 +3474,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 load.assert_not_called()
 
     def test_env_only_benchmark_modes_do_not_persist_history(self):
-        """PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE=0 are benchmark runs without a flag."""
+        """PRKS_E2E_PROFILE / PRKS_E2E_ROUTE_FASTPATH are benchmark runs without a flag."""
         from tests.e2e.sharding import load_timings, save_timings
 
         test_id = "tests.e2e.fake.BenchTests.test_x"
@@ -3493,7 +3497,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 last_path.write_bytes(prior_last_bytes)
                 with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                     os.environ.pop("PRKS_E2E_PROFILE", None)
-                    os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                     os.environ.pop("PRKS_E2E_ROUTE_FASTPATH", None)
                     os.environ.update(env)
                     return self._invoke_runner_history_case(
@@ -3506,8 +3509,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
 
             for env in (
                 {"PRKS_E2E_PROFILE": "1"},
-                {"PRKS_E2E_SEED_CACHE": "0"},
-                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_SEED_CACHE": "0"},
+                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "1"},
                 {"PRKS_E2E_ROUTE_FASTPATH": "1"},
             ):
                 code, print_slow = _run(env)
@@ -3524,8 +3526,8 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                     "env=%s must leave last-failed untouched" % env,
                 )
 
-            # An explicitly-default seed cache is a representative run: it persists.
-            code, _ = _run({"PRKS_E2E_SEED_CACHE": "1"})
+            # An explicitly-off route fast path is a representative run: it persists.
+            code, _ = _run({"PRKS_E2E_ROUTE_FASTPATH": "0"})
             self.assertEqual(code, 0)
             self.assertEqual(load_timings(timings_path)[test_id], 99.0)
 
@@ -3543,7 +3545,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
 
                 code, _ = self._invoke_runner_history_case(
                     repo, last_path, test_id, argv_extra=["--profile"]
@@ -3569,7 +3570,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             last_path = repo / ".tests" / "e2e-last-failed.json"
             out = io.StringIO()
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                 os.environ["PRKS_E2E_PROFILE"] = "1"
                 with redirect_stdout(out):
                     code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
@@ -3596,7 +3596,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             out = io.StringIO()
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                 with contextlib.ExitStack() as stack:
                     enter = stack.enter_context
                     enter(mock.patch.object(runner, "REPO", repo))
@@ -3635,7 +3634,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             err = io.StringIO()
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                 with mock.patch.object(
                     runner, "save_last_failed", return_value=False
                 ) as save:
@@ -3653,16 +3651,14 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertEqual(last_path.read_bytes(), prior_last_bytes)
 
     def test_benchmark_modes_do_not_persist_timing_or_last_failed_history(self):
-        """--profile / --no-seed-cache must not train LPT timings or last-failed."""
+        """--profile must not train LPT timings or last-failed."""
         from tests.e2e import run as runner
         from tests.e2e.sharding import load_timings, save_timings
 
         previous = os.environ.get("PRKS_E2E")
         profile_prev = os.environ.get("PRKS_E2E_PROFILE")
-        seed_prev = os.environ.get("PRKS_E2E_SEED_CACHE")
         os.environ["PRKS_E2E"] = "1"
         os.environ.pop("PRKS_E2E_PROFILE", None)
-        os.environ.pop("PRKS_E2E_SEED_CACHE", None)
         try:
             test_id = "tests.e2e.fake.BenchTests.test_x"
             prior_failed = ["tests.e2e.fake.Other.test_keep"]
@@ -3693,11 +3689,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         argv_extra=extra_flags,
                     )
 
-                for flags in (
-                    ["--profile"],
-                    ["--no-seed-cache"],
-                    ["--profile", "--no-seed-cache"],
-                ):
+                for flags in (["--profile"],):
                     timings_path.write_bytes(prior_timings_bytes)
                     last_path.write_bytes(prior_last_bytes)
                     code, print_slow = _invoke(flags)
@@ -3716,7 +3708,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         % flags,
                     )
                     os.environ.pop("PRKS_E2E_PROFILE", None)
-                    os.environ.pop("PRKS_E2E_SEED_CACHE", None)
 
                 timings_path.write_bytes(prior_timings_bytes)
                 last_path.write_bytes(prior_last_bytes)
@@ -3739,10 +3730,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
             else:
                 os.environ["PRKS_E2E_PROFILE"] = profile_prev
-            if seed_prev is None:
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
-            else:
-                os.environ["PRKS_E2E_SEED_CACHE"] = seed_prev
 
     def test_no_sigalrm_watchdog_in_runner(self):
         """Full-gate deadline must not depend on POSIX-only alarm APIs."""

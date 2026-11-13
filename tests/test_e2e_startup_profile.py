@@ -740,7 +740,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
             "app_route_wait": 1.0,
             "request_routing": 6.0,
             "routing_decision": 0.1,
-            "seed_clone": 0.5,
+            "seed_build": 0.5,
             # Browser-native details are diagnostic overlaps, not new work.
             "nav_response_wait": 0.5,
             "nav_response_body": 0.2,
