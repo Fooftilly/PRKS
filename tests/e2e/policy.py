@@ -462,7 +462,10 @@ AFFECTED_RULES = (
         "name": "research-network-core",
         "paths": (
             "backend/domain/research/**",
-            "backend/pg_facade/research.py",
+            "backend/api/arguments.py",
+            "backend/api/concepts.py",
+            "backend/api/positions.py",
+            "backend/api/research_notes.py",
             "backend/pg_facade/research_index.py",
         ),
         "features": ("concepts", "positions", "arguments", "graph", "notes"),

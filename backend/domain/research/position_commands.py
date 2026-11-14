@@ -7,7 +7,7 @@ one READ COMMITTED :func:`~backend.domain.identity.library_scope.library_command
 transaction needing ``EDIT_LIBRARY``, fenced by maintenance and the epoch.
 Refusals are SQLite's ``ResearchError`` codes, messages and statuses, and
 ``AccessRefused``; the differences from SQLite are listed in
-:mod:`backend.pg_facade.research`.
+:mod:`backend.domain.research`.
 """
 
 from __future__ import annotations

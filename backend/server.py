@@ -30,12 +30,14 @@ from backend.domain.works.rules import BulkWorkError, effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
+from backend.api import arguments as arguments_api
 from backend.api import concepts as concepts_api
 from backend.api import folders as folders_api
 from backend.api import person_groups as person_groups_api
 from backend.api import persons as persons_api
 from backend.api import playlists as playlists_api
 from backend.api import positions as positions_api
+from backend.api import research_notes as research_notes_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.api import tags as tags_api
@@ -1239,18 +1241,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     notes_text = body.pop("text_content", None)
                     if notes_present:
                         try:
-                            db.save_work_notes(w_id, notes_text)
+                            research_notes_api.save(self, db, w_id, notes_text)
                         except ResearchError as e:
                             self.send_json(e.http_status, {'error': str(e), 'code': e.code})
                             return
-                        try:
-                            research_index.sync_work(w_id, notes_text, db)
-                        except Exception as e:
-                            LOGGER.warning(
-                                "research_index_sync_failed work_id=%s error_type=%s",
-                                safe_log_id(w_id),
-                                safe_error_type(e),
-                            )
                     if body:
                         try:
                             _update_postgres_work_metadata(w_id, body)
@@ -1278,22 +1272,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif positions_api.handle_patch(self, db, path, data):
                 return
-            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
-                aid = unquote(path.split('/')[-1])
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.update_argument(
-                        aid,
-                        name=data.get('name') if 'name' in data else None,
-                        kind=data.get('kind') if 'kind' in data else None,
-                        main_text=data.get('main_text') if 'main_text' in data else None,
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
+            elif arguments_api.handle_patch(self, db, path, data):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -1323,39 +1303,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
             if data is _JSON_BODY_ABSENT:
                 data = {}
-            parts = path.split('/')
             if concepts_api.handle_put(self, db, path, data):
                 return
-            elif (
-                path.startswith('/api/arguments/')
-                and len(parts) == 5
-                and parts[4] == 'sources'
-            ):
-                aid = unquote(parts[3])
-                sources = data.get('sources') if isinstance(data, dict) else None
-                if sources is None and isinstance(data, list):
-                    sources = data
-                try:
-                    item = db.replace_argument_sources(aid, sources)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
-            elif (
-                path.startswith('/api/arguments/')
-                and len(parts) == 5
-                and parts[4] == 'targets'
-            ):
-                aid = unquote(parts[3])
-                targets = data.get('targets') if isinstance(data, dict) else None
-                if targets is None and isinstance(data, list):
-                    targets = data
-                try:
-                    item = db.replace_argument_targets(aid, targets)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
+            elif arguments_api.handle_put(self, db, path, data):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -1403,22 +1354,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif positions_api.handle_delete(self, db, path):
                 return
-            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
-                aid = unquote(path.split('/')[-1])
-                try:
-                    db.delete_argument(aid)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                try:
-                    research_index.remove_argument_mentions(aid)
-                except Exception as e:
-                    LOGGER.warning(
-                        "research_index_cleanup_failed argument_id=%s error_type=%s",
-                        safe_log_id(aid),
-                        safe_error_type(e),
-                    )
-                self.send_json(200, {'status': 'deleted'})
+            elif arguments_api.handle_delete(self, db, path):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -1967,48 +1904,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, processing_items_openapi_document())
             elif positions_api.handle_get(self, db, path):
                 return
-            elif path == '/api/argument-verdicts':
-                self.send_json(200, db.list_verdicts())
-            elif path == '/api/arguments':
-                kind = (query.get('kind') or [''])[0].strip() or None
-                try:
-                    items = db.list_arguments(kind=kind)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                counts = research_index.argument_mention_counts()
-                for item in items:
-                    item['mention_count'] = int(counts.get(item['id'], 0))
-                self.send_json(200, items)
-            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
-                aid = unquote(path.split('/')[-1])
-                item = db.get_argument(aid)
-                if not item:
-                    self.send_json(404, {'error': 'Argument not found.'})
-                    return
-                item['mention_count'] = research_index.mention_count_for_argument(aid)
-                item['mentions'] = research_index.argument_backlinks(aid, db)
-                item['verdicts'] = db.list_verdicts()
-                self.send_json(200, item)
+            elif arguments_api.handle_get(self, db, path, query):
+                return
             elif persons_api.handle_metadata_state(self, db, path):
                 return
             elif folders_api.handle_work_state(self, db, path):
                 return
             elif positions_api.handle_sync_state(self, db, path):
                 return
-            elif path.startswith('/api/arguments/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY, aggregates included: the Argument detail
-                # already carries its sources and its targets, and a second
-                # copy would be a second thing to keep true.
-                data = db.get_argument_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Argument not found"})
-                else:
-                    etag = db.etag_for_representation("argument-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif arguments_api.handle_sync_state(self, db, path):
+                return
             elif concepts_api.handle_sync_state(self, db, path):
                 return
             elif playlists_api.handle_work_state(self, db, path):
@@ -2402,22 +2307,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif positions_api.handle_post(self, db, path, data):
                 return
-            elif path == '/api/arguments':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.create_argument(
-                        name=data.get('name'),
-                        kind=data.get('kind'),
-                        main_text=data.get('main_text', '') or '',
-                        sources=data.get('sources'),
-                        targets=data.get('targets'),
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(201, item)
+            elif arguments_api.handle_post(self, db, path, data):
+                return
             elif persons_api.handle_post(self, db, path, data):
                 return
             elif tags_api.handle_post(self, db, path, data):

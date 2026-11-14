@@ -1238,7 +1238,7 @@ class AffectedMappingTests(unittest.TestCase):
         # concepts-only; CI fail-closed to full.
         for path in (
             "backend/domain/research/concepts.py",
-            "backend/pg_facade/research.py",
+            "backend/api/arguments.py",
             "backend/pg_facade/research_index.py",
         ):
             with self.subTest(path=path):

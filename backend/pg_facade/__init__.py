@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING
 
 from backend.pg_facade.annotations import AnnotationsMixin
 from backend.pg_facade.registry import FacadeMixin, NotPortedError
-from backend.pg_facade.research import ResearchMixin
 from backend.pg_facade.search import SearchMixin
 from backend.pg_facade.works import WorksMixin
 
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
 
 class PostgresLibrary(
     WorksMixin,
-    ResearchMixin,
     AnnotationsMixin,
     SearchMixin,
 ):

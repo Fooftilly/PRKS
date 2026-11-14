@@ -633,6 +633,63 @@ class TestLibrary(PostgresLibrary):
 
         return position_commands.sync_state(self.database, current_context(), position_id)
 
+    # -- Arguments and the Research Note (PG-C3 PR 12: ``backend/api/arguments.py``
+    # and ``backend/api/research_notes.py`` call the commands) --
+
+    def list_verdicts(self) -> List[Dict[str, Any]]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.verdicts(self.database, current_context())
+
+    def list_arguments(self, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.catalog(self.database, current_context(), kind)
+
+    def get_argument(self, argument_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.detail(self.database, current_context(), argument_id)
+
+    def create_argument(self, *, name: Any, kind: Any, main_text: Any = "", sources: Any = None,
+                        targets: Any = None) -> Dict[str, Any]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.create(self.database, current_context(), name=name, kind=kind,
+                                        main_text=main_text, sources=sources, targets=targets)
+
+    def update_argument(self, argument_id: str, *, name: Any = None, kind: Any = None,
+                        main_text: Any = None) -> Dict[str, Any]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.update(self.database, current_context(), argument_id, name=name, kind=kind,
+                                        main_text=main_text)
+
+    def replace_argument_sources(self, argument_id: str, sources: Any) -> Dict[str, Any]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.replace_sources(self.database, current_context(), argument_id, sources)
+
+    def replace_argument_targets(self, argument_id: str, targets: Any) -> Dict[str, Any]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.replace_targets(self.database, current_context(), argument_id, targets)
+
+    def delete_argument(self, argument_id: str) -> None:
+        from backend.domain.research import argument_commands
+
+        argument_commands.delete(self.database, current_context(), argument_id)
+
+    def get_argument_sync_state(self, argument_id: str) -> Optional[Dict[str, Any]]:
+        from backend.domain.research import argument_commands
+
+        return argument_commands.sync_state(self.database, current_context(), argument_id)
+
+    def save_work_notes(self, work_id: str, text_content: Any) -> None:
+        from backend.domain.research import note_commands
+
+        note_commands.save(self.database, current_context(), work_id, text_content)
+
     # -- Person Groups (PG-C3 PR 7: ``backend/api/person_groups.py`` calls the commands) --
 
     def add_person_group_with_parent_options(self, name: str, parent_id: Optional[str] = None,
