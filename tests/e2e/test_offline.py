@@ -5083,20 +5083,30 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         server, page, _context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
+        # Each step drains the durable queue before asserting and re-caching.
+        # updateArgument() writes ONE operation per changed field, and every
+        # field ACK fences the domain again. Without the drain the name ACK
+        # satisfies the assertion, the next _cache_arguments() starts its
+        # index read, and the kind ACK then bumps the generation under that
+        # read: the read is (correctly) refused publication and the index
+        # page never re-reads, so the list is never cached.
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
         page.evaluate("() => window.createArgument({ name: 'Created Argument', kind: 'argument' })")
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
         # B may embed A as a target or a response, so the whole domain goes.
         page.evaluate("id => window.updateArgument(id, { name: 'Renamed Argument', kind: 'stance' })", argument_a)
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
         page.evaluate("id => window.deleteArgument(id)", server.ids["argument_unvisited"])
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
     def test_failed_argument_mutations_retain_the_cache(self):
@@ -5446,7 +5456,11 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
 
     def _save_person_profile(self, page, person_id, field, value):
         """Drives the real profile editor: open, change one field, Save."""
-        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+        # Await the route render, as OfflinePeopleCoherenceTests does: on the
+        # second edit the page already shows this Person, so the hash check
+        # below passes at once and an Edit click during the same-Person
+        # refresh is lost when that render commits.
+        page.evaluate("async id => { await window.prksNavigate('#/people/' + id); }", person_id)
         page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Edit profile").click()
