@@ -272,6 +272,63 @@ class TestLibrary(PostgresLibrary):
 
         return self._query(lambda scope: wiki_links.render(scope, text))
 
+    # -- Work reads (PG-C3 PR 15: ``backend/api/works.py`` calls the commands) --
+
+    @staticmethod
+    def _work_commands() -> Any:
+        from backend.domain.works import work_commands
+
+        return work_commands
+
+    def _finish(self, rows: List[dict]) -> List[dict]:
+        from backend.domain.works.rules import finish_work_summary_rows
+
+        finish_work_summary_rows(rows, self._pdfs_dir())
+        return rows
+
+    @staticmethod
+    def etag_for_representation(label: str, rows: Any) -> str:
+        from backend.etags import etag_for_representation
+
+        return etag_for_representation(label, rows)
+
+    def etag_works_catalog(self, rows: List[dict]) -> str:
+        return self.etag_for_representation("works", rows)
+
+    def get_all_works(self) -> List[dict]:
+        return self._work_commands().catalog(self.database, current_context(), self._pdfs_dir())
+
+    def get_works_browse_catalog(self) -> List[dict]:
+        return self._work_commands().browse_catalog(self.database, current_context(), self._pdfs_dir())
+
+    def get_recent_browse(self, limit: int = 30) -> List[dict]:
+        return self._work_commands().recent_browse(self.database, current_context(), self._pdfs_dir(), limit)
+
+    def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
+        return self._work_commands().recently_added_browse(self.database, current_context(), self._pdfs_dir(),
+                                                           limit)
+
+    def get_work(self, work_id: str) -> Optional[dict]:
+        return self._work_commands().detail(self.database, current_context(), self._pdfs_dir(), work_id)
+
+    def get_primary_thumbnail_fields(self, work_id: str) -> Optional[dict]:
+        return self._work_commands().thumbnail_fields(self.database, current_context(), work_id)
+
+    def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
+        return self._work_commands().metadata_state(self.database, current_context(), work_id)
+
+    def get_work_source_state(self, work_id: str) -> Any:
+        return self._work_commands().source_state(self.database, current_context(), work_id)
+
+    def get_work_notes_state(self, work_id: str) -> Optional[dict]:
+        return self._work_commands().notes_state(self.database, current_context(), work_id)
+
+    def generate_bibtex(self, work_id: str) -> str:
+        return self._work_commands().bibtex(self.database, current_context(), work_id)
+
+    def _holds_managed_pdf(self, name: str) -> bool:
+        return self._work_commands().holds_managed_pdf(self.database, current_context(), name)
+
     # -- Saved Views (PG-C3 PR 1: ``backend/api/saved_views.py`` calls the commands) --
 
     def get_saved_views(self) -> List[dict]:

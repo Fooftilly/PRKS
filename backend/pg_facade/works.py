@@ -1,33 +1,29 @@
 """Works family of the PostgreSQL transition facade (L-W-1, L-W-2).
 
-Owned by the Works lane (``docs/postgresql-architecture.md`` §15.2): Works,
-Manifestations, notes, lifecycle, metadata, bulk actions, BibTeX and wiki
-links. Each method keeps the signature and return shape of the
-SQLite library it replaced.
+Owned by the Works lane (``docs/postgresql-architecture.md`` §15.2): the
+Work writes the HTTP adapter still calls (create, metadata, open, delete and
+bulk actions). Each method keeps the signature and return shape of the
+SQLite library it replaced. The Work reads moved to
+``backend/domain/works/work_commands.py``, which ``backend/api/works.py``
+calls (PG-C3 #642); the writes follow in the next PG-C3 PR.
 
 A method acts for the :class:`~backend.domain.identity.request_context.RequestContext`
 bound with :func:`backend.pg_facade.context.acting_as`; it refuses to run
-without one. Reads run in one ``library_query`` snapshot, commands in one
+without one. Commands run in one
 ``library_command`` transaction, so authorization and the epoch check happen
 inside the same transaction as the work (L-ID-1). The domain modules (and so
 psycopg) are imported inside the methods: importing the facade stays free of
 psycopg.
-
-What the SQLite methods take from outside the database is taken the same
-way here: ``file_size_bytes`` from the managed PDF on disk
-(``finish_work_summary_rows``); ``html_content`` is the wiki-link resolver's,
-read in the Work detail's snapshot.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import inspect
 import os
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, Optional, TypeVar
 
 from backend.pg_facade.context import current_context
 from backend.pg_facade.registry import FacadeMixin
@@ -47,11 +43,6 @@ class WorksMixin(FacadeMixin):
     """Work create, reads and mutations (L-W-1), and bulk actions (L-W-2)."""
 
     # -- plumbing ---------------------------------------------------------------
-
-    def _read(self, fn: Callable[[LibraryScope], T]) -> T:
-        from backend.domain.identity.library_scope import library_query
-
-        return library_query(self._database, current_context(), fn)
 
     def _command(self, fn: Callable[[LibraryScope], T], *, serializable: bool = False) -> T:
         from backend.db.database import Isolation
@@ -89,43 +80,11 @@ class WorksMixin(FacadeMixin):
             raise RuntimeError("this PostgreSQL library has no data root")
         return LocalFilesystemStorage.for_config(self._storage)
 
-    def _finish(self, rows: List[dict]) -> List[dict]:
-        from backend.domain.works.rules import finish_work_summary_rows
-
-        finish_work_summary_rows(rows, self._pdfs_dir())
-        return rows
-
-    def _holds_managed_pdf(self, name: str) -> bool:
-        """Whether the acting Library has an Asset whose bytes are the managed PDF ``name``.
-
-        One data root serves every Library, so ``/api/pdfs/<name>`` serves a
-        file only to a member of a Library that references it: a name from
-        another Library reads as missing.
-        """
-
-        def read(scope: LibraryScope) -> bool:
-            row = scope.execute(
-                "SELECT 1 FROM prks.assets WHERE library_id = %(library_id)s"
-                " AND (storage_locator = %(name)s OR source_locator = %(name)s) LIMIT 1",
-                {"name": name},
-            ).fetchone()
-            return row is not None
-
-        return self._read(read)
-
-    # -- ids and ETags ----------------------------------------------------------
+    # -- ids ------------------------------------------------------------------
     def _generate_id(self, prefix: str) -> str:
         from backend.entity_ids import generate
 
         return generate(prefix)
-
-    @staticmethod
-    def etag_for_representation(label: str, rows: List[dict]) -> str:
-        from backend.etags import etag_for_representation as derive
-
-        return derive(label, rows)
-    def etag_works_catalog(self, rows: List[dict]) -> str:
-        return self.etag_for_representation("works", rows)
 
     # -- create -----------------------------------------------------------------
     def add_work(self, title: str, status: str = 'Not Started', abstract: str = "",
@@ -269,66 +228,6 @@ class WorksMixin(FacadeMixin):
                 size += len(chunk)
         return commands.ManagedFile(storage_locator=name, sha256=digest.hexdigest(), byte_size=size)
 
-    # -- reads ------------------------------------------------------------------
-    def get_work(self, work_id: str) -> Optional[dict]:
-        from backend.domain.organization import links
-        from backend.domain.works import projection, queries
-
-        from backend.domain.works import wiki_links
-
-        from backend.domain.annotations import store as annotation_store
-
-        def read(scope: LibraryScope) -> Optional[tuple[dict, List[dict], Optional[str], List[dict]]]:
-            found = queries.work(scope, work_id)
-            if found is None:
-                return None
-            text = found.get("text_content")
-            # The Research Note's links resolve in the snapshot the Work was read in.
-            html_content = wiki_links.render(scope, text) if text else None
-            return (found, links.tags_of(scope, links.WORK, work_id), html_content,
-                    annotation_store.work_annotations(scope, work_id))
-
-        detail = self._read(read)
-        if detail is None:
-            return None
-        core, tags, html_content, annotations = detail
-        work = projection.work_detail(core)
-        work["tags"] = tags  # the Organization lane's (L-O-1), in the same snapshot
-        work["annotations"] = json.dumps(annotations)  # the Annotations lane's (L-A-1), likewise
-        if html_content is not None:
-            work["html_content"] = html_content
-        self._finish([work])
-        return work
-    def get_primary_thumbnail_fields(self, work_id: str) -> Optional[dict]:
-        from backend.domain.works import projection, queries
-
-        return projection.thumbnail_fields(self._read(lambda scope: queries.work(scope, work_id)))
-    def get_all_works(self) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        cores = self._read(queries.works_by_created)
-        return self._finish([projection.work_summary(core) for core in cores])
-    def get_works_browse_catalog(self) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        cores = self._read(queries.works_by_title)
-        return self._finish([projection.work_browse(core) for core in cores])
-    def get_recent_browse(self, limit: int = 30) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        cores = self._read(lambda scope: queries.works_by_opened(scope, limit))
-        return self._finish([
-            projection.work_browse(core, excerpt=False, extra=("last_opened_at",)) for core in cores
-        ])
-    def get_recently_added_browse(self, limit: int = 50) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        cores = self._read(lambda scope: queries.works_by_created(scope, limit))
-        return self._finish([
-            projection.work_browse(core, excerpt=False,
-                                   extra=("created_at", "publisher", "folder_id"))
-            for core in cores
-        ])
     # -- mutations (L-W-1 PR 3) -------------------------------------------------
     def mark_work_opened(self, work_id: str) -> bool:
         """Record an open now (server time), through the max-register."""
@@ -397,19 +296,6 @@ class WorksMixin(FacadeMixin):
         self._command(lambda scope: _patch_work(scope, work_id, synced, notes, plain),
                       serializable=bool(notes))
         return ()
-    def get_work_source_state(self, work_id: str) -> Optional[dict[str, Any] | str]:
-        """The source's revision, or ``INVALID_SOURCE_STATE``; ``None`` when the Work is missing."""
-        from backend.domain.works import source
-
-        return self._read(lambda scope: source.source_state(scope, work_id))
-    def get_work_metadata_state(self, work_id: str) -> Optional[dict]:
-        from backend.domain.works import metadata
-
-        return self._read(lambda scope: metadata.field_state(scope, work_id))
-    def get_work_notes_state(self, work_id: str) -> Optional[dict]:
-        from backend.domain.works import notes
-
-        return self._read(lambda scope: notes.notes_state(scope, work_id))
     def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Optional[DeletedWorkRecord]:
         """Delete the Work and what it owns, claiming its managed file for cleanup.
 
@@ -460,30 +346,6 @@ class WorksMixin(FacadeMixin):
                        bulk.Missing.TAGS: BULK_TAGS_MISSING}[missing.what]
             raise BulkWorkError(message, 404) from None
         return request.result()
-
-    # -- wiki links (L-W-2) -------------------------------------------------------
-
-    # -- BibTeX (L-W-2) -----------------------------------------------------------
-    def generate_bibtex(self, work_id: str) -> str:
-        """``PRKSDatabase.generate_bibtex`` on PostgreSQL: the same formatter, read in one snapshot.
-
-        The citation record, the citation Manifestation's credits and the
-        Library's export profile come from ``backend.domain.works.citation``;
-        ``backend.domain.works.bibtex_format.format_bibtex`` turns them into the entry, so equal
-        data exports byte-identical text. A Work that is not in this
-        Library, or an id PostgreSQL text cannot hold (NUL), gives ``""``.
-        """
-        from backend.domain.works import citation
-        from backend.domain.works.bibtex_format import format_bibtex
-
-        if "\x00" in work_id:
-            return ""
-        inputs = self._read(lambda scope: citation.bibtex_inputs(scope, work_id))
-        if inputs is None:
-            return ""
-        record, roles, profile = inputs
-        # The projection's "video" means the target's primary Asset is a stream.
-        return format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
 
 
 def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],

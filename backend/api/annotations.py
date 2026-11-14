@@ -219,7 +219,7 @@ def _write_pdf(handler: Any, db: Any, work_id: str, pdf_bytes: bytes,
     except LookupError:
         # The commands refuse a missing Work and a Work without managed PDF
         # bytes alike; answer each with its own 404.
-        if db.get_work(work_id) is None:
+        if commands.materialization(database, ctx, work_id) is None:
             return 404, {"error": "Work not found"}
         return 404, {"error": "Work has no managed PDF"}
     except ValueError as e:

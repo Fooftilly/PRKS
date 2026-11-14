@@ -95,6 +95,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/works/lifecycle.py",
     "backend/domain/works/merge.py",
     "backend/domain/works/wiki_links.py",
+    "backend/domain/works/work_commands.py",
     "backend/domain/people/__init__.py",
     "backend/domain/people/persons.py",
     "backend/domain/people/groups.py",

@@ -15,6 +15,8 @@ MANIFEST = ROOT / "docs" / "screenshots" / "manifest.json"
 # (tests/test_screenshot_freshness.py asserts parity).
 AFFECTING_PATHS = {
     "DESIGN.md",
+    "backend/api/works.py",
+    "backend/domain/works/work_commands.py",
     "backend/pg_facade/works.py",
     "backend/research_graph.py",
     "backend/server.py",
