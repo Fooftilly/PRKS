@@ -349,8 +349,9 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     from backend.pg_facade.research_index import PostgresResearchIndex
     from backend.storage.config import StorageConfig
     from backend.domain.identity.authorization import Capability
-    from backend.domain.identity.library_scope import library_command
-    from backend.domain.research import reindex
+    from backend.domain.identity.library_scope import library_command, library_query
+    from backend.domain.research import concept_commands, reindex
+    from backend.domain.search import search_commands
     from backend.domain.works import notes
     from backend.jobs import queue
     from backend.jobs.runner import Outcome, run_job
@@ -391,9 +392,11 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             # Seed before reset; all graph reads below use the
                             # genuinely ported PG adapter, never the SQLite graph.
                             for i in range(len(concept_ids), size):
-                                cid = library.create_concept(f"Profile Concept {i:04d}")["id"]
+                                cid = concept_commands.create(
+                                    database, actor.context, f"Profile Concept {i:04d}")["id"]
                                 if concept_ids:
-                                    library.replace_concept_parents(cid, [concept_ids[-1]])
+                                    concept_commands.replace_parents(
+                                        database, actor.context, cid, [concept_ids[-1]])
                                 concept_ids.append(cid)
                             # These are real PG adapter reads. The fixture is
                             # deterministic, isolated, synthetic and disposable.
@@ -427,6 +430,14 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                             batch_ids = by_id[::2] + by_id[1::2]
                             if batch_ids == tuple(fixture_ids[:bounded_limit]):
                                 batch_ids = batch_ids[1:] + batch_ids[:1]
+                            def works_batch_by_ids(ids: tuple[str, ...] = batch_ids) -> list[dict]:
+                                # The route-side Work summary read (PG-C3 #642):
+                                # one snapshot, then the on-disk PDF sizes.
+                                rows = library_query(
+                                    database, actor.context,
+                                    lambda scope: search_commands.summaries(scope, list(ids)))
+                                return search_commands.finish(rows, storage.pdfs_dir)
+
                             workloads = (
                                 ("works_list", library.get_all_works, verify_list),
                                 ("works_browse", library.get_works_browse_catalog,
@@ -437,7 +448,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                  lambda: library.get_recently_added_browse(limit=bounded_limit),
                                  verify_recent),
                                 ("works_batch_by_ids",
-                                 lambda: library.get_work_summaries_by_ids_ordered(list(batch_ids)),
+                                 works_batch_by_ids,
                                  lambda value: assert_ordered_work_ids(value, batch_ids)),
                                 ("concept_hierarchy_graph",
                                  research_index.build_graph,
@@ -460,7 +471,8 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                         with facade_context.acting_as(mention_actor.context):
                             for i in range(size):
                                 name = f"Profile Indexed Concept {i:04d}"
-                                indexed_concepts.append(library.create_concept(name)["id"])
+                                indexed_concepts.append(
+                                    concept_commands.create(database, mention_actor.context, name)["id"])
                                 wid = library.add_work(f"Profile Indexed Work {i:04d}")
                                 indexed_works.append(wid)
                                 changed = library_command(
