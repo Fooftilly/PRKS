@@ -105,7 +105,8 @@ def setup_logging(config: StorageConfig) -> None:
     root.setLevel(level)
     root.addHandler(file_handler)
     root.addHandler(stderr_handler)
-    root._prks_logging_configured = True
+    # A marker on the root logger survives module reloads; Logger has no such attribute.
+    setattr(root, "_prks_logging_configured", True)
 
     _chmod_owner_only(log_file, report=True)
 

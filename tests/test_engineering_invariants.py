@@ -1278,6 +1278,8 @@ class EngineeringInvariantTests(unittest.TestCase):
             if scope.endswith(".py"):
                 (root / scope).parent.mkdir(parents=True, exist_ok=True)
                 (root / scope).write_text("", encoding="utf-8")
+            else:
+                (root / scope).mkdir(parents=True, exist_ok=True)
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "pyrightconfig.json").write_text(
             json.dumps(
@@ -1495,6 +1497,33 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/jobs/__init__.py",
                 "backend/services/__init__.py",
                 "backend/services/work_pdf_replace.py",
+                "backend/api_contract",
+                "backend/argument_sync.py",
+                "backend/concept_sync.py",
+                "backend/dependency_gate.py",
+                "backend/folder_sync.py",
+                "backend/folder_tag_sync.py",
+                "backend/log_config.py",
+                "backend/pdf_annotation_adopt.py",
+                "backend/pdf_annotation_sync.py",
+                "backend/pdf_annotations.py",
+                "backend/pdf_materialization.py",
+                "backend/performance.py",
+                "backend/person_group_sync.py",
+                "backend/person_metadata_sync.py",
+                "backend/person_sync.py",
+                "backend/playlist_sync.py",
+                "backend/position_sync.py",
+                "backend/research_graph.py",
+                "backend/startup_profile.py",
+                "backend/sync_protocol.py",
+                "backend/tag_color.py",
+                "backend/tag_sync.py",
+                "backend/work_lifecycle_sync.py",
+                "backend/work_note_sync.py",
+                "backend/work_open_sync.py",
+                "backend/work_source_sync.py",
+                "backend/work_tag_sync.py",
             ),
         )
 
@@ -1569,7 +1598,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["include"].append("backend/api_contract")
+            typed["include"].append("backend/server.py")
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
@@ -1651,7 +1680,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["exclude"] = ["**/__pycache__", "backend/api_contract"]
+            typed["exclude"] = ["**/__pycache__", "backend/server.py"]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
