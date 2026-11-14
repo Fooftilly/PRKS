@@ -54,7 +54,6 @@ class _Worker:
 class LibraryGateHttpTests(ProcessingHttpTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.facade = self.server_module.db
         self.gate = self.httpd.prks_access_gate
 
     def titles(self) -> list[str]:
@@ -100,7 +99,7 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
     def test_mutations_serialize(self) -> None:
         first_inside, release_first, second_inside = threading.Event(), threading.Event(), threading.Event()
         self.addCleanup(release_first.set)
-        original = self.facade.add_work
+        original = work_commands.create
         order: list[str] = []
 
         def held(*args: Any, **kwargs: Any) -> Any:
@@ -113,7 +112,7 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
                 order.append("b")
             return original(*args, **kwargs)
 
-        with mock.patch.object(self.facade, "add_work", held):
+        with mock.patch.object(work_commands, "create", held):
             first = _Worker(lambda: self.create("A"))
             self.assertTrue(first_inside.wait(10))
             second = _Worker(lambda: self.create("B"))
@@ -181,7 +180,7 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
 
     def test_a_mutation_whose_body_is_still_arriving_holds_no_scope(self) -> None:
         added = threading.Event()
-        original = self.facade.add_work
+        original = work_commands.create
 
         def adding(*args: Any, **kwargs: Any) -> Any:
             added.set()
@@ -192,7 +191,7 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
                 f"Content-Length: {len(body)}", "Connection: close"]
         head += [f"{name}: {value}" for name, value in
                  self._request_headers("POST", self.cookies, [], self.origin, self.library_epoch())]
-        with (mock.patch.object(self.facade, "add_work", adding),
+        with (mock.patch.object(work_commands, "create", adding),
               socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock):
             sock.sendall(("\r\n".join(head) + "\r\n\r\n").encode("ascii") + body[:8])
             self.assertFalse(self.gate.wait_until(lambda s: s["mutation_active"], timeout=0.5))

@@ -344,10 +344,10 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
 
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
-    from backend.pg_facade import PostgresLibrary
     from backend.pg_facade import context as facade_context
     from backend.pg_facade.research_index import PostgresResearchIndex
     from backend.storage.config import StorageConfig
+    from backend.storage.objects import LocalFilesystemStorage
     from backend.domain.identity.authorization import Capability
     from backend.domain.identity.library_scope import library_command, library_query
     from backend.domain.research import concept_commands, reindex
@@ -379,15 +379,21 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                 with tempfile.TemporaryDirectory(prefix="prks-profile-root-") as temp:
                     storage = StorageConfig.for_testing(temp)
                     os.makedirs(storage.pdfs_dir, exist_ok=True)
-                    library = PostgresLibrary(database, storage=storage)
+                    objects = LocalFilesystemStorage.for_config(storage)
+
+                    def add_work(title: str, ctx: Any = actor.context) -> str:
+                        # The Work create route's command (PG-C3 #642), with no file.
+                        return work_commands.create(database, ctx, storage.pdfs_dir, objects,
+                                                    work_commands.new_work_fields(title=title))
                     research_index = PostgresResearchIndex(database)
                     fixture_ids: list[str] = []
                     concept_ids: list[str] = []
                     output = []
+                    ctx, pdfs = actor.context, storage.pdfs_dir
                     with facade_context.acting_as(actor.context):
                         for size in sizes:
                             for i in range(len(fixture_ids), size):
-                                fixture_ids.append(library.add_work(f"Fixture Work {i:04d}"))
+                                fixture_ids.append(add_work(f"Fixture Work {i:04d}"))
                             # Same-sized connected synthetic Concept network.
                             # Seed before reset; all graph reads below use the
                             # genuinely ported PG adapter, never the SQLite graph.
@@ -439,7 +445,6 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                 return search_commands.finish(rows, storage.pdfs_dir)
 
                             # The Work route reads (PG-C3 #642), as the routes call them.
-                            ctx, pdfs = actor.context, storage.pdfs_dir
                             workloads = (
                                 ("works_list", lambda: work_commands.catalog(database, ctx, pdfs),
                                  verify_list),
@@ -477,7 +482,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                 name = f"Profile Indexed Concept {i:04d}"
                                 indexed_concepts.append(
                                     concept_commands.create(database, mention_actor.context, name)["id"])
-                                wid = library.add_work(f"Profile Indexed Work {i:04d}")
+                                wid = add_work(f"Profile Indexed Work {i:04d}", mention_actor.context)
                                 indexed_works.append(wid)
                                 changed = library_command(
                                     database, mention_actor.context, Capability.EDIT_LIBRARY,

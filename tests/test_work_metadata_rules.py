@@ -512,13 +512,13 @@ class WriterAuditTests(unittest.TestCase):
         server = (_ROOT / "backend" / "server.py").read_text(encoding="utf-8")
         at = server.index("If author_text not provided, fill from oEmbed author_name.")
         window = server[at: at + 4000]
-        self.assertIn("_create_postgres_work(", window)
-        self.assertNotIn("update_work_metadata", window)
-        create = server[server.index("def _create_postgres_work("):]
+        self.assertIn("works_api.create(", window)
+        self.assertNotIn("update_metadata", window)
+        works = (_ROOT / "backend" / "api" / "works.py").read_text(encoding="utf-8")
+        create = works[works.index("def create("):]
         create = create[: create.index("\ndef ", 1)]
-        self.assertIn("db.add_work(", create)
-        self.assertIn("db._add_work_with_pdf(", create)
-        self.assertNotIn("update_work_metadata", create)
+        self.assertIn("commands.create(", create)
+        self.assertNotIn("update_metadata", create)
 
 
 if __name__ == "__main__":

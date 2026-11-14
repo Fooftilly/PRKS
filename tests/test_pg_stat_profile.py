@@ -18,8 +18,10 @@ from scripts.pg_stat_profile import (
 
 class ProfileSafetyTests(unittest.TestCase):
     def test_every_library_call_exists_on_the_facade(self):
-        """The profiler drives a real ``PostgresLibrary``: a method PG-C3 (#642)
-        moved off the facade would fail the opt-in run with ``AttributeError``."""
+        """A ``library.<name>`` the profiler calls must exist on ``PostgresLibrary``:
+        a method PG-C3 (#642) moved off the facade would fail the opt-in run with
+        ``AttributeError``. Since PG-C3 PR 15b it drives the route commands
+        (``work_commands``) and calls no Library method at all."""
         import ast
 
         from backend.pg_facade import PostgresLibrary
@@ -31,7 +33,6 @@ class ProfileSafetyTests(unittest.TestCase):
         called = {node.attr for node in ast.walk(tree)
                   if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
                   and node.value.id == "library"}
-        self.assertTrue(called)
         self.assertEqual(sorted(name for name in called if not hasattr(PostgresLibrary, name)), [])
 
     def test_never_runs_outside_disposable_wrapper(self):

@@ -1094,7 +1094,7 @@ class AffectedMappingTests(unittest.TestCase):
     def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
         pg_paths = ["backend/db/schema/snapshot.json", "backend/db/schema/040_sync.sql"]
         for runtime in (
-            "prks_app.py", "backend/server.py", "backend/pg_facade/works.py",
+            "prks_app.py", "backend/server.py", "backend/pg_facade/context.py",
             "backend/db/__init__.py", "backend/db/database.py",
             "backend/db/new_unknown_module.py", "backend/api/session.py",
             "backend/domain/identity/web_start.py",

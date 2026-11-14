@@ -67,7 +67,7 @@ class LibraryStore:
         from backend.pg_facade.context import acting_as
 
         with acting_as(self._ctx):
-            return self._facade._command(postgres)
+            return self._facade._edit(postgres)
 
     def close(self) -> None:
         self._stack.close()

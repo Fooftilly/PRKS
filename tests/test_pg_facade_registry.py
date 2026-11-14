@@ -20,9 +20,7 @@ if _PROJECT_DIR not in sys.path:
 
 from backend.pg_facade import FacadeMixin, NotPortedError, PostgresLibrary
 
-LANE_MIXINS = {
-    "WorksMixin",
-}
+LANE_MIXINS: set[str] = set()  # PG-C3 #642: every family left the facade
 # The HTTP adapter: the modules that hold the bound Library as ``db``.
 ADAPTER_GLOBS = ("backend/server.py", "backend/api/*.py", "backend/services/*.py")
 
@@ -47,15 +45,18 @@ class FacadeSkeletonTests(unittest.TestCase):
                  if issubclass(cls, FacadeMixin) and cls not in (FacadeMixin, PostgresLibrary)}
         self.assertEqual(names, LANE_MIXINS)
 
-    def test_unported_method_is_a_typed_refusal_not_a_fallback(self):
-        library = PostgresLibrary(object())  # type: ignore[arg-type]
+    def test_unported_capability_is_a_typed_refusal_not_a_fallback(self):
+        from backend.domain.works import work_commands
+
+        # Refused before the database is touched: ``object()`` is no Database.
         with self.assertRaises(NotPortedError) as ctx:
-            library.update_work_metadata("W-" + "0" * 32, {"file_path": "/api/pdfs/a.pdf"})
+            work_commands.update_metadata(object(), object(), "W-" + "0" * 32,  # type: ignore[arg-type]
+                                          {"file_path": "/api/pdfs/a.pdf"})
         self.assertEqual(ctx.exception.method, "update_work_metadata(file_path)")
         # Not an AttributeError: hasattr()/getattr(default) must not hide it.
         self.assertNotIsInstance(ctx.exception, AttributeError)
         with self.assertRaises(AttributeError):
-            library.no_such_method  # noqa: B018
+            PostgresLibrary(object()).no_such_method  # type: ignore[arg-type]  # noqa: B018
 
     def test_facade_keeps_its_database_and_storage(self):
         marker = object()
@@ -76,7 +77,7 @@ class FacadeSkeletonTests(unittest.TestCase):
 class AdapterSurfaceTests(unittest.TestCase):
     def test_the_facade_has_every_library_member_the_adapter_reaches(self):
         calls = adapter_library_calls()
-        self.assertIn("add_work", calls)  # the scan sees the adapter at all
+        self.assertIn("database", calls)  # the scan sees the adapter at all
         missing = {name: sorted(files) for name, files in calls.items() if not hasattr(PostgresLibrary, name)}
         self.assertEqual(missing, {})
 

@@ -21,11 +21,10 @@ from urllib.request import urlopen, Request
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.derived_caches import (
-    prks_delete_pdf_thumbnails_for_work_id,
     prks_thumb_cache_stem,
 )
 from backend.domain.people.errors import MissingPersonError
-from backend.domain.works.rules import BulkWorkError, effective_source_kind
+from backend.domain.works.rules import effective_source_kind
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
@@ -37,14 +36,12 @@ from backend.api import person_groups as person_groups_api
 from backend.api import persons as persons_api
 from backend.api import playlists as playlists_api
 from backend.api import positions as positions_api
-from backend.api import research_notes as research_notes_api
 from backend.api import search as search_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.api import tags as tags_api
 from backend.api import work_roles as work_roles_api
 from backend.api import works as works_api
-from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import (
@@ -420,67 +417,6 @@ def _served_pdf_path(handler, path: str) -> str | None:
 
 
 _BACKUP_ROUTE_PREFIX = '/api/backups/'
-
-
-def _stored_work_file_path(handler, work_id: str) -> str:
-    """The Work's stored ``file_path`` (``""`` when none or no such Work).
-
-    On PostgreSQL that is its primary Asset's: there is no ``works.file_path``
-    column, and changing it is not ported (``update_work_metadata`` refuses).
-    """
-    fields = works_api.thumbnail_fields(handler, db, work_id)
-    return str((fields or {}).get("file_path") or "")
-
-
-def _create_postgres_work(file_path: str, upload: tuple[str, bytes] | None, fields: dict) -> str:
-    """Create a Work on the PostgreSQL Library, from an upload or an existing managed PDF.
-
-    No adoption lock: the facade checks an existing file for an actor who
-    may edit and adopts it in the create's transaction, and the settle that
-    removes bytes re-checks every Asset under the per-object lock (§7.4,
-    §11.2). An upload is stored by the facade under fresh keys.
-    """
-    if upload is None:
-        return db.add_work(file_path=file_path, **fields)
-    name, data = upload
-
-    def write(out) -> None:
-        out.write(data)
-
-    return db._add_work_with_pdf(name, write, **fields)
-
-
-def _update_postgres_work_metadata(work_id: str, fields: dict) -> None:
-    """``PATCH /api/works/{id}`` metadata on the PostgreSQL Library.
-
-    Never with ``file_path``: the PATCH refuses a changed one (501) and drops
-    an unchanged echo, and the Library refuses it too (``NotPortedError``),
-    so no existing managed file is adopted here.
-    """
-    db.update_work_metadata(work_id, {k: v for k, v in fields.items() if k != "file_path"})
-
-
-def _delete_work(work_id: str, *, keep_managed_pdf: bool = False) -> None:
-    """Delete a Work and its derived state on the bound Library.
-
-    On PostgreSQL the delete records its files' cleanup claims in its own
-    transaction and the orphan sweep removes the bytes (§11.2); the text and
-    Research indexes are the database's. Only the Work's thumbnails, derived
-    files under the root, are removed here.
-    """
-    deleted = db.delete_work_record(work_id, claim_pdf=not keep_managed_pdf)
-    if deleted is None or not thumbs_dir:
-        return
-    # Log the id the database returned, never the request's own value.
-    logged_id = safe_log_id(deleted.work_id)
-    try:
-        failed = prks_delete_pdf_thumbnails_for_work_id(deleted.work_id, thumbs_dir)
-        if failed:
-            LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s failed_count=%s",
-                           logged_id, len(failed))
-    except Exception as e:
-        LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s error_type=%s",
-                       logged_id, safe_error_type(e))
 
 
 def _prks_pixmap_to_pil(pix):
@@ -1201,54 +1137,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 data = {}
             if work_roles_api.handle_patch(self, db, path, data):
                 return
-            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
-                w_id = path.split('/')[-1]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                body = dict(data)
-                # Adoption lock + existence check only when the stored path
-                # would actually change. Echoing the same file_path on a
-                # title/status PATCH must not 409 missing_pdf when the bytes
-                # are already gone (CodeRabbit Minor on #172); the echo is
-                # dropped below so this request cannot rewrite it after a
-                # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
-                file_path_changing = "file_path" in body and (
-                    str(body.get("file_path") or "") != str(_stored_work_file_path(self, w_id) or "")
-                )
-                if file_path_changing:
-                    # Adopting another file is not ported. Refuse before any
-                    # part of the PATCH (a folder move, notes) commits, so a
-                    # 501 never hides an applied change.
-                    self._send_not_ported("Changing a Work's file_path is not ported to PostgreSQL yet.")
-                    return
-                if 'folder_id' in body:
-                    raw_folder = body.pop('folder_id')
-                    try:
-                        folders_api.move_work(self, db, w_id, raw_folder)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                if body:
-                    # An unchanged echo never rewrites the stored path.
-                    body.pop("file_path", None)
-                    notes_present = "text_content" in body
-                    notes_text = body.pop("text_content", None)
-                    if notes_present:
-                        try:
-                            research_notes_api.save(self, db, w_id, notes_text)
-                        except ResearchError as e:
-                            self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                            return
-                    if body:
-                        try:
-                            _update_postgres_work_metadata(w_id, body)
-                        except ValueError as e:
-                            # A refused length is the caller's mistake, not a
-                            # server fault: say so rather than 500.
-                            self.send_json(400, {'error': str(e)})
-                            return
-                self.send_json(200, {'status': 'updated'})
+            elif works_api.handle_patch(self, db, path, data):
+                return
             elif playlists_api.handle_patch(self, db, path, data):
                 return
             elif persons_api.handle_patch(self, db, path, data):
@@ -1325,10 +1215,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         try:
             if work_roles_api.handle_delete(self, db, path, query_params):
                 return
-            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
-                w_id = path.split('/')[-1]
-                _delete_work(w_id)
-                self.send_json(200, {'status': 'deleted'})
+            elif works_api.handle_delete(self, db, path):
+                return
             elif playlists_api.handle_delete(self, db, path):
                 return
             elif folders_api.handle_delete(self, db, path):
@@ -1863,31 +1751,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     )
                 )
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
-            elif path == '/api/works/bulk':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    result = db.bulk_update_works(data)
-                except BulkWorkError as e:
-                    self.send_json(int(e.http_status), {'error': str(e)})
-                    return
-                LOGGER.info(
-                    "bulk_work_update action=%s work_count=%s target_count=%s request_id=%s",
-                    safe_log_label(result.get("action")),
-                    int(result.get("requested") or 0),
-                    int(result.get("target_count") or 0),
-                    safe_log_id(self._prks_request_id),
-                )
-                self.send_json(
-                    200,
-                    {
-                        "status": result.get("status"),
-                        "action": result.get("action"),
-                        "requested": result.get("requested"),
-                        "updated": result.get("updated"),
-                    },
-                )
+            elif works_api.handle_bulk(self, db, path, data):
+                return
             elif path == '/api/works/reindex-pdf-text':
                 force = bool(data.get("force", False)) if isinstance(data, dict) else False
                 summary = text_index.reconcile_all(db, force=force)
@@ -1945,7 +1810,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    # The facade stores the bytes as objects and adopts
+                    # The create command stores the bytes as objects and adopts
                     # them in its create (objects.ingest, §10, §11.2).
                     postgres_upload = (str(data['file_name']), decoded_pdf)
 
@@ -1964,7 +1829,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # the explicitly labelled ones meant two Works with identical
                 # canonical identity got different titles, authors and
                 # thumbnails purely because one request said so twice.
-                # An upload the facade has not stored yet is still a file.
+                # An upload the create has not stored yet is still a file.
                 classified_file = file_path or ("upload" if postgres_upload else "")
                 if effective_source_kind(source_kind, source_url, classified_file) == 'video':
                     if not provider:
@@ -2025,11 +1890,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     thumb_page=data.get('thumb_page'),
                     private_notes=data.get('private_notes', ''),
                 )
-                # No adoption lock or discard here: the facade checks an
+                # No adoption lock or discard here: the create checks an
                 # adopted file under the actor's edit right, and bytes a
                 # refused create stored are the orphan sweep's (§11.2).
                 try:
-                    w_id = _create_postgres_work(file_path, postgres_upload, work_fields)
+                    w_id = works_api.create(self, db, file_path, postgres_upload, work_fields)
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
@@ -2044,7 +1909,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # Undo this create: a PDF this request uploaded goes with it;
                 # existing bytes it only adopted were never its to remove.
                 def undo_create():
-                    _delete_work(w_id, keep_managed_pdf=not postgres_upload)
+                    works_api.delete(self, db, w_id, keep_managed_pdf=not postgres_upload)
 
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
@@ -2118,27 +1983,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif publishers_api.handle_post(self, db, path, data):
                 return
-            elif path.startswith('/api/works/') and path.endswith('/opened'):
-                # Explicit "the user opened this Work" event, with server-now
-                # as this caller's event time. GET /api/works/:id is a pure
-                # read. PRKS's own UI takes the durable MARK_WORK_OPENED path
-                # instead, so that an open made from cache while the server is
-                # unreachable is recorded identically; this endpoint remains
-                # for other canonical callers and shares the same max-register
-                # helper, so the column can never acquire two meanings.
-                parts = path.split('/')
-                if len(parts) != 5:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                try:
-                    marked = db.mark_work_opened(parts[3])
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                if not marked:
-                    self.send_error(404, "Work not found")
-                    return
-                self.send_json(200, {'status': 'opened'})
+            elif works_api.handle_opened(self, db, path):
+                return
             elif work_roles_api.handle_post(self, db, path, data):
                 return
             elif annotations_api.handle_post(self, db, path, data):
