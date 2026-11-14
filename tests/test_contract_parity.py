@@ -12,7 +12,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from backend.pg_facade import PostgresLibrary
+from backend.domain.works import work_commands
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import WORK_STATUSES
 from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE_TYPES
@@ -579,7 +579,7 @@ class ContractParityTests(unittest.TestCase):
     def test_recent_projection_limit_matches_server_default(self):
         frontend_limit = js_recent_limit(read("frontend/js/work-open-state.js"))
 
-        param = inspect.signature(PostgresLibrary.get_recent_browse).parameters["limit"]
+        param = inspect.signature(work_commands.recent_browse).parameters["limit"]
         self.assertIsInstance(param.default, int)
         self.assertEqual(frontend_limit, param.default)
 
