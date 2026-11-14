@@ -17,7 +17,7 @@ from unittest import mock
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import queries, wiki_links
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
 _LINK = '<a href="#/{kind}/{id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{name}</a>'

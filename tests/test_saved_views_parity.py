@@ -24,7 +24,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
 from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
-from backend.pg_facade.context import current_context
+from tests.acting_context import current_context
 from tests.backend_parity import parametrize_backends
 from tests.library_adapter import SavedViewCommandsOver, route_commands_over
 from tests.test_tags_parity import TagParityTestCase, TagSide

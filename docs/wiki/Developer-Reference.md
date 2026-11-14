@@ -151,7 +151,7 @@ A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tie
 | `backend/api/` | Optional domain HTTP controllers extracted from `server.py` (parse/validate, invoke domain, map errors). First family: Saved Views. |
 | `backend/concurrency.py` | Process-local library access gate (reads, mutations, backup, restore). |
 | `backend/db/` | PostgreSQL pool, transaction helpers, error mapping, and the `migrate` schema runner over `backend/db/schema/`. |
-| `backend/pg_facade/` | The PostgreSQL Library facade the routes call. |
+| `backend/library.py` | The PostgreSQL Library handle (database and storage) the routes hold; they call `backend/domain/` commands directly. |
 | `backend/domain/` | Library commands and queries by area, identity and authorization, objects, backup/restore, search. |
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |

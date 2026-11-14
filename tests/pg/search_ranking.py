@@ -168,7 +168,7 @@ def _library() -> tuple[Any, Callable[[str, dict[str, Any]], Any], Callable[[], 
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
     from tests.library_adapter import TestLibrary
-    from backend.pg_facade import context as facade_context
+    from tests import acting_context as facade_context
     from backend.storage.config import StorageConfig
     from tests.pg.facade_context import provision_actor
     from tests.pg.harness import get_harness

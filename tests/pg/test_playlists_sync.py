@@ -17,7 +17,7 @@ from typing import Any, Optional
 from backend import sync_protocol
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.playlist_sync import scope_key
 from backend.sync.families import Environment, FamilyHandler
 from backend.sync.handlers import playlist as playlist_handlers

@@ -28,7 +28,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import groups, persons, roles
 from backend.entity_ids import generate, is_distributed
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers import person as person_handlers

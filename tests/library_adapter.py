@@ -1,18 +1,18 @@
-"""The tests' Library object during PG-C3 (#642): the facade plus the methods it shed.
+"""The tests' Library object (PG-C3 #642): the handle plus the facade's old method names.
 
-PG-C3 moves each route family off :class:`backend.pg_facade.PostgresLibrary`
-to direct domain calls, and removes the facade methods no route calls any
-more. The tests still need those names: the parity tests replay SQLite's
-recorded answers by method name and arguments (``tests/parity_reference.py``),
-and nothing can record them again, so a parity test keeps its calls and this
-class keeps answering them. Each method here runs the same domain query or
-command the facade ran, for the bound actor, and shapes the answer as the
-facade did, so the recorded SQLite answers still hold for the domain code.
+PG-C3 moved every route family off the ``PostgresLibrary`` facade to direct
+domain calls and retired the facade package: :class:`backend.library.PostgresLibrary`
+is now only the database-plus-storage handle the routes hold. The tests still
+need the old names: the parity tests replay SQLite's recorded answers by
+method name and arguments (``tests/parity_reference.py``), and nothing can
+record them again, so a parity test keeps its calls and this class keeps
+answering them. Each method runs the domain query or command the route runs,
+for the actor bound with :mod:`tests.acting_context`, and shapes the answer
+as the facade did, so the recorded SQLite answers still hold for the domain
+code.
 
-Every test builds its Library with :class:`TestLibrary` rather than the
-facade. As a family moves, the methods its tests call move here, built over
-the domain and the route module's own response shaping; when the facade is
-gone (the last PG-C3 PR), this class stops extending it.
+Every test builds its Library with :class:`TestLibrary`, which extends the
+handle, so a test can bind it as the served ``db``.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from __future__ import annotations
 import contextlib
 from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
 
-from backend.pg_facade import PostgresLibrary
-from backend.pg_facade.context import current_context
+from backend.library import PostgresLibrary
+from tests.acting_context import current_context
 
 T = TypeVar("T")
 

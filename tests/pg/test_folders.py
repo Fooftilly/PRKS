@@ -22,7 +22,7 @@ from backend.domain.organization import folders, links, tags
 from backend.domain.works import commands
 from backend.entity_ids import generate
 from backend.folder_sync import FolderRuleError, scope_key
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
 
 

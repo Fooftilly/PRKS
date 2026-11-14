@@ -5,11 +5,11 @@ Positions, Arguments with targets and citations, Works with Research Notes
 and Authors) one command at a time. The SQLite side is the recording of
 ``PRKSResearchIndex`` (``sync_work`` after a note, ``remove_*`` after a
 delete) and its ``build_graph`` (``tests/parity_reference.py``); the
-facade reads through ``PostgresResearchIndex`` after its
+PostgreSQL side reads through ``PostgresResearchIndex`` after its
 ``research.reindex_work`` jobs ran. Results must be equal once generated
 ids become labels. Edges are compared as sets: their order is by node id,
 and the ids differ per side. Inputs avoid the documented differences
-(``backend/pg_facade/research_index.py``): one alias per Concept, and
+(``tests/research_index_adapter.py``): one alias per Concept, and
 ``pending`` is compared apart. ``tests/pg/test_research_graph.py`` covers
 what only PostgreSQL has (the fence while a job is pending, stale rows,
 isolation).
@@ -58,7 +58,7 @@ class ResearchReadParityTests(ArgumentParityTestCase):
         }
 
     def _leg_index(self) -> Any:
-        from backend.pg_facade.research_index import PostgresResearchIndex
+        from tests.research_index_adapter import PostgresResearchIndex
 
         return PostgresResearchIndex(self.leg.db._database)
 
@@ -258,10 +258,33 @@ class ResearchReadParityTests(ArgumentParityTestCase):
 
 class AdapterShapeTests(unittest.TestCase):
     def test_every_index_call_the_server_makes_is_mirrored(self) -> None:
-        """``server.py`` reaches the index only through ``research_index.<name>``; PostgreSQL has each."""
-        from backend.pg_facade.research_index import PostgresResearchIndex
+        """The routes read the derived index only through ``index_commands.<name>``, which the adapter replays.
 
-        with open(os.path.join(_PROJECT_DIR, "backend", "server.py"), encoding="utf-8") as handle:
-            called = set(re.findall(r"\bresearch_index\.(\w+)\(", handle.read()))
-        self.assertTrue(called)
-        self.assertEqual(called - set(vars(PostgresResearchIndex)), set())
+        Since PG-C3 (#642) no route holds a bound ``research_index``: ``server.py``
+        and ``backend/api/`` call :mod:`backend.domain.research.index_commands`,
+        and :class:`PostgresResearchIndex` answers its refs and graph reads
+        through the same functions, so the parity replays check what the
+        routes run.
+        """
+        import glob
+        import inspect
+
+        from backend.domain.research import index_commands
+        from tests.research_index_adapter import PostgresResearchIndex
+
+        called: set[str] = set()
+        bound: set[str] = set()
+        paths = [os.path.join(_PROJECT_DIR, "backend", "server.py"),
+                 *glob.glob(os.path.join(_PROJECT_DIR, "backend", "api", "*.py"))]
+        for path in paths:
+            with open(path, encoding="utf-8") as handle:
+                source = handle.read()
+            called |= set(re.findall(r"\bindex_commands\.(\w+)\(", source))
+            bound |= set(re.findall(r"\bresearch_index\.(\w+)\(", source))
+        self.assertEqual(bound, set())
+        self.assertEqual(called, {"research_refs", "graph"})
+        self.assertEqual({name for name in called if not hasattr(index_commands, name)}, set())
+        replayed = inspect.getsource(PostgresResearchIndex.work_research_refs) + inspect.getsource(
+            PostgresResearchIndex.build_graph)
+        for name in sorted(called):
+            self.assertIn(f"index_commands.{name}(", replayed)

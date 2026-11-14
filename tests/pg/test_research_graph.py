@@ -18,8 +18,8 @@ from unittest import mock
 
 from backend import research_graph
 from backend.domain.identity.library_scope import LibraryScope
-from backend.pg_facade.research_index import PostgresResearchIndex
-from backend.pg_facade import context as facade_context
+from tests.research_index_adapter import PostgresResearchIndex
+from tests import acting_context as facade_context
 from backend.research_graph import graph_node_id
 from tests.pg.test_research_index import ResearchIndexTestCase
 

@@ -22,7 +22,7 @@ Only shared protocol/coordinator changes that genuinely span many durable famili
 
 ### Research network / Research Graph
 
-Before changing `domain/research/`, `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py`, `pg_facade/research_index.py`, `research_graph.py`, `research_markup.py`, or related research API/controllers, read the **Research network** and **Research Graph** sections in `frontend/AGENTS.md` (canonical DB/index/deletion/privacy invariants). Do not treat the derived research index or graph projection as authority for destructive mutation.
+Before changing `domain/research/`, `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py`, `research_graph.py`, `research_markup.py`, or related research API/controllers, read the **Research network** and **Research Graph** sections in `frontend/AGENTS.md` (canonical DB/index/deletion/privacy invariants). Do not treat the derived research index or graph projection as authority for destructive mutation.
 
 ### Saved Views
 

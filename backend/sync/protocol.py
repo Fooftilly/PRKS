@@ -44,7 +44,7 @@ another Library or account is ``OP_ID_REUSE`` and never discloses its
 result, and the envelope's device must be one of the user's devices.
 
 Only the operations registered at the bottom run; any other well-formed
-operation raises :class:`~backend.pg_facade.NotPortedError` (answered 501).
+operation raises :class:`~backend.library.NotPortedError` (answered 501).
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ from backend.domain.identity.authorization import AccessRefused, Capability, Ref
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import lifecycle
-from backend.pg_facade.registry import NotPortedError
+from backend.library import NotPortedError
 from backend.sync.families import Environment, Handler, Result
 
 _HANDLERS: dict[str, Handler] = {}

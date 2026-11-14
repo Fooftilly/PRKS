@@ -643,6 +643,22 @@ facade is the strangler seam, not the target: after cutover, route families
 move to calling the domain directly under #67, and the facade shrinks to
 nothing.
 
+**Status (PG-C3, #642).** Done. Every route family is a module in
+`backend/api/<family>.py` calling domain commands and queries with the
+served Library's database and the admitted `RequestContext`, which
+`library_command` and `library_query` authorize inside each transaction; no
+actor is bound beside the call. The `backend/pg_facade` package is deleted:
+`backend/library.py` keeps `PostgresLibrary` as the database-plus-storage
+handle the routes hold, and `NotPortedError` (answered 501). A Work's
+Research refs and the Research Graph are
+`backend/domain/research/index_commands.py`; the PDF text rebuild route is
+`search_commands.queue_text_rebuild`. Tests keep the facade's old method
+names, and the old index objects' names, over the same commands
+(`tests/library_adapter.py`, `tests/research_index_adapter.py`,
+`tests/text_index_adapter.py`, with the actor bound by
+`tests/acting_context.py`), so the recorded SQLite parity answers still
+replay.
+
 ---
 
 ## 6. Schema

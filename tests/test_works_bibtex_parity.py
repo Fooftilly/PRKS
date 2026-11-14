@@ -72,7 +72,7 @@ class BibtexParityTests(PeopleParityTestCase):
 
     def _row(self, side: PeopleSide, pg_sql: str, sqlite_sql: str, params: dict[str, Any]) -> None:
         if side is self.leg:
-            from backend.pg_facade.context import current_context
+            from tests.acting_context import current_context
 
             values = {**params, "library_id": current_context().library_id}
             side.db.database.command(lambda tx: tx.execute(pg_sql, values))

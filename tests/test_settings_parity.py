@@ -25,7 +25,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import settings as settings_api
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
-from backend.pg_facade.context import current_context
+from tests.acting_context import current_context
 from tests.library_adapter import SettingsCommandsOver, route_commands_over
 from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase

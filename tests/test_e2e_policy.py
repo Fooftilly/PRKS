@@ -163,12 +163,12 @@ def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list
     pending = ["prks_app", "backend.server"]
     visited = set()
     offenders = []
-    # These are the first staged PostgreSQL boundaries. Importing the facade
-    # from the served application is itself a cutover signal, even when the
-    # facade relies only on lazy/TYPE_CHECKING database references.
+    # These are the first staged PostgreSQL boundaries. Importing the Library
+    # handle from the served application is itself a cutover signal, even
+    # though it relies only on TYPE_CHECKING database references.
     pg_prefixes = (
         "backend.db",
-        "backend.pg_facade",
+        "backend.library",
         "backend.domain.identity",
         "backend.domain.text_identity",
     )
@@ -1094,7 +1094,7 @@ class AffectedMappingTests(unittest.TestCase):
     def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
         pg_paths = ["backend/db/schema/snapshot.json", "backend/db/schema/040_sync.sql"]
         for runtime in (
-            "prks_app.py", "backend/server.py", "backend/pg_facade/context.py",
+            "prks_app.py", "backend/server.py", "backend/library.py",
             "backend/db/__init__.py", "backend/db/database.py",
             "backend/db/new_unknown_module.py", "backend/api/session.py",
             "backend/domain/identity/web_start.py",
@@ -1146,9 +1146,8 @@ class AffectedMappingTests(unittest.TestCase):
             (root / "backend" / "domain" / "identity" / "root_pairing.py").write_text(
                 "from backend.db.database import Database\n", encoding="utf-8",
             )
-            (root / "backend" / "pg_facade").mkdir()
-            (root / "backend" / "pg_facade" / "__init__.py").write_text(
-                "# Facade can lazily receive database state; no static db import\n",
+            (root / "backend" / "library.py").write_text(
+                "# The handle can lazily receive database state; no static db import\n",
                 encoding="utf-8",
             )
             self.assertEqual(_runtime_postgres_imports(root), [])
@@ -1164,8 +1163,8 @@ class AffectedMappingTests(unittest.TestCase):
                 for entry in _runtime_postgres_imports(root, deferred=True)
             ))
             self.assertIn("backend.domain.identity.root_pairing", _served_modules(root))
-            active.write_text("from backend.pg_facade import PostgresLibrary\n", encoding="utf-8")
-            self.assertTrue(any("backend.pg_facade" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.library import PostgresLibrary\n", encoding="utf-8")
+            self.assertTrue(any("backend.library" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("from backend.domain.identity import root_pairing\n", encoding="utf-8")
             self.assertTrue(any("backend.domain.identity" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("from backend.domain import text_identity\n", encoding="utf-8")
@@ -1239,7 +1238,7 @@ class AffectedMappingTests(unittest.TestCase):
         for path in (
             "backend/domain/research/concepts.py",
             "backend/api/arguments.py",
-            "backend/pg_facade/research_index.py",
+            "backend/domain/research/index_commands.py",
         ):
             with self.subTest(path=path):
                 classified = policy.classify_affected_path(path)

@@ -87,7 +87,7 @@ class WorksParityTestCase(BackendParityTestCase):
         self.ref = _Side(reference_for(self), ref_storage.pdfs_dir, str(uuid.uuid4()))
 
     def _leg_device(self) -> str:
-        from backend.pg_facade.context import current_context
+        from tests.acting_context import current_context
 
         device = current_context().device_id
         assert device is not None
@@ -101,7 +101,7 @@ class WorksParityTestCase(BackendParityTestCase):
         """
         if side is self.ref:
             return side.db.process_operation(data)
-        from backend.pg_facade.context import current_context
+        from tests.acting_context import current_context
         from backend.sync import protocol
         from backend.sync.families import Environment
 

@@ -37,7 +37,7 @@ class BackendParityTestCase(unittest.TestCase):
         """The facade over ``storage`` (a ``StorageConfig``) and a fresh database, dropped after the test."""
         from backend.db import Database, DatabaseConfig
         from tests.library_adapter import TestLibrary
-        from backend.pg_facade import context as facade_context
+        from tests import acting_context as facade_context
         from tests.pg.facade_context import provision_actor
         from tests.pg.harness import get_harness
 

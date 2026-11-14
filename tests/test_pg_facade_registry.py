@@ -1,8 +1,11 @@
-"""PostgreSQL facade skeleton (#625, PG-3; PG-C2 #641).
+"""The Library handle the HTTP adapter holds (#625, PG-3; PG-C2 #641; PG-C3 #642).
 
-The facade package never imports psycopg, so these run in the default suite
-for every lane. The ported-method registry and the SQLite reach tooling they
-also checked were retired with SQLite (``tests/sqlite_retirement/``).
+The PostgreSQL facade package these first checked (``backend/pg_facade``)
+was retired by PG-C3: ``backend/library.py`` keeps its database-plus-storage
+handle and its typed refusal. The module keeps its name because the SQLite
+retirement records name its tests. It never imports psycopg, so these run in
+the default suite. The ported-method registry and the SQLite reach tooling
+were retired with SQLite (``tests/sqlite_retirement/``).
 """
 
 from __future__ import annotations
@@ -18,9 +21,8 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-from backend.pg_facade import FacadeMixin, NotPortedError, PostgresLibrary
+from backend.library import NotPortedError, PostgresLibrary
 
-LANE_MIXINS: set[str] = set()  # PG-C3 #642: every family left the facade
 # The HTTP adapter: the modules that hold the bound Library as ``db``.
 ADAPTER_GLOBS = ("backend/server.py", "backend/api/*.py", "backend/services/*.py")
 
@@ -40,10 +42,8 @@ def adapter_library_calls() -> dict[str, set[str]]:
 
 
 class FacadeSkeletonTests(unittest.TestCase):
-    def test_facade_is_composed_of_one_mixin_per_lane(self):
-        names = {cls.__name__ for cls in PostgresLibrary.__mro__
-                 if issubclass(cls, FacadeMixin) and cls not in (FacadeMixin, PostgresLibrary)}
-        self.assertEqual(names, LANE_MIXINS)
+    def test_the_facade_package_is_retired(self):
+        self.assertFalse(os.path.exists(os.path.join(_PROJECT_DIR, "backend", "pg_facade", "__init__.py")))
 
     def test_unported_capability_is_a_typed_refusal_not_a_fallback(self):
         from backend.domain.works import work_commands
@@ -58,20 +58,20 @@ class FacadeSkeletonTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             PostgresLibrary(object()).no_such_method  # type: ignore[arg-type]  # noqa: B018
 
-    def test_facade_keeps_its_database_and_storage(self):
+    def test_the_handle_keeps_its_database_and_storage(self):
         marker = object()
         library = PostgresLibrary(marker, storage=None)  # type: ignore[arg-type]
         self.assertIs(library.database, marker)
         self.assertIsNone(library.storage)
 
-    def test_facade_package_does_not_import_psycopg(self):
+    def test_the_library_handle_does_not_import_psycopg(self):
         code = (
-            "import sys; import backend.pg_facade; "
+            "import sys; import backend.library; "
             "sys.exit(1 if any(m.split('.')[0] in ('psycopg', 'psycopg_pool') "
             "for m in sys.modules) else 0)"
         )
         proc = subprocess.run([sys.executable, "-c", code], cwd=_PROJECT_DIR, check=False)
-        self.assertEqual(proc.returncode, 0, "backend.pg_facade imported psycopg")
+        self.assertEqual(proc.returncode, 0, "backend.library imported psycopg")
 
 
 class AdapterSurfaceTests(unittest.TestCase):
@@ -82,9 +82,9 @@ class AdapterSurfaceTests(unittest.TestCase):
         self.assertEqual(missing, {})
 
     def test_the_adapter_reaches_every_public_facade_member(self):
-        # PG-C3 (#642): the facade holds only what a route still calls. A
-        # method only tests call belongs in tests/library_adapter.py, and a
-        # family whose routes call the domain directly leaves the facade.
+        # PG-C3 (#642): the handle holds only what a route still calls. A
+        # method only tests call belongs in tests/library_adapter.py; a route
+        # calls the domain commands directly.
         calls = adapter_library_calls()
         handle = {"database", "storage"}
         unreached = sorted(name for name in dir(PostgresLibrary)

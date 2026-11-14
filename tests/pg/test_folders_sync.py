@@ -20,7 +20,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.organization import folders
 from backend.entity_ids import generate
 from backend.folder_sync import scope_key
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.sync.families import Environment, FamilyHandler
 from backend.sync.handlers import folder as folder_handlers
 from backend.sync.handlers import work_lifecycle

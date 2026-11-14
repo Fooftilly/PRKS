@@ -17,7 +17,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons, roles
 from backend.domain.works import commands
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 
 _MISSING_PERSON = "P-" + "0" * 32

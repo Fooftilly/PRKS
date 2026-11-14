@@ -46,7 +46,7 @@ Important backend areas include:
 
 - `backend/server.py` — HTTP adapter lifecycle and method dispatch.
 - `backend/api/` — optional domain HTTP controllers extracted from `server.py` (parse/validate, invoke domain, map errors). First family: Saved Views.
-- `backend/pg_facade/` — the PostgreSQL Library facade the routes call.
+- `backend/library.py` — the PostgreSQL Library handle (database and storage) the routes hold; they call `backend/domain/` commands directly.
 - `backend/domain/` — Library commands and queries by area (Works, People, Organization, Research, Search, objects, maintenance, identity).
 - `backend/db/` and `backend/db/schema/` — the connection pool, transaction helpers, and the schema files the `migrate` runner applies.
 - `backend/concurrency.py` — storage-access coordination.

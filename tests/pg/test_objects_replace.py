@@ -30,7 +30,7 @@ from backend.domain.works import commands
 from backend.entity_ids import generate
 from backend.pdf_materialization import STALE_CODE
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, annotation
 from tests.pg.test_annotations_materialize import RENDERED, MaterializeTestCase, writing

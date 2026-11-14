@@ -17,7 +17,6 @@ import json
 import logging
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
-from unittest import mock
 from urllib.parse import quote, urlsplit
 
 from tests.pg.server_api_fixtures import ServerApiTestCase
@@ -75,9 +74,8 @@ class BulkTests(ServerApiTestCase):
     def test_a_status_change_never_reindexes_text(self) -> None:
         work_id = self.create_work("Bulk No Index", status="Paused")["id"]
         jobs = self.sql("SELECT count(*) AS n FROM prks.jobs")[0]["n"]
-        with mock.patch.object(self.server_module.text_index, "sync_work") as sync:
-            self.ok(self.bulk([work_id], status="Completed"))
-        sync.assert_not_called()
+        # The text is the database's: a status change queues no extraction.
+        self.ok(self.bulk([work_id], status="Completed"))
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.jobs")[0]["n"], jobs)
 
     def test_a_cross_origin_or_non_json_request_changes_nothing(self) -> None:

@@ -19,8 +19,7 @@ from backend.derived_caches import prks_thumb_cache_stem
 from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
-from backend.pg_facade.text_index import PostgresTextIndex
+from tests import acting_context as facade_context
 from tests.pg.http_fixtures import HttpAuthTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -29,18 +28,17 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
         module = self.server_module
-        previous = (module.db, module.text_index)
+        previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
-        module.text_index = PostgresTextIndex(self.db)
         self.serve()
         self.cookies = self.session_cookie()
 
-    def _restore(self, previous: tuple[Any, Any]) -> None:
-        self.server_module.db, self.server_module.text_index = previous
+    def _restore(self, previous: Any) -> None:
+        self.server_module.db = previous
 
     def acting(self) -> Any:
         valid = sessions.resolve_session(self.db, self.cookies["prks_session"])

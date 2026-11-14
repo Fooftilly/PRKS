@@ -91,7 +91,7 @@ def _route(path: str) -> Optional[tuple[str, str]]:
 
 def _library(handler: Any, db: Any) -> Any:
     """The PostgreSQL library the route acts on, for the admitted request's context."""
-    from backend.pg_facade import PostgresLibrary
+    from backend.library import PostgresLibrary
 
     if getattr(handler, "_prks_request_context", None) is None:
         raise RuntimeError("a Processing route ran without an admitted request context")

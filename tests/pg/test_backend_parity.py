@@ -11,7 +11,7 @@ import os
 import tempfile
 import unittest
 
-from backend.pg_facade import PostgresLibrary
+from backend.library import PostgresLibrary
 from backend.storage.config import StorageConfig
 from tests.backend_parity import BackendParityTestCase
 from tests.pg.harness import get_harness

@@ -17,7 +17,7 @@ from unittest import mock
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import citation
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
 _ENTRY = ("@book{Lovelace1843,\n"

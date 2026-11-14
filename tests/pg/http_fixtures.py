@@ -75,7 +75,7 @@ class HttpAuthTestCase(IdentityTestCase):
         cls.server_module = server_module
         cls._previous = (
             server_module._bound_storage, server_module.pdfs_dir, server_module.thumbs_dir,
-            server_module.db, server_module.text_index, server_module.research_index,
+            server_module.db,
         )
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-http-auth-")
         cls._storage = StorageConfig.for_testing(os.path.join(cls._tmpdir, "storage"))
@@ -87,7 +87,7 @@ class HttpAuthTestCase(IdentityTestCase):
         module = cls.server_module
         (
             module._bound_storage, module.pdfs_dir, module.thumbs_dir,
-            module.db, module.text_index, module.research_index,
+            module.db,
         ) = cls._previous
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
         super().tearDownClass()
