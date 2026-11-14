@@ -1,17 +1,15 @@
 """The PDF text index of the PostgreSQL transition facade (L-S-1 #637).
 
-``server.py`` searches PDF text, and keeps it current, through the bound
-``PRKSTextIndex`` (``backend/text_index.py``, a separate SQLite FTS5 file),
-not through ``PRKSDatabase``. :class:`PostgresTextIndex` stands where that
-index object is used, with the ``PRKSTextIndex`` names and signatures the
-routes call, as :class:`~backend.pg_facade.research_index.PostgresResearchIndex`
-does for the Research index:
+``server.py`` kept PDF text current through the bound ``PRKSTextIndex``
+(``backend/text_index.py``, a separate SQLite FTS5 file), not through
+``PRKSDatabase``. :class:`PostgresTextIndex` stands where that index object
+is used, with the ``PRKSTextIndex`` names and signatures the routes call, as
+:class:`~backend.pg_facade.research_index.PostgresResearchIndex` does for the
+Research index. ``/api/search``'s any-mode PDF text hits no longer come
+through it: since PG-C3 (#642) the route reads
+:func:`backend.domain.search.text.pdf_text_work_ids` in its own snapshot
+(:mod:`backend.domain.search.search_commands`).
 
-- :meth:`search_work_ids` is ``/api/search``'s any-mode PDF text hits:
-  :func:`backend.domain.search.text.pdf_text_work_ids` in one
-  ``library_query`` snapshot for the bound context. Hits come most recently
-  updated first (SQLite: FTS5 rank), since the stored vectors keep no
-  positions to rank by.
 - The text is kept by the database, never by its reader: every command
   that gives a managed PDF new bytes queues ``text.extract`` in its own
   transaction, and a Work delete drops its rows (§8.3). So
@@ -29,7 +27,7 @@ does for the Research index:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict
 
 from backend.pg_facade.context import current_context
 
@@ -40,19 +38,10 @@ if TYPE_CHECKING:
 
 
 class PostgresTextIndex:
-    """``PRKSTextIndex``'s search and maintenance calls for the bound Library."""
+    """``PRKSTextIndex``'s maintenance calls for the bound Library."""
 
     def __init__(self, database: Database) -> None:
         self._database = database
-
-    def search_work_ids(self, term: str, limit: int = 2000) -> List[str]:
-        from backend.domain.identity.library_scope import library_query
-        from backend.domain.search import text
-
-        if not (term or "").strip():
-            return []
-        return library_query(self._database, current_context(),
-                             lambda scope: text.pdf_text_work_ids(scope, term, limit))
 
     def sync_work(self, work_id: str, file_path: str, **_options: Any) -> TextIndexSyncResult:
         """Nothing to do: the command that changed the PDF queued ``text.extract`` in its transaction."""

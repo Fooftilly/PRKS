@@ -17,6 +17,23 @@ from scripts.pg_stat_profile import (
 
 
 class ProfileSafetyTests(unittest.TestCase):
+    def test_every_library_call_exists_on_the_facade(self):
+        """The profiler drives a real ``PostgresLibrary``: a method PG-C3 (#642)
+        moved off the facade would fail the opt-in run with ``AttributeError``."""
+        import ast
+
+        from backend.pg_facade import PostgresLibrary
+
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "scripts", "pg_stat_profile.py")
+        with open(path, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), path)
+        called = {node.attr for node in ast.walk(tree)
+                  if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                  and node.value.id == "library"}
+        self.assertTrue(called)
+        self.assertEqual(sorted(name for name in called if not hasattr(PostgresLibrary, name)), [])
+
     def test_never_runs_outside_disposable_wrapper(self):
         with patch.dict(os.environ, {"PRKS_PG_PROFILE_NONCE": ""}):
             with self.assertRaisesRegex(RuntimeError, "scripts/test-postgres --profile"):

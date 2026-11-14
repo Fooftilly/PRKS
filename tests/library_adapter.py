@@ -215,6 +215,15 @@ class TestLibrary(PostgresLibrary):
         cores = self._query(lambda scope: queries.works_by_created(scope, limit))
         return self._finish([projection.work_summary(core) for core in cores])
 
+    def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
+        """Work summaries in ``work_ids`` order (blank and unknown ids skipped)."""
+        from backend.domain.search import search_commands
+
+        ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]
+        if not ordered_ids:
+            return []
+        return self._search_rows(lambda scope: search_commands.summaries(scope, ordered_ids))
+
     def resolve_wiki_links(self, text: str) -> str:
         """Targets resolve against this Library only (``backend.domain.works.wiki_links``)."""
         from backend.domain.works import wiki_links
@@ -689,6 +698,41 @@ class TestLibrary(PostgresLibrary):
         from backend.domain.research import note_commands
 
         note_commands.save(self.database, current_context(), work_id, text_content)
+
+    # -- Search (PG-C3 PR 13: ``backend/api/search.py`` calls the commands) --
+
+    def _search_rows(self, fn: Callable[[Any], List[dict]]) -> List[dict]:
+        from backend.domain.search import search_commands
+
+        if self.storage is None:
+            raise RuntimeError("this PostgreSQL library has no data root")
+        return search_commands.finish(self._query(fn), self.storage.pdfs_dir)
+
+    def work_ids_matching_author(self, author: str) -> List[str]:
+        from backend.domain.search import queries
+
+        return self._query(lambda scope: queries.author_work_ids(scope, author))
+
+    def work_ids_matching_publisher(self, pub: str) -> List[str]:
+        from backend.domain.search import queries
+
+        return self._query(lambda scope: queries.publisher_work_ids(scope, pub))
+
+    def search_works(self, search_term: str, author_filter: str = "", publisher_filter: str = "") -> List[dict]:
+        from backend.domain.search import search_commands
+
+        return self._search_rows(
+            lambda scope: search_commands.keyword_rows(scope, search_term, author_filter, publisher_filter))
+
+    def search_works_any(self, term: str) -> List[dict]:
+        from backend.domain.search import search_commands
+
+        return self._search_rows(lambda scope: search_commands.any_rows(scope, term))
+
+    def get_works_by_tag_name(self, tag_name: str) -> List[dict]:
+        from backend.domain.search import search_commands
+
+        return self._search_rows(lambda scope: search_commands.tagged_rows(scope, tag_name))
 
     # -- Person Groups (PG-C3 PR 7: ``backend/api/person_groups.py`` calls the commands) --
 

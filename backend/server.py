@@ -38,6 +38,7 @@ from backend.api import persons as persons_api
 from backend.api import playlists as playlists_api
 from backend.api import positions as positions_api
 from backend.api import research_notes as research_notes_api
+from backend.api import search as search_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.api import tags as tags_api
@@ -1940,52 +1941,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_json_not_modified(etag)
                     return
                 self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/search':
-                q = query.get('q', [''])[0]
-                tag = query.get('tag', [''])[0]
-                author = query.get('author', [''])[0]
-                publisher = query.get('publisher', [''])[0]
-                any_mode = query.get('any', [''])[0] in ('1', 'true', 'yes')
-                if tag:
-                    data = db.get_works_by_tag_name(tag)
-                    if author and author.strip():
-                        allow = set(db.work_ids_matching_author(author.strip()))
-                        data = [w for w in data if w.get('id') in allow]
-                    if publisher and publisher.strip():
-                        allow_pub = set(db.work_ids_matching_publisher(publisher.strip()))
-                        data = [w for w in data if w.get('id') in allow_pub]
-                else:
-                    if any_mode:
-                        term = (q or author or publisher or '').strip()
-                        data = db.search_works_any(term)
-                    else:
-                        data = db.search_works(
-                            q,
-                            author.strip() if author else '',
-                            publisher.strip() if publisher else '',
-                        )
-                    if any_mode and q and str(q).strip():
-                        text_ids = text_index.search_work_ids(q)
-                        if text_ids:
-                            existing = {str(w.get('id')) for w in data if w.get('id')}
-                            author_allow = None
-                            publisher_allow = None
-                            if author and author.strip():
-                                author_allow = set(db.work_ids_matching_author(author.strip()))
-                            if publisher and publisher.strip():
-                                publisher_allow = set(db.work_ids_matching_publisher(publisher.strip()))
-
-                            def passes_filters(wid: str) -> bool:
-                                if author_allow is not None and wid not in author_allow:
-                                    return False
-                                if publisher_allow is not None and wid not in publisher_allow:
-                                    return False
-                                return True
-
-                            extra_ids = [wid for wid in text_ids if wid not in existing and passes_filters(wid)]
-                            if extra_ids:
-                                data.extend(db.get_work_summaries_by_ids_ordered(extra_ids))
-                self.send_json(200, data)
+            elif search_api.handle_get(self, db, path, query):
+                return
             elif publishers_api.handle_get(self, db, path, query):
                 return
             elif path.startswith('/api/pdfs/'):

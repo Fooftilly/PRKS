@@ -1,9 +1,11 @@
 """``/api/search`` served from PostgreSQL (L-S-1 #637; the route seam PG-C1 #640 binds).
 
-``server.py`` searches through its bound ``db`` and its bound
-``text_index``. These tests bind :class:`~tests.library_adapter.TestLibrary`
-and :class:`~backend.pg_facade.text_index.PostgresTextIndex` there (the way
-the cutover will), sign in over HTTP, and check the route's modes: keyword
+``backend/api/search.py`` searches the bound ``db``'s database through
+``backend/domain/search/search_commands.py`` (PG-C3 #642), and the PDF text
+rebuild route goes through the bound ``text_index``. These tests bind
+:class:`~tests.library_adapter.TestLibrary` and
+:class:`~backend.pg_facade.text_index.PostgresTextIndex` there, sign in over
+HTTP, and check the route's modes: keyword
 search with author and publisher filters, the Tag filter, any mode with the
 PDF text hits appended (and filtered), and the PDF text rebuild route, which
 queues a ``text`` rebuild instead of extracting in the request. A Saved
@@ -107,6 +109,24 @@ class SearchHttpTests(HttpAuthTestCase):
         # As on SQLite, the author filter applies to the PDF text hits only in any mode.
         self.assertEqual(self.search(q="zebra", any="1", author="ann"), ["Zebra in the title", "Body only"])
         self.assertEqual(self.search(q="zebra"), ["Zebra in the title"])  # PDF text is any mode only
+
+    def test_a_search_reads_one_snapshot(self) -> None:
+        """Every mode's matches, filters and PDF text hits come from one read transaction."""
+        from unittest import mock
+
+        from backend.domain.search import search_commands
+
+        with self.acting():
+            self.facade.add_work("Zebra in the title", author_text="Ann", publisher="Press")
+        self.pdf_work("Body only", "a zebra hides in the body", "a.pdf", author_text="Ann", publisher="Press")
+        self.run_jobs()
+        for params in ({"q": "zebra", "any": "1", "author": "ann", "publisher": "press"},
+                       {"q": "zebra", "author": "ann", "publisher": "press"},
+                       {"tag": "none", "author": "ann"}):
+            with self.subTest(params=params), mock.patch.object(
+                    search_commands, "library_query", wraps=search_commands.library_query) as read:
+                self.search(**params)
+            self.assertEqual(read.call_count, 1)
 
     def test_the_pdf_text_rebuild_route_queues_a_text_rebuild(self) -> None:
         res = self.call("POST", "/api/works/reindex-pdf-text", body={"force": True}, cookies=self.cookies,

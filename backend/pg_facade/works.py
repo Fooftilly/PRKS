@@ -329,16 +329,6 @@ class WorksMixin(FacadeMixin):
                                    extra=("created_at", "publisher", "folder_id"))
             for core in cores
         ])
-    def get_work_summaries_by_ids_ordered(self, work_ids: List[str]) -> List[dict]:
-        from backend.domain.works import projection, queries
-
-        ordered_ids = [str(wid).strip() for wid in (work_ids or []) if str(wid).strip()]
-        if not ordered_ids:
-            return []
-        by_id = self._read(lambda scope: queries.works_by_ids(scope, ordered_ids))
-        return self._finish([projection.work_summary(by_id[i]) for i in ordered_ids if i in by_id])
-
-
     # -- mutations (L-W-1 PR 3) -------------------------------------------------
     def mark_work_opened(self, work_id: str) -> bool:
         """Record an open now (server time), through the max-register."""
