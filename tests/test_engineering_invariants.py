@@ -1484,6 +1484,17 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/sync/handlers/work_open.py",
                 "backend/sync/handlers/work_role.py",
                 "backend/sync/handlers/work_source.py",
+                "backend/api",
+                "backend/domain/__init__.py",
+                "backend/domain/identity/__init__.py",
+                "backend/domain/maintenance/upload.py",
+                "backend/domain/people/constraints.py",
+                "backend/domain/research/constraints.py",
+                "backend/domain/saved_views/constraints.py",
+                "backend/db/testing_guard.py",
+                "backend/jobs/__init__.py",
+                "backend/services/__init__.py",
+                "backend/services/work_pdf_replace.py",
             ),
         )
 
