@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from backend.pg_facade.annotations import AnnotationsMixin
 from backend.pg_facade.registry import FacadeMixin, NotPortedError
 from backend.pg_facade.works import WorksMixin
 
@@ -30,10 +29,7 @@ if TYPE_CHECKING:
     from backend.storage.config import StorageConfig
 
 
-class PostgresLibrary(
-    WorksMixin,
-    AnnotationsMixin,
-):
+class PostgresLibrary(WorksMixin):
     """The library object of one PostgreSQL database and data root."""
 
     def __init__(self, database: Database, *, storage: StorageConfig | None = None) -> None:
