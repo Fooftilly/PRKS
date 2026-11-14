@@ -37,8 +37,9 @@ from typing import Any
 from backend.pdf_materialization import STALE_CODE
 
 
-def stale_materialization_body(db, work_id: str) -> dict[str, Any]:
-    mat = db.get_work_pdf_materialization(work_id) or {}
+def stale_materialization_body(materialization: dict[str, Any] | None) -> dict[str, Any]:
+    """The ``409`` body of a stale materialization claim, from the Work's materialization status."""
+    mat = materialization or {}
     return {
         "error": "PDF materialization is stale",
         "code": STALE_CODE,

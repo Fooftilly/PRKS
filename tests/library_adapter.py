@@ -58,9 +58,51 @@ class TestLibrary(PostgresLibrary):
 
     # -- annotations ------------------------------------------------------------
 
+    # PG-C3 PR 14: ``backend/api/annotations.py`` calls the commands.
+
+    @staticmethod
+    def _annotation_commands() -> Any:
+        from backend.domain.annotations import annotation_commands
+
+        return annotation_commands
+
+    def _annotation_objects(self) -> Any:
+        from backend.api.annotations import _objects
+
+        return _objects(self)
+
+    def get_work_annotations(self, work_id: str) -> str:
+        return self._annotation_commands().annotations_json(self.database, current_context(), work_id)
+
+    def get_work_annotations_state(self, work_id: str) -> Any:
+        return self._annotation_commands().state(self.database, current_context(), work_id)
+
+    def get_work_annotations_snapshot(self, work_id: str) -> Any:
+        return self._annotation_commands().snapshot(self.database, current_context(), work_id)
+
+    def get_work_pdf_materialization(self, work_id: str) -> Any:
+        return self._annotation_commands().materialization(self.database, current_context(), work_id)
+
+    def adopt_byte_only_user_markup(self, work_id: str, viewer_items: Any) -> Any:
+        return self._annotation_commands().adopt(self.database, current_context(), work_id, viewer_items)
+
+    def save_work_annotations(self, work_id: str, annotations_json: str, *, base_set_revision: Any = None) -> int:
+        return self._annotation_commands().save(self.database, current_context(), work_id, annotations_json,
+                                                base_set_revision=base_set_revision)
+
     def sync_work_annotations(self, work_id: str, items: List[dict], *, base_set_revision: Any = None) -> int:
         """The legacy full-list replace (``operations.replace_all``), which ``save_work_annotations`` runs."""
-        return self._sync_work_annotations(work_id, items, base_set_revision=base_set_revision)
+        return self._annotation_commands().replace_all(self.database, current_context(), work_id, items,
+                                                       base_set_revision=base_set_revision)
+
+    def _materialize_work_pdf(self, work_id: str, write: Any, claimed_revision: Any) -> dict[str, Any]:
+        return self._annotation_commands().materialize_pdf(self.database, current_context(),
+                                                           self._annotation_objects(), work_id, write,
+                                                           claimed_revision)
+
+    def _replace_work_pdf(self, work_id: str, write: Any) -> dict[str, Any]:
+        return self._annotation_commands().replace_pdf(self.database, current_context(),
+                                                       self._annotation_objects(), work_id, write)
 
     def accept_work_pdf_materialization_claim(self, work_id: str, claimed_revision: Any) -> Any:
         from backend.domain.annotations import materialize

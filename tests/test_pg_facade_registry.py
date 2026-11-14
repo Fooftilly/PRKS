@@ -22,7 +22,6 @@ from backend.pg_facade import FacadeMixin, NotPortedError, PostgresLibrary
 
 LANE_MIXINS = {
     "WorksMixin",
-    "AnnotationsMixin",
 }
 # The HTTP adapter: the modules that hold the bound Library as ``db``.
 ADAPTER_GLOBS = ("backend/server.py", "backend/api/*.py", "backend/services/*.py")

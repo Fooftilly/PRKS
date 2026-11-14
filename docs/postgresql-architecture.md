@@ -3136,7 +3136,7 @@ stops for maintainer review. No PR is merged without explicit approval.
 | People (L-P) | `backend/domain/people/**`, `110_people.sql`, `api/persons.py`, `api/person_groups.py`, `api/work_roles.py`, `api/publishers.py`, `sync/handlers/person*.py`, `work_role` handler | works schema (references only) |
 | Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `api/tags.py`, `api/folders.py`, `api/playlists.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
 | Research (L-R) | `backend/domain/research/**`, `130_research.sql`, `derived` mention tables, `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py`, concept/position/argument/note handlers | |
-| Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `pg_facade/annotations.py` | works projection (calls it) |
+| Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `api/annotations.py` | works projection (calls it) |
 | Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, the Processing API routes, the Processing clause of the reference checks in `backend/domain/objects/lifecycle.py` (§11.5; L-A-1 is closed) | |
 | Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `api/search.py`, `pg_facade/text_index.py`, text extraction job | |
 | Jobs (L-J) | `backend/jobs/**`, `030_jobs.sql`, `prks worker` entry point | job handlers (owned by their lanes) |

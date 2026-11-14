@@ -545,6 +545,8 @@ AFFECTED_RULES = (
             "backend/pdf_materialization.py",
             "backend/pdf_annotation_adopt.py",
             "backend/services/work_pdf_replace.py",
+            "backend/api/annotations.py",
+            "backend/domain/annotations/**",
         ),
         "features": ("pdf-annotations",),
         "note": "PDF annotation durable family + materialization + viewer bridge",
