@@ -384,6 +384,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                     fixture_ids: list[str] = []
                     concept_ids: list[str] = []
                     output = []
+                    ctx, pdfs = actor.context, storage.pdfs_dir
                     with facade_context.acting_as(actor.context):
                         for size in sizes:
                             for i in range(len(fixture_ids), size):
@@ -439,7 +440,6 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                 return search_commands.finish(rows, storage.pdfs_dir)
 
                             # The Work route reads (PG-C3 #642), as the routes call them.
-                            ctx, pdfs = actor.context, storage.pdfs_dir
                             workloads = (
                                 ("works_list", lambda: work_commands.catalog(database, ctx, pdfs),
                                  verify_list),
