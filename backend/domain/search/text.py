@@ -236,7 +236,8 @@ def attach(registry: HandlerRegistry, storage: StorageBackend) -> TextExtraction
 # -- reads -----------------------------------------------------------------------------
 
 # The Works whose primary managed PDF's current bytes, read by this
-# extractor version, hold every token as a prefix (``PRKSTextIndex.search_work_ids``).
+# extractor version, hold every token as a prefix (``/api/search``'s any
+# mode, through ``search_commands``).
 # ``doc`` keeps no positions, so a rank could not tell matches apart: they
 # come most recently updated first.
 _PDF_TEXT_SQL: LiteralString = """

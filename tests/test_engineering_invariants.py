@@ -1418,6 +1418,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/search/refresh.py",
                 "backend/domain/search/queries.py",
                 "backend/domain/search/text.py",
+                "backend/domain/search/search_commands.py",
                 "backend/domain/search/rebuild.py",
                 "backend/domain/annotations/__init__.py",
                 "backend/domain/annotations/materialize.py",

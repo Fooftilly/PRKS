@@ -1,6 +1,8 @@
 """Work search: PostgreSQL lists what SQLite lists (L-S-1 #637; §8.3, §8.7).
 
-Each library is built the same way on this leg's library object and on a
+Each library is built the same way on this leg's library object (the
+facade names kept by ``tests/library_adapter.py`` over
+``backend/domain/search/search_commands.py`` since PG-C3 #642) and on a
 reference SQLite library, and ``search_works``, ``search_works_any``,
 ``work_ids_matching_author``, ``work_ids_matching_publisher`` and
 ``get_works_by_tag_name`` must return

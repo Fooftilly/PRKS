@@ -3138,7 +3138,7 @@ stops for maintainer review. No PR is merged without explicit approval.
 | Research (L-R) | `backend/domain/research/**`, `130_research.sql`, `derived` mention tables, `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py`, concept/position/argument/note handlers | |
 | Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `pg_facade/annotations.py` | works projection (calls it) |
 | Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, the Processing API routes, the Processing clause of the reference checks in `backend/domain/objects/lifecycle.py` (§11.5; L-A-1 is closed) | |
-| Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `pg_facade/search.py`, text extraction job | |
+| Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `api/search.py`, `pg_facade/text_index.py`, text extraction job | |
 | Jobs (L-J) | `backend/jobs/**`, `030_jobs.sql`, `prks worker` entry point | job handlers (owned by their lanes) |
 | Backup (L-B) | `backend/domain/maintenance/backup*`, `restore*`, `backup_runs` table | |
 | Deployment (L-D) | `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh`, `scripts/test-postgres`, README deployment section, health endpoints | |

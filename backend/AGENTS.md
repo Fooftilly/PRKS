@@ -26,7 +26,7 @@ Before changing `domain/research/`, `api/concepts.py`, `api/positions.py`, `api/
 
 ### Saved Views
 
-Before changing Saved Views HTTP/API or search-definition persistence (`api/saved_views.py` and related DB/search paths), read the **Saved Views** section in `frontend/AGENTS.md` (definitions vs membership, reuse of normal search, privacy of names/definitions, no executable arbitrary rules).
+Before changing Saved Views HTTP/API or search-definition persistence (`api/saved_views.py`, `api/search.py` and related DB/search paths), read the **Saved Views** section in `frontend/AGENTS.md` (definitions vs membership, reuse of normal search, privacy of names/definitions, no executable arbitrary rules).
 
 ## Logging privacy
 
