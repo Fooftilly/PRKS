@@ -39,7 +39,7 @@ These settings configure every PRKS process: PostgreSQL is the only Library back
 | `serve` | The web server. It keeps the Library, accounts, sessions, the root pairing and jobs in PostgreSQL, and every request is signed in (`PRKS_AUTH`). |
 | `migrate` | One-shot: applies the schema. Once setup is complete, it also runs the start check and moves the start generation forward, then exits. |
 | `worker` | Runs background jobs beside `serve`. |
-| `admin` | Admin commands such as `admin bootstrap` ([admin bootstrap](../admin-bootstrap.md)), `admin backup --library ID --out DIR` (a verified format-2 backup of one Library) and `admin restore --library ID --archive FILE --owner LOGIN` (restores it in place of the Library's contents; the Library's replaced files are kept, not deleted). Each command takes its own `--root`. |
+| `admin` | Admin commands such as `admin bootstrap` ([admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md)), `admin backup --library ID --out DIR` (a verified format-2 backup of one Library) and `admin restore --library ID --archive FILE --owner LOGIN` (restores it in place of the Library's contents; the Library's replaced files are kept, not deleted). Each command takes its own `--root`. |
 
 Every `serve`, `migrate` and `worker` start checks that the database and the data root's `prks-root.json` record the same start generation, then moves both forward by one, database first (§11.1). The start generation counts starts, not writes.
 
