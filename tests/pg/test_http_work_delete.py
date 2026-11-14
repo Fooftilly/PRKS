@@ -1,7 +1,7 @@
 """``DELETE /api/works/{id}`` served from PostgreSQL (PG-C2 #641).
 
-``server._delete_work`` deletes the Work through the bound
-:class:`~tests.library_adapter.TestLibrary`: the delete records the cleanup
+``backend/api/works.py`` ``delete`` deletes the Work through
+``work_commands.delete``: the delete records the cleanup
 claims of its files in its own transaction (§11.2) and the text rows go with
 the Work. Only the Work's thumbnails, derived files under the root, are
 removed by the request, best effort: a thumbnail that cannot be removed is

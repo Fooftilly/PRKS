@@ -17,7 +17,6 @@ AFFECTING_PATHS = {
     "DESIGN.md",
     "backend/api/works.py",
     "backend/domain/works/work_commands.py",
-    "backend/pg_facade/works.py",
     "backend/research_graph.py",
     "backend/server.py",
     "backend/services/work_pdf_replace.py",

@@ -329,6 +329,64 @@ class TestLibrary(PostgresLibrary):
     def _holds_managed_pdf(self, name: str) -> bool:
         return self._work_commands().holds_managed_pdf(self.database, current_context(), name)
 
+    # -- Work writes (PG-C3 PR 15b: ``backend/api/works.py`` calls the commands) --
+
+    def _pdfs_dir(self) -> str:
+        if self.storage is None:
+            raise RuntimeError("this PostgreSQL library has no data root")
+        return self.storage.pdfs_dir
+
+    def _objects(self) -> Any:
+        from backend.storage.objects import LocalFilesystemStorage
+
+        if self.storage is None:
+            raise RuntimeError("this PostgreSQL library has no data root")
+        return LocalFilesystemStorage.for_config(self.storage)
+
+    @staticmethod
+    def _generate_id(prefix: str) -> str:
+        from backend.entity_ids import generate
+
+        return generate(prefix)
+
+    def add_work(self, title: str, status: str = 'Not Started', abstract: str = "",
+                 text_content: str = "", published_date: str = "", file_path: str = "",
+                 author_text: str = "", year: str = "", publisher: str = "",
+                 location: str = "", edition: str = "",
+                 journal: str = "", volume: str = "", issue: str = "",
+                 pages: str = "", isbn: str = "", doi: str = "",
+                 doc_type: str = "article", source_kind: str = "", source_url: str = "",
+                 source_mime: str = "", thumb_url: str = "", provider: str = "",
+                 provider_id: str = "", urldate: str = "", thumb_page: Any = None,
+                 private_notes: str = "") -> str:
+        """SQLite's ``add_work`` over ``work_commands.create`` (an existing managed PDF, a stream or no file)."""
+        fields = {name: value for name, value in locals().items() if name != "self"}
+        commands = self._work_commands()
+        return commands.create(self.database, current_context(), self._pdfs_dir(), self._objects(),
+                               commands.new_work_fields(**fields))
+
+    def _add_work_with_pdf(self, file_name: str, write: Callable[[Any], None], **fields: Any) -> str:
+        """``add_work`` from an uploaded PDF, as ``POST /api/works`` with ``file_b64`` creates it."""
+        if "file_path" in fields:
+            raise TypeError("the uploaded PDF is the Work's file")
+        commands = self._work_commands()
+        return commands.create(self.database, current_context(), self._pdfs_dir(), self._objects(),
+                               commands.new_work_fields(**fields), (file_name, write))
+
+    def mark_work_opened(self, work_id: str) -> bool:
+        return self._work_commands().mark_opened(self.database, current_context(), work_id)
+
+    def update_work_metadata(self, work_id: str, fields: dict) -> tuple:
+        """SQLite's ``update_work_metadata``: ``()``, since no file is released here."""
+        self._work_commands().update_metadata(self.database, current_context(), work_id, fields)
+        return ()
+
+    def delete_work_record(self, work_id: str, *, claim_pdf: bool = True) -> Any:
+        return self._work_commands().delete(self.database, current_context(), work_id, claim_pdf=claim_pdf)
+
+    def bulk_update_works(self, data: dict) -> Dict[str, Any]:
+        return self._work_commands().bulk_update(self.database, current_context(), data)
+
     # -- Saved Views (PG-C3 PR 1: ``backend/api/saved_views.py`` calls the commands) --
 
     def get_saved_views(self) -> List[dict]:
