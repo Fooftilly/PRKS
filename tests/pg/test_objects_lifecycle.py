@@ -28,7 +28,7 @@ from backend.domain.objects import jobs, lifecycle
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.works import commands
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,

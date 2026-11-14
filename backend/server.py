@@ -93,9 +93,7 @@ from backend.person_image import identify_cached_portrait_subtype
 from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
 
 if TYPE_CHECKING:
-    from backend.pg_facade import PostgresLibrary
-    from backend.pg_facade.research_index import PostgresResearchIndex
-    from backend.pg_facade.text_index import PostgresTextIndex
+    from backend.library import PostgresLibrary
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -123,8 +121,6 @@ _bound_storage: StorageConfig | None = None
 pdfs_dir: str | None = None
 thumbs_dir: str | None = None
 db: "PostgresLibrary | None" = None
-text_index: "PostgresTextIndex | None" = None
-research_index: "PostgresResearchIndex | None" = None
 
 
 def normalize_listen_host(host: str) -> str:
@@ -353,32 +349,24 @@ def bind_storage(config: StorageConfig, *, library_database) -> StorageConfig:
     # single-process lease on would defeat that lease (storage-architecture
     # §12). Only enforced once the process entry opened a root.
     assert_config_matches_bound_root(config.root)
-    return _publish_binding(config, *_postgres_library(config, library_database))
+    return _publish_binding(config, _postgres_library(config, library_database))
 
 
 def _postgres_library(config: StorageConfig, database):
-    """The PostgreSQL facade and its index adapters for ``database`` (PG-C1 #640)."""
-    from backend.pg_facade import PostgresLibrary
-    from backend.pg_facade.research_index import PostgresResearchIndex
-    from backend.pg_facade.text_index import PostgresTextIndex
+    """The Library handle for ``database`` and the root (PG-C1 #640)."""
+    from backend.library import PostgresLibrary
 
     os.makedirs(config.thumbs_dir, exist_ok=True)
-    return (
-        PostgresLibrary(database, storage=config),
-        PostgresTextIndex(database),
-        PostgresResearchIndex(database),
-    )
+    return PostgresLibrary(database, storage=config)
 
 
-def _publish_binding(config: StorageConfig, db_local, candidate, research_candidate) -> StorageConfig:
-    """Publish a built binding whole: the adapters were all built before this runs."""
-    global _bound_storage, pdfs_dir, thumbs_dir, db, text_index, research_index
+def _publish_binding(config: StorageConfig, db_local) -> StorageConfig:
+    """Publish a built binding whole: the Library handle was built before this runs."""
+    global _bound_storage, pdfs_dir, thumbs_dir, db
     _bound_storage = config
     pdfs_dir = config.pdfs_dir
     thumbs_dir = config.thumbs_dir
     db = db_local
-    text_index = candidate
-    research_index = research_candidate
     return config
 
 
@@ -655,7 +643,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # error raised in the route keeps its own status (§5.4, §9.4).
             from backend.api import session as session_api
             from backend.domain.identity.authorization import AccessRefused
-            from backend.pg_facade.registry import NotPortedError
+            from backend.library import NotPortedError
 
             if isinstance(exc, NotPortedError):
                 # A documented gap of the PostgreSQL Library, never a fault
@@ -714,19 +702,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if gate is None:
             return nullcontext()
         return gate.scope(mode)
-
-    def _acting_for_request(self):
-        """Bind the admitted RequestContext for the route (PostgreSQL facade calls act for it).
-
-        Called only after :meth:`_prks_admit` admitted the request, which
-        always leaves a context: a route never runs without an actor.
-        """
-        ctx = getattr(self, "_prks_request_context", None)
-        if ctx is None:
-            raise RuntimeError("an /api/ route ran without an admitted request context")
-        from backend.pg_facade.context import acting_as
-
-        return acting_as(ctx)
 
     def _validate_request_host(self) -> bool:
         hosts = self.headers.get_all("Host") or []
@@ -1026,7 +1001,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_get(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
@@ -1054,7 +1029,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_head(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
@@ -1090,14 +1065,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     backup_body = self._read_json_body()
                     if backup_body is _JSON_BODY_REJECTED:
                         return
-                with self._library_access(parsed_path), self._acting_for_request():
+                with self._library_access(parsed_path):
                     try:
                         self._handle_postgres_backup_post(parsed_path.path, backup_body)
                     except Exception as exc:
                         self._send_internal_error(exc)
                 return
             if upload:
-                with self._library_access(parsed_path), self._acting_for_request():
+                with self._library_access(parsed_path):
                     try:
                         processing_api.handle_upload(self, db)
                     except Exception as exc:
@@ -1106,7 +1081,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_post(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1121,7 +1096,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_patch(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1174,7 +1149,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_put(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1204,7 +1179,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1613,7 +1588,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif tags_api.handle_get(self, db, path, query):
                 return
-            elif works_api.handle_detail(self, db, path, research_index):
+            elif works_api.handle_detail(self, db, path):
                 return
             elif annotations_api.handle_get(self, db, path, query):
                 return
@@ -1630,8 +1605,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/research-graph':
                 raw_people = (query.get('people') or [''])[0].strip().lower()
                 include_people = raw_people in ('1', 'true', 'yes', 'on')
+                from backend.domain.research import index_commands
+
                 try:
-                    snapshot = research_index.build_graph(db, include_people=include_people)
+                    snapshot = index_commands.graph(db.database, self._prks_request_context,
+                                                    include_people=include_people)
                 except GraphTooLargeError as e:
                     body = {
                         'error': str(e),
@@ -1754,8 +1732,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif works_api.handle_bulk(self, db, path, data):
                 return
             elif path == '/api/works/reindex-pdf-text':
-                force = bool(data.get("force", False)) if isinstance(data, dict) else False
-                summary = text_index.reconcile_all(db, force=force)
+                # ``force`` is accepted and asks for nothing more: a text
+                # rebuild re-extracts only what has no current row.
+                from backend.domain.search import search_commands
+
+                summary = search_commands.queue_text_rebuild(db.database, self._prks_request_context)
                 self.send_json(200, {"status": "ok", **summary})
             elif path == '/api/works/linearize-existing-pdfs':
                 # Managed PDFs on PostgreSQL are immutable stored objects;
@@ -1898,14 +1879,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 except ValueError as e:
                     self.send_json(400, {'error': str(e)})
                     return
-                try:
-                    text_index.sync_work(w_id, file_path)
-                except Exception as e:
-                    LOGGER.warning(
-                        "work_create_text_index_failed work_id=%s error_type=%s",
-                        safe_log_id(w_id),
-                        safe_error_type(e),
-                    )
                 # Undo this create: a PDF this request uploaded goes with it;
                 # existing bytes it only adopted were never its to remove.
                 def undo_create():
@@ -2041,7 +2014,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # leaves the refs out (the client reads them later) and never turns
             # a saved note into an error.
             try:
-                result["research_refs"] = research_index.work_research_refs(data.get("entity_id"), db)
+                from backend.domain.research import index_commands
+
+                result["research_refs"] = index_commands.research_refs(
+                    db.database, self._prks_request_context, data.get("entity_id"))
             except Exception as e:
                 LOGGER.warning(
                     "research_refs_read_failed request_id=%s error_type=%s",

@@ -20,7 +20,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.settings import app_settings
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 

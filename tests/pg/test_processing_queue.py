@@ -29,7 +29,7 @@ from backend.domain.organization import folders
 from backend.domain.people import persons
 from backend.domain.processing import commands, imports, items, uploads
 from backend.domain.works import merge
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
 

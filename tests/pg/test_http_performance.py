@@ -24,7 +24,6 @@ from psycopg_pool import PoolTimeout
 
 from backend import performance
 from tests.library_adapter import TestLibrary
-from backend.pg_facade.text_index import PostgresTextIndex
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_search_text import pdf_bytes
 
@@ -94,19 +93,18 @@ class PerformanceHttpTests(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
         module = self.server_module
-        previous = (module.db, module.text_index)
+        previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
-        module.text_index = PostgresTextIndex(self.db)
         self.serve()
         self.cookies = self.session_cookie()
         performance.reset()
 
-    def _restore(self, previous: tuple[Any, Any]) -> None:
-        self.server_module.db, self.server_module.text_index = previous
+    def _restore(self, previous: Any) -> None:
+        self.server_module.db = previous
 
     def get(self, path: str, headers: Optional[list[tuple[str, str]]] = None) -> Response:
         return self.call("GET", path, cookies=self.cookies, headers=headers)

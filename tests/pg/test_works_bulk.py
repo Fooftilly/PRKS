@@ -20,7 +20,7 @@ from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import folders, links, tags
 from backend.domain.works import bulk, commands, metadata
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment
 from tests.pg.test_folders import FolderTestCase

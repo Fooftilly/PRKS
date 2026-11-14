@@ -20,7 +20,7 @@ from backend.domain.identity.authorization import AccessRefused, Capability, Ref
 from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import commands, metadata, notes, revisions, source
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
 T = TypeVar("T")

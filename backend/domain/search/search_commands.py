@@ -153,3 +153,24 @@ def search(db: Database, ctx: RequestContext, pdfs_dir: str, *, q: str = "", tag
     """
     rows = library_query(db, ctx, lambda scope: _search(scope, q, tag, author, publisher, any_mode))
     return finish(rows, pdfs_dir)
+
+
+def queue_text_rebuild(db: Database, ctx: RequestContext) -> dict:
+    """``POST /api/works/reindex-pdf-text``: queue the Library's ``text`` rebuild (§8.6).
+
+    The counters are zero, because the work happens later in the worker, and
+    ``queued`` says whether a rebuild was queued (False: one already is). A
+    text rebuild re-extracts only an Asset whose current bytes and extractor
+    version have no row, so the route's ``force`` asks for nothing more.
+    """
+    from backend.db.database import Isolation
+    from backend.domain.identity.authorization import Capability
+    from backend.domain.identity.library_scope import library_command
+    from backend.domain.search import rebuild
+    from backend.pdf_text import _empty_summary
+
+    def enqueue(scope: LibraryScope) -> bool:
+        return rebuild.enqueue(scope, ["text"]) is not None
+
+    queued = library_command(db, ctx, Capability.EDIT_LIBRARY, enqueue, isolation=Isolation.READ_COMMITTED)
+    return {**_empty_summary(), "queued": queued}

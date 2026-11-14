@@ -24,7 +24,7 @@ class ProfileSafetyTests(unittest.TestCase):
         (``work_commands``) and calls no Library method at all."""
         import ast
 
-        from backend.pg_facade import PostgresLibrary
+        from backend.library import PostgresLibrary
 
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "scripts", "pg_stat_profile.py")

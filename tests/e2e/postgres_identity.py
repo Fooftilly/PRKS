@@ -111,7 +111,7 @@ def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> di
     of the bootstrap owner. Managed PDFs are copied into the root first, as
     the SQLite seed copies them, and adopted by the create.
     """
-    from backend.pg_facade.context import acting_as
+    from tests.acting_context import acting_as
     from tests.e2e.fixtures import seeding_into
 
     with owner_facade(library, storage_root) as (facade, ctx):

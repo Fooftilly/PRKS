@@ -131,8 +131,8 @@ class Admitted:
     """Run the route; ``epoch`` is the Library's current epoch for the response header.
 
     ``context`` is the :class:`RequestContext` admission authorized: the
-    server binds it for the route (:mod:`backend.pg_facade.context`), so a
-    PostgreSQL facade call acts for this session and claimed epoch.
+    server keeps it as ``_prks_request_context`` and every route passes it to
+    the domain commands, so a route acts for this session and claimed epoch.
     """
 
     epoch: int

@@ -22,9 +22,7 @@ from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
-from backend.pg_facade.research_index import PostgresResearchIndex
-from backend.pg_facade.text_index import PostgresTextIndex
+from tests import acting_context as facade_context
 from backend.storage.objects import LocalFilesystemStorage
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.jobs_fixtures import LEASE
@@ -37,20 +35,18 @@ class ServerApiTestCase(HttpAuthTestCase):
         module = self.server_module
         from backend.domain.research import reindex  # noqa: F401  registers research.reindex_work
 
-        previous = (module.db, module.text_index, module.research_index)
+        previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
-        module.text_index = PostgresTextIndex(self.db)
-        module.research_index = PostgresResearchIndex(self.db)
         self.serve()
         self.cookies = self.session_cookie()
 
-    def _restore(self, previous: tuple[Any, Any, Any]) -> None:
-        self.server_module.db, self.server_module.text_index, self.server_module.research_index = previous
+    def _restore(self, previous: Any) -> None:
+        self.server_module.db = previous
 
     # -- requests ----------------------------------------------------------------------
 

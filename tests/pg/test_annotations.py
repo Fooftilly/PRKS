@@ -21,7 +21,7 @@ from backend.domain.annotations import operations, store
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.works import commands
 from backend.pdf_annotations import WorkAnnotationError
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_works_sync import SyncTestCase
 
 HIGHLIGHT: dict[str, Any] = {

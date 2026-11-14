@@ -25,7 +25,7 @@ from backend.domain.identity.library_scope import library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import queries, work_commands
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import Actor, provision_actor
 from tests.pg.harness import PostgresHarness, get_harness

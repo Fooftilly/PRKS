@@ -20,7 +20,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.research import arguments, positions
 from backend.domain.works import commands, merge, notes
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.domain.research.rules import ResearchError
 from tests.pg.test_concepts import ConceptTestCase
 

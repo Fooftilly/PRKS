@@ -55,7 +55,7 @@ class PeopleSyncParityTests(PeopleParityTestCase):
         self.devices = {id(self.leg): self._leg_device(), id(self.ref): str(uuid.uuid4())}
 
     def _leg_device(self) -> str:
-        from backend.pg_facade.context import current_context
+        from tests.acting_context import current_context
 
         device = current_context().device_id
         assert device is not None
@@ -79,7 +79,7 @@ class PeopleSyncParityTests(PeopleParityTestCase):
     def send(self, side: PeopleSide, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if side is self.ref:
             return side.db.process_operation(data)
-        from backend.pg_facade.context import current_context
+        from tests.acting_context import current_context
         from backend.sync import protocol
         from backend.sync.families import Environment
 

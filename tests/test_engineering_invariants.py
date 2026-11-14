@@ -1413,6 +1413,8 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/research/argument_commands.py",
                 "backend/domain/research/note_commands.py",
                 "backend/domain/research/graph.py",
+                "backend/domain/research/index_commands.py",
+                "backend/library.py",
                 "backend/domain/research/positions.py",
                 "backend/domain/research/reindex.py",
                 "backend/domain/search/__init__.py",

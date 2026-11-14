@@ -1,16 +1,13 @@
-"""The Research index and graph reads of the PostgreSQL transition facade (L-R-1 #634, PR 5).
+"""``PRKSResearchIndex``'s reads over the PostgreSQL Library, for tests (L-R-1 #634; PG-C3 #642).
 
-``server.py`` reads mentions through the bound ``PRKSResearchIndex``
-(``backend/research_index.py``, a separate SQLite file) and the graph
-through ``ResearchGraphBuilder``, not through ``PRKSDatabase``, so these
-reads are not facade methods. :class:`PostgresResearchIndex` stands where
-that index object is used: its read methods keep the ``PRKSResearchIndex``
-names, signatures and return shapes (the ``db`` argument is accepted and
-unused: the reads come from the same database), and :meth:`build_graph`
-answers what ``ResearchGraphBuilder().build(db, index, include_people=…)``
-does. Each read runs in one ``library_query`` snapshot for the bound
-:class:`~backend.domain.identity.request_context.RequestContext`, through
-:mod:`backend.domain.research.reindex` and :mod:`backend.domain.research.graph`.
+The served routes read a Work's Research refs and the Research Graph through
+:mod:`backend.domain.research.index_commands` with the admitted context.
+:class:`PostgresResearchIndex` keeps the SQLite ``PRKSResearchIndex`` names,
+signatures and return shapes the recorded parity tests replay (the ``db``
+argument is accepted and unused), each read in one ``library_query``
+snapshot for the context bound with :mod:`tests.acting_context`. Until PG-C3
+retired the facade package it was ``backend/pg_facade/research_index.py``,
+the index object ``server.py`` held.
 
 Differences from SQLite, each deliberate:
 
@@ -26,20 +23,11 @@ Differences from SQLite, each deliberate:
   missing or corrupt apart from the canonical tables.
 
 The index is kept by the database, never by its reader: a note save
-enqueues ``research.reindex_work`` in its own transaction, and the reads
-join the live Concepts, Arguments and Works. So the maintenance calls
-``PRKSResearchIndex`` took after a change (``sync_work``,
+enqueues ``research.reindex_work`` in its own transaction. So the
+maintenance calls ``PRKSResearchIndex`` took after a change (``sync_work``,
 ``remove_concept_mentions``, ``remove_argument_mentions``) are accepted with
-its signatures and do nothing; no route makes them any more (PG-C3 #642:
-the Concept, Position and Argument routes and the Research Note save call
-``backend/domain/research/*_commands``, whose reads take their mentions in
-the same snapshot), and the recorded parity tests replay them.
-``remove_work`` and ``reconcile_all`` have no counterpart (no route calls
-them through the bound index; a full rebuild is L-S-1's).
-
-``server.py`` reaches the Work's Research refs and the graph through its
-bound ``research_index``, with the admitted :class:`RequestContext` bound
-per request.
+its signatures and do nothing, for the recorded parity tests that replay
+them.
 """
 
 from __future__ import annotations
@@ -47,7 +35,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, TypeVar
 
-from backend.pg_facade.context import current_context
+from tests.acting_context import current_context
 
 if TYPE_CHECKING:
     from backend.db.database import Database
@@ -90,11 +78,9 @@ class PostgresResearchIndex:
 
     def work_research_refs(self, work_id: str, db: Any) -> Dict[str, Any]:
         """``{concepts, arguments, pending}``; empty lists for a Work that does not exist."""
-        from backend.domain.research import reindex
+        from backend.domain.research import index_commands
 
-        wid = (work_id or "").strip()
-        refs = self._read(lambda scope: reindex.research_refs(scope, wid)) if wid else None
-        return refs if refs is not None else {"concepts": [], "arguments": [], "pending": False}
+        return index_commands.research_refs(self._database, current_context(), work_id)
 
     def concept_backlinks(self, concept_id: str, db: Any) -> List[dict]:
         from backend.domain.research import reindex
@@ -122,6 +108,6 @@ class PostgresResearchIndex:
 
         ``db`` is accepted and unused, as in the other reads.
         """
-        from backend.domain.research import graph
+        from backend.domain.research import index_commands
 
-        return self._read(lambda scope: graph.snapshot(scope, include_people=bool(include_people)))
+        return index_commands.graph(self._database, current_context(), include_people=include_people)

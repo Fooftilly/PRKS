@@ -36,7 +36,7 @@ class LibraryStore:
             return method
 
         def call(*args, **kwargs):
-            from backend.pg_facade.context import acting_as
+            from tests.acting_context import acting_as
 
             with acting_as(self._ctx):
                 return method(*args, **kwargs)
@@ -64,7 +64,7 @@ class LibraryStore:
         For a test standing in for another device: the write goes through
         the domain's own writer, so it moves revisions as the server would.
         """
-        from backend.pg_facade.context import acting_as
+        from tests.acting_context import acting_as
 
         with acting_as(self._ctx):
             return self._facade._edit(postgres)

@@ -83,7 +83,7 @@ class SearchParityTests(PeopleParityTestCase):
                 from backend.domain.identity.authorization import Capability
                 from backend.domain.identity.library_scope import library_command
                 from backend.domain.search import refresh
-                from backend.pg_facade.context import current_context
+                from tests.acting_context import current_context
 
                 library_command(side.db.database, current_context(), Capability.EDIT_LIBRARY,
                                 lambda scope: refresh.refresh_work_search(scope, [work[0]]),
@@ -94,7 +94,7 @@ class SearchParityTests(PeopleParityTestCase):
 
     def _row(self, side: PeopleSide, pg_sql: str, sqlite_sql: str, params: dict[str, Any]) -> None:
         if self._on_postgres(side):
-            from backend.pg_facade.context import current_context
+            from tests.acting_context import current_context
 
             values = {**params, "library_id": current_context().library_id}
             side.db.database.command(lambda tx: tx.execute(pg_sql, values))

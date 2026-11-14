@@ -363,7 +363,7 @@ def update_metadata(db: Database, ctx: RequestContext, work_id: str, fields: dic
     from backend import work_metadata_sync as rules
     from backend import work_source_sync
     from backend.domain.works.rules import normalize_doc_type
-    from backend.pg_facade.registry import NotPortedError
+    from backend.library import NotPortedError
 
     updates = {k: v for k, v in fields.items() if k in METADATA_FIELDS}
     identity_writes = sorted(set(updates) & work_source_sync.SOURCE_AGGREGATE_COLUMNS)

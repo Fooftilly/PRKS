@@ -136,7 +136,7 @@ def _send_state(handler: Any, label: str, data: Any) -> None:
     _send_revalidated(handler, label, data)
 
 
-def handle_detail(handler: Any, db: Any, path: str, research_index: Any) -> bool:
+def handle_detail(handler: Any, db: Any, path: str) -> bool:
     if not (path.startswith(_PREFIX) and len(path.split("/")) == 4):
         return False
     w_id = path.split("/")[-1]
@@ -146,7 +146,9 @@ def handle_detail(handler: Any, db: Any, path: str, research_index: Any) -> bool
         handler.send_error(404, "Work not found")
         return True
     try:
-        data["research_refs"] = research_index.work_research_refs(w_id, db)
+        from backend.domain.research import index_commands
+
+        data["research_refs"] = index_commands.research_refs(database, ctx, w_id)
     except Exception as e:  # noqa: BLE001 - the Work still answers without its refs
         LOGGER.warning("research_index_refs_failed work_id=%s error_type=%s",
                        safe_log_id(w_id), safe_error_type(e))

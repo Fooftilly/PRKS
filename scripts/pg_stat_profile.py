@@ -344,8 +344,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
 
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
-    from backend.pg_facade import context as facade_context
-    from backend.pg_facade.research_index import PostgresResearchIndex
+    from backend.domain.research import index_commands
     from backend.storage.config import StorageConfig
     from backend.storage.objects import LocalFilesystemStorage
     from backend.domain.identity.authorization import Capability
@@ -385,87 +384,85 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                         # The Work create route's command (PG-C3 #642), with no file.
                         return work_commands.create(database, ctx, storage.pdfs_dir, objects,
                                                     work_commands.new_work_fields(title=title))
-                    research_index = PostgresResearchIndex(database)
                     fixture_ids: list[str] = []
                     concept_ids: list[str] = []
                     output = []
                     ctx, pdfs = actor.context, storage.pdfs_dir
-                    with facade_context.acting_as(actor.context):
-                        for size in sizes:
-                            for i in range(len(fixture_ids), size):
-                                fixture_ids.append(add_work(f"Fixture Work {i:04d}"))
-                            # Same-sized connected synthetic Concept network.
-                            # Seed before reset; all graph reads below use the
-                            # genuinely ported PG adapter, never the SQLite graph.
-                            for i in range(len(concept_ids), size):
-                                cid = concept_commands.create(
-                                    database, actor.context, f"Profile Concept {i:04d}")["id"]
-                                if concept_ids:
-                                    concept_commands.replace_parents(
-                                        database, actor.context, cid, [concept_ids[-1]])
-                                concept_ids.append(cid)
-                            # These are real PG adapter reads. The fixture is
-                            # deterministic, isolated, synthetic and disposable.
-                            work_id = fixture_ids[-1]
-                            # T07: only real PostgreSQL reads. Graph has been
-                            # ported as a ResearchIndex adapter (PR #946);
-                            # search and generic offset pagination are not ported.
-                            bounded_limit = min(size, 10)
-                            # Capture the already-timed first list result in its
-                            # verifier: do not pre-read the catalog and turn the
-                            # first-observed list measurement into a second call.
-                            recent_expectation: list[tuple[str, ...]] = []
+                    for size in sizes:
+                        for i in range(len(fixture_ids), size):
+                            fixture_ids.append(add_work(f"Fixture Work {i:04d}"))
+                        # Same-sized connected synthetic Concept network.
+                        # Seed before reset; all graph reads below use the
+                        # genuinely ported PG adapter, never the SQLite graph.
+                        for i in range(len(concept_ids), size):
+                            cid = concept_commands.create(
+                                database, actor.context, f"Profile Concept {i:04d}")["id"]
+                            if concept_ids:
+                                concept_commands.replace_parents(
+                                    database, actor.context, cid, [concept_ids[-1]])
+                            concept_ids.append(cid)
+                        # These are real PG adapter reads. The fixture is
+                        # deterministic, isolated, synthetic and disposable.
+                        work_id = fixture_ids[-1]
+                        # T07: only real PostgreSQL reads. Graph has been
+                        # ported as a ResearchIndex adapter (PR #946);
+                        # search and generic offset pagination are not ported.
+                        bounded_limit = min(size, 10)
+                        # Capture the already-timed first list result in its
+                        # verifier: do not pre-read the catalog and turn the
+                        # first-observed list measurement into a second call.
+                        recent_expectation: list[tuple[str, ...]] = []
 
-                            def verify_list(value: Any) -> None:
-                                assert_works_count(value, size)
-                                expected = expected_recent_work_ids(
-                                    value, fixture_ids, bounded_limit
-                                )
-                                if recent_expectation and recent_expectation[0] != expected:
-                                    raise RuntimeError("synthetic catalog changed during profiling")
-                                if not recent_expectation:
-                                    recent_expectation.append(expected)
-
-                            def verify_recent(value: Any) -> None:
-                                if len(recent_expectation) != 1:
-                                    raise RuntimeError("missing validated list baseline")
-                                assert_bounded_works(value, recent_expectation[0])
-                            # Deliberately non-natural: neither SQL id order nor
-                            # fixture insertion order should satisfy batch lookup.
-                            by_id = tuple(sorted(fixture_ids[:bounded_limit]))
-                            batch_ids = by_id[::2] + by_id[1::2]
-                            if batch_ids == tuple(fixture_ids[:bounded_limit]):
-                                batch_ids = batch_ids[1:] + batch_ids[:1]
-                            def works_batch_by_ids(ids: tuple[str, ...] = batch_ids) -> list[dict]:
-                                # The route-side Work summary read (PG-C3 #642):
-                                # one snapshot, then the on-disk PDF sizes.
-                                rows = library_query(
-                                    database, actor.context,
-                                    lambda scope: search_commands.summaries(scope, list(ids)))
-                                return search_commands.finish(rows, storage.pdfs_dir)
-
-                            # The Work route reads (PG-C3 #642), as the routes call them.
-                            workloads = (
-                                ("works_list", lambda: work_commands.catalog(database, ctx, pdfs),
-                                 verify_list),
-                                ("works_browse", lambda: work_commands.browse_catalog(database, ctx, pdfs),
-                                 lambda value: assert_works_count(value, size)),
-                                ("work_detail", lambda: work_commands.detail(database, ctx, pdfs, work_id),
-                                 lambda value: assert_work_detail(value, work_id)),
-                                ("works_recent_bounded",
-                                 lambda: work_commands.recently_added_browse(database, ctx, pdfs,
-                                                                             limit=bounded_limit),
-                                 verify_recent),
-                                ("works_batch_by_ids",
-                                 works_batch_by_ids,
-                                 lambda value: assert_ordered_work_ids(value, batch_ids)),
-                                ("concept_hierarchy_graph",
-                                 research_index.build_graph,
-                                 lambda value: assert_concept_parent_graph(value, concept_ids)),
+                        def verify_list(value: Any) -> None:
+                            assert_works_count(value, size)
+                            expected = expected_recent_work_ids(
+                                value, fixture_ids, bounded_limit
                             )
-                            for label, operation, verify in workloads:
-                                result = benchmark(stats, operation, repetitions, verify)
-                                output.append({"fixture_works": size, "operation": label, **result})
+                            if recent_expectation and recent_expectation[0] != expected:
+                                raise RuntimeError("synthetic catalog changed during profiling")
+                            if not recent_expectation:
+                                recent_expectation.append(expected)
+
+                        def verify_recent(value: Any) -> None:
+                            if len(recent_expectation) != 1:
+                                raise RuntimeError("missing validated list baseline")
+                            assert_bounded_works(value, recent_expectation[0])
+                        # Deliberately non-natural: neither SQL id order nor
+                        # fixture insertion order should satisfy batch lookup.
+                        by_id = tuple(sorted(fixture_ids[:bounded_limit]))
+                        batch_ids = by_id[::2] + by_id[1::2]
+                        if batch_ids == tuple(fixture_ids[:bounded_limit]):
+                            batch_ids = batch_ids[1:] + batch_ids[:1]
+                        def works_batch_by_ids(ids: tuple[str, ...] = batch_ids) -> list[dict]:
+                            # The route-side Work summary read (PG-C3 #642):
+                            # one snapshot, then the on-disk PDF sizes.
+                            rows = library_query(
+                                database, actor.context,
+                                lambda scope: search_commands.summaries(scope, list(ids)))
+                            return search_commands.finish(rows, storage.pdfs_dir)
+
+                        # The Work route reads (PG-C3 #642), as the routes call them.
+                        workloads = (
+                            ("works_list", lambda: work_commands.catalog(database, ctx, pdfs),
+                             verify_list),
+                            ("works_browse", lambda: work_commands.browse_catalog(database, ctx, pdfs),
+                             lambda value: assert_works_count(value, size)),
+                            ("work_detail", lambda: work_commands.detail(database, ctx, pdfs, work_id),
+                             lambda value: assert_work_detail(value, work_id)),
+                            ("works_recent_bounded",
+                             lambda: work_commands.recently_added_browse(database, ctx, pdfs,
+                                                                         limit=bounded_limit),
+                             verify_recent),
+                            ("works_batch_by_ids",
+                             works_batch_by_ids,
+                             lambda value: assert_ordered_work_ids(value, batch_ids)),
+                            ("concept_hierarchy_graph",
+                             lambda: index_commands.graph(database, ctx),
+                             lambda value: assert_concept_parent_graph(value, concept_ids)),
+                        )
+                        for label, operation, verify in workloads:
+                            result = benchmark(stats, operation, repetitions, verify)
+                            output.append({"fixture_works": size, "operation": label, **result})
 
                     # A separate synthetic Library per tier keeps the already
                     # measured bare Concept hierarchy unchanged. It also
@@ -477,43 +474,44 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                         mention_actor = provision_actor(database, name="Indexed Graph Fixture")
                         indexed_concepts: list[str] = []
                         indexed_works: list[str] = []
-                        with facade_context.acting_as(mention_actor.context):
-                            for i in range(size):
-                                name = f"Profile Indexed Concept {i:04d}"
-                                indexed_concepts.append(
-                                    concept_commands.create(database, mention_actor.context, name)["id"])
-                                wid = add_work(f"Profile Indexed Work {i:04d}", mention_actor.context)
-                                indexed_works.append(wid)
-                                changed = library_command(
-                                    database, mention_actor.context, Capability.EDIT_LIBRARY,
-                                    lambda scope, work_id=wid, concept_name=name: notes.set_note(
-                                        scope, work_id, notes.RESEARCH,
-                                        f"[[concept:{concept_name}]]"
-                                    ),
-                                )
-                                if changed is None or not changed[0]:
-                                    raise RuntimeError("synthetic indexed graph note was not saved")
-                            # Each note write enqueues one reindex. Never silently
-                            # time an unindexed graph, a failed job, or a partial
-                            # fixture. Only this disposable profile DB is touched.
-                            for _ in range(size):
-                                job = queue.claim(database, "profile-reindex", lease=lease)
-                                if (job is None or job.kind != reindex.KIND
-                                        or job.library_id != mention_actor.library_id):
-                                    raise RuntimeError("synthetic indexed graph job inventory is incomplete")
-                                if run_job(database, job, lease=lease) is not Outcome.SUCCEEDED:
-                                    raise RuntimeError("synthetic indexed graph reindex failed")
-                            # The graph's exact nodes/edges are checked on every
-                            # call, not only after seeding or during warmup.
-                            result = benchmark(
-                                stats, research_index.build_graph, repetitions,
-                                lambda value: assert_indexed_note_graph(
-                                    value, indexed_concepts, indexed_works
+                        for i in range(size):
+                            name = f"Profile Indexed Concept {i:04d}"
+                            indexed_concepts.append(
+                                concept_commands.create(database, mention_actor.context, name)["id"])
+                            wid = add_work(f"Profile Indexed Work {i:04d}", mention_actor.context)
+                            indexed_works.append(wid)
+                            changed = library_command(
+                                database, mention_actor.context, Capability.EDIT_LIBRARY,
+                                lambda scope, work_id=wid, concept_name=name: notes.set_note(
+                                    scope, work_id, notes.RESEARCH,
+                                    f"[[concept:{concept_name}]]"
                                 ),
                             )
-                            output.append({
-                                "fixture_works": size, "operation": "indexed_note_graph", **result
-                            })
+                            if changed is None or not changed[0]:
+                                raise RuntimeError("synthetic indexed graph note was not saved")
+                        # Each note write enqueues one reindex. Never silently
+                        # time an unindexed graph, a failed job, or a partial
+                        # fixture. Only this disposable profile DB is touched.
+                        for _ in range(size):
+                            job = queue.claim(database, "profile-reindex", lease=lease)
+                            if (job is None or job.kind != reindex.KIND
+                                    or job.library_id != mention_actor.library_id):
+                                raise RuntimeError("synthetic indexed graph job inventory is incomplete")
+                            if run_job(database, job, lease=lease) is not Outcome.SUCCEEDED:
+                                raise RuntimeError("synthetic indexed graph reindex failed")
+                        # The graph's exact nodes/edges are checked on every
+                        # call, not only after seeding or during warmup.
+                        result = benchmark(
+                            stats,
+                            lambda graph_ctx=mention_actor.context: index_commands.graph(database, graph_ctx),
+                            repetitions,
+                            lambda value: assert_indexed_note_graph(
+                                value, indexed_concepts, indexed_works
+                            ),
+                        )
+                        output.append({
+                            "fixture_works": size, "operation": "indexed_note_graph", **result
+                        })
                     return {
                         "tool": "pg_stat_statements",
                         "server_version_num": int(version),

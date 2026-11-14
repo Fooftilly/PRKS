@@ -27,8 +27,8 @@ from backend.domain.organization import playlists
 from backend.domain.research.rules import ResearchError
 from backend.domain.works import commands, notes
 from backend.entity_ids import generate
-from backend.pg_facade import NotPortedError
-from backend.pg_facade import context as facade_context
+from backend.library import NotPortedError
+from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers import work_lifecycle, work_metadata

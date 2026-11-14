@@ -37,8 +37,8 @@ Pydantic **must not** own:
 - authorization / Origin policy;
 - research-domain normalization beyond JSON type checks.
 
-Those stay in `backend/*_sync.py`, `backend/domain/` (with the `backend/pg_facade/`
-Library facade), and related domain modules. The HTTP adapter (`backend/server.py` or a future
+Those stay in `backend/*_sync.py`, `backend/domain/` (the route modules in
+`backend/api/` call its commands with the `backend/library.py` handle's database), and related domain modules. The HTTP adapter (`backend/server.py` or a future
 extracted controller) only parses, dispatches, maps status codes, and
 serializes.
 

@@ -22,7 +22,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
-from backend.pg_facade.context import current_context
+from tests.acting_context import current_context
 from backend.storage.config import StorageConfig
 from tests.backend_parity import BackendParityTestCase, parametrize_backends
 

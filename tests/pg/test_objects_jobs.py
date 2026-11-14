@@ -29,7 +29,7 @@ from backend.jobs import prune, queue
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.jobs.worker import Worker, WorkerSettings
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_objects_lifecycle import DAY, ObjectsTestCase
 from tests.pg.test_objects_portraits import URL, image

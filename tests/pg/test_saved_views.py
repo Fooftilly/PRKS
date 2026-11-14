@@ -22,7 +22,7 @@ from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
 
 _ALL = {"mode": "all", "q": "culture", "tag": "", "author": "", "publisher": ""}

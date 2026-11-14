@@ -1,11 +1,9 @@
 """``/api/search`` served from PostgreSQL (L-S-1 #637; the route seam PG-C1 #640 binds).
 
 ``backend/api/search.py`` searches the bound ``db``'s database through
-``backend/domain/search/search_commands.py`` (PG-C3 #642), and the PDF text
-rebuild route goes through the bound ``text_index``. These tests bind
-:class:`~tests.library_adapter.TestLibrary` and
-:class:`~backend.pg_facade.text_index.PostgresTextIndex` there, sign in over
-HTTP, and check the route's modes: keyword
+``backend/domain/search/search_commands.py`` (PG-C3 #642), as does the PDF
+text rebuild route. These tests bind :class:`~tests.library_adapter.TestLibrary`
+there, sign in over HTTP, and check the route's modes: keyword
 search with author and publisher filters, the Tag filter, any mode with the
 PDF text hits appended (and filtered), and the PDF text rebuild route, which
 queues a ``text`` rebuild instead of extracting in the request. A Saved
@@ -25,8 +23,7 @@ from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
-from backend.pg_facade.text_index import PostgresTextIndex
+from tests import acting_context as facade_context
 from backend.storage.objects import LocalFilesystemStorage
 from tests.pg.http_fixtures import HttpAuthTestCase
 from tests.pg.jobs_fixtures import LEASE
@@ -37,17 +34,16 @@ class SearchHttpTests(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
         module = self.server_module
-        previous = (module.db, module.text_index)
+        previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
-        module.text_index = PostgresTextIndex(self.db)
         self.serve()
         self.cookies = self.session_cookie()
 
-    def _restore(self, previous: tuple[Any, Any]) -> None:
-        self.server_module.db, self.server_module.text_index = previous
+    def _restore(self, previous: Any) -> None:
+        self.server_module.db = previous
 
     def acting(self) -> Any:
         valid = sessions.resolve_session(self.db, self.cookies["prks_session"])

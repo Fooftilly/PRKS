@@ -31,7 +31,7 @@ from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObjec
 from backend.domain.people import persons
 from backend.person_image import PortraitImage, decode_and_transcode
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
 

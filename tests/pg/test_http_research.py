@@ -1,11 +1,9 @@
 """The Research HTTP routes served from PostgreSQL (L-R-1 #634; the route seam PG-C1 #640 binds).
 
-``server.py`` reaches Research records only through its bound ``db`` and
-mentions and the graph only through its bound ``research_index``, and with
-``PRKS_AUTH`` it binds the admitted :class:`RequestContext` for the route.
-These tests bind :class:`~tests.library_adapter.TestLibrary` and
-:class:`~backend.pg_facade.research_index.PostgresResearchIndex` there (the
-way the cutover will), sign in over HTTP, and check that the routes answer
+``server.py`` reaches Research records, mentions and the graph through the
+domain commands with its bound ``db``'s database and, with ``PRKS_AUTH``,
+the admitted :class:`RequestContext` (PG-C3 #642). These tests bind
+:class:`~tests.library_adapter.TestLibrary` there, sign in over HTTP, and check that the routes answer
 from PostgreSQL with today's statuses, bodies and refusal codes: Concept,
 Position and Argument CRUD, Version-aware citations, the Research Note save
 and its references with ``pending`` until ``research.reindex_work`` runs,
@@ -23,8 +21,7 @@ from backend.domain.identity.request_context import RequestContext
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
 from tests.library_adapter import TestLibrary
-from backend.pg_facade import context as facade_context
-from backend.pg_facade.research_index import PostgresResearchIndex
+from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.jobs_fixtures import LEASE
@@ -38,16 +35,15 @@ class ResearchHttpTestCase(HttpAuthTestCase):
         from backend.domain.research import reindex  # noqa: F401  registers research.reindex_work
 
         module = self.server_module
-        previous = (module.db, module.research_index)
+        previous = module.db
         self.addCleanup(self._restore, previous)
         self.facade = TestLibrary(self.db, storage=module._bound_storage)
         module.db = self.facade
-        module.research_index = PostgresResearchIndex(self.db)
         self.serve()
         self.cookies = self.session_cookie()
 
-    def _restore(self, previous: tuple[Any, Any]) -> None:
-        self.server_module.db, self.server_module.research_index = previous
+    def _restore(self, previous: Any) -> None:
+        self.server_module.db = previous
 
     # -- requests ----------------------------------------------------------------------
 
