@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import List
+from typing import Any, Mapping, Sequence
 
 
-def etag_for_representation(label: str, rows: List[dict]) -> str:
+def etag_for_representation(label: str, rows: Sequence[Any] | Mapping[str, Any]) -> str:
     """Weak ETag derived from the serialized response itself.
 
     The invariant is absolute: if the body can change, the ETag must

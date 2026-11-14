@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from backend.db.database import Database, Isolation
 from backend.db.errors import DatabaseError
@@ -70,7 +70,7 @@ def _answer(found: uploads.Registered, body_read: bool) -> Uploaded:
 
 
 def upload(db: Database, ctx: RequestContext, storage: StorageBackend, *, upload_key: str, filename: str,
-           body: BinaryIO, content_length: int, max_bytes: int, item_id: Optional[str] = None) -> Uploaded:
+           body: uploads.RequestBody, content_length: int, max_bytes: int, item_id: Optional[str] = None) -> Uploaded:
     """One file into the queue (§11.5 steps 1-5).
 
     Before reading the body: the key and filename are checked, the actor's
