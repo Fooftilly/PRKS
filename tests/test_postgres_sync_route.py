@@ -26,11 +26,15 @@ class PostgresSyncRouteTests(unittest.TestCase):
     def answer(self, operation: str, refs) -> tuple[int, dict]:
         handler = _Handler()
         acked = (200, {"code": "ACKNOWLEDGED", "work_id": "W-1", "changed": True, "file_path": "x"})
+        library = SimpleNamespace(database=object())
+        # The route reads the refs for the admitted context (PG-C3 #642).
         with mock.patch("backend.sync.protocol.process_operation", return_value=acked), \
-                mock.patch.object(server, "db", SimpleNamespace(database=object())), \
-                mock.patch.object(server, "research_index", SimpleNamespace(work_research_refs=refs)):
+                mock.patch.object(server, "db", library), \
+                mock.patch("backend.domain.research.index_commands.research_refs", refs):
             server.PRKSHandler._handle_postgres_sync_operation(
                 handler, {"operation": operation, "entity_id": "W-1"})  # type: ignore[arg-type]
+        if refs.call_count:
+            refs.assert_called_once_with(library.database, handler._prks_request_context, "W-1")
         [sent] = handler.sent
         return sent
 
@@ -45,7 +49,9 @@ class PostgresSyncRouteTests(unittest.TestCase):
         self.assertNotIn("research_refs", body)
 
     def test_a_delete_ack_carries_no_path(self) -> None:
-        status, body = self.answer("DELETE_WORK", mock.Mock())
+        refs = mock.Mock()
+        status, body = self.answer("DELETE_WORK", refs)
+        refs.assert_not_called()
         self.assertEqual((status, body), (200, {"code": "ACKNOWLEDGED", "work_id": "W-1", "changed": True}))
 
 
