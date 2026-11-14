@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from urllib.parse import unquote
 
+from backend.api import works as works_api
 from backend.etags import etag_for_representation
 
 COLLECTION = "/api/folders"
@@ -181,8 +182,7 @@ def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
     if not exists(handler, db, f_id):
         handler.send_json(404, {"error": "Folder not found"})
         return True
-    # The Works family's existence read (PG-C3 moves it with the Work routes).
-    if db.get_primary_thumbnail_fields(w_id) is None:
+    if works_api.thumbnail_fields(handler, db, w_id) is None:
         handler.send_json(404, {"error": "Work not found"})
         return True
     try:

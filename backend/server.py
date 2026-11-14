@@ -43,6 +43,7 @@ from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
 from backend.api import tags as tags_api
 from backend.api import work_roles as work_roles_api
+from backend.api import works as works_api
 from backend.domain.research.rules import ResearchError
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.jobs import JobDiagnostics
@@ -404,7 +405,7 @@ def _safe_pdf_path_for_route(path: str) -> str | None:
     return _safe_pdf_path_in_pdfs_dir(path[len(_PDF_ROUTE_PREFIX):])
 
 
-def _served_pdf_path(path: str) -> str | None:
+def _served_pdf_path(handler, path: str) -> str | None:
     """The managed PDF a ``/api/pdfs/<filename>`` request may read, or ``None``.
 
     On the PostgreSQL Library the file must also be one of the acting
@@ -413,7 +414,7 @@ def _served_pdf_path(path: str) -> str | None:
     pdf_path = _safe_pdf_path_for_route(path)
     if pdf_path is None or not os.path.exists(pdf_path):
         return None
-    if not db._holds_managed_pdf(os.path.basename(pdf_path)):
+    if not works_api.holds_managed_pdf(handler, db, os.path.basename(pdf_path)):
         return None
     return pdf_path
 
@@ -421,13 +422,13 @@ def _served_pdf_path(path: str) -> str | None:
 _BACKUP_ROUTE_PREFIX = '/api/backups/'
 
 
-def _stored_work_file_path(work_id: str) -> str:
+def _stored_work_file_path(handler, work_id: str) -> str:
     """The Work's stored ``file_path`` (``""`` when none or no such Work).
 
     On PostgreSQL that is its primary Asset's: there is no ``works.file_path``
     column, and changing it is not ported (``update_work_metadata`` refuses).
     """
-    fields = db.get_primary_thumbnail_fields(work_id)
+    fields = works_api.thumbnail_fields(handler, db, work_id)
     return str((fields or {}).get("file_path") or "")
 
 
@@ -1213,7 +1214,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # dropped below so this request cannot rewrite it after a
                 # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
                 file_path_changing = "file_path" in body and (
-                    str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
+                    str(body.get("file_path") or "") != str(_stored_work_file_path(self, w_id) or "")
                 )
                 if file_path_changing:
                     # Adopting another file is not ported. Refuse before any
@@ -1461,7 +1462,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         try:
             if path.startswith('/api/pdfs/'):
-                pdf_path = _served_pdf_path(path)
+                pdf_path = _served_pdf_path(self, path)
                 if pdf_path:
                     self._send_pdf_bytes(pdf_path, head_only=True)
                 else:
@@ -1543,27 +1544,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, dump_response(PerformanceSnapshot, performance_snapshot()))
             elif path == '/api/diagnostics/jobs':
                 self._handle_job_diagnostics()
-            elif path == '/api/works':
-                # `?projection=browse` is an explicit, additive contract: the
-                # compact catalog the browse routes cache. The default response
-                # keeps its existing semantics for every other caller.
-                if (query.get('projection') or [''])[0] == 'browse':
-                    data = db.get_works_browse_catalog()
-                    etag = db.etag_for_representation('works-browse', data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-                else:
-                    # Build once. file_size_bytes is read from the managed PDF,
-                    # so the ETag has to come from these rows, not from a
-                    # works.updated_at probe evaluated before them.
-                    data = db.get_all_works()
-                    etag = db.etag_works_catalog(data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif works_api.handle_catalog(self, db, path, query):
+                return
             elif playlists_api.handle_get(self, db, path):
                 return
             elif path.startswith('/api/works/') and path.endswith('/thumbnail'):
@@ -1577,7 +1559,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     page_q = query.get('page', [''])[0]
                 except Exception:
                     page_q = ''
-                thumb = db.get_primary_thumbnail_fields(w_id)
+                thumb = works_api.thumbnail_fields(self, db, w_id)
                 if not thumb:
                     self.send_error(404, "Work not found")
                     return
@@ -1737,67 +1719,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.wfile.write(generated_bytes)
                 except Exception as exc:
                     self._send_internal_error(exc)
-            elif path.startswith('/api/works/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
-                data = db.get_work_metadata_state(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-metadata-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/source-state') and len(path.split('/')) == 5:
-                # A REVISION ONLY. The Work record already carries every
-                # canonical source value, so duplicating a URL here would
-                # double what this endpoint sends and what IndexedDB stores
-                # for values the client already holds.
-                data = db.get_work_source_state(path.split("/")[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                elif data == work_source_sync.INVALID_SOURCE_STATE:
-                    # The product reads this row as a video, but its identity
-                    # cannot be stated. Said plainly rather than answered with
-                    # a revision the mutation would then refuse to act on.
-                    self.send_json(409, {
-                        "error": "This file's video source cannot be read. Its link is not a "
-                                 "supported video URL.",
-                        "code": work_source_sync.INVALID_SOURCE_STATE})
-                else:
-                    etag = db.etag_for_representation("work-source-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/notes-state') and len(path.split('/')) == 5:
-                data = db.get_work_notes_state(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-notes-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif works_api.handle_state(self, db, path):
+                return
             elif work_roles_api.handle_get(self, db, path):
                 return
             elif tags_api.handle_get(self, db, path, query):
                 return
-            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
-                w_id = path.split('/')[-1]
-                data = db.get_work(w_id)
-                if data:
-                    try:
-                        data['research_refs'] = research_index.work_research_refs(w_id, db)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "research_index_refs_failed work_id=%s error_type=%s",
-                            safe_log_id(w_id),
-                            safe_error_type(e),
-                        )
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Work not found")
+            elif works_api.handle_detail(self, db, path, research_index):
+                return
             elif annotations_api.handle_get(self, db, path, query):
                 return
             elif folders_api.handle_get(self, db, path):
@@ -1861,41 +1790,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             elif persons_api.handle_detail(self, db, path):
                 return
-            elif path == '/api/recent':
-                # Representation-derived ETag: the old probe keyed on
-                # COUNT + MAX(last_opened_at), which cannot see a re-open of a
-                # Work that was already the most recent, nor a display field
-                # changing on a row already in the result.
-                data = db.get_recent_browse()
-                etag = db.etag_for_representation('recent', data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/recently-added':
-                data = db.get_recently_added_browse()
-                etag = db.etag_for_representation('recently-added', data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
+            elif works_api.handle_browse(self, db, path):
+                return
             elif search_api.handle_get(self, db, path, query):
                 return
             elif publishers_api.handle_get(self, db, path, query):
                 return
             elif path.startswith('/api/pdfs/'):
-                pdf_path = _served_pdf_path(path)
+                pdf_path = _served_pdf_path(self, path)
                 if pdf_path:
                     self._send_pdf_bytes(pdf_path)
                 else:
                     self.send_error(404, "PDF not found")
-            elif path.startswith('/api/bibtex/'):
-                work_id = path.split('/')[-1]
-                bibtex = db.generate_bibtex(work_id)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/plain')
-                self.end_headers()
-                self.wfile.write(bibtex.encode())
+            elif works_api.handle_bibtex(self, db, path):
+                return
             elif settings_api.handle_get(self, db, path):
                 return
             elif path == '/api/backups/download':

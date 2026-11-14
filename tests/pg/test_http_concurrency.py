@@ -21,6 +21,7 @@ from typing import Any, Callable
 from unittest import mock
 
 from backend.api import maintenance as maintenance_api
+from backend.domain.works import work_commands
 from tests.pg.http_fixtures import Response
 from tests.pg.test_http_processing import ProcessingHttpTestCase
 
@@ -69,30 +70,30 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
     def test_reads_overlap_on_separate_threads(self) -> None:
         entered, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)
-        original = self.facade.get_all_works
+        original = work_commands.catalog
 
-        def held() -> list[dict[str, Any]]:
+        def held(*args: Any) -> list[dict[str, Any]]:
             entered.set()
             self.assertTrue(release.wait(10))
-            return original()
+            return original(*args)
 
-        with mock.patch.object(self.facade, "get_all_works", held):
+        with mock.patch.object(work_commands, "catalog", held):
             first = _Worker(lambda: self.get("/api/works"))
             self.assertTrue(entered.wait(10))
-            # A second read runs to the end while the first is still inside the facade.
+            # A second read runs to the end while the first is still inside the command.
             self.assertEqual(self.get("/api/folders").status, 200)
             release.set()
             self.assertEqual(first.join().status, 200)
 
     def test_two_reads_run_in_the_facade_at_once(self) -> None:
         both = threading.Barrier(2, timeout=10)
-        original = self.facade.get_all_works
+        original = work_commands.catalog
 
-        def together() -> list[dict[str, Any]]:
+        def together(*args: Any) -> list[dict[str, Any]]:
             both.wait()  # breaks, failing both reads, unless the two overlap
-            return original()
+            return original(*args)
 
-        with mock.patch.object(self.facade, "get_all_works", together):
+        with mock.patch.object(work_commands, "catalog", together):
             readers = [_Worker(lambda: self.get("/api/works")) for _ in range(2)]
             self.assertEqual([reader.join().status for reader in readers], [200, 200])
 
@@ -152,7 +153,7 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
         inside, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)
         read_inside = threading.Event()
-        original_read = self.facade.get_all_works
+        original_read = work_commands.catalog
 
         def restore(_library: Any, _ctx: Any, _root: str, _data: Any) -> tuple[int, dict[str, Any], None]:
             inside.set()
@@ -160,12 +161,12 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
             self.run_sql("UPDATE prks.works SET title = 'RESTORED' WHERE id = %s", (work["id"],))
             return 200, {"status": "restored"}, None
 
-        def read() -> list[dict[str, Any]]:
+        def read(*args: Any) -> list[dict[str, Any]]:
             read_inside.set()
-            return original_read()
+            return original_read(*args)
 
         with (mock.patch.object(maintenance_api, "restore_staged", restore),
-              mock.patch.object(self.facade, "get_all_works", read)):
+              mock.patch.object(work_commands, "catalog", read)):
             restoring = _Worker(lambda: self.send("POST", "/api/backups/restore",
                                                   {"token": "0" * 32, "confirm": "RESTORE"}))
             self.assertTrue(inside.wait(10))

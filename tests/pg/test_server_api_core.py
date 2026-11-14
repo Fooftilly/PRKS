@@ -18,6 +18,7 @@ from urllib.parse import quote
 from backend.api import folders as folders_api
 from backend.api import playlists as playlists_api
 from backend.api import work_roles as work_roles_api
+from backend.domain.works import work_commands
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 
@@ -28,7 +29,7 @@ class RequestIdTests(ServerApiTestCase):
         self.assertTrue(res.header("X-Request-ID")[0].strip())
 
     def test_an_internal_error_names_its_request_id(self) -> None:
-        with mock.patch.object(self.facade, "get_all_works", side_effect=RuntimeError("boom")):
+        with mock.patch.object(work_commands, "catalog", side_effect=RuntimeError("boom")):
             res = self.get("/api/works")
         self.assertEqual(res.status, 500, res.raw)
         request_id = res.header("X-Request-ID")[0].strip()

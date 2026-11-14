@@ -352,7 +352,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
     from backend.domain.identity.library_scope import library_command, library_query
     from backend.domain.research import concept_commands, reindex
     from backend.domain.search import search_commands
-    from backend.domain.works import notes
+    from backend.domain.works import notes, work_commands
     from backend.jobs import queue
     from backend.jobs.runner import Outcome, run_job
     from tests.pg.facade_context import provision_actor
@@ -384,6 +384,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                     fixture_ids: list[str] = []
                     concept_ids: list[str] = []
                     output = []
+                    ctx, pdfs = actor.context, storage.pdfs_dir
                     with facade_context.acting_as(actor.context):
                         for size in sizes:
                             for i in range(len(fixture_ids), size):
@@ -438,14 +439,17 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
                                     lambda scope: search_commands.summaries(scope, list(ids)))
                                 return search_commands.finish(rows, storage.pdfs_dir)
 
+                            # The Work route reads (PG-C3 #642), as the routes call them.
                             workloads = (
-                                ("works_list", library.get_all_works, verify_list),
-                                ("works_browse", library.get_works_browse_catalog,
+                                ("works_list", lambda: work_commands.catalog(database, ctx, pdfs),
+                                 verify_list),
+                                ("works_browse", lambda: work_commands.browse_catalog(database, ctx, pdfs),
                                  lambda value: assert_works_count(value, size)),
-                                ("work_detail", lambda: library.get_work(work_id),
+                                ("work_detail", lambda: work_commands.detail(database, ctx, pdfs, work_id),
                                  lambda value: assert_work_detail(value, work_id)),
                                 ("works_recent_bounded",
-                                 lambda: library.get_recently_added_browse(limit=bounded_limit),
+                                 lambda: work_commands.recently_added_browse(database, ctx, pdfs,
+                                                                             limit=bounded_limit),
                                  verify_recent),
                                 ("works_batch_by_ids",
                                  works_batch_by_ids,

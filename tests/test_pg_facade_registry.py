@@ -76,7 +76,7 @@ class FacadeSkeletonTests(unittest.TestCase):
 class AdapterSurfaceTests(unittest.TestCase):
     def test_the_facade_has_every_library_member_the_adapter_reaches(self):
         calls = adapter_library_calls()
-        self.assertIn("get_work", calls)
+        self.assertIn("add_work", calls)  # the scan sees the adapter at all
         missing = {name: sorted(files) for name, files in calls.items() if not hasattr(PostgresLibrary, name)}
         self.assertEqual(missing, {})
 
