@@ -210,8 +210,10 @@ def create(handler: Any, db: Any, file_path: str, upload: Optional[tuple[str, by
 
         writing = (name, write)
     database, ctx = _actor(handler, db)
+    # An upload is the Work's file: a path echoed beside it is not read.
+    stored_path = "" if upload is not None else file_path
     return commands.create(database, ctx, _pdfs_dir(db), _objects(db),
-                           commands.new_work_fields(file_path=file_path, **fields), writing)
+                           commands.new_work_fields(file_path=stored_path, **fields), writing)
 
 
 def delete(handler: Any, db: Any, work_id: str, *, keep_managed_pdf: bool = False) -> None:
