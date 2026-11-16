@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,7 +95,7 @@ def collector_failure_categories(collector) -> str:
     return "_".join(flagged) or "unknown"
 
 
-def verify_isolation(environ: dict[str, str]) -> None:
+def verify_isolation(environ: Mapping[str, str]) -> None:
     """Never let a synthetic cross-browser test inherit a real database."""
     if any(environ.get(name, "").strip() for name in INHERITED_DB_SETTINGS):
         raise RuntimeError("Cross-browser smoke refuses inherited auth/database settings")

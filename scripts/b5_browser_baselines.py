@@ -26,13 +26,17 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse
+
+if TYPE_CHECKING:
+    from playwright.sync_api import ViewportSize
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO / "docs" / "b5-browser-baselines" / "browser-baselines.json"
 DEFAULT_MARKDOWN = REPO / "docs" / "b5-browser-baselines.md"
 DEFAULT_STORAGE = Path(tempfile.gettempdir()) / "prks-b5-baselines-454"
-VIEWPORT = {"width": 1400, "height": 900}
+VIEWPORT: ViewportSize = {"width": 1400, "height": 900}
 
 TITLE_ONLY = 120
 TINY_PDF = 20
@@ -330,6 +334,14 @@ def _http_json(method: str, url: str, payload=None, timeout: float = 60.0):
         raise RuntimeError("HTTP %s %s -> %s %s" % (method, url, exc.code, body[:240])) from exc
 
 
+def _http_json_object(method: str, url: str, payload=None) -> dict[str, Any]:
+    """Like ``_http_json`` but the seeding call needs a JSON object back."""
+    body = _http_json(method, url, payload)
+    if not isinstance(body, dict):
+        raise RuntimeError("HTTP %s %s -> expected a JSON object, got %r" % (method, url, body))
+    return body
+
+
 def _tiny_pdf_bytes(title: str, pages: int = 1) -> bytes:
     import pymupdf as fitz
 
@@ -394,8 +406,8 @@ def seed_library(base: str) -> dict:  # noqa: C901
             "work_count": len(works),
         }
 
-    library = _http_json("POST", base + "/api/folders", {"title": "Synthetic Library", "description": ""})
-    batch = _http_json(
+    library = _http_json_object("POST", base + "/api/folders", {"title": "Synthetic Library", "description": ""})
+    batch = _http_json_object(
         "POST",
         base + "/api/folders",
         {"title": "Large Batch", "description": "", "parent_id": library["id"]},
@@ -431,7 +443,7 @@ def seed_library(base: str) -> dict:  # noqa: C901
         )
 
     note = "Baseline notes mention [[concept:Synthetic Concept One]]."
-    work_a = _http_json(
+    work_a = _http_json_object(
         "POST",
         base + "/api/works",
         {
@@ -443,7 +455,7 @@ def seed_library(base: str) -> dict:  # noqa: C901
             "file_name": "synthetic-work-a.pdf",
         },
     )
-    work_b = _http_json(
+    work_b = _http_json_object(
         "POST",
         base + "/api/works",
         {
@@ -687,9 +699,13 @@ def _delta(pre: dict, post: dict) -> dict:
     return out
 
 
+def _sanitize_id_mapping(blob: dict, aliases: dict) -> dict:
+    return {k: _sanitize_ids(v, aliases) for k, v in blob.items()}
+
+
 def _sanitize_ids(blob, aliases: dict):
     if isinstance(blob, dict):
-        return {k: _sanitize_ids(v, aliases) for k, v in blob.items()}
+        return _sanitize_id_mapping(blob, aliases)
     if isinstance(blob, list):
         return [_sanitize_ids(v, aliases) for v in blob]
     if isinstance(blob, str):
@@ -1209,7 +1225,7 @@ def measure(page, base: str, seed: dict, tap: RequestTap) -> dict:  # noqa: C901
         "coordinatorAfterScenarios": coord,
         "largeFolderCardCount": folder_cards,
     }
-    return _sanitize_ids(out, aliases)
+    return _sanitize_id_mapping(out, aliases)
 
 
 def _fmt_ms(value) -> str:
@@ -1257,7 +1273,8 @@ def _probe_table(surface: dict) -> str:
 def _summarize_server_diagnostics(perf: dict, top_n: int = 8) -> dict:
     if not isinstance(perf, dict):
         return {}
-    src = perf.get("window") if isinstance(perf.get("window"), dict) else perf
+    window = perf.get("window")
+    src = window if isinstance(window, dict) else perf
     routes = list(src.get("routes") or [])
     ranked = sorted(routes, key=lambda r: int((r or {}).get("count") or 0), reverse=True)[:top_n]
     slim = []

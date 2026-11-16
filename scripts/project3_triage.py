@@ -191,7 +191,7 @@ def load_plan(raw: bytes) -> dict:
     return data
 
 
-def guard(row: dict, current: dict, issue: dict) -> None:
+def guard(row: dict, current: dict | None, issue: dict) -> None:
     n = row["number"]
     if current is None or current["archived"] or current["state"] != "OPEN":
         raise TriageError(f"#{n}: missing, archived or closed Project item")
@@ -317,11 +317,10 @@ def main(argv: list[str] | None = None, *, transport=None, read=None) -> int:
             c.add_argument("--plan-sha256", required=True)
     args = parser.parse_args(argv)
     try:
-        token = None
         if transport is None or read is None:
             token = token_from_environment()
-        transport = transport if transport is not None else pm.http_transport(token)
-        read = read if read is not None else rest_client(token)
+            transport = transport if transport is not None else pm.http_transport(token)
+            read = read if read is not None else rest_client(token)
         gql = pm.GraphQL(transport, allow_mutations=args.command == "apply")
         project = pm.Project(gql)
         if args.command == "propose":

@@ -219,7 +219,7 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
         "--jobs", "1",
         "--shard", SHARD_ARGUMENTS[shard_index],
         "--no-pointer-capture",
-    ] if not preflight else []
+    ] if shard_index is not None else []  # validated above: set iff not preflight
     try:
         # The worker candidate is checked via the same argument-list-only Node
         # invocation as the two JS bundles; never launch a second command path.

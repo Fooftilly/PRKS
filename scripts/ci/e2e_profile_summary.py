@@ -12,6 +12,7 @@ import json
 import math
 import re
 from pathlib import Path
+from typing import TypeGuard
 
 _PHASE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _SHARD = re.compile(r"^([1-9][0-9]*)/([1-9][0-9]*)$")
@@ -36,12 +37,12 @@ _PRIORITY = (
 )
 
 
-def _nonnegative_int(value: object) -> bool:
+def _nonnegative_int(value: object) -> TypeGuard[int]:
     return type(value) is int and value >= 0
 
 
-def _seconds(value: object) -> bool:
-    return type(value) in (int, float) and math.isfinite(value) and value >= 0
+def _seconds(value: object) -> TypeGuard[int | float]:
+    return (type(value) is int or type(value) is float) and math.isfinite(value) and value >= 0
 
 
 def _validated_profile(payload: object) -> tuple[int, float, dict[str, float], dict]:
@@ -58,8 +59,13 @@ def _validated_profile(payload: object) -> tuple[int, float, dict[str, float], d
         or type(payload.get("workers")) is not int
     ):
         raise ValueError("profile benchmark mode or worker count invalid")
-    counts = [payload.get(key) for key in ("tests", "failures", "errors", "skipped")]
-    if not all(_nonnegative_int(x) for x in counts) or counts[0] == 0 or any(counts[1:]):
+    tests, *unsuccessful = [payload.get(key) for key in ("tests", "failures", "errors", "skipped")]
+    if (
+        not _nonnegative_int(tests)
+        or not all(_nonnegative_int(x) for x in unsuccessful)
+        or tests == 0
+        or any(unsuccessful)
+    ):
         raise ValueError("profile test counts invalid or run incomplete")
     wall = payload.get("wall_seconds")
     if not _seconds(wall) or wall == 0:
@@ -85,7 +91,7 @@ def _validated_profile(payload: object) -> tuple[int, float, dict[str, float], d
         )
     ):
         raise ValueError("profile phase data invalid")
-    return counts[0], float(wall), {k: float(v) for k, v in phases.items()}, nav
+    return tests, float(wall), {k: float(v) for k, v in phases.items()}, nav
 
 
 def render_summary(payload: object, *, shard: str) -> str:

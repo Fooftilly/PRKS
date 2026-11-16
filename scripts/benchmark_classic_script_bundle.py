@@ -124,7 +124,7 @@ def build_candidate(root: Path) -> tuple[str, dict[str, str], dict[str, int]]:
             expected.append((location, [("src", src)]))
             if location not in groups:
                 raise ValueError("unexpected classic script placement")
-            groups[location].append(src)
+            groups[location].append(classic)
             if len(groups[location]) == 1:
                 url = HEAD_URL if location == "head" else BODY_URL
                 replacement = line[:len(line) - len(line.lstrip())] + f'<script src="{url}"></script>\n'

@@ -1526,6 +1526,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/work_tag_sync.py",
                 "backend/server.py",
                 "prks_app.py",
+                "scripts",
             ),
         )
 
@@ -1684,7 +1685,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["exclude"] = ["**/__pycache__", "scripts"]
+            typed["exclude"] = ["**/__pycache__", "docs"]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )

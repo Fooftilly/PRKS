@@ -198,7 +198,8 @@
     "backend/work_source_sync.py",
     "backend/work_tag_sync.py",
     "backend/server.py",
-    "prks_app.py"
+    "prks_app.py",
+    "scripts"
   ],
   "exclude": [
     "**/__pycache__"
