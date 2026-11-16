@@ -23,7 +23,7 @@ def _read(path: str) -> str:
 class FrontendTypesBrowseTests(unittest.TestCase):
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for the types browse model")
+        assert node is not None, "node is required for the types browse model"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,

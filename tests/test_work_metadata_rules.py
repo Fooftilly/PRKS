@@ -17,6 +17,7 @@ revision, and every offline device would overwrite it on its next save.
 from __future__ import annotations
 
 import ast
+from typing import TypeGuard
 import json
 import pathlib
 import re
@@ -274,8 +275,9 @@ def _render(node: ast.expr) -> str:
             return "%s"
         if name == "Composed" and len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple)):
             return "".join(_render(part) for part in node.args[0].elts)
-        if _joined_parts(node) is not None:
-            return _render(node.func.value).join(_render(part) for part in _joined_parts(node))
+        joined = _joined_parts(node)
+        if joined is not None and isinstance(node.func, ast.Attribute):
+            return _render(node.func.value).join(_render(part) for part in joined)
     return "{}"
 
 
@@ -287,7 +289,7 @@ def _joined_parts(node: ast.Call) -> list[ast.expr] | None:
     return None
 
 
-def _is_text(node: ast.AST) -> bool:
+def _is_text(node: ast.AST) -> TypeGuard[ast.expr]:
     if isinstance(node, ast.Constant):
         return isinstance(node.value, str)
     if isinstance(node, ast.JoinedStr):
@@ -311,7 +313,7 @@ def _consumed(node: ast.AST) -> list[ast.AST]:
         return list(ast.iter_child_nodes(node))
     name = _call_name(node)
     parts = _joined_parts(node)
-    if parts is not None:
+    if parts is not None and isinstance(node.func, ast.Attribute):
         return [node.func.value, node.args[0], *parts]
     if name in ("format", "join"):
         return [node.func.value] if isinstance(node.func, ast.Attribute) else []

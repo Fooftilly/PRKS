@@ -19,7 +19,7 @@ def _read(path: str) -> str:
 class FrontendWikiLinkAutocompleteTests(unittest.TestCase):
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for wiki-link autocomplete tests")
+        assert node is not None, "node is required for wiki-link autocomplete tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,

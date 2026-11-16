@@ -293,7 +293,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
             r"(?ms)^  packaged-smoke:\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
             content,
         )
-        self.assertIsNotNone(match)
+        assert match is not None
         job = match.group(1)
         lines = job.splitlines()
         starts = [

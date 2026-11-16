@@ -20,6 +20,7 @@ from backend.storage.errors import (
     BootstrapConfigError,
     BootstrapConfigLockTimeout,
 )
+from tests.narrowing import require
 
 
 class BootstrapTestCase(unittest.TestCase):
@@ -45,6 +46,7 @@ class TestReader(BootstrapTestCase):
         with open(self.path, "w", encoding="utf-8") as handle:
             json.dump({"format": 1, "storage": {"local_root": self.root("a") + "/./"}}, handle)
         cfg = bc.read_bootstrap_config(self.path)
+        assert cfg is not None
         self.assertEqual(cfg.local_root, self.root("a"))
         self.assertEqual(cfg.backend, "local")
         self.assertIsNone(cfg.relocation)
@@ -67,7 +69,7 @@ class TestCompareAndSet(BootstrapTestCase):
         )
         with self.assertRaises(BootstrapConfigConflict):
             self.store.compare_and_set(expect=bc.expect_absent(), local_root=self.root("b"))
-        self.assertEqual(self.store.read().local_root, self.root("a"))
+        self.assertEqual(require(self.store.read()).local_root, self.root("a"))
 
     def test_stale_read_modify_write_cannot_overwrite_newer_selection(self):
         self.store.compare_and_set(expect=bc.expect_absent(), local_root=self.root("a"))
@@ -77,7 +79,7 @@ class TestCompareAndSet(BootstrapTestCase):
         with self.assertRaises(BootstrapConfigConflict) as ctx:
             self.store.compare_and_set(expect=bc.expect_unchanged(seen_by_user), local_root=self.root("c"))
         self.assertEqual(ctx.exception.reason, "bootstrap_config_conflict")
-        self.assertEqual(self.store.read().local_root, self.root("b"))
+        self.assertEqual(require(self.store.read()).local_root, self.root("b"))
 
     def test_relocation_state_is_part_of_the_expected_state(self):
         rel = {"id": "rel-1", "phase": "copying", "from": "/o", "to": "/n"}
@@ -93,7 +95,7 @@ class TestCompareAndSet(BootstrapTestCase):
             local_root=self.root("a"),
             relocation=advanced,
         )
-        self.assertEqual(self.store.read().relocation["phase"], "verified")
+        self.assertEqual(require(require(self.store.read()).relocation)["phase"], "verified")
 
     def test_check_happens_under_the_lock_after_a_fresh_read(self):
         self.store.compare_and_set(expect=bc.expect_absent(), local_root=self.root("a"))
@@ -105,7 +107,7 @@ class TestCompareAndSet(BootstrapTestCase):
                 json.dump({"format": 1, "storage": {"local_root": self.root("z")}}, handle)
             with self.assertRaises(BootstrapConfigConflict):
                 txn.write(expect=bc.expect_unchanged(snapshot), local_root=self.root("b"))
-        self.assertEqual(self.store.read().local_root, self.root("z"))
+        self.assertEqual(require(self.store.read()).local_root, self.root("z"))
 
     def test_multi_step_transaction_holds_the_lock_throughout(self):
         self.store.compare_and_set(expect=bc.expect_absent(), local_root=self.root("a"))
@@ -115,7 +117,7 @@ class TestCompareAndSet(BootstrapTestCase):
             with self.assertRaises(BootstrapConfigLockTimeout):
                 other.compare_and_set(expect=bc.expect_unchanged(snapshot), local_root=self.root("x"))
             txn.write(expect=bc.expect_unchanged(snapshot), local_root=self.root("b"))
-        self.assertEqual(self.store.read().local_root, self.root("b"))
+        self.assertEqual(require(self.store.read()).local_root, self.root("b"))
 
     def test_malformed_current_file_is_never_overwritten(self):
         os.makedirs(os.path.dirname(self.path))
@@ -185,7 +187,7 @@ class TestCompareAndSet(BootstrapTestCase):
             with self.assertRaises(BootstrapConfigError) as ctx:
                 self.store.compare_and_set(expect=bc.expect_storage(local_root=self.root("a")), local_root=self.root("b"))
         self.assertEqual(ctx.exception.reason, "write_failed")
-        self.assertEqual(self.store.read().local_root, self.root("a"))
+        self.assertEqual(require(self.store.read()).local_root, self.root("a"))
 
     def test_undurable_directory_entry_is_reported_as_failure(self):
         with patch.object(bc, "replace_file_atomically", return_value=False):
@@ -216,7 +218,7 @@ class TestCompareAndSet(BootstrapTestCase):
         winners = [i for kind, i in results if kind == "ok"]
         self.assertEqual(len(results), 8)
         self.assertEqual(len(winners), 1)
-        self.assertEqual(self.store.read().local_root, self.root(f"t{winners[0]}"))
+        self.assertEqual(require(self.store.read()).local_root, self.root(f"t{winners[0]}"))
 
 
 _CHILD = textwrap.dedent(
@@ -264,8 +266,8 @@ class TestSymlinkedConfig(BootstrapTestCase):
                 via_real.compare_and_set(expect=bc.expect_absent(), local_root=self.root("x"))
             txn.write(expect=bc.expect_absent(), local_root=self.root("a"))
         self.assertTrue(os.path.islink(self.alias))
-        self.assertEqual(bc.read_bootstrap_config(self.real).local_root, self.root("a"))
-        self.assertEqual(bc.read_bootstrap_config(self.alias).local_root, self.root("a"))
+        self.assertEqual(require(bc.read_bootstrap_config(self.real)).local_root, self.root("a"))
+        self.assertEqual(require(bc.read_bootstrap_config(self.alias)).local_root, self.root("a"))
         with self.assertRaises(BootstrapConfigConflict):
             via_real.compare_and_set(expect=bc.expect_absent(), local_root=self.root("b"))
 
@@ -285,6 +287,7 @@ class TestSymlinkedConfig(BootstrapTestCase):
             for i, path in enumerate((self.alias, self.real, self.alias, self.real))
         ]
         for proc in procs:
+            assert proc.stdout is not None
             self.assertEqual(proc.stdout.readline().strip(), "ready")
         open(go, "w").close()
         verdicts = [p.communicate(timeout=60)[0].strip() for p in procs]
@@ -308,13 +311,14 @@ class TestCrossProcess(BootstrapTestCase):
         ]
         # Every child has read its snapshot before any of them may write.
         for proc in procs:
+            assert proc.stdout is not None
             self.assertEqual(proc.stdout.readline().strip(), "ready")
         open(go, "w").close()
         outputs = [p.communicate(timeout=60) for p in procs]
         verdicts = [out.strip() for out, _err in outputs]
         self.assertEqual(sorted(verdicts), ["conflict", "conflict", "conflict", "ok"], outputs)
         winner = verdicts.index("ok")
-        self.assertEqual(self.store.read().local_root, self.root(f"p{winner}"))
+        self.assertEqual(require(self.store.read()).local_root, self.root(f"p{winner}"))
 
     def test_lock_held_by_another_process_times_out_instead_of_writing(self):
         os.makedirs(os.path.dirname(self.path))
@@ -338,6 +342,7 @@ class TestCrossProcess(BootstrapTestCase):
             stdout=subprocess.PIPE,
             text=True,
         )
+        assert holder.stdin is not None and holder.stdout is not None
         try:
             self.assertEqual(holder.stdout.readline().strip(), "held")
             with self.assertRaises(BootstrapConfigLockTimeout):
@@ -348,7 +353,7 @@ class TestCrossProcess(BootstrapTestCase):
             holder.wait(30)
             holder.stdout.close()
         self.store.compare_and_set(expect=bc.expect_absent(), local_root=self.root("a"))
-        self.assertEqual(self.store.read().local_root, self.root("a"))
+        self.assertEqual(require(self.store.read()).local_root, self.root("a"))
 
 
 if __name__ == "__main__":

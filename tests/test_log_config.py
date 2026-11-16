@@ -50,7 +50,7 @@ def _isolated_logging():
     saved_handlers = list(root.handlers)
     saved_level = root.level
     saved_configured = getattr(root, "_prks_logging_configured", False)
-    root._prks_logging_configured = False
+    setattr(root, "_prks_logging_configured", False)
     try:
         yield
     finally:
@@ -60,7 +60,7 @@ def _isolated_logging():
             handler.close()
         root.handlers = list(saved_handlers)
         root.setLevel(saved_level)
-        root._prks_logging_configured = saved_configured
+        setattr(root, "_prks_logging_configured", saved_configured)
 
 
 class TestSetupLogging(unittest.TestCase):

@@ -16,6 +16,8 @@ import hashlib
 import io
 import threading
 import time
+import unittest
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
@@ -46,7 +48,20 @@ class _Boom(RuntimeError):
     pass
 
 
-class StorageBackendContract:
+# The checker sees the mixin as a TestCase (assert helpers, ``subTest``); at
+# runtime it stays a plain mixin so unittest only collects concrete backends.
+if TYPE_CHECKING:
+    _ContractBase = unittest.TestCase
+else:
+
+    class _ContractBase:
+        pass
+
+
+BackendT = TypeVar("BackendT", bound=StorageBackend)
+
+
+class StorageBackendContract(_ContractBase, Generic[BackendT]):
     """Mixin: ``self.backend`` is a fresh, empty backend for each test.
 
     List it **first** among the bases and provide ``make_backend()`` (returning
@@ -54,9 +69,13 @@ class StorageBackendContract:
     ``setUp`` runs the test case's own ``setUp`` before building the backend.
     """
 
+    if TYPE_CHECKING:
+
+        def make_backend(self) -> BackendT: ...
+
     def setUp(self):  # noqa: D401 - unittest hook
         super().setUp()
-        self.backend: StorageBackend = self.make_backend()
+        self.backend: BackendT = self.make_backend()
 
     def key(self, name="1700000000_abcdef12_paper.pdf", namespace=NAMESPACE_ASSET_OBJECTS):
         return StorageKey(namespace, name)
@@ -203,11 +222,13 @@ class StorageBackendContract:
         self.assertIsNone(self.backend.stat(self.key()))
         put = self.backend.put_new(self.key(), _writer(b"12345"))
         info = self.backend.stat(self.key())
+        assert info is not None
         self.assertEqual(info.size, 5)
         self.assertIsNone(info.sha256)
         self.assertEqual(info.version, put.version)
         # When the bytes were written, for the orphan sweep's grace period.
         self.assertIsInstance(info.modified_at, float)
+        assert info.modified_at is not None
         self.assertLess(abs(info.modified_at - time.time()), 600)
 
     # -- delete ---------------------------------------------------------------------
@@ -302,7 +323,8 @@ class StorageBackendContract:
         with self.assertRaises(InvalidStorageKey):
             StorageKey("pdfs", "a.pdf")
         with self.assertRaises(InvalidStorageKey):
-            self.backend.stat(("asset-objects", "a.pdf"))
+            # Deliberately not a StorageKey: the backend must reject raw tuples.
+            self.backend.stat(("asset-objects", "a.pdf"))  # pyright: ignore[reportArgumentType]
         self.assertEqual(list(self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS)), [])
 
     def test_legacy_names_stay_valid(self):

@@ -122,7 +122,7 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             before = index.read_bytes()
             for bad in (0, 7, -1, 1.0, "1"):
                 with self.subTest(shard=bad), self.assertRaises(ValueError):
-                    run_canary(root, bad)
+                    run_canary(root, bad)  # pyright: ignore[reportArgumentType]
             self.assertEqual(index.read_bytes(), before)
             bundle = root / "frontend" / HEAD_URL.lstrip("/")
             bundle.write_text("sentinel", encoding="utf-8")
@@ -235,7 +235,7 @@ class ClassicBundleCanaryTests(unittest.TestCase):
         fake_playwright = ModuleType("playwright")
         fake_playwright.__path__ = []
         fake_sync_api = ModuleType("playwright.sync_api")
-        fake_sync_api.sync_playwright = lambda: pw
+        setattr(fake_sync_api, "sync_playwright", lambda: pw)
         with (
             patch.dict("sys.modules", {
                 "playwright": fake_playwright,
@@ -281,7 +281,7 @@ class ClassicBundleCanaryTests(unittest.TestCase):
         fake_playwright = ModuleType("playwright")
         fake_playwright.__path__ = []
         fake_sync_api = ModuleType("playwright.sync_api")
-        fake_sync_api.sync_playwright = lambda: pw
+        setattr(fake_sync_api, "sync_playwright", lambda: pw)
 
         report = StringIO()
         with (

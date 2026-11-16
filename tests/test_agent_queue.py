@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "agent-queue.sh"
 
 
-def item(number, *, agent, status="Ready", execution="Agent", repository="Fooftilly/PRKS", kind="Issue"):
+def item(number, *, agent, status="Ready", execution: str | None = "Agent", repository="Fooftilly/PRKS", kind="Issue"):
     return {
         "content": {"number": number, "repository": repository, "type": kind, "title": f"Issue {number}"},
         "title": f"Issue {number}",

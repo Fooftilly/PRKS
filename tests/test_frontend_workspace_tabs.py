@@ -545,7 +545,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
 
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tab tests")
+        assert node is not None, "node is required for workspace tab tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,
@@ -563,7 +563,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         """Warm-suspended tabs (mounted=false, suspended=true) must keep showing
         saving/error status; cold-parked and destroyed contexts must not."""
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tab tests")
+        assert node is not None, "node is required for workspace tab tests"
         self.assertTrue(os.path.isfile(_TAB_STATUS_WARM_RUNNER))
         proc = subprocess.run(
             [node, _TAB_STATUS_WARM_RUNNER],
@@ -587,7 +587,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
         self.assertNotEqual(tree_at, -1)
         self.assertLess(tree_at, ws_at)
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tree tests")
+        assert node is not None, "node is required for workspace tree tests"
         proc = subprocess.run(
             [node, _TREE_RUNNER],
             cwd=_PROJECT_DIR,
@@ -603,7 +603,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
 
     def test_workspace_model_differential_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace model tests")
+        assert node is not None, "node is required for workspace model tests"
         runner = os.path.join(
             _PROJECT_DIR, "tests", "browser", "run_workspace_model_differential_selftest.js"
         )
@@ -623,7 +623,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
 
     def test_workspace_projection_subscription_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace projection tests")
+        assert node is not None, "node is required for workspace projection tests"
         runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_projection_selftest.js")
         self.assertTrue(os.path.isfile(runner))
         proc = subprocess.run(
@@ -669,7 +669,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
             self.assertNotIn("sessionStorage", src, name)
             self.assertNotIn("indexedDB", src, name)
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace persistence tests")
+        assert node is not None, "node is required for workspace persistence tests"
         proc = subprocess.run(
             [node, _PERSIST_RUNNER],
             cwd=_PROJECT_DIR,
@@ -685,7 +685,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
 
     def test_tiling_observer_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tiling tests")
+        assert node is not None, "node is required for workspace tiling tests"
         runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tiling_selftest.js")
         proc = subprocess.run(
             [node, runner],
@@ -764,7 +764,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
 
     def test_drag_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace drag tests")
+        assert node is not None, "node is required for workspace drag tests"
         proc = subprocess.run(
             [node, _DRAG_RUNNER],
             cwd=_PROJECT_DIR,
@@ -780,7 +780,7 @@ class FrontendWorkspaceTabsTests(unittest.TestCase):
 
     def test_tiling_recursive_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tiling tests")
+        assert node is not None, "node is required for workspace tiling tests"
         runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tiling_recursive_selftest.js")
         self.assertTrue(os.path.isfile(runner))
         proc = subprocess.run(

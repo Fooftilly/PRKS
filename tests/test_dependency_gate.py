@@ -546,6 +546,7 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
         raise ValueError("incomplete required docs-only CI step set")
     for name, style, body in run_steps:
+        assert name is not None
         assert_test_gate_single_run_step_allowed(
             name, style, body, docs_plan=bool(pg_plan_present)
         )
@@ -1796,7 +1797,7 @@ class RepoGateLiveTests(unittest.TestCase):
             self.assertNotIn(marker, html)
 
 
-def _vue_gate_fixture(tmp: Path) -> Path:
+def _vue_gate_fixture(tmp: str | Path) -> Path:
     root = Path(tmp)
     for rel in (
         "frontend-app/package.json",

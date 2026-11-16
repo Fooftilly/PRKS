@@ -81,7 +81,7 @@ class FrontendWorkSelectionTests(unittest.TestCase):
 
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for work-selection tests")
+        assert node is not None, "node is required for work-selection tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,

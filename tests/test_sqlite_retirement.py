@@ -29,6 +29,7 @@ import glob
 import json
 import os
 import unittest
+from typing import Any
 from functools import lru_cache
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,7 +63,7 @@ def _tests_in(path: str) -> frozenset[str]:
     return frozenset(found)
 
 
-def _manifests() -> list[tuple[str, dict[str, object]]]:
+def _manifests() -> list[tuple[str, dict[str, Any]]]:
     found = []
     for path in sorted(glob.glob(os.path.join(_DIRECTORY, "*.json"))):
         with open(path, encoding="utf-8") as handle:

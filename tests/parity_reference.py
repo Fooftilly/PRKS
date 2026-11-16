@@ -189,6 +189,8 @@ def _error_record(exc: BaseException, text: Callable[[str], str]) -> dict[str, A
 
 def _rebuild_error(record: dict[str, Any], text: Callable[[str], str]) -> BaseException:
     cls = _load_class(record["class"])
+    if not issubclass(cls, BaseException):
+        raise TypeError(f"{record['class']} is not an exception class")
     exc = cls.__new__(cls)
     BaseException.__init__(exc, *_decode(record["args"], text))
     for name, item in record["attrs"].items():
