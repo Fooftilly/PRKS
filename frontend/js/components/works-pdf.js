@@ -3399,27 +3399,32 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const observed = acknowledgedPdfAnnotationBase(ackList, state, id);
         if (evt.kind === 'delete') {
             observed.annotation_id = id;
-            return { id: id, ackList: ackList, desired: null, observed: observed };
+            return { id: id, desired: null, observed: observed };
         }
         const raw = rawViewerAnnotation(evt, id);
         if (!raw) return null;
         return {
             id: id,
-            ackList: ackList,
             desired: { annotation_id: id, annotation: raw },
             observed: observed,
         };
     }
 
-    function adoptDurableAnnotationCache(ackList) {
-        // Refresh local projection from effective overlay, including the live
-        // viewer — ACK-only materialize may have removed a pending create/update
-        // that this deferred write restored.
-        const ackOnly = Array.isArray(ackList) ? ackList : [];
+    function adoptDurableAnnotationCache() {
+        // A local write leaves acknowledged state as it is, so keep the
+        // acknowledged items the runtime holds now. Never put back the list
+        // this write read before it was recorded: the sync engine can send
+        // the operation and apply its ACK (or a catch-up snapshot) while the
+        // write is still settling, and the older list would drop that
+        // acknowledged annotation. The next projection would then take it
+        // off the page, and a materialization would export bytes without it
+        // under the newer claim (#1212).
+        const current = runtime.annotationCache || {};
+        const ackOnly = Array.isArray(current.items) ? current.items : [];
         const cacheViewer = liveAnnotationViewer();
         runtime.annotationCache = {
-            allItems: ackOnly,
-            rawItems: ackOnly,
+            allItems: Array.isArray(current.allItems) ? current.allItems : ackOnly,
+            rawItems: Array.isArray(current.rawItems) ? current.rawItems : ackOnly,
             items: ackOnly,
             docId: cacheViewer && cacheViewer.getDocumentId
                 ? cacheViewer.getDocumentId()
@@ -3594,7 +3599,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         intent.observed
                     );
                     if (!stillLive()) return;
-                    adoptDurableAnnotationCache(intent.ackList);
+                    adoptDurableAnnotationCache();
                     // Annotations with a later edit still to be recorded (e.g.
                     // a second Save while this one was writing) keep the
                     // viewer's newer value for that write to read (#401).
