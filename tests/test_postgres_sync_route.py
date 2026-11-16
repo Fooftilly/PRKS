@@ -30,6 +30,7 @@ class PostgresSyncRouteTests(unittest.TestCase):
         # The route reads the refs for the admitted context (PG-C3 #642).
         with mock.patch("backend.sync.protocol.process_operation", return_value=acked), \
                 mock.patch.object(server, "db", library), \
+                mock.patch.object(server, "pdfs_dir", "/unused/pdfs"), \
                 mock.patch("backend.domain.research.index_commands.research_refs", refs):
             server.PRKSHandler._handle_postgres_sync_operation(
                 handler, {"operation": operation, "entity_id": "W-1"})  # type: ignore[arg-type]
