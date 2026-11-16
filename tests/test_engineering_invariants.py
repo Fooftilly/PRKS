@@ -1524,6 +1524,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/work_open_sync.py",
                 "backend/work_source_sync.py",
                 "backend/work_tag_sync.py",
+                "backend/server.py",
             ),
         )
 
@@ -1598,7 +1599,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["include"].append("backend/server.py")
+            typed["include"].append("prks_app.py")
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
@@ -1675,12 +1676,14 @@ class EngineeringInvariantTests(unittest.TestCase):
             for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
                 self.assertIn(scope, findings[0].message)
 
-    def test_pyright_typed_slice_allows_unrelated_backend_exclude(self):
+    def test_pyright_typed_slice_allows_unrelated_exclude(self):
+        # Every backend module is in the slice, so the unrelated path is the
+        # top-level entry point.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["exclude"] = ["**/__pycache__", "backend/server.py"]
+            typed["exclude"] = ["**/__pycache__", "prks_app.py"]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )

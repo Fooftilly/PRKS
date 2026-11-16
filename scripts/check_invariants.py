@@ -232,6 +232,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/work_open_sync.py",
     "backend/work_source_sync.py",
     "backend/work_tag_sync.py",
+    "backend/server.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})

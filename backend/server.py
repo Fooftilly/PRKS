@@ -13,7 +13,7 @@ import uuid
 import logging
 import ipaddress
 from contextlib import nullcontext
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from email.message import Message
 from urllib.parse import urlparse, parse_qs, quote, unquote
 from urllib.request import urlopen, Request
@@ -93,7 +93,12 @@ from backend.person_image import identify_cached_portrait_subtype
 from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
 
 if TYPE_CHECKING:
+    from backend.db.database import Database
+    from backend.domain.identity.request_context import RequestContext
+    from backend.domain.identity.web_start import WebAuth
+    from backend.jobs.embedded import WebJobs
     from backend.library import PostgresLibrary
+    from backend.readiness import PostgresReadiness
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -370,8 +375,22 @@ def _publish_binding(config: StorageConfig, db_local) -> StorageConfig:
     return config
 
 
+def _bound_pdfs_dir() -> str:
+    """The bound data root's PDF directory; refuses before ``bind_storage()``."""
+    if pdfs_dir is None:
+        raise RuntimeError("storage is not bound; call bind_storage() first")
+    return pdfs_dir
+
+
+def _bound_thumbs_dir() -> str:
+    """The bound data root's thumbnail cache directory; refuses before ``bind_storage()``."""
+    if thumbs_dir is None:
+        raise RuntimeError("storage is not bound; call bind_storage() first")
+    return thumbs_dir
+
+
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
-    return safe_pdf_path_under_dir(pdfs_dir, url_last_segment)
+    return safe_pdf_path_under_dir(_bound_pdfs_dir(), url_last_segment)
 
 
 _PDF_ROUTE_PREFIX = '/api/pdfs/'
@@ -627,6 +646,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self._prks_request_id = uuid.uuid4().hex[:12]
         super().__init__(*args, directory=frontend_dir, **kwargs)
+
+    def _admitted_actor(self) -> "tuple[Database, RequestContext]":
+        """The served Library's database and the admitted request's context.
+
+        Every ``/api/`` route runs after ``_prks_admit`` admitted it on a
+        bound Library, so a missing one is a server bug, not a client error.
+        """
+        if db is None:
+            raise RuntimeError("an /api/ route ran before bind_storage()")
+        ctx = self._prks_request_context
+        if ctx is None:
+            raise RuntimeError("an /api/ route ran without an admitted request context")
+        return db.database, ctx
 
     def _request_context(self) -> dict:
         parsed = urlparse(getattr(self, "path", "") or "")
@@ -1461,7 +1493,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 cache_base = prks_thumb_cache_stem(
                     w_id, page, thumb.get("primary_asset_id")
                 )
-                path_webp = os.path.join(thumbs_dir, cache_base + ".webp")
+                cache_dir = _bound_thumbs_dir()
+                path_webp = os.path.join(cache_dir, cache_base + ".webp")
 
                 cache_path: str | None = None
                 serve_mime = "image/webp"
@@ -1534,7 +1567,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             serve_mime = f"image/{thumb_sub}"
                             # v2 cache: WebP only (lossy default); fallbacks use matching ext.
                             ext = "webp" if thumb_sub == "webp" else thumb_sub
-                            cache_path = os.path.join(thumbs_dir, f"{cache_base}.{ext}")
+                            cache_path = os.path.join(cache_dir, f"{cache_base}.{ext}")
                         finally:
                             try:
                                 doc.close()
@@ -1546,11 +1579,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         tmp_name = f"{cache_base}.{ext}.tmp"
                         try:
                             publish_derived_cache_bytes(
-                                thumbs_dir, f"{cache_base}.{ext}", generated_bytes
+                                cache_dir, f"{cache_base}.{ext}", generated_bytes
                             )
                         except Exception:
                             try:
-                                tmp_path = os.path.join(thumbs_dir, tmp_name)
+                                tmp_path = os.path.join(cache_dir, tmp_name)
                                 if os.path.exists(tmp_path):
                                     os.remove(tmp_path)
                             except Exception:
@@ -1567,19 +1600,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_error(404, "Thumbnail unavailable")
                         return
 
-                if not (cache_path and os.path.exists(cache_path)) and not generated_bytes:
-                    self.send_error(404, "Thumbnail unavailable")
-                    return
                 try:
+                    if cache_path and os.path.exists(cache_path):
+                        with open(cache_path, "rb") as f:
+                            thumbnail_body = f.read()
+                    elif generated_bytes:
+                        thumbnail_body = generated_bytes
+                    else:
+                        self.send_error(404, "Thumbnail unavailable")
+                        return
                     self.send_response(200)
                     self.send_header("Content-Type", serve_mime)
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()
-                    if cache_path and os.path.exists(cache_path):
-                        with open(cache_path, "rb") as f:
-                            self.wfile.write(f.read())
-                    else:
-                        self.wfile.write(generated_bytes)
+                    self.wfile.write(thumbnail_body)
                 except Exception as exc:
                     self._send_internal_error(exc)
             elif works_api.handle_state(self, db, path):
@@ -1608,7 +1642,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 from backend.domain.research import index_commands
 
                 try:
-                    snapshot = index_commands.graph(db.database, self._prks_request_context,
+                    snapshot = index_commands.graph(*self._admitted_actor(),
                                                     include_people=include_people)
                 except GraphTooLargeError as e:
                     body = {
@@ -1681,7 +1715,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def handle_api_post(self, parsed_path, data=_JSON_BODY_REJECTED):
+    def handle_api_post(self, parsed_path, data: Any = _JSON_BODY_REJECTED):
+        # ``data`` is a decoded JSON request body (``json.loads``), or one of
+        # the ``_JSON_BODY_*`` markers until it is read below.
         path = parsed_path.path
         try:
             if data is _JSON_BODY_REJECTED:
@@ -1736,7 +1772,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # rebuild re-extracts only what has no current row.
                 from backend.domain.search import search_commands
 
-                summary = search_commands.queue_text_rebuild(db.database, self._prks_request_context)
+                summary = search_commands.queue_text_rebuild(*self._admitted_actor())
                 self.send_json(200, {"status": "ok", **summary})
             elif path == '/api/works/linearize-existing-pdfs':
                 # Managed PDFs on PostgreSQL are immutable stored objects;
@@ -2006,7 +2042,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         from backend.sync.protocol import process_operation as process_postgres_operation
 
         status, result = process_postgres_operation(
-            db.database, self._prks_request_context, data, Environment(pdfs_dir=pdfs_dir))
+            *self._admitted_actor(), data, Environment(pdfs_dir=_bound_pdfs_dir()))
         acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
         operation = data.get("operation") if isinstance(data, dict) else None
         if acknowledged and operation == work_note_sync.RESEARCH_OPERATION:
@@ -2017,7 +2053,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 from backend.domain.research import index_commands
 
                 result["research_refs"] = index_commands.research_refs(
-                    db.database, self._prks_request_context, data.get("entity_id"))
+                    *self._admitted_actor(), data.get("entity_id"))
             except Exception as e:
                 LOGGER.warning(
                     "research_refs_read_failed request_id=%s error_type=%s",
@@ -2186,6 +2222,16 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     daemon_threads = True
     block_on_close = False
     allow_reuse_address = True
+
+    # Set by ``run_server`` before serving. Declared without values so a
+    # server that never set one still has no such attribute: the handler
+    # reads them with ``getattr(self.server, ..., None)``.
+    prks_bind_host: str
+    prks_trusted_hosts: frozenset[str]
+    prks_access_gate: LibraryAccessGate
+    prks_auth: "WebAuth | None"
+    prks_jobs: "WebJobs | None"
+    prks_readiness: "PostgresReadiness | None"
 
 
 
