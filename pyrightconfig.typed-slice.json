@@ -199,6 +199,10 @@
     "backend/work_tag_sync.py",
     "backend/server.py",
     "prks_app.py",
+    "scripts",
+    "tests"
+  ],
+  "extraPaths": [
     "scripts"
   ],
   "exclude": [

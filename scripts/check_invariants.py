@@ -235,6 +235,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/server.py",
     "prks_app.py",
     "scripts",
+    "tests",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 # "basic" is no longer accepted: the slice was raised to "standard" in #69

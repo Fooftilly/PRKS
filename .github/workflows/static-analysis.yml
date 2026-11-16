@@ -191,9 +191,10 @@ jobs:
           node-version: "24"
 
       # The typed slice includes PostgreSQL, identity login and the person
-      # portrait encoder and PDF text extraction (#69), plus scripts/ (#1269).
-      # Resolve psycopg, argon2, Pillow, PyMuPDF and pydantic imports, and the
-      # scripts' Playwright, requests and markdown-it-py imports, rather than
+      # portrait encoder and PDF text extraction (#69), plus scripts/ (#1269)
+      # and tests/ (#1273). Resolve psycopg, argon2, Pillow, PyMuPDF and
+      # pydantic imports, the scripts' Playwright, requests and markdown-it-py
+      # imports, and the tests' openapi-core and Hypothesis imports, rather than
       # suppressing diagnostics. Install only pinned type imports from
       # requirements.txt and requirements-dev.txt.
       - name: Set up Python for PostgreSQL and identity type imports
@@ -212,13 +213,13 @@ jobs:
           mapfile -t pillow_pins < <(grep -E '^Pillow==[^[:space:]]+$' requirements.txt)
           mapfile -t pymupdf_pins < <(grep -E '^PyMuPDF==[^[:space:]]+$' requirements.txt)
           mapfile -t pydantic_pins < <(grep -E '^pydantic==[^[:space:]]+$' requirements.txt)
-          mapfile -t script_pins < <(grep -E '^(playwright|requests|markdown-it-py)==[^[:space:]]+$' requirements-dev.txt)
+          mapfile -t script_pins < <(grep -E '^(playwright|requests|markdown-it-py|openapi-core|hypothesis)==[^[:space:]]+$' requirements-dev.txt)
           if [[ "${#pg_pins[@]}" -ne 3 || "${#argon_pins[@]}" -ne 1 || "${#pillow_pins[@]}" -ne 1 || "${#pymupdf_pins[@]}" -ne 1 || "${#pydantic_pins[@]}" -ne 1 ]]; then
             echo "Expected three pinned PostgreSQL packages, one argon2-cffi package, one Pillow package, one PyMuPDF package and one pydantic package in requirements.txt" >&2
             exit 1
           fi
-          if [[ "${#script_pins[@]}" -ne 3 ]]; then
-            echo "Expected pinned playwright, requests and markdown-it-py packages in requirements-dev.txt" >&2
+          if [[ "${#script_pins[@]}" -ne 5 ]]; then
+            echo "Expected pinned playwright, requests, markdown-it-py, openapi-core and hypothesis packages in requirements-dev.txt" >&2
             exit 1
           fi
           python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}" "${argon_pins[@]}" "${pillow_pins[@]}" "${pymupdf_pins[@]}" "${pydantic_pins[@]}" "${script_pins[@]}"
