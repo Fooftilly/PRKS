@@ -69,10 +69,10 @@ def executable_lines(entry: dict, kind: str) -> tuple[set[int], set[int]] | None
             lines[line] = max(lines.get(line, 0), int(hits[statement_id]))
         return set(lines), {line for line, count in lines.items() if count > 0}
     # Older Istanbul JSON representations may include line hits directly.
-    lines = entry.get("l")
-    if not isinstance(lines, dict) or not lines:
+    line_hits = entry.get("l")
+    if not isinstance(line_hits, dict) or not line_hits:
         return None
-    return {int(n) for n in lines}, {int(n) for n, count in lines.items() if count > 0}
+    return {int(n) for n in line_hits}, {int(n) for n, count in line_hits.items() if count > 0}
 
 
 def changed_line_report(

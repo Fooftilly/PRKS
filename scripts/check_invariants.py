@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence, TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -234,6 +234,7 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/work_tag_sync.py",
     "backend/server.py",
     "prks_app.py",
+    "scripts",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
 # "basic" is no longer accepted: the slice was raised to "standard" in #69
@@ -1206,7 +1207,7 @@ def _names_of_bindings(bindings: Iterable[_Binding]) -> set[str]:
     return names
 
 
-def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> bool:
+def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> TypeGuard[ast.Call]:
     return isinstance(node, ast.Call) and "functools.partial" in _qualified_names(
         node.func, scopes
     )
@@ -1503,7 +1504,8 @@ def _static_sql_text(node: ast.expr) -> str | None:
         return node.value
     if isinstance(node, ast.JoinedStr):
         return "".join(
-            part.value if isinstance(part, ast.Constant) else "?" for part in node.values
+            part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "?"
+            for part in node.values
         )
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left, right = _static_sql_text(node.left), _static_sql_text(node.right)
@@ -2576,6 +2578,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         )
 
     def visit_Try(self, node: ast.Try) -> None:
+        self._visit_try_statement(node)
+
+    def visit_TryStar(self, node: ast.TryStar) -> None:
+        self._visit_try_statement(node)
+
+    def _visit_try_statement(self, node: ast.Try | ast.TryStar) -> None:
         before = _copy_state(self.scopes[-1].current)
         mark = len(self._dirty_log)
         body_end = self._run_branch(before, node.body)
@@ -2595,8 +2603,6 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.scopes[-1].current = _join(flows)
         for stmt in node.finalbody:
             self.visit(stmt)
-
-    visit_TryStar = visit_Try
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.type is not None:
@@ -3528,14 +3534,16 @@ def check_source(source: str, relpath: str) -> list[Finding]:
     class_registry: dict[int, _ClassInfo] = {}
     function_registry: dict[int, _FuncInfo] = {}
     previous: object = None
+    findings: list[Finding] = []
     for _ in range(_MAX_ANALYSIS_PASSES):
         visitor = _InvariantVisitor(relpath, class_registry, function_registry)
         visitor.visit(tree)
+        findings = visitor.findings
         snapshot = _registry_snapshot(class_registry, function_registry)
         if snapshot == previous:
             break
         previous = snapshot
-    return visitor.findings
+    return findings
 
 
 _MAX_ANALYSIS_PASSES = 10

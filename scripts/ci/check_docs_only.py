@@ -164,7 +164,7 @@ def check_markdown(root: Path, relative: str) -> list[str]:
                 if child.type in ("link_open", "image"):
                     attr = "href" if child.type == "link_open" else "src"
                     href = child.attrGet(attr)
-                    if href:
+                    if isinstance(href, str) and href:
                         error = _check_link(root, current, relative, number, href, cache)
                         if error:
                             errors.append(error)

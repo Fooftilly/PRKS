@@ -402,7 +402,7 @@ def build_request(args: argparse.Namespace, env: dict[str, str]) -> Request:
 def main(argv: list[str] | None = None, env: dict[str, str] | None = None,
          client_factory: Callable[[str, str], Client] | None = None) -> int:
     env = dict(os.environ) if env is None else env
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("--repo", default="")
     parser.add_argument("--blocked", required=True, help="issue number that is blocked")
     parser.add_argument("--blocking", required=True, help="issue number that blocks it")

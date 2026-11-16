@@ -11,12 +11,16 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
+
+if TYPE_CHECKING:
+    from playwright.sync_api import ViewportSize
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "docs" / "screenshots"
 MANIFEST = OUT_DIR / "manifest.json"
-VIEWPORT = {"width": 1440, "height": 900}
+VIEWPORT: ViewportSize = {"width": 1440, "height": 900}
 THEME = "light"
 PNG_OPTIMIZE_MODE = "lossless"
 
@@ -339,8 +343,9 @@ def _promote_capture(
                 raise RuntimeError(f"Staged screenshot missing: {name}")
             prior: Path | None = None
             if dest.is_file():
-                prior = backup_dir / name
-                shutil.copy2(dest, prior)
+                backup = backup_dir / name
+                shutil.copy2(dest, backup)
+                prior = backup
             backed_up.append((dest, prior))
 
         for entry in captured:
@@ -504,6 +509,8 @@ def capture(base_url: str, set_name: str = "all") -> list[dict]:
                 )
 
             if set_name in ("extra", "all"):
+                # Guaranteed by the "Demo library incomplete" check above.
+                assert darwin is not None and note is not None and group is not None
                 shot(
                     "#/folders",
                     "all-folders.png",

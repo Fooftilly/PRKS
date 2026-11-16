@@ -338,7 +338,7 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
         raise RuntimeError("run through scripts/test-postgres --profile only")
 
     import psycopg
-    from psycopg.rows import dict_row
+    from psycopg.rows import DictRow, dict_row
 
     from datetime import timedelta
 
@@ -365,9 +365,12 @@ def run(sizes: tuple[int, ...], repetitions: int) -> dict[str, Any]:
         # Disable tracking for this administrative connection at startup;
         # otherwise the reset SELECT is itself recorded after its reset.
         # The independent facade pool retains its ordinary top-level tracking.
-        with psycopg.connect(harness.conninfo(dbname), autocommit=True,
-                             options="-c pg_stat_statements.track=none",
-                             row_factory=dict_row) as stats:
+        # Parameterise the class so the checker binds Row to DictRow; the
+        # module-level ``psycopg.connect`` alias is fixed to tuple rows.
+        with psycopg.Connection[DictRow].connect(
+                harness.conninfo(dbname), autocommit=True,
+                options="-c pg_stat_statements.track=none",
+                row_factory=dict_row) as stats:
             # Recheck on the just-created, harness-owned database before any
             # extension DDL or server-shared pg_stat_statements reset.
             version = verify_disposable_cluster(stats, nonce)

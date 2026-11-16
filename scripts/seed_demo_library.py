@@ -14,6 +14,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import pymupdf as fitz
 
@@ -154,8 +155,8 @@ def _clip_pdf(data: bytes, pages: int = 8, start_page: int | None = None) -> byt
     else:
         start = 0
         for i in range(src.page_count):
-            text = (src[i].get_text("text") or "").strip()
-            if len(text) > 80:
+            text = src[i].get_text("text")
+            if isinstance(text, str) and len(text.strip()) > 80:
                 start = i
                 break
     out = fitz.open()
@@ -196,6 +197,13 @@ class Client:
 
     def post(self, path: str, body):
         return self.json("POST", path, body)
+
+    def create(self, path: str, body) -> dict[str, Any]:
+        """POST that must answer with the created record as a JSON object."""
+        created = self.post(path, body)
+        if not isinstance(created, dict):
+            raise RuntimeError(f"POST {path} -> expected a JSON object, got {created!r}")
+        return created
 
     def delete(self, path: str):
         return self.json("DELETE", path)
@@ -285,7 +293,7 @@ def ensure_demo_note(api: Client) -> None:
         return
 
     pdf = _excerpt_pdf()
-    created = api.post(
+    created = api.create(
         "/api/works",
         {
             "title": NOTE_TITLE,
@@ -319,7 +327,7 @@ def ensure_demo_group(api: Client) -> None:
     if not isinstance(persons, list):
         persons = []
     by_last = {(p.get("last_name") or p.get("first_name") or ""): p.get("id") for p in persons}
-    created = api.post(
+    created = api.create(
         "/api/person-groups",
         {"name": DEMO_GROUP, "description": "Writers and thinkers from the long nineteenth century."},
     )
@@ -347,14 +355,14 @@ def seed(base_url: str) -> dict:
             "works": works if isinstance(works, list) else [],
         }
 
-    library = api.post(
+    library = api.create(
         "/api/folders",
         {
             "title": DEMO_LIBRARY,
             "description": "Scans of works in the public domain, for screenshots.",
         },
     )
-    notes = api.post(
+    notes = api.create(
         "/api/folders",
         {"title": DEMO_NOTES, "description": "Excerpts and reading notes."},
     )
@@ -362,10 +370,10 @@ def seed(base_url: str) -> dict:
     notes_id = notes["id"]
 
     tags = {
-        "biology": api.post("/api/tags", {"name": "biology", "color": "#3d8b6e"})["id"],
-        "fiction": api.post("/api/tags", {"name": "fiction", "color": "#6d6cf7"})["id"],
-        "politics": api.post("/api/tags", {"name": "politics", "color": "#c45c26"})["id"],
-        "philosophy": api.post("/api/tags", {"name": "philosophy", "color": "#5a6a8a"})["id"],
+        "biology": api.create("/api/tags", {"name": "biology", "color": "#3d8b6e"})["id"],
+        "fiction": api.create("/api/tags", {"name": "fiction", "color": "#6d6cf7"})["id"],
+        "politics": api.create("/api/tags", {"name": "politics", "color": "#c45c26"})["id"],
+        "philosophy": api.create("/api/tags", {"name": "philosophy", "color": "#5a6a8a"})["id"],
     }
 
     person_ids = {}
@@ -378,7 +386,7 @@ def seed(base_url: str) -> dict:
             "birth_date": born,
             "death_date": died,
         }
-        created = api.post("/api/persons", body)
+        created = api.create("/api/persons", body)
         key = last or first
         person_ids[key] = created["id"]
 
@@ -400,7 +408,7 @@ def seed(base_url: str) -> dict:
             "file_name": spec["file_name"],
             "roles": [{"person_id": person_ids[spec["person"]], "role_type": spec["role"]}],
         }
-        created = api.post("/api/works", payload)
+        created = api.create("/api/works", payload)
         wid = created["id"]
         api.post(f"/api/works/{wid}/tags", {"tag_id": tags[spec["tag"]]})
         if spec.get("hero"):

@@ -200,7 +200,7 @@ def render(queue: dict[str, Any], agent: str, *, now: datetime) -> str:
 def main(argv: Optional[Sequence[str]] = None, *, now: Optional[datetime] = None,
          env: Optional[Mapping[str, str]] = None,
          transport_factory: Callable[[str], readiness.Transport] = readiness.http_transport) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
     publish = sub.add_parser("publish", help="build a public queue from a validated readiness snapshot")
     publish.add_argument("--snapshot", required=True)

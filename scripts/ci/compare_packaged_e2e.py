@@ -27,7 +27,9 @@ class InvalidBenchmark(ValueError):
     """A run is incomplete, unpaired, or unsuitable for comparison."""
 
 
-def _seconds(start: str, end: str) -> float:
+def _seconds(start: object, end: object) -> float:
+    if not isinstance(start, str) or not isinstance(end, str):
+        raise InvalidBenchmark("Missing or invalid job timestamps")
     try:
         first = datetime.fromisoformat(start.replace("Z", "+00:00"))
         last = datetime.fromisoformat(end.replace("Z", "+00:00"))
@@ -72,12 +74,19 @@ def _successful_jobs(jobs: list[dict]) -> list[dict]:
     return active
 
 
+def _shard_number(job: dict) -> int:
+    match = FULL_JOB.fullmatch(job.get("name") or "")
+    if match is None:
+        raise InvalidBenchmark(f"Not a full shard job: {job.get('name')!r}")
+    return int(match.group(1))
+
+
 def _browser_jobs(active: list[dict], jobs: list[dict], mode: str) -> list[dict]:
     shards = [job for job in active if FULL_JOB.fullmatch(job.get("name") or "")]
     smoke = [job for job in active if job.get("name") == SMOKE_JOB]
     skipped = [job.get("name") or "" for job in jobs if job.get("conclusion") == "skipped"]
     if mode == "full":
-        indices = sorted(int(FULL_JOB.fullmatch(job["name"]).group(1)) for job in shards)
+        indices = sorted(_shard_number(job) for job in shards)
         if indices != list(range(1, 7)) or smoke:
             raise InvalidBenchmark("Full run must have six distinct passing shards and no smoke job")
         if SMOKE_JOB not in skipped:
@@ -140,7 +149,7 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
     active = _successful_jobs(jobs)
     shards = [j for j in active if FULL_JOB.fullmatch(j.get("name") or "")]
     smoke = [j for j in active if j.get("name") == SMOKE_JOB]
-    shard_ids = sorted(int(FULL_JOB.fullmatch(j["name"]).group(1)) for j in shards)
+    shard_ids = sorted(_shard_number(j) for j in shards)
     if shard_ids != list(range(1, 7)) or len(smoke) != 1:
         raise InvalidBenchmark("Paired run requires all six full shards and one smoke job")
     permitted = {*(j["name"] for j in shards), SMOKE_JOB, *SHARED_JOBS}

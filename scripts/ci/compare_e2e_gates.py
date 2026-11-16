@@ -87,8 +87,10 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
     return [by_name[name] for name in required_names], step_name
 
 
-def _timestamp(value: str, label: str) -> datetime:
+def _timestamp(value: object, label: str) -> datetime:
     """Parse an explicit GitHub UTC/offset timestamp; never assume a timezone."""
+    if not isinstance(value, str):
+        raise InvalidBenchmark(f"Missing or invalid {label} timestamp")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (AttributeError, ValueError, TypeError) as exc:

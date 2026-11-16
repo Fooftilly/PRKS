@@ -1328,9 +1328,20 @@ class RepoGateLiveTests(unittest.TestCase):
             line for line in static_install.splitlines()
             if "python -m pip install" in line
         )
-        for group in ("pg_pins", "argon_pins", "pillow_pins", "pymupdf_pins", "pydantic_pins"):
+        for group in (
+            "pg_pins", "argon_pins", "pillow_pins", "pymupdf_pins", "pydantic_pins", "script_pins",
+        ):
             self.assertIn(f'"${{{group}[@]}}"', pip_line)
-        self.assertNotIn("requirements-dev.txt", static_install)
+        # scripts/ is in the typed slice (#1269): only its tooling imports
+        # (Playwright, requests, markdown-it-py) come from the development pins.
+        dev_lines = [line.strip() for line in static_install.splitlines()
+                     if "requirements-dev.txt" in line and not line.strip().startswith("echo")]
+        self.assertEqual(dev_lines, [
+            "mapfile -t script_pins < <(grep -E "
+            "'^(playwright|requests|markdown-it-py)==[^[:space:]]+$' requirements-dev.txt)"
+        ])
+        for name in ("playwright", "requests", "markdown-it-py"):
+            self.assertIn(name, dev)
         expected_unit = dict(runtime, **{
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl", "requests")

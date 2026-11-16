@@ -236,6 +236,9 @@ def _check_guards(item: dict, stage: str) -> None:
     missing = [f for f in target if not isinstance(before, dict) or f not in before]
     if missing:
         raise MigrationError(f"{key}: plan row needs an explicit expected_before entry for {', '.join(missing)} (null is allowed)")
+    # Every target field is in ``before`` now, so it is a dict whenever a
+    # target field is read below.
+    before = before if isinstance(before, dict) else {}
     bad = [f for f in target if not isinstance(target[f], str) or not (before[f] is None or isinstance(before[f], str))]
     if bad:
         raise MigrationError(f"{key}: set and expected_before values must be option names (strings; null allowed "
@@ -455,6 +458,8 @@ def apply_item(project: Project, item: dict, rec: dict, stage: str, checkpoint: 
         # Returns the existing item if native auto-add got there first.
         item_id = gql.mutate("addProjectV2ItemById", ADD_M, {"project": PROJECT_ID, "content": content["id"]})["addProjectV2ItemById"]["item"]["id"]
     else:
+        if live is None:  # build_record sets add exactly when the item is missing
+            raise MigrationError(f"{key}: no live project item to update")
         item_id = live["id"]
     rec["item_id"] = item_id
     written: list = []
