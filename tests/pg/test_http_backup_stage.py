@@ -63,6 +63,7 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
         self.assertIn(b"Connection: close", rest)
         self.assertLess(elapsed, 5)
         self.assertTrue(restored.is_set())
+        assert self.server_module._bound_storage is not None
         directory = staged.staged_dir(self.server_module._bound_storage.root)
         self.assertEqual(os.listdir(directory) if os.path.isdir(directory) else [], [])
 
@@ -82,6 +83,7 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
             conn.close()
 
     def staged_files(self) -> list[str]:
+        assert self.server_module._bound_storage is not None
         directory = staged.staged_dir(self.server_module._bound_storage.root)
         return os.listdir(directory) if os.path.isdir(directory) else []
 

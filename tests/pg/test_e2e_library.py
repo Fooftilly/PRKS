@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import LiteralString
 import tempfile
 import unittest
 
@@ -23,7 +24,7 @@ class E2ELibraryTests(unittest.TestCase):
         self.root = os.path.join(tmp.name, "storage")
         os.mkdir(self.root)
 
-    def rows(self, conninfo: str, query: str) -> list[dict]:
+    def rows(self, conninfo: str, query: LiteralString) -> list[dict]:
         db = Database(DatabaseConfig(conninfo=conninfo, role="test", pool_min=0, pool_max=1))
         try:
             return db.command(lambda tx: tx.execute(query).fetchall())
@@ -105,6 +106,7 @@ if __name__ == "__main__":
 class PostgresLibraryLegTests(unittest.TestCase):
     """The seed and the server on PostgreSQL, the only backend (PG-C1 #640, PG-C2 #641)."""
 
+    root: str  # set by the shared setUp
     setUp = E2ELibraryTests.setUp
     rows = E2ELibraryTests.rows
 

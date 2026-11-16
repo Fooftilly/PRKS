@@ -29,6 +29,7 @@ from backend.domain.maintenance import backup, tables
 from backend.domain.maintenance.backup import BackupFailed, BackupResult
 from backend.domain.objects import lifecycle
 from tests.pg.test_objects_lifecycle import ObjectsTestCase
+from backend.storage.objects import StorageKey
 
 VERSION = "0.8.0-test"
 
@@ -198,7 +199,7 @@ class ObjectSafetyTests(BackupTestCase):
         self.create(obj)
         real = self.objects.open_read
 
-        def closing_badly(key: str) -> Any:
+        def closing_badly(key: StorageKey) -> Any:
             handle = real(key)
             close = handle.close
 

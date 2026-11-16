@@ -30,6 +30,7 @@ from tests import acting_context as facade_context
 from backend.domain.research.rules import ResearchError
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_arguments_sync import ResearchSyncTestCase
+from tests.narrowing import require
 
 
 class ResearchIndexTestCase(ResearchSyncTestCase):
@@ -164,7 +165,7 @@ class MentionTests(ResearchIndexTestCase):
     def test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index(self) -> None:
         work = self.library.add_work("W")
         self.library.save_work_notes(work, "See [[concept:Culture Industry]].")
-        self.assertEqual(self.library.get_work_notes_state(work)["research_note_revision"], 1)
+        self.assertEqual(require(self.library.get_work_notes_state(work))["research_note_revision"], 1)
         status, result = self.send(self.envelope("SET_WORK_RESEARCH_NOTE", work,
                                                  {"text": "Also [[concept:Mass Culture]]."}, 1,
                                                  entity_type="work"))
@@ -183,7 +184,7 @@ class MentionTests(ResearchIndexTestCase):
         self.assertEqual(status, 200)
         self.run_jobs()
         self.assertEqual((self.concept_ids(), self.mentions(work)["concepts"]), ({}, []))
-        self.assertEqual(self.library.get_work(work)["private_notes"], "Remind me: [[concept:Should Not Exist]].")
+        self.assertEqual(require(self.library.get_work(work))["private_notes"], "Remind me: [[concept:Should Not Exist]].")
 
     def test_a_failed_note_write_rolls_back_its_concepts_and_job(self) -> None:
         work = self.library.add_work("W")
@@ -515,7 +516,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.assertEqual((concept["name"], concept["description"]), ("Culture Industry", ""))
         self.research_note(work, "Same idea as [[concept:culture industry]] and [[concept:  Culture   Industry  ]].")
         self.assertEqual([item["id"] for item in self.library.list_concepts()], [concept["id"]])
-        self.assertIn("[[concept:culture industry]]", self.library.get_work(work)["text_content"])
+        self.assertIn("[[concept:culture industry]]", require(self.library.get_work(work))["text_content"])
 
     def test_the_last_reference_going_keeps_the_concept(self) -> None:
         a, b = self.library.add_work("A"), self.library.add_work("B")
@@ -538,16 +539,17 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         (concept,) = self.library.list_concepts()
         self.library.update_concept(concept["id"], name="Cultural Industry")
         item = self.library.get_concept(concept["id"])
+        assert item is not None
         self.assertEqual((item["name"], item["aliases"]), ("Cultural Industry", ["Culture Industry"]))
         self.research_note(work, "still [[concept:Culture Industry]]")
         self.assertEqual(len(self.library.list_concepts()), 1)
         # A capitalization-only rename changes the display name and adds no alias.
         other = self.concept("Mass Culture")
         self.library.update_concept(other, name="MASS CULTURE")
-        self.assertEqual((self.library.get_concept(other)["name"], self.library.get_concept(other)["aliases"]),
+        self.assertEqual((require(self.library.get_concept(other))["name"], require(self.library.get_concept(other))["aliases"]),
                          ("MASS CULTURE", []))
         self.refused("concept_exists", self.library.update_concept, other, name="Cultural Industry")
-        self.assertEqual(self.library.get_concept(other)["name"], "MASS CULTURE")
+        self.assertEqual(require(self.library.get_concept(other))["name"], "MASS CULTURE")
         # An alias resolves a note to its Concept.
         self.library.replace_concept_aliases(other, ["Kulturindustrie"])
         self.research_note(work, "[[concept:Kulturindustrie]]")
@@ -556,7 +558,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
     def test_parents_and_cycles(self) -> None:
         a, b, c = self.concept("Critical Theory"), self.concept("Mass Culture"), self.concept("Culture Industry")
         self.library.replace_concept_parents(c, [a, b])
-        self.assertEqual({p["id"] for p in self.library.get_concept(c)["parents"]}, {a, b})
+        self.assertEqual({p["id"] for p in require(self.library.get_concept(c))["parents"]}, {a, b})
         self.library.replace_concept_parents(b, [a])
         self.refused("concept_cycle", self.library.replace_concept_parents, a, [c])
         self.refused("concept_cycle", self.library.replace_concept_parents, a, [a])
@@ -594,7 +596,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
                                               targets=[{"type": "position", "id": pos, "verdict_id": "holds"}])
         self.assertEqual(stance["kind"], "stance")
         b = self.argument("Habermas response", targets=[{"type": "argument", "id": a["id"], "verdict_id": "opposes"}])
-        self.assertEqual(self.library.get_argument(a["id"])["responses"][0]["id"], b)
+        self.assertEqual(require(self.library.get_argument(a["id"]))["responses"][0]["id"], b)
         self.refused("argument_cycle", self.library.replace_argument_targets, a["id"],
                      [{"type": "argument", "id": a["id"], "verdict_id": "supports"}])
         self.refused("argument_cycle", self.library.replace_argument_targets, a["id"],

@@ -26,7 +26,7 @@ import uuid
 import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 
 import psycopg
 
@@ -176,7 +176,7 @@ class DeviceRaceTests(ScopeTestCase):
         self.device_id = self.device(self.editor)
         self.claim = self.ctx(self.editor, device_id=self.device_id)
 
-    def assert_change_waits_for_the_write(self, statement: str, params: tuple[Any, ...]) -> None:
+    def assert_change_waits_for_the_write(self, statement: LiteralString, params: tuple[Any, ...]) -> None:
         paused = Paused()
         writer = paused.start(
             lambda: library_command(self.db, self.claim, Capability.EDIT_LIBRARY, paused.hold(bump("a1")))
@@ -242,7 +242,7 @@ class ExpiryAfterLockWaitTests(ScopeTestCase):
 
         return check
 
-    def run_through_expiry(self, table: str, column: str, row_id: Any, ctx: RequestContext) -> Paused:
+    def run_through_expiry(self, table: LiteralString, column: LiteralString, row_id: Any, ctx: RequestContext) -> Paused:
         self.expires_soon(table, column, row_id)
         with self.connect() as blocker:
             blocker.execute("BEGIN")

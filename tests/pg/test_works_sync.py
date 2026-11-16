@@ -33,6 +33,7 @@ from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers import work_lifecycle, work_metadata
 from tests.pg.test_works_mutations import MutationTestCase
+from tests.narrowing import require
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 _OTHER_VIDEO = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -107,7 +108,7 @@ class LedgerTests(SyncTestCase):
         self.assertTrue(all(result == results[0] for result in results), results)
         self.assertEqual(results[0][1]["server_revision"], 1)
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(self.library.get_work_metadata_state(work_id)["fields"]["title"]["revision"], 1)
+        self.assertEqual(require(self.library.get_work_metadata_state(work_id))["fields"]["title"]["revision"], 1)
 
     def test_a_create_sent_concurrently_applies_once(self) -> None:
         data = self.envelope("CREATE_WORK", "W-" + uuid.uuid4().hex.upper(), create_payload())
@@ -137,7 +138,7 @@ class LedgerTests(SyncTestCase):
         self.assertEqual(self.send(dict(data, device_id=str(other.context.device_id)), other.context),
                          (409, {"code": "OP_ID_REUSE"}))
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(self.library.get_work(work_id)["title"], "Mine")
+        self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
 
     def test_the_device_must_be_the_users(self) -> None:
         work_id = self.library.add_work("Work")
@@ -145,7 +146,7 @@ class LedgerTests(SyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(work_id, "Stolen", 0, device_id=str(other.context.device_id)))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
 
     def test_a_new_device_is_bound_to_the_user_that_first_presents_it(self) -> None:
         work_id = self.library.add_work("Work")
@@ -228,7 +229,7 @@ class ConcurrentOperationTests(SyncTestCase):
             for moment in moments
         ])
         self.assertTrue(all(result[0] == 200 for result in results))
-        self.assertEqual(self.library.get_work(work_id)["last_opened_at"], "2026-09-11 10:00:00.900")
+        self.assertEqual(require(self.library.get_work(work_id))["last_opened_at"], "2026-09-11 10:00:00.900")
 
     def test_a_delete_and_an_edit_of_one_work(self) -> None:
         for _ in range(5):
@@ -254,7 +255,7 @@ class CreateWorkTests(SyncTestCase):
         self.assertEqual(self.send(self.envelope("CREATE_WORK", work_id, create_payload()))[1]["changed"], True)
         again = self.send(self.envelope("CREATE_WORK", work_id, create_payload(title="Other")))
         self.assertEqual((again[0], again[1]["changed"]), (200, False))
-        self.assertEqual(self.library.get_work(work_id)["title"], "A talk")
+        self.assertEqual(require(self.library.get_work(work_id))["title"], "A talk")
         self.assertEqual(self.filing.filed, [work_id])
 
     def test_concurrent_creates_of_one_id_make_one_work(self) -> None:
@@ -355,7 +356,7 @@ class DeleteAgainstPendingTests(SyncTestCase):
                          ["changed"], True)
         status, result = self.send(self.title_op(work_id, "Queued before the delete", 1))
         self.assertEqual((status, result["code"], result["current_revision"]), (409, "REVISION_CONFLICT", 2))
-        self.assertEqual(self.library.get_work(work_id)["title"], "Again")
+        self.assertEqual(require(self.library.get_work(work_id))["title"], "Again")
         self.assertEqual(self.send(self.title_op(work_id, "Seen after", 2))[1]["server_revision"], 3)
 
 
@@ -524,6 +525,7 @@ class IsolationTests(SyncTestCase):
         deleted = self.send(self.envelope("DELETE_WORK", work_id, {}, device_id=device), other.context)
         self.assertEqual(deleted, (200, {"code": "ACKNOWLEDGED", "work_id": work_id, "changed": False}))
         work = self.library.get_work(work_id)
+        assert work is not None
         self.assertEqual((work["title"], work["private_notes"], work["last_opened_at"]), ("Mine", "kept", None))
         self.assertEqual(self.revisions_of(work_id), {})
         # The other Library's answers are its own ledger rows, never this one's.
@@ -541,7 +543,7 @@ class IsolationTests(SyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(work_id, "Job", 0), worker)
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
 
 
 class EpochTests(SyncTestCase):
@@ -562,7 +564,7 @@ class EpochTests(SyncTestCase):
                 with self.assertRaises(AccessRefused) as caught:
                     self.send(data)
                 self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
-        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
         self.assertEqual(self.revisions_of(work_id), {})
         # The op_id was not burnt: the client resends it for the new epoch.
         data = self.title_op(work_id, "Resent", 0)
@@ -593,7 +595,7 @@ class FailureTests(SyncTestCase):
         with self.failing_after("SET_WORK_METADATA_FIELD", work_metadata.HANDLER):
             with self.assertRaises(RuntimeError):
                 self.send(data)
-        self.assertEqual((self.ledger(), self.library.get_work(work_id)["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
         self.assertEqual(self.revisions_of(work_id), {})
         self.assertEqual(self.send(data)[1]["server_revision"], 1)
         self.assertEqual(self.send(data)[1]["server_revision"], 1)  # and then replays
@@ -604,7 +606,7 @@ class FailureTests(SyncTestCase):
         with self.failing_after("DELETE_WORK", work_lifecycle.DELETE_HANDLER):
             with self.assertRaises(RuntimeError):
                 self.send(data)
-        self.assertEqual(self.library.get_work(work_id)["private_notes"], "kept")
+        self.assertEqual(require(self.library.get_work(work_id))["private_notes"], "kept")
         self.assertEqual((self.ledger(), self.revisions_of(work_id)), ([], {}))
         self.assertEqual(self.send(data)[1]["changed"], True)
         self.assertIsNone(self.library.get_work(work_id))
@@ -628,6 +630,7 @@ class NoteConflictTests(SyncTestCase):
                 self.assertTrue(all(loser["current_revision"] == winner["server_revision"] for loser in losers))
                 state = self.library.get_work_notes_state(work_id)
                 key = "research_note_revision" if operation == "SET_WORK_RESEARCH_NOTE" else "private_note_revision"
+                assert state is not None
                 self.assertEqual(state[key], 1)
 
 
@@ -643,7 +646,7 @@ class OpenSyncTests(SyncTestCase):
                              created_at=occurred_at, **changes)
 
     def opened_at(self, work_id: Optional[str] = None) -> Optional[str]:
-        return self.library.get_work(work_id or self.work)["last_opened_at"]
+        return require(self.library.get_work(work_id or self.work))["last_opened_at"]
 
     def test_the_latest_event_wins_whatever_the_arrival_order_or_zone(self) -> None:
         self.assertIsNone(self.opened_at())
@@ -721,13 +724,14 @@ class NoteSyncTests(SyncTestCase):
         super().setUp()
         self.work = self.library.add_work("Noted work")
 
-    def note(self, kind: str, text: Any, base: Optional[int] = 0, work_id: Optional[str] = None,
+    def note_op(self, kind: str, text: Any, base: Optional[int] = 0, work_id: Optional[str] = None,
              **changes: Any) -> dict[str, Any]:
         operation = "SET_WORK_RESEARCH_NOTE" if kind == "research" else "SET_WORK_PRIVATE_NOTE"
         return self.envelope(operation, work_id or self.work, {"text": text}, base, **changes)
 
     def state(self) -> tuple[int, int]:
         state = self.library.get_work_notes_state(self.work)
+        assert state is not None
         return state["research_note_revision"], state["private_note_revision"]
 
     def test_the_two_notes_advance_their_own_revisions_on_either_path(self) -> None:
@@ -735,14 +739,15 @@ class NoteSyncTests(SyncTestCase):
         self.assertEqual(self.library.get_work_notes_state(fresh),
                          {"work_id": fresh, "research_note_revision": 0, "private_note_revision": 0})
         self.assertIsNone(self.library.get_work_notes_state(generate("W")))
-        self.send(self.note("research", "Research A"))
-        self.send(self.note("private", "Private A"))
+        self.send(self.note_op("research", "Research A"))
+        self.send(self.note_op("private", "Private A"))
         self.assertEqual(self.state(), (1, 1))
-        self.send(self.note("research", "Research B", 1))
+        self.send(self.note_op("research", "Research B", 1))
         self.assertEqual(self.state(), (2, 1))
-        self.send(self.note("private", "Private B", 1))
+        self.send(self.note_op("private", "Private B", 1))
         self.assertEqual(self.state(), (2, 2))
         work = self.library.get_work(self.work)
+        assert work is not None
         self.assertEqual((work["text_content"], work["private_notes"]), ("Research B", "Private B"))
         self.library.update_work_metadata(self.work, {"private_notes": "Reminder via PATCH"})
         self.assertEqual(self.state(), (2, 3))
@@ -753,10 +758,10 @@ class NoteSyncTests(SyncTestCase):
         body, other = "Secret prose that must never appear in a durable result.", "A different secret."
         for kind in ("research", "private"):
             with self.subTest(kind=kind):
-                status, result = self.send(self.note(kind, body))
+                status, result = self.send(self.note_op(kind, body))
                 self.assertEqual((status, result["value_omitted"]), (200, True))
                 self.assertNotIn(body, json.dumps(result))
-                status, result = self.send(self.note(kind, other))
+                status, result = self.send(self.note_op(kind, other))
                 dumped = json.dumps(result)
                 self.assertEqual((status, result["code"], result["current_revision"], result["current_bytes"],
                                   result["requested_bytes"]),
@@ -767,7 +772,7 @@ class NoteSyncTests(SyncTestCase):
                     self.assertNotIn(key, result)
                 self.assertLessEqual(len(dumped.encode()), 2048)
                 # The same text from a stale base converges at the newer revision.
-                status, result = self.send(self.note(kind, body))
+                status, result = self.send(self.note_op(kind, body))
                 self.assertEqual((status, result["changed"], result["server_revision"]), (200, False, 1))
         self.assertEqual(self.state(), (1, 1))
 
@@ -776,27 +781,27 @@ class NoteSyncTests(SyncTestCase):
         with self.assertRaises(ResearchError) as caught:
             self.library.save_work_notes(self.work, control)
         self.assertEqual(caught.exception.code, "invalid_text")
-        self.assertEqual(self.send(self.note("research", control)), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.note_op("research", control)), (400, {"code": "INVALID_ENVELOPE"}))
         over_private = "p" * (work_note_sync.MAX_PRIVATE_NOTE_UTF8_BYTES + 1)
-        self.assertEqual(self.send(self.note("private", over_private))[0], 400)
+        self.assertEqual(self.send(self.note_op("private", over_private))[0], 400)
         with self.assertRaises(ValueError):
             self.library.update_work_metadata(self.work, {"private_notes": over_private})
-        self.assertEqual(self.send(self.note("research", "x", None))[1]["code"], "INVALID_BASE_REVISION")
-        extra = self.note("research", "x")
+        self.assertEqual(self.send(self.note_op("research", "x", None))[1]["code"], "INVALID_BASE_REVISION")
+        extra = self.note_op("research", "x")
         extra["payload"]["extra"] = 1
         self.assertEqual(self.send(extra), (400, {"code": "INVALID_ENVELOPE"}))
-        self.assertEqual(self.send(self.note("private", "x") | {"payload": {}}), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.note_op("private", "x") | {"payload": {}}), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual((self.ledger(), self.library.list_concepts(), self.state()), ([], [], (0, 0)))
         # The Research Note is the large aggregate: past the generic 64 KiB envelope cap it still lands.
         large = "r" * (64 * 1024 + 1)
-        self.assertEqual(self.send(self.note("research", large))[0], 200)
-        self.assertEqual(len(self.library.get_work(self.work)["text_content"]), 64 * 1024 + 1)
+        self.assertEqual(self.send(self.note_op("research", large))[0], 200)
+        self.assertEqual(len(require(self.library.get_work(self.work))["text_content"]), 64 * 1024 + 1)
         at_limit = "q" * work_note_sync.MAX_PRIVATE_NOTE_UTF8_BYTES
-        self.assertEqual(self.send(self.note("private", at_limit))[0], 200)
+        self.assertEqual(self.send(self.note_op("private", at_limit))[0], 200)
         missing = generate("W")
         for kind in ("research", "private"):
             with self.subTest(kind=kind):
-                data = self.note(kind, "gone", 0, missing)
+                data = self.note_op(kind, "gone", 0, missing)
                 first = self.send(data)
                 self.assertEqual((first[0], first[1]["code"], first[1]["work_id"]),
                                  (404, "ENTITY_NOT_FOUND", missing))
@@ -819,6 +824,7 @@ class SourceSyncTests(SyncTestCase):
 
     def columns(self, work_id: Optional[str] = None) -> dict[str, Any]:
         row = self.library.get_work(work_id or self.work)
+        assert row is not None
         return {key: row[key] for key in ("source_kind", "provider", "provider_id", "source_url", "thumb_url")}
 
     def revision(self, work_id: Optional[str] = None) -> int:
@@ -842,6 +848,7 @@ class SourceSyncTests(SyncTestCase):
                          (0, _WATCH % "AAA", "https://img/AAA.jpg"))
         status, result = self.send(self.source_op(_WATCH % "BBB"))
         row = self.library.get_work(self.work)
+        assert row is not None
         self.assertEqual((status, result["changed"], result["source_url"], result["provider_id"], result["provider"],
                           result["source_kind"], result["thumb_url"], result["urldate"]),
                          (200, True, row["source_url"], "BBB", "youtube", "video", None, row["urldate"]))
@@ -853,7 +860,7 @@ class SourceSyncTests(SyncTestCase):
         self.assertEqual((status, result["changed"], result["source_url"], result["server_revision"]),
                          (200, False, _WATCH % "BBB", 1))
         # The source is its own scope: no metadata field moved.
-        fields = self.library.get_work_metadata_state(self.work)["fields"]
+        fields = require(self.library.get_work_metadata_state(self.work))["fields"]
         self.assertEqual({entry["revision"] for entry in fields.values()}, {0})
         self.assertEqual(self.send(self.source_op(_WATCH % ("B" * work_source_sync.MAX_PROVIDER_ID_CHARS), 1))[0],
                          200)
@@ -924,7 +931,7 @@ class SourceSyncTests(SyncTestCase):
         pdf = self.library.add_work("Paper", file_path=path)
         self.assertEqual(self.send(self.source_op(_WATCH % "BBB", 0, pdf))[1]["code"],
                          "UNSUPPORTED_SOURCE_TRANSITION")
-        self.assertEqual((self.columns(pdf)["source_kind"], self.library.get_work(pdf)["file_path"]),
+        self.assertEqual((self.columns(pdf)["source_kind"], require(self.library.get_work(pdf))["file_path"]),
                          ("pdf", "/api/pdfs/refused.pdf"))
 
     def test_a_patch_never_writes_the_identity(self) -> None:
@@ -940,7 +947,7 @@ class SourceSyncTests(SyncTestCase):
                                                           "provider_id": "BBB", "title": "Renamed too"})
         for column in ("provider", "provider_id", "source_kind"):
             self.assertIn(column, str(caught.exception))
-        self.assertEqual((self.columns()["provider_id"], self.library.get_work(self.work)["title"], self.revision()),
+        self.assertEqual((self.columns()["provider_id"], require(self.library.get_work(self.work))["title"], self.revision()),
                          ("AAA", "Clip", 0))
         self.library.update_work_metadata(self.work, {"title": "Renamed", "year": "2021"})
-        self.assertEqual(self.library.get_work(self.work)["title"], "Renamed")
+        self.assertEqual(require(self.library.get_work(self.work))["title"], "Renamed")

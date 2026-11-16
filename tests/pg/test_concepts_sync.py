@@ -25,9 +25,10 @@ from backend.sync.families import FamilyHandler
 from backend.sync.handlers import concept as concept_handlers
 from tests.pg.test_concepts import ConceptTestCase
 from tests.pg.test_works_sync import SyncTestCase
+from tests.narrowing import require
 
 
-class ConceptSyncTestCase(SyncTestCase, ConceptTestCase):
+class ConceptSyncTestCase(SyncTestCase, ConceptTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def envelope(self, operation: str, entity_id: str, payload: dict[str, Any],
                  base: Optional[int] = None, **changes: Any) -> dict[str, Any]:
         changes.setdefault("entity_type", "concept")
@@ -226,6 +227,7 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
                 ("INVALID_BASE_REVISION", self.identity_op(emergence, "Other", [], 0) | {"base_revision": None}),
                 ("INVALID_BASE_REVISION", self.envelope("DELETE_CONCEPT", emergence, {}, 0)),
                 ("INVALID_ENVELOPE", self.envelope("DELETE_CONCEPT", emergence, {"cascade": True}))):
+            assert data["entity_id"] is not None
             with self.subTest(code=expected, operation=data["operation"], entity_id=data["entity_id"][:12]):
                 self.assertEqual(self.send(data), (400, {"code": expected}))
         self.assertEqual((len(self.ledger()), self.state(emergence)), before)
@@ -299,7 +301,7 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
         self.assertEqual(self.send(self.identity_op(holism, "Mine", [], 1))[1]["code"], "REVISION_CONFLICT")
         state = self.state(holism)
         self.assertEqual((state["identity_revision"], state["identity"]["aliases"],
-                          self.library.get_concept(holism)["aliases"]), (2, ["Alpha", "Zeta"], ["Alpha", "Zeta"]))
+                          require(self.library.get_concept(holism))["aliases"]), (2, ["Alpha", "Zeta"], ["Alpha", "Zeta"]))
 
     def test_the_parents_are_one_set_and_a_delete_advances_what_it_drops(self) -> None:
         child, first, second = self.create_concept("Emergence"), self.create_concept("Systems"), \
@@ -354,4 +356,4 @@ class AccessTests(ConceptSyncTestCase):
                                  "ENTITY_NOT_FOUND")
         self.assertEqual(self.send(self.envelope("DELETE_CONCEPT", ethics, {}) | {"device_id": device},
                                    other.context)[1]["changed"], False)
-        self.assertEqual(self.library.get_concept(ethics)["name"], "Ethics")
+        self.assertEqual(require(self.library.get_concept(ethics))["name"], "Ethics")

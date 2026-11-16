@@ -37,6 +37,7 @@ from backend.server import parse_request_origin
 from backend.storage import root_binding
 from backend.storage.config import StorageConfig
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
+from tests.narrowing import require
 
 
 # Not a bind: the address loopback-owner mode must refuse, and session mode accepts.
@@ -130,7 +131,7 @@ class StartTests(WebStartTestCase):
         before = self.db_state(name)
         lease = self.lease(root)
         auth = self.web_start(name, root, lease=lease)
-        self.assertEqual(auth.instance_id, self.instance(name)["id"])
+        self.assertEqual(auth.instance_id, require(self.instance(name))["id"])
         self.assert_paired(name, root, before.generation + 1)
         # The caller's shared lease stays held for the process's whole run.
         self.assertTrue(lease.held)
@@ -149,7 +150,7 @@ class StartTests(WebStartTestCase):
 
         auth = self.web_start(name, root, lease=lease, wait_for_setup=wait)
         self.assertEqual(len(calls), 2)
-        self.assertEqual(auth.instance_id, self.instance(name)["id"])
+        self.assertEqual(auth.instance_id, require(self.instance(name))["id"])
         # The claim was generation 1; this process's start is the one bump.
         self.assert_paired(name, root, 2)
 
@@ -166,6 +167,7 @@ class StartTests(WebStartTestCase):
         owner = self.db(name).query(
             lambda tx: tx.execute("SELECT user_id, library_id FROM prks.library_memberships").fetchone()
         )
+        assert owner is not None
         self.assertEqual((session.user_id, session.library_id), (owner["user_id"], owner["library_id"]))
 
     def test_loopback_owner_needs_exactly_one_owner(self) -> None:
@@ -186,6 +188,7 @@ class StartTests(WebStartTestCase):
         name, root = self.ready()
         auth = self.web_start(name, root)
         library = self.db(name).query(lambda tx: tx.execute("SELECT id FROM prks.libraries").fetchone())
+        assert library is not None
         self.assertEqual(auth.library_id, library["id"])
 
     def test_unfinished_setup_is_refused(self) -> None:
@@ -202,6 +205,7 @@ class StartTests(WebStartTestCase):
         auth = self.web_start(name, root, AuthMode.LOOPBACK_OWNER)
         with psycopg.connect(self.harness.conninfo(name)) as conn:
             instance = conn.execute("SELECT id, testing, setup_state FROM prks.instance").fetchone()
+        assert instance is not None
         self.assertEqual((auth.instance_id, instance[1], instance[2]), (instance[0], True, "ready"))
         # The claim was this start's bump; the next start bumps as usual.
         self.assertEqual(self.db_state(name).generation, 1)
@@ -248,7 +252,7 @@ class StartTests(WebStartTestCase):
         moved = self.relocated(root)
         before = self.db_state(name)
         auth = self.web_start(name, moved)
-        self.assertEqual(auth.instance_id, self.instance(name)["id"])
+        self.assertEqual(auth.instance_id, require(self.instance(name))["id"])
         self.assert_paired(name, moved, before.generation + 1)
 
     def test_a_testing_mismatch_is_refused(self) -> None:

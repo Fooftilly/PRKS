@@ -28,12 +28,13 @@ from backend.sync.handlers import tag as tag_handlers
 from backend.sync.handlers import tag_link
 from tests.pg.test_tags import OrganizationTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase
+from tests.narrowing import require
 
 _ENTITY_TYPES = {"CREATE_TAG": "tag", "DELETE_TAG": "tag", "MERGE_TAG": "tag",
                  "ADD_FOLDER_TAG": "folder", "REMOVE_FOLDER_TAG": "folder"}
 
 
-class TagSyncTestCase(SyncTestCase, OrganizationTestCase):
+class TagSyncTestCase(SyncTestCase, OrganizationTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def envelope(self, operation: str, entity_id: str, payload: dict[str, Any],
                  base: Optional[int] = None, **changes: Any) -> dict[str, Any]:
         return super().envelope(operation, entity_id, payload, base,
@@ -271,8 +272,8 @@ class LinkTests(TagSyncTestCase):
         def failing_finish(scope: LibraryScope, statement: Any, *args: Any, **kwargs: Any) -> Any:
             if statement is finish:
                 # The link is already written in this transaction when the ledger is finished.
-                linked_at_finish.append(real_execute(
-                    scope, "SELECT count(*) AS n FROM prks.work_tags WHERE library_id = %(library_id)s", {}).fetchone()["n"])
+                linked_at_finish.append(require(real_execute(
+                    scope, "SELECT count(*) AS n FROM prks.work_tags WHERE library_id = %(library_id)s", {}).fetchone())["n"])
                 raise RuntimeError("the ledger result could not be written")
             return real_execute(scope, statement, *args, **kwargs)
 

@@ -38,7 +38,9 @@ class ServerApiTestCase(HttpAuthTestCase):
         previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
+        assert self.storage is not None
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
+        assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade

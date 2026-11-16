@@ -19,6 +19,7 @@ from backend.domain.people import persons, roles
 from backend.domain.works import commands
 from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
+from tests.narrowing import require
 
 _MISSING_PERSON = "P-" + "0" * 32
 
@@ -29,7 +30,7 @@ class RoleTestCase(PeopleFacadeTestCase):
         self.ann = self.library.add_person("Ann", "Lee")
         self.bo = self.library.add_person("Bo", "Ng")
         self.work = self.library.add_work("Essay")
-        self.primary = self.library.get_work(self.work)["primary_manifestation_id"]
+        self.primary = require(self.library.get_work(self.work))["primary_manifestation_id"]
 
     def add_manifestation(self, work_id: str, manifestation_id: str) -> str:
         self.sql("INSERT INTO prks.manifestations (library_id, id, work_id) VALUES (%s, %s, %s)",
@@ -61,7 +62,7 @@ class ManifestationScopeTests(RoleTestCase):
         self.assertEqual([p["display_name"] for p in self.library.get_all_works()[0]["linked_people"]],
                          ["Ann Lee", "B. N."])
         # The Translator role on the other Version is not one of the primary's credits.
-        self.assertEqual([w["role_type"] for w in self.library.get_person(self.ann)["works"]], ["Author"])
+        self.assertEqual([w["role_type"] for w in require(self.library.get_person(self.ann))["works"]], ["Author"])
         self.assertTrue(self.library.has_work_role(self.ann, self.work, "Translator"))
         self.assertEqual(self.revisions("manifestation-person-role"), {
             roles.Role(self.work, self.bo, "Translator", self.primary).revision_scope()[1]: 1,
@@ -76,7 +77,7 @@ class ManifestationScopeTests(RoleTestCase):
         self.assertEqual(self.count("roles"), 2)
 
     def test_a_manifestation_of_another_work_is_refused(self) -> None:
-        elsewhere = self.library.get_work(self.library.add_work("Other"))["primary_manifestation_id"]
+        elsewhere = require(self.library.get_work(self.library.add_work("Other")))["primary_manifestation_id"]
         with self.assertRaises(roles.RoleTargetMissing) as caught:
             self.set_role(roles.Role(self.work, self.ann, "Translator", elsewhere), True)
         self.assertEqual(caught.exception.code, "MANIFESTATION_NOT_FOUND")

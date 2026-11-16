@@ -31,7 +31,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, LiteralString
 
 from tests.pg.search_corpus import QUERIES, WORKS, JudgedQuery
 
@@ -42,7 +42,7 @@ _EDITED = ("UPDATE prks.works SET updated_at = timestamptz '2026-01-01 10:00:00+
            " + make_interval(mins => %(minute)s) WHERE id = %(work_id)s")
 
 
-def load(library: Any, sql: Callable[[str, dict[str, Any]], Any]) -> dict[str, str]:
+def load(library: Any, sql: Callable[[LiteralString, dict[str, Any]], Any]) -> dict[str, str]:
     """Create the corpus in ``library``; returns Work id by corpus key.
 
     Each Work is created and edited one minute after the previous one, so
@@ -163,7 +163,7 @@ def report(orders: dict[str, list[str]], before: dict[str, list[str]] | None = N
     return "\n".join(lines)
 
 
-def _library() -> tuple[Any, Callable[[str, dict[str, Any]], Any], Callable[[], None]]:
+def _library() -> tuple[Any, Callable[[LiteralString, dict[str, Any]], Any], Callable[[], None]]:
     """A fresh harness database with one Library and a bound owner."""
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
@@ -182,7 +182,7 @@ def _library() -> tuple[Any, Callable[[str, dict[str, Any]], Any], Callable[[], 
     library = TestLibrary(db, storage=storage)
     token = facade_context.bind(provision_actor(db).context)
 
-    def sql(query: str, params: dict[str, Any]) -> None:
+    def sql(query: LiteralString, params: dict[str, Any]) -> None:
         db.command(lambda tx: tx.execute(query, params))
 
     def close() -> None:
@@ -195,6 +195,7 @@ def _library() -> tuple[Any, Callable[[str, dict[str, Any]], Any], Callable[[], 
 
 
 def main(argv: list[str] | None = None) -> int:
+    assert __doc__ is not None
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--compare", action="store_true", help="show the baseline order next to the live one")

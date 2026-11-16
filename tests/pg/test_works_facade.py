@@ -29,6 +29,7 @@ from tests import acting_context as facade_context
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import Actor, provision_actor
 from tests.pg.harness import PostgresHarness, get_harness
+from tests.narrowing import require
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -127,7 +128,7 @@ class ActorTests(WorksFacadeTestCase):
     def test_a_reader_reads_but_cannot_create(self) -> None:
         work_id = self.library.add_work("Shared")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.get_work(work_id)["title"], "Shared")
+            self.assertEqual(require(self.library.get_work(work_id))["title"], "Shared")
             with self.assertRaises(AccessRefused) as caught:
                 self.library.add_work("Refused")
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
@@ -324,9 +325,9 @@ class CreateTests(WorksFacadeTestCase):
 
     def test_a_research_note_renders_its_wiki_links(self) -> None:
         work_id = self.library.add_work("Linked", text_content="See [[Other]]")
-        self.assertEqual(self.library.get_work(work_id)["html_content"],
+        self.assertEqual(require(self.library.get_work(work_id))["html_content"],
                          'See <span class="wiki-link-unresolved" style="color:#ef4444;">[[Other]]</span>')
-        self.assertNotIn("html_content", self.library.get_work(self.library.add_work("Plain")))
+        self.assertNotIn("html_content", require(self.library.get_work(self.library.add_work("Plain"))))
 
     def test_concurrent_creates_all_commit(self) -> None:
         errors: list[BaseException] = []

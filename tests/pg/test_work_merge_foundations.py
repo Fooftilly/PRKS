@@ -29,6 +29,7 @@ from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from backend.sync import protocol
 from tests.pg.test_works_sync import SyncTestCase, create_payload
+from tests.narrowing import require
 
 T = TypeVar("T")
 _PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -174,7 +175,7 @@ class SyncGateTests(MergeTestCase):
                                 depends_on=[pending])
         self.assertEqual(self.send(waiting), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(self.library.get_work(live)["title"], "Live")
+        self.assertEqual(require(self.library.get_work(live))["title"], "Live")
 
     def test_playlist_reorder_with_a_merged_payload_work_is_terminal_and_ledgered(self) -> None:
         # REORDER_PLAYLIST_ITEMS has entity_type=playlist and a Playlist id
@@ -593,7 +594,7 @@ class OwnershipTests(MergeTestCase):
 
         with self.refused_by("23503"):
             self.command(move_primary)  # checked at COMMIT: the source's pointer names a moved row
-        self.assertEqual(self.library.get_work(source)["id"], source)
+        self.assertEqual(require(self.library.get_work(source))["id"], source)
 
     def test_a_work_with_manifestations_cannot_be_deleted(self) -> None:
         work_id = self.library.add_work("W")

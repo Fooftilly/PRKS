@@ -206,7 +206,8 @@ class ObjectInfo:
     modified_at: Optional[float] = None
 
 
-Writer = Callable[[BinaryIO], None]
+# A writer's return value is ignored (``stream.write`` returns a count).
+Writer = Callable[[BinaryIO], object]
 
 
 @runtime_checkable

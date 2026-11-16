@@ -23,6 +23,7 @@ from backend import work_metadata_sync as rules
 from backend.domain.works import metadata, revisions
 from backend.domain.works.rules import BulkWorkError
 from tests.pg.test_works_sync import SyncTestCase
+from tests.narrowing import require
 
 _MISSING = "W-" + "E" * 32
 _WATCH = "https://www.youtube.com/watch?v=%s"
@@ -43,11 +44,11 @@ class MetadataSyncTestCase(SyncTestCase):
         return self.send(self.op(field, value, base, work))
 
     def state(self, work: Optional[str] = None) -> dict[str, Any]:
-        return self.library.get_work_metadata_state(work or self.work)["fields"]
+        return require(self.library.get_work_metadata_state(work or self.work))["fields"]
 
     def value(self, field: str, work: Optional[str] = None) -> Any:
         """The Work record's value: typed for ``thumb_page``, as stored for every other field."""
-        return self.library.get_work(work or self.work)[field]
+        return require(self.library.get_work(work or self.work))[field]
 
     def wire_value(self, field: str) -> str:
         return rules.database_to_wire(field, self.value(field))
@@ -246,6 +247,7 @@ class PatchBoundaryTests(MetadataSyncTestCase):
                          ("Planned", "book", "10.1/initial", "999", "4"))
         self.assertEqual((state["title"], state["author_text"]), ({"revision": 0}, {"revision": 0}))
         work = self.library.get_work(created)
+        assert work is not None
         self.assertEqual((work["title"], work["author_text"], work["thumb_page"]),
                          ("Fresh Title", "Jane Smith", 4))
 
@@ -376,7 +378,7 @@ class LargeFieldTests(MetadataSyncTestCase):
         self.assertEqual(result["value"], "10.1/echoed")
         self.assertNotIn("value_omitted", result)
         self.assertEqual(self.state()["doi"], {"value": "10.1/echoed", "revision": 1})
-        self.assertEqual(self.library.get_work(self.work)["title"], "A Renamed Work")
+        self.assertEqual(require(self.library.get_work(self.work))["title"], "A Renamed Work")
 
     def test_large_conflicts_report_sizes_and_previews_within_the_bound(self) -> None:
         for field, server, device in (("author_text", "S" * (40 * 1024), "D" * (40 * 1024)),
@@ -418,6 +420,7 @@ class LargeFieldTests(MetadataSyncTestCase):
         with self.assertRaises(ValueError):
             self.patch({"source_url": "https://x/B"}, video)
         work = self.library.get_work(video)
+        assert work is not None
         self.assertEqual((work["source_url"], work["provider_id"]), (_WATCH % "AAA", "AAA"))
         self.patch({"source_url": "https://example.com/other"})
         self.assertEqual(self.value("source_url"), "https://example.com/other")
@@ -555,6 +558,7 @@ class ConflictBoundTests(MetadataSyncTestCase):
 class ProjectionTests(MetadataSyncTestCase):
     def test_projection_lists_every_field_of_its_own_work_only(self) -> None:
         state = self.library.get_work_metadata_state(self.work)
+        assert state is not None
         self.assertEqual((state["work_id"], sorted(state["fields"])), (self.work, sorted(rules.SYNCED_FIELDS)))
         self.assertIsNone(self.library.get_work_metadata_state(_MISSING))
         noisy = [self.library.add_work("Noise %d" % i) for i in range(5)]
@@ -562,7 +566,7 @@ class ProjectionTests(MetadataSyncTestCase):
             self.patch({"doi": "10.1/%s" % work, "isbn": work}, work)
         self.patch({"doi": "10.1/mine"})
         with mock.patch.object(revisions, "read", wraps=revisions.read) as read:
-            state = self.library.get_work_metadata_state(self.work)["fields"]
+            state = require(self.library.get_work_metadata_state(self.work))["fields"]
         self.assertEqual((state["doi"], state["isbn"]), ({"value": "10.1/mine", "revision": 1},
                                                           {"value": "", "revision": 0}))
         self.assertEqual(read.call_count, 1, "one query, not one per field")

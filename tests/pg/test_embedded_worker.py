@@ -105,7 +105,9 @@ class LifecycleTests(EmbeddedWorkerTestCase):
         # The listening socket is already closed: a new connection is refused at
         # once instead of waiting in the backlog for the grace period.
         with self.assertRaises(ConnectionRefusedError):
-            socket.create_connection(address, timeout=WAIT).close()
+            host, port = address[0], address[1]
+            assert isinstance(host, str)
+            socket.create_connection((host, port), timeout=WAIT).close()
         go.set()
         thread.join(WAIT)
         self.assertFalse(thread.is_alive())

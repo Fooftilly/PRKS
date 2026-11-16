@@ -23,6 +23,7 @@ from backend.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.domain.research.rules import ResearchError
 from tests.pg.test_tags import OrganizationTestCase
+from tests.narrowing import require
 
 
 class ConceptTestCase(OrganizationTestCase):
@@ -65,7 +66,7 @@ class ConceptTestCase(OrganizationTestCase):
 class IdentityTests(ConceptTestCase):
     def test_names_compare_by_identity_key(self) -> None:
         logos = self.concept("  Λόγος  ")
-        self.assertEqual(self.library.get_concept(logos)["name"], "Λόγος")
+        self.assertEqual(require(self.library.get_concept(logos))["name"], "Λόγος")
         for name in ("ΛΌΓΟΣ", "λόγος"):
             with self.subTest(name=name):
                 self.refused("concept_exists", self.library.create_concept, name)
@@ -85,13 +86,13 @@ class IdentityTests(ConceptTestCase):
     def test_names_and_aliases_share_one_namespace(self) -> None:
         ethics, logic = self.concept("Ethics"), self.concept("Logic")
         self.library.replace_concept_aliases(ethics, ["Morals", "MORALS", "ethics", " Moral  philosophy "])
-        self.assertEqual(self.library.get_concept(ethics)["aliases"], ["Moral philosophy", "Morals"])
+        self.assertEqual(require(self.library.get_concept(ethics))["aliases"], ["Moral philosophy", "Morals"])
         self.refused("alias_conflict", self.library.replace_concept_aliases, logic, ["morals"])
         self.refused("alias_conflict", self.library.replace_concept_aliases, ethics, ["LOGIC"])
         self.refused("concept_exists", self.library.create_concept, "MORAL PHILOSOPHY")
         self.refused("concept_exists", self.library.update_concept, logic, name="morals")
         self.assertEqual(self.resolve("moral philosophy"), ethics)
-        self.assertEqual(self.library.get_concept(logic)["aliases"], [])
+        self.assertEqual(require(self.library.get_concept(logic))["aliases"], [])
         self.assert_integrity()
 
     def test_a_rename_keeps_the_old_name_as_an_alias(self) -> None:
@@ -106,7 +107,7 @@ class IdentityTests(ConceptTestCase):
         # Dropped deliberately: the request places the old key itself.
         state = self.state(ethics)
         self.library.replace_concept_aliases(ethics, [])
-        self.assertEqual(self.library.get_concept(ethics)["aliases"], [])
+        self.assertEqual(require(self.library.get_concept(ethics))["aliases"], [])
         self.assertEqual(self.state(ethics)["identity_revision"], state["identity_revision"] + 1)
         self.assert_integrity()
 
@@ -139,7 +140,7 @@ class IdentityTests(ConceptTestCase):
         self.assertIsNone(self.library.get_concept("C-\x00"))
         self.assertIsNone(self.library.get_concept_sync_state("C-\x00"))
         self.refused("parent_not_found", self.library.replace_concept_parents, ethics, ["C-\x00"])
-        self.assertEqual(self.library.get_concept(self.concept("é" * 160))["name"], "é" * 160)
+        self.assertEqual(require(self.library.get_concept(self.concept("é" * 160)))["name"], "é" * 160)
         self.assertEqual(self.count("concepts"), 2)
         self.assert_integrity()
 
@@ -154,8 +155,8 @@ class HierarchyTests(ConceptTestCase):
         self.refused("parent_not_found", self.library.replace_concept_parents, a, [generate("C")])
         # Several parents, a diamond: no cycle.
         self.library.replace_concept_parents(c, [b, a, f" {a} "])
-        self.assertEqual([p["id"] for p in self.library.get_concept(c)["parents"]], [a, b])
-        self.assertEqual([child["id"] for child in self.library.get_concept(a)["children"]], [b, c])
+        self.assertEqual([p["id"] for p in require(self.library.get_concept(c))["parents"]], [a, b])
+        self.assertEqual([child["id"] for child in require(self.library.get_concept(a))["children"]], [b, c])
         self.assertEqual(self.library.list_concepts()[0]["subconcept_count"], 2)
 
     def test_both_ends_of_an_edge_advance(self) -> None:
@@ -209,8 +210,8 @@ class DeleteTests(ConceptTestCase):
         self.assertEqual(self.revisions("concept-identity"), {middle: 2})
         self.assertEqual(self.revisions("concept-field"), {f'["{middle}","description"]': 1})
         # Its child is not reparented.
-        self.assertEqual(self.library.get_concept(child)["parents"], [])
-        self.assertEqual(self.library.get_concept(parent)["children"], [])
+        self.assertEqual(require(self.library.get_concept(child))["parents"], [])
+        self.assertEqual(require(self.library.get_concept(parent))["children"], [])
         self.assertEqual(self.count("concept_parents"), 0)
         self.assert_integrity()
 
@@ -262,7 +263,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(holder["name"], "Shared")
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "concept_exists")
-        self.assertEqual(self.library.get_concept(second)["name"], "Second")
+        self.assertEqual(require(self.library.get_concept(second))["name"], "Second")
         self.assert_integrity()
 
     def test_identity_writes_of_one_library_queue_on_its_key_lock(self) -> None:
@@ -282,7 +283,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "concept_exists")
-        self.assertEqual(self.library.get_concept(b)["name"], "Beta")
+        self.assertEqual(require(self.library.get_concept(b))["name"], "Beta")
         self.assert_integrity()
 
     def test_an_alias_racing_a_create_of_the_same_name(self) -> None:
@@ -327,7 +328,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(len(holder["parents"]), 1)
         self.assertIsNone(contender)
         # The delete waited, then removed the edge and advanced the child.
-        self.assertEqual(self.library.get_concept(child)["parents"], [])
+        self.assertEqual(require(self.library.get_concept(child))["parents"], [])
         self.assertEqual(self.revisions("concept-parents")[child], 2)
 
     def test_a_delete_racing_a_rename(self) -> None:
@@ -348,7 +349,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "concept_in_use")
-        self.assertEqual(self.library.get_concept(ethics)["name"], "Ethics")
+        self.assertEqual(require(self.library.get_concept(ethics))["name"], "Ethics")
 
     def test_a_research_note_racing_a_delete_of_a_concept_it_names(self) -> None:
         ethics = self.concept("Ethics")
@@ -422,7 +423,7 @@ class CatalogTests(ConceptTestCase):
         self.assertEqual((by_name["Gamma"]["aliases"], by_name["iota"]["aliases"]), (["Gamma One", "gamma-2"], ["jot"]))
         for item in items:
             self.assertIs(type(item["subconcept_count"]), int)
-            self.assertEqual(self.library.get_concept(item["id"])["name"], item["name"])
+            self.assertEqual(require(self.library.get_concept(item["id"]))["name"], item["name"])
 
     def test_the_catalog_is_three_uncorrelated_statements_whatever_its_size(self) -> None:
         self.concept("Solo")

@@ -17,6 +17,7 @@ import uuid
 from typing import Any, Optional
 
 from tests.pg.test_search_refresh import SearchTestCase
+from tests.narrowing import require
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -68,7 +69,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.refresh(work_id)
 
     def origin(self, work_id: str) -> str:
-        return str(self.library.get_work(work_id)["primary_manifestation_id"])
+        return str(require(self.library.get_work(work_id))["primary_manifestation_id"])
 
     @staticmethod
     def identity(row: dict[str, Any]) -> dict[str, Any]:
@@ -85,14 +86,15 @@ class PrimaryProjectionTests(SearchTestCase):
         work_id = self.library.add_work("Canonical Work", abstract="Canonical abstract", publisher="Old Press",
                                         file_path=self.store_pdf("original.pdf", b"original"))
         origin = self.origin(work_id)
-        self.assertNotIn("citation_manifestation_id", self.library.get_work(work_id))
+        self.assertNotIn("citation_manifestation_id", require(self.library.get_work(work_id)))
         mf = self.manifestation(work_id, title="Translated Version", publisher="New Press",
                                 abstract="Translated abstract", primary=False)
         asset = self.stream(work_id, mf)
-        self.assertEqual(self.library.get_work(work_id)["title"], "Canonical Work")  # not primary yet
+        self.assertEqual(require(self.library.get_work(work_id))["title"], "Canonical Work")  # not primary yet
         self.make_primary(work_id, mf)
 
         work = self.library.get_work(work_id)
+        assert work is not None
         self.assertEqual({key: work[key] for key in ("title", "abstract", "publisher", "year", "source_url",
                                                      "source_kind", "provider", "provider_id", "file_path",
                                                      "source_mime")},
@@ -116,7 +118,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.library.add_work_to_playlist(playlist_id, work_id)
         self.library.mark_work_opened(work_id)
 
-        expected = self.identity(self.library.get_work(work_id))
+        expected = self.identity(require(self.library.get_work(work_id)))
         self.assertEqual((expected["manifestation_count"], expected["asset_count"]), (2, 2))
         folder, person, playlist = (self.library.get_folder(folder_id), self.library.get_person(person_id),
                                     self.library.get_playlist(playlist_id))
@@ -148,6 +150,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertEqual((fields["file_path"], fields["thumb_page"], fields["primary_asset_id"]),
                          ("/api/pdfs/secondary.pdf", 7, asset))
         work = self.library.get_work(work_id)
+        assert work is not None
         self.assertEqual((work["file_path"], work["thumb_page"]), ("/api/pdfs/secondary.pdf", 7))
 
     def test_the_browse_catalog_orders_by_the_displayed_title(self) -> None:
@@ -170,7 +173,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.credit(work_id, charles, "Author", origin, 2)
 
         def credits() -> set[tuple[str, str]]:
-            return {(role["role_type"], role["last_name"]) for role in self.library.get_work(work_id)["roles"]}
+            return {(role["role_type"], role["last_name"]) for role in require(self.library.get_work(work_id))["roles"]}
 
         self.assertEqual(credits(), {("Author", "Lovelace")})
         row = self.browse_row(work_id)
@@ -202,7 +205,7 @@ class PrimaryProjectionTests(SearchTestCase):
         work_id = self.library.add_work("Legacy Pub Work", publisher="Legacy Press")
         self.assertIn(work_id, self.library.work_ids_matching_publisher("Legacy Press"))
         self.manifestation(work_id, title="Null Publisher Edition", publisher=None)
-        self.assertIsNone(self.library.get_work(work_id)["publisher"])
+        self.assertIsNone(require(self.library.get_work(work_id))["publisher"])
         self.assertNotIn(work_id, self.library.work_ids_matching_publisher("Legacy Press"))
         self.assertNotIn(work_id, self.ids(self.library.search_works("", publisher_filter="Legacy Press")))
 

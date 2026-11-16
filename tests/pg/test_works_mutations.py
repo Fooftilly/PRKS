@@ -22,6 +22,7 @@ from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import commands, metadata, notes, revisions, source
 from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from tests.narrowing import require
 
 T = TypeVar("T")
 
@@ -192,7 +193,7 @@ class FieldDecisionTests(MutationTestCase):
     def test_concurrent_writers_of_one_field_on_one_base(self) -> None:
         work_id = self.library.add_work("Work")
         for _ in range(3):
-            base = self.library.get_work_metadata_state(work_id)["fields"]["title"]["revision"]
+            base = require(self.library.get_work_metadata_state(work_id))["fields"]["title"]["revision"]
             results = self.concurrently([
                 (lambda value=value, base=base: self.field(work_id, "title", value, base))
                 for value in ("A%d" % base, "B%d" % base, "C%d" % base, "D%d" % base)
@@ -204,14 +205,14 @@ class FieldDecisionTests(MutationTestCase):
             for _status, body in results:
                 if body["code"] == "REVISION_CONFLICT":
                     self.assertEqual(body["current_revision"], base + 1)
-        self.assertEqual(self.library.get_work_metadata_state(work_id)["fields"]["title"]["revision"], 3)
+        self.assertEqual(require(self.library.get_work_metadata_state(work_id))["fields"]["title"]["revision"], 3)
 
     def test_concurrent_writers_of_different_fields_never_block_each_other_out(self) -> None:
         work_id = self.library.add_work("Work")
         names = ("year", "publisher", "journal", "volume", "issue", "pages")
         results = self.concurrently([(lambda name=name: self.field(work_id, name, name, 0)) for name in names])
         self.assertEqual([body["server_revision"] for _status, body in results], [1] * len(names))
-        state = self.library.get_work_metadata_state(work_id)["fields"]
+        state = require(self.library.get_work_metadata_state(work_id))["fields"]
         self.assertEqual({name: state[name]["value"] for name in names}, {name: name for name in names})
 
 
@@ -239,7 +240,7 @@ class WaitedForLockTests(MutationTestCase):
         self.assertEqual(first[1]["server_revision"], 1)
         self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
                          (409, "REVISION_CONFLICT", 1))
-        self.assertEqual(self.library.get_work(work_id)["doi"], "10.1/new")
+        self.assertEqual(require(self.library.get_work(work_id))["doi"], "10.1/new")
 
     def test_the_same_video_on_one_base_converges(self) -> None:
         work_id = self.library.add_work("Video", source_url=_VIDEO)
@@ -261,7 +262,7 @@ class WaitedForLockTests(MutationTestCase):
                 scope, work_id, {"kind": "video", "url": _VIDEO}, 0))
         self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
                          (409, "SOURCE_REVISION_CONFLICT", 1))
-        self.assertEqual(self.library.get_work(work_id)["source_url"], _OTHER_VIDEO)
+        self.assertEqual(require(self.library.get_work(work_id))["source_url"], _OTHER_VIDEO)
 
 
 class NoteDecisionTests(MutationTestCase):
@@ -291,7 +292,7 @@ class NoteDecisionTests(MutationTestCase):
         ])
         self.assertEqual(sorted(body["code"] for _status, body in results),
                          ["ACKNOWLEDGED"] + ["REVISION_CONFLICT"] * 4)
-        self.assertEqual(self.library.get_work_notes_state(work_id)["research_note_revision"], 1)
+        self.assertEqual(require(self.library.get_work_notes_state(work_id))["research_note_revision"], 1)
 
 
 class SourceDecisionTests(MutationTestCase):
@@ -308,7 +309,7 @@ class SourceDecisionTests(MutationTestCase):
         status, body = self.set_source(work_id, _VIDEO, 0)
         self.assertEqual((status, body["code"], body["current_revision"]), (409, "SOURCE_REVISION_CONFLICT", 1))
         self.assertEqual(self.set_source(work_id, _VIDEO, 2)[1]["code"], "FUTURE_REVISION")
-        self.assertEqual(self.library.get_work(work_id)["source_url"], _OTHER_VIDEO)
+        self.assertEqual(require(self.library.get_work(work_id))["source_url"], _OTHER_VIDEO)
         state = self.run_command(lambda scope: source.source_state(scope, work_id))
         self.assertEqual(state, {"work_id": work_id, "revision": 1})
 
@@ -340,7 +341,7 @@ class OpenTests(MutationTestCase):
             (lambda moment=moment: self.run_command(lambda scope: commands.mark_opened(scope, work_id, moment)))
             for moment in reversed(moments)
         ])
-        self.assertEqual(self.library.get_work(work_id)["last_opened_at"], "2026-01-02 03:04:05.727")
+        self.assertEqual(require(self.library.get_work(work_id))["last_opened_at"], "2026-01-02 03:04:05.727")
         # An older event changes nothing and reports the recorded value.
         self.assertEqual(self.run_command(lambda scope: commands.mark_opened(scope, work_id, start)),
                          (True, False, "2026-01-02 03:04:05.727"))
@@ -429,7 +430,7 @@ class IsolationTests(MutationTestCase):
         with facade_context.acting_as(ctx):
             self.library.update_work_metadata(work_id, {"title": "Stolen"})
             self.assertIsNone(self.library.get_work_metadata_state(work_id))
-        self.assertEqual(self.library.get_work(work_id)["title"], "Mine")
+        self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
         self.assertEqual(self.revisions_of(work_id), {})
 
     def test_a_reader_cannot_change_a_work(self) -> None:
@@ -442,6 +443,6 @@ class IsolationTests(MutationTestCase):
                 with self.assertRaises(AccessRefused) as caught:
                     call()
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-            self.assertEqual(self.library.get_work(work_id)["title"], "Mine")
-        self.assertIsNone(self.library.get_work(work_id)["last_opened_at"])
+            self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
+        self.assertIsNone(require(self.library.get_work(work_id))["last_opened_at"])
         self.assertEqual(self.revisions_of(work_id), {})

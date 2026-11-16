@@ -34,6 +34,7 @@ from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
+from tests.narrowing import require
 
 URL = "https://example.org/ada.png"
 OTHER_URL = "https://example.org/ada-2.png"
@@ -202,7 +203,7 @@ class ReplacementTests(PortraitTestCase):
         self.assertEqual(self.claims(), {old})
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 1})
         self.assertEqual(self.names(), {new})
-        self.assertEqual(self.library._person_portrait(person_id)["body"], second.body)
+        self.assertEqual(require(self.library._person_portrait(person_id))["body"], second.body)
 
     def test_four_concurrent_replacements_leave_one_key_named(self) -> None:
         person_id = self.person()
@@ -520,7 +521,7 @@ class RestartTests(PortraitTestCase):
         db = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(db.close)
         library = TestLibrary(db, storage=self.storage)
-        self.assertEqual(library._person_portrait(person_id)["body"], second.body)
+        self.assertEqual(require(library._person_portrait(person_id))["body"], second.body)
         self.assertEqual(self.claims(), {old})
         self.assertEqual(lifecycle.retry_claims(db, self.objects), {Settled.REMOVED: 1})
         self.assertEqual(lifecycle.retry_claims(db, self.objects), {})

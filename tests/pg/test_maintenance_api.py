@@ -65,6 +65,7 @@ class MaintenanceApiTests(unittest.TestCase):
 
     def test_a_staged_token_is_bound_to_the_user_who_uploaded_it(self) -> None:
         token = "a" * 32
+        assert self.owner.context.user_id is not None
         path = staged.staged_path(self.root, token, self.owner.context.user_id)
         with open(path, "wb") as handle:
             handle.write(b"not read")
@@ -96,7 +97,7 @@ class MaintenanceApiTests(unittest.TestCase):
             objects={StorageKey(NAMESPACE_ASSET_OBJECTS, "a" * 64): None,
                      StorageKey(NAMESPACE_ASSET_OBJECTS, "b" * 64): None,
                      StorageKey(NAMESPACE_PORTRAITS, "c" * 64): None})
-        summary = staged.summarize(archive)
+        summary = staged.summarize(archive)  # pyright: ignore[reportArgumentType]  # a stand-in archive
         self.assertEqual((summary["works"], summary["pdf_files"], summary["persons"]), (2, 2, None))
 
     def test_progress_follows_a_long_backup_until_it_publishes(self) -> None:

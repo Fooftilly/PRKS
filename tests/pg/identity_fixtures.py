@@ -9,7 +9,7 @@ import unittest
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -57,7 +57,7 @@ class CountingHasher(PasswordHasher):
         with self._lock:
             return len(self.verified)
 
-    def verify(self, hash: str | bytes, password: str | bytes) -> bool:  # noqa: A002 - base name
+    def verify(self, hash: str | bytes, password: str | bytes) -> Literal[True]:  # noqa: A002 - base name
         params = extract_parameters(hash if isinstance(hash, str) else hash.decode("ascii"))
         with self._lock:
             self.verified.append((params.time_cost, params.memory_cost, params.parallelism))

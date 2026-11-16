@@ -23,6 +23,7 @@ from backend.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.domain.research.rules import ResearchError
 from tests.pg.test_concepts import ConceptTestCase
+from tests.narrowing import require
 
 
 class ResearchTestCase(ConceptTestCase):
@@ -101,7 +102,7 @@ class PositionTests(ResearchTestCase):
     def test_a_targeted_position_refuses_its_delete_and_a_delete_moves_every_scope_on(self) -> None:
         claim = self.position("Claim")
         answer = self.argument("Answer", targets=[target("position", claim, "opposes")])
-        self.assertEqual(self.library.get_position(claim)["arguments"],
+        self.assertEqual(require(self.library.get_position(claim))["arguments"],
                          [{"id": answer, "name": "Answer", "kind": "argument", "verdict_id": "opposes",
                            "verdict_label": "Opposes"}])
         self.assertEqual(self.refused("position_in_use", self.library.delete_position, claim).http_status, 409)
@@ -126,7 +127,7 @@ class ArgumentTests(ResearchTestCase):
                                              "order_index": 0, "work_title": "Republic", "authors": []}])
         self.assertEqual([(t["type"], t["id"], t["order_index"]) for t in reply["targets"]],
                          [("argument", base, 0), ("position", claim, 1)])
-        self.assertEqual(self.library.get_argument(base)["responses"],
+        self.assertEqual(require(self.library.get_argument(base))["responses"],
                          [{"id": reply["id"], "name": "Reply", "kind": "argument", "verdict_id": "opposes",
                            "verdict_label": "Opposes"}])
         self.assertEqual([row["id"] for row in self.library.list_arguments("stance")], [base])
@@ -164,7 +165,7 @@ class ArgumentTests(ResearchTestCase):
         self.refused("invalid_targets", self.library.replace_argument_targets, a, [target("argument", "A-x!")])
         # A diamond is no cycle.
         self.library.replace_argument_targets(c, [target("argument", b), target("argument", a, "qualifies")])
-        self.assertEqual(self.library.get_argument(a)["responses"][0]["verdict_id"], "supports")
+        self.assertEqual(require(self.library.get_argument(a))["responses"][0]["verdict_id"], "supports")
         self.assertEqual(self.count("argument_target_arguments"), 3)
 
     def test_only_a_change_advances_a_scope(self) -> None:
@@ -186,7 +187,7 @@ class ArgumentTests(ResearchTestCase):
     def test_a_refused_field_rolls_back_every_field(self) -> None:
         a = self.argument("A")
         self.refused("invalid_kind", self.library.update_argument, a, name="New", kind="essay")
-        self.assertEqual((self.library.get_argument(a)["name"], self.revisions("argument-field")), ("A", {}))
+        self.assertEqual((require(self.library.get_argument(a))["name"], self.revisions("argument-field")), ("A", {}))
         self.refused("nothing_to_update", self.library.update_argument, a)
         self.refused("not_found", self.library.update_argument, generate("A"))
 
@@ -223,7 +224,7 @@ class CitationTests(ResearchTestCase):
                      " manifestation_id) VALUES (%s, %s, %s, 'Author', %s, %s)",
                      (self.actor.library_id, work, person, order, manifestation))
         a = self.argument("A", sources=[source(work)])
-        self.assertEqual([author["id"] for author in self.library.get_argument(a)["sources"][0]["authors"]],
+        self.assertEqual([author["id"] for author in require(self.library.get_argument(a))["sources"][0]["authors"]],
                          [ada])
 
     def test_a_pinpoint_pins_the_only_version_and_a_bare_entry_cites_the_work(self) -> None:
@@ -282,7 +283,7 @@ class CitationTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [(1, kept, None, "")])
         self.assertEqual(self.citations(b), [])
         self.assertEqual(self.revisions("argument-sources"), {a: 1, b: 1})
-        self.assertEqual(self.library.get_argument(a)["sources"][0]["work_id"], kept)
+        self.assertEqual(require(self.library.get_argument(a))["sources"][0]["work_id"], kept)
         self.assertEqual(self.citations(c), [(0, kept, None, "")])
 
     def test_malformed_lists_are_refused_in_sqlites_order(self) -> None:
@@ -303,7 +304,7 @@ class VersionAwareCitationTests(ResearchTestCase):
 
     def read_back(self, argument_id: str) -> list[tuple[str, Optional[str], str]]:
         return [(row["work_id"], row["manifestation_id"], row["pages"])
-                for row in self.library.get_argument(argument_id)["sources"]]
+                for row in require(self.library.get_argument(argument_id))["sources"]]
 
     def test_a_work_with_one_version(self) -> None:
         work = self.library.add_work("W")
@@ -432,7 +433,7 @@ class IsolationTests(ResearchTestCase):
                                ("replace_argument_sources", (a, [])), ("replace_argument_targets", (a, []))):
                 with self.subTest(call=call):
                     self.refused("not_found", getattr(self.library, call), *args)
-        self.assertEqual(len(self.library.get_argument(a)["targets"]), 1)
+        self.assertEqual(len(require(self.library.get_argument(a))["targets"]), 1)
 
     def test_a_reader_reads_but_cannot_change(self) -> None:
         a = self.argument("A")

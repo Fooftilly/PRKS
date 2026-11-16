@@ -25,9 +25,10 @@ from backend.sync.handlers import argument as argument_handlers
 from backend import argument_sync
 from tests.pg.test_arguments import ResearchTestCase, pinned, source, target
 from tests.pg.test_works_sync import SyncTestCase
+from tests.narrowing import require
 
 
-class ResearchSyncTestCase(SyncTestCase, ResearchTestCase):
+class ResearchSyncTestCase(SyncTestCase, ResearchTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def envelope(self, operation: str, entity_id: str, payload: dict[str, Any],
                  base: Optional[int] = None, **changes: Any) -> dict[str, Any]:
         changes.setdefault("entity_type", "position" if "POSITION" in operation else "argument")
@@ -135,6 +136,7 @@ class PositionEnvelopeTests(ResearchSyncTestCase):
         position_id = self.sent(data)
         ordinary = self.library.create_position("  Realism   is   false  ", "  A   claim.  ")
         synced = self.library.get_position(position_id)
+        assert synced is not None
         self.assertEqual((synced["name"], synced["description"]), (ordinary["name"], ordinary["description"]))
         self.assertEqual(synced["name"], "Realism is false")
         status, result = self.send(self.field_op(position_id, "name", "Realism    is false", 0))
@@ -157,7 +159,7 @@ class PositionEnvelopeTests(ResearchSyncTestCase):
         self.assertTrue(result["value_omitted"])
         self.assertNotIn("value", result)
         self.library.update_position(position_id, name="Both", description="Changed")
-        self.assertEqual(self.library.get_position_sync_state(position_id)["fields"],
+        self.assertEqual(require(self.library.get_position_sync_state(position_id))["fields"],
                          {"description": {"revision": 2}, "name": {"revision": 2}})
         self.assertIsNone(self.library.get_position_sync_state(generate("P")))
 
@@ -200,7 +202,7 @@ class ArgumentCreateTests(ResearchSyncTestCase):
             lambda: self.send(self.create_argument_op("B", argument_id)), serializable=True)
         self.assertEqual(holder[1]["changed"], True)
         self.assertEqual(contender[1]["changed"], False)
-        self.assertEqual(self.library.get_argument(argument_id)["name"], "A")
+        self.assertEqual(require(self.library.get_argument(argument_id))["name"], "A")
 
     def test_one_create_sent_concurrently_applies_once(self) -> None:
         data = self.create_argument_op("Once")
@@ -216,7 +218,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         return self.envelope("SET_ARGUMENT_FIELD", argument_id, {"field": field, "value": value}, base)
 
     def targets_of(self, argument_id: str) -> list[tuple[str, str, str]]:
-        return [(row["type"], row["id"], row["verdict_id"]) for row in self.library.get_argument(argument_id)["targets"]]
+        return [(row["type"], row["id"], row["verdict_id"]) for row in require(self.library.get_argument(argument_id))["targets"]]
 
     def test_refused_envelopes_change_nothing_and_are_never_ledgered(self) -> None:
         work, claim = self.library.add_work("W"), self.position("Claim")
@@ -266,6 +268,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         ordinary = self.library.create_argument(name="  Spaced   out  ", kind="stance", main_text="Body.",
                                                 sources=[source(work, "4")])
         synced = self.library.get_argument(a)
+        assert synced is not None
         self.assertEqual((synced["name"], synced["kind"], synced["main_text"]), ("Spaced out", "stance", "Body."))
         self.assertEqual(ordinary["name"], synced["name"])
         self.assertEqual(self.citations(a), [(0, work, self.primary(work), "4")])
@@ -291,6 +294,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
                 self.assertNotIn("value", result)
                 self.assertNotIn("current_value", result)
         synced = self.library.get_argument(a)
+        assert synced is not None
         self.assertEqual((synced["name"], synced["kind"], synced["main_text"]), ("After", "stance", "x" * 5000))
         status, result = self.send(self.field_op(a, "name", "Something else", 0))
         self.assertEqual((status, result["code"], result["current_value"], result["current_revision"]),

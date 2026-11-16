@@ -21,6 +21,7 @@ from backend.domain.identity.request_context import EPOCH_MAX
 from backend.domain.identity.web_start import AuthMode
 from backend.server import parse_request_origin
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
+from tests.narrowing import require
 
 
 class AdmissionTestCase(HttpAuthTestCase):
@@ -414,7 +415,7 @@ class ProxyTests(AdmissionTestCase):
 class LoopbackOwnerTests(AdmissionTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.auth = self.serve(self.settings(AuthMode.LOOPBACK_OWNER))
+        self.auth = require(self.serve(self.settings(AuthMode.LOOPBACK_OWNER)))
 
     def test_requests_act_as_the_owner_with_the_epoch_fence(self) -> None:
         res = self.call("GET", "/api/session")

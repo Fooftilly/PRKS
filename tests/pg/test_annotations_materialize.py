@@ -36,6 +36,7 @@ from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, AnnotationTestCase, annotation
+from tests.narrowing import require
 
 RENDERED = b"%PDF-1.4\n% rendered with the annotation set\n" + b"x" * 512
 
@@ -143,7 +144,7 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
         self.assertEqual((after["id"], after["source_locator"]), (before["id"], before["source_locator"]))
-        self.assertEqual(self.library.get_work(work_id)["file_path"], done["file_path"])
+        self.assertEqual(require(self.library.get_work(work_id))["file_path"], done["file_path"])
         status = self.library.get_work_pdf_materialization(work_id)
         self.assertEqual((status["stale"], status["code"]), (False, None))
         self.assertEqual(self.library.accept_work_pdf_materialization_claim(work_id, canonical), canonical)
@@ -570,7 +571,7 @@ class RestartTests(MaterializeTestCase):
         status = library.get_work_pdf_materialization(work_id)
         self.assertEqual((status["canonical_annotation_set_revision"], status["materialized_pdf_annotation_revision"],
                           status["stale"]), (canonical + 1, canonical, True))
-        self.assertEqual(library.get_work(work_id)["file_path"], done["file_path"])
+        self.assertEqual(require(library.get_work(work_id))["file_path"], done["file_path"])
         self.assertEqual(self.read(done["file_path"][len("/api/pdfs/"):]), RENDERED)
         self.assertEqual(self.claims(), {"p.pdf"})
         library._materialize_work_pdf(work_id, writing(RENDERED + b"later"), canonical + 1)
