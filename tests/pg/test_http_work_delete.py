@@ -31,6 +31,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
+        assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
@@ -46,12 +47,14 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         return facade_context.acting_as(RequestContext.for_session(valid, epoch=self.library_epoch()))
 
     def pdf_work(self, title: str, name: str) -> str:
+        assert self.storage is not None
         with open(os.path.join(self.storage.pdfs_dir, name), "wb") as handle:
             handle.write(pdf_bytes(title))
         with self.acting():
             return self.facade.add_work(title, file_path=f"/api/pdfs/{name}")
 
     def thumb(self, work_id: str, page: int, ext: str = "webp") -> str:
+        assert self.storage is not None
         path = os.path.join(self.storage.thumbs_dir, f"{prks_thumb_cache_stem(work_id, page)}.{ext}")
         with open(path, "wb") as handle:
             handle.write(b"t")
@@ -110,6 +113,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         self.assertEqual(res.status, 500, res.raw)
         self.assertTrue(self.work_exists(work_id))
         self.assertTrue(os.path.isfile(thumb))
+        assert self.storage is not None
         self.assertTrue(os.path.isfile(os.path.join(self.storage.pdfs_dir, "kept-whole.pdf")))
         self.assertEqual(self.claimed(), [])
         self.assertEqual(self.run_sql("SELECT count(*) AS n FROM derived.work_search WHERE work_id = %s", (work_id,)),

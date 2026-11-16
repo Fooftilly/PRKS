@@ -32,6 +32,7 @@ from backend.storage.config import StorageConfig
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.jobs_fixtures import LEASE, JobsTestCase
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
+from tests.narrowing import require
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INSERT_EFFECT = "INSERT INTO prks.instance_effects (note) VALUES (%s)"
@@ -470,7 +471,7 @@ class SettingsTests(WorkerTestCase):
         for kwargs in ({"lease": timedelta(0)}, {"poll": timedelta(0)}, {"prune_every": timedelta(-1)},
                        {"stop_grace": timedelta(seconds=-1)}):
             with self.subTest(**{k: str(v) for k, v in kwargs.items()}), self.assertRaises(ValueError):
-                WorkerSettings(**kwargs)
+                WorkerSettings(**kwargs)  # pyright: ignore[reportArgumentType]
 
 
 # --- prks worker and the §11.1 start -------------------------------------------------
@@ -563,9 +564,9 @@ class WorkerStartTests(RootPairingTestCase):
 
     def job_state(self, name: str, job_id: Any) -> str:
         return str(
-            self.db(name).query(
+            require(self.db(name).query(
                 lambda tx: tx.execute("SELECT state FROM prks.jobs WHERE id = %s", (job_id,)).fetchone()
-            )["state"]
+            ))["state"]
         )
 
     def bootstrapped(self) -> tuple[str, str]:

@@ -22,6 +22,7 @@ from backend.domain.works import commands
 from backend.entity_ids import generate
 from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
+from tests.narrowing import require
 
 
 class OrganizationTestCase(PeopleFacadeTestCase):
@@ -153,7 +154,7 @@ class LinkTests(OrganizationTestCase):
         self.assertEqual(self.library.get_folder_tag_options(folder),
                          {"folder_id": folder, "assigned": [], "known_absent": {tag: 2}})
         self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
-        self.assertEqual(self.library.get_work(work)["tags"], self.library.get_work_tags(work))
+        self.assertEqual(require(self.library.get_work(work))["tags"], self.library.get_work_tags(work))
         self.assertIsNone(self.library.get_work_tag_options(generate("W")))
         self.assertIsNone(self.library.get_folder_tag_options(generate("F")))
 

@@ -29,6 +29,7 @@ from backend.readiness import PostgresReadiness
 from backend.storage import root_binding, root_marker
 from backend.storage.config import StorageConfig
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
+from tests.narrowing import require
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -259,7 +260,7 @@ class WebProcessTests(RootPairingTestCase):
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
             with psycopg.connect(self.harness.conninfo(name)) as conn:
-                instance_id, testing = conn.execute("SELECT id, testing FROM prks.instance").fetchone()
+                instance_id, testing = require(conn.execute("SELECT id, testing FROM prks.instance").fetchone())
             self.assertTrue(testing)
             self.assertEqual(self.marker(root).instance_id, instance_id)
             # Bootstrap's root claim is this start's one bump.

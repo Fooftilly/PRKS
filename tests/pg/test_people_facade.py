@@ -15,7 +15,7 @@ import threading
 import time
 import unicodedata
 from collections.abc import Callable
-from typing import Any
+from typing import Any, LiteralString
 from unittest import mock
 
 from backend.db.database import Isolation
@@ -27,6 +27,7 @@ from backend.domain.people import groups, persons, publishers, queries
 from tests import acting_context as facade_context
 from backend.person_group_sync import GroupRuleError
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from tests.narrowing import require
 
 _MISSING_GROUP = "PG-" + "0" * 32
 
@@ -101,7 +102,7 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
         person = self.library.add_person("Ann", "Lee")
         group = self.library.add_person_group_with_parent_options("Readers")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.get_person(person)["last_name"], "Lee")
+            self.assertEqual(require(self.library.get_person(person))["last_name"], "Lee")
             self.assertEqual(len(self.library.get_all_person_groups()), 1)
             for call in (lambda: self.library.add_person("No", "One"),
                          lambda: self.library.add_person_to_group(person, group),
@@ -155,8 +156,8 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
                 self.library.add_person_group_with_parent_options("Child", parent_id=group)
             with self.assertRaisesRegex(ValueError, "Parent group not found"):
                 self.library.update_person_group(theirs, {"parent_id": group})
-        self.assertEqual(self.library.get_person(person)["about"], "")
-        self.assertEqual(self.library.get_person_group(group)["name"], "Shared name")
+        self.assertEqual(require(self.library.get_person(person))["about"], "")
+        self.assertEqual(require(self.library.get_person_group(group))["name"], "Shared name")
         self.assertEqual([(p["id"], p["aliases"]) for p in self.library.get_publishers_in_use()],
                          [(publisher, ["Shared alias"])])
         with self.assertRaisesRegex(ValueError, "Person or group not found"):
@@ -167,7 +168,7 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
         self.assertEqual(self.sql("SELECT library_id, scope_id, revision FROM prks.entity_revisions"),
                          [{"library_id": self.actor.library_id, "scope_id": groups.member_scope(group, person),
                            "revision": 1}])
-        self.assertEqual(self.library.get_person_group(group)["member_count"], 1)
+        self.assertEqual(require(self.library.get_person_group(group))["member_count"], 1)
 
     def test_a_call_without_a_bound_actor_is_refused(self) -> None:
         import contextvars
@@ -191,7 +192,7 @@ class IdentityTests(PeopleFacadeTestCase):
                 self.assertEqual(caught.exception.code, "NAME_TAKEN")
         self.library.add_person_group_with_parent_options("Resume")  # diacritics are not folded
         child = self.library.add_person_group_with_parent_options("Child", parent_name="RÉSUMÉ")
-        self.assertEqual(self.library.get_person_group(child)["parent"]["name"], "Résumé")
+        self.assertEqual(require(self.library.get_person_group(child))["parent"]["name"], "Résumé")
         with self.assertRaisesRegex(ValueError, "same name"):
             self.library.add_person_group_with_parent_options("Ωμέγα", parent_name="ΩΜΈΓΑ")
         self.assertEqual(self.count("person_groups"), 4)
@@ -210,15 +211,15 @@ class IdentityTests(PeopleFacadeTestCase):
 
     def test_aliases_are_rows_with_one_spelling_per_key(self) -> None:
         person = self.library.add_person("Ann", "Lee", aliases=" A. Lee ,a. lee, ,Anna  Lee,ANNA LEE")
-        self.assertEqual(self.library.get_person(person)["aliases"], "A. Lee, Anna  Lee")
+        self.assertEqual(require(self.library.get_person(person))["aliases"], "A. Lee, Anna  Lee")
         rows = self.sql("SELECT position, alias FROM prks.person_aliases ORDER BY position")
         self.assertEqual([(r["position"], r["alias"]) for r in rows], [(0, "A. Lee"), (1, "Anna  Lee")])
         # Re-spacing the same aliases, or repeating one, is no change.
         self.library.update_person_profile(person, {"aliases": "A. Lee,Anna  Lee, a. LEE"})
-        self.assertEqual(self.library.get_person_metadata_state(person)["fields"]["aliases"]["revision"], 0)
+        self.assertEqual(require(self.library.get_person_metadata_state(person))["fields"]["aliases"]["revision"], 0)
         self.library.update_person_profile(person, {"aliases": ""})
         self.assertEqual(self.count("person_aliases"), 0)
-        self.assertEqual(self.library.get_person_metadata_state(person)["fields"]["aliases"]["revision"], 1)
+        self.assertEqual(require(self.library.get_person_metadata_state(person))["fields"]["aliases"]["revision"], 1)
 
 
 class InvalidInputTests(PeopleFacadeTestCase):
@@ -241,14 +242,14 @@ class InvalidInputTests(PeopleFacadeTestCase):
             with self.assertRaises(ValueError):
                 call()
         self.assertEqual(self.count("persons"), 1)
-        self.assertEqual(self.library.get_person(person)["about"], "")
+        self.assertEqual(require(self.library.get_person(person))["about"], "")
         self.assertEqual(self.count("person_groups"), 1)
         self.assertEqual(self.count("publisher_aliases"), 0)
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.entity_revisions")[0]["n"], 0)
 
     def test_a_portrait_url_is_normalized_on_create(self) -> None:
         person = self.library.add_person("Ann", "Lee", image_url="  https://example.org/a.png  ")
-        self.assertEqual(self.library.get_person(person)["image_url"], "https://example.org/a.png")
+        self.assertEqual(require(self.library.get_person(person))["image_url"], "https://example.org/a.png")
 
 
 class RevisionDecisionTests(PeopleFacadeTestCase):
@@ -274,7 +275,7 @@ class RevisionDecisionTests(PeopleFacadeTestCase):
         status, result = self.run_command(lambda scope: persons.apply_field_operation(
             scope, "P-" + "0" * 32, "about", "x", 0))
         self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
-        self.assertEqual(self.library.get_person(person)["about"], "two")
+        self.assertEqual(require(self.library.get_person(person))["about"], "two")
 
     def test_aliases_converge_on_their_stored_spelling(self) -> None:
         person = self.library.add_person("Ann", "Lee", aliases="A, B")
@@ -320,8 +321,8 @@ class PhantomScopeTests(PeopleFacadeTestCase):
             scope, group, person, False, 0), serializable=True)
         self.assertEqual((status, result["code"], result["changed"]), (200, "ACKNOWLEDGED", False))
         self.assertEqual(self.revisions("person-group-member"), {})
-        self.assertEqual(self.library.get_person_group_sync_state(group)["members"], [])
-        self.assertEqual(self.library.get_person_groups_state(person)["groups"], [])
+        self.assertEqual(require(self.library.get_person_group_sync_state(group))["members"], [])
+        self.assertEqual(require(self.library.get_person_groups_state(person))["groups"], [])
 
 
 class DeletionTests(PeopleFacadeTestCase):
@@ -340,7 +341,7 @@ class DeletionTests(PeopleFacadeTestCase):
         self.assertEqual(self.count("persons"), 1)
         self.assertEqual(self.count("person_group_members"), 1)
         self.assertEqual(self.library.get_all_persons()[0]["assigned_roles"], ["Author"])
-        self.assertEqual([(w["id"], w["role_type"]) for w in self.library.get_person(person)["works"]],
+        self.assertEqual([(w["id"], w["role_type"]) for w in require(self.library.get_person(person))["works"]],
                          [(work, "Author")])
 
     def test_a_person_without_works_reads_without_a_data_root(self) -> None:
@@ -348,7 +349,7 @@ class DeletionTests(PeopleFacadeTestCase):
 
         person = self.library.add_person("Ann", "Lee")
         bare = TestLibrary(self.db)
-        self.assertEqual(bare.get_person(person)["works"], [])
+        self.assertEqual(require(bare.get_person(person))["works"], [])
         self.link_role(person)
         # Finishing a Work summary needs the PDF directory.
         with self.assertRaisesRegex(RuntimeError, "no data root"):
@@ -374,13 +375,13 @@ class DeletionTests(PeopleFacadeTestCase):
         self.library.add_person_to_group(person, middle)
         self.library.update_person_group(middle, {"description": "d"})
         self.library.delete_person_group(middle)
-        self.assertEqual(self.library.get_person_group(bottom)["parent_id"], top)
+        self.assertEqual(require(self.library.get_person_group(bottom))["parent_id"], top)
         expected = {groups.field_scope(middle, field): 1 for field in group_rules.FIELDS}
         expected[groups.field_scope(middle, "description")] = 2
         expected[groups.field_scope(bottom, "parent_id")] = 1
         self.assertEqual(self.revisions("person-group-field"), expected)
         self.assertEqual(self.revisions("person-group-member"), {groups.member_scope(middle, person): 2})
-        self.assertEqual(self.library.get_person_groups_state(person)["groups"],
+        self.assertEqual(require(self.library.get_person_groups_state(person))["groups"],
                          [{"group_id": middle, "revision": 2, "present": False}])
 
     def test_a_failed_group_delete_rolls_back_the_reparenting(self) -> None:
@@ -395,11 +396,11 @@ class DeletionTests(PeopleFacadeTestCase):
             with self.assertRaises(Exception):
                 self.library.delete_person_group(group)
         self.assertIsNotNone(self.library.get_person_group(group))
-        self.assertEqual(self.library.get_person_group(child)["parent_id"], group)
+        self.assertEqual(require(self.library.get_person_group(child))["parent_id"], group)
         self.assertEqual(self.revisions("person-group-field"), before)
         # The ordinary delete still works once the injected failure is gone.
         self.library.delete_person_group(group)
-        self.assertEqual(self.library.get_person_group(child)["parent_id"], parent)
+        self.assertEqual(require(self.library.get_person_group(child))["parent_id"], parent)
 
     def stale_add(self, group_id: str, person_id: str, base: int) -> tuple[int, dict[str, Any]]:
         return self.run_command(lambda scope: groups.apply_member_operation(
@@ -411,7 +412,7 @@ class DeletionTests(PeopleFacadeTestCase):
         self.library.add_person_to_group(person, kept)
         self.library.add_person_to_group(person, removed)
         self.library.remove_person_from_group(person, removed)
-        before = {g["group_id"]: g["revision"] for g in self.library.get_person_groups_state(person)["groups"]}
+        before = {g["group_id"]: g["revision"] for g in require(self.library.get_person_groups_state(person))["groups"]}
         self.assertEqual(before, {kept: 1, removed: 2})
         self.library.delete_person_if_unlinked(person)
         # Every pair advanced once: the present one and the one removed earlier.
@@ -429,7 +430,7 @@ class DeletionTests(PeopleFacadeTestCase):
         self.library.add_person_to_group(present, group)
         self.library.add_person_to_group(removed, group)
         self.library.remove_person_from_group(removed, group)
-        before = {m["person_id"]: m["revision"] for m in self.library.get_person_group_sync_state(group)["members"]}
+        before = {m["person_id"]: m["revision"] for m in require(self.library.get_person_group_sync_state(group))["members"]}
         self.assertEqual(before, {present: 1, removed: 2})
         self.library.delete_person_group(group)
         self.assertEqual(self.revisions("person-group-member"),
@@ -443,7 +444,7 @@ class DeletionTests(PeopleFacadeTestCase):
 
     def test_a_recreated_person_refuses_a_field_base_0_from_before_the_delete(self) -> None:
         person = self.library.add_person("Ann", "Lee")
-        before = self.library.get_person_metadata_state(person)["fields"]
+        before = require(self.library.get_person_metadata_state(person))["fields"]
         self.assertEqual({field: state["revision"] for field, state in before.items()},
                          dict.fromkeys(person_rules.SYNCED_FIELDS, 0))
         self.library.delete_person_if_unlinked(person)
@@ -454,7 +455,7 @@ class DeletionTests(PeopleFacadeTestCase):
                 scope, person, field, persons.canonical_field(field, value), 0))
             self.assertEqual((status, result["code"], result["current_revision"]),
                              (409, "REVISION_CONFLICT", 1), field)
-        self.assertEqual(self.library.get_person(person)["about"], "")
+        self.assertEqual(require(self.library.get_person(person))["about"], "")
         status, result = self.run_command(lambda scope: persons.apply_field_operation(
             scope, person, "about", "seen the delete", 1))
         self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 2))
@@ -462,7 +463,7 @@ class DeletionTests(PeopleFacadeTestCase):
     def test_a_recreated_group_refuses_a_field_base_0_from_before_the_delete(self) -> None:
         group = self.library.add_person_group_with_parent_options("Readers")
         other = self.library.add_person_group_with_parent_options("Other")
-        before = self.library.get_person_group_sync_state(group)["fields"]
+        before = require(self.library.get_person_group_sync_state(group))["fields"]
         self.assertEqual({field: state["revision"] for field, state in before.items()},
                          dict.fromkeys(group_rules.FIELDS, 0))
         self.library.delete_person_group(group)
@@ -473,6 +474,7 @@ class DeletionTests(PeopleFacadeTestCase):
                 scope, group, field, value, 0))
             self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), field)
         recreated = self.library.get_person_group(group)
+        assert recreated is not None
         self.assertEqual((recreated["name"], recreated["description"], recreated["parent_id"]),
                          ("Readers", "", None))
 
@@ -494,8 +496,8 @@ class ConcurrencyTests(PeopleFacadeTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, GroupRuleError)
         self.assertEqual(contender.code, "PARENT_CYCLE")
-        self.assertEqual(self.library.get_person_group(first)["parent_id"], second)
-        self.assertIsNone(self.library.get_person_group(second)["parent_id"])
+        self.assertEqual(require(self.library.get_person_group(first))["parent_id"], second)
+        self.assertIsNone(require(self.library.get_person_group(second))["parent_id"])
 
     def test_two_creates_of_one_name(self) -> None:
         holder, contender = self.race(
@@ -515,7 +517,7 @@ class ConcurrencyTests(PeopleFacadeTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, GroupRuleError)
         self.assertEqual(contender.code, "NAME_TAKEN")
-        self.assertEqual(self.library.get_person_group(second)["name"], "Two")
+        self.assertEqual(require(self.library.get_person_group(second))["name"], "Two")
         self.assertEqual(self.revisions("person-group-field"), {groups.field_scope(first, "name"): 1})
 
     def test_a_parent_found_by_name_while_another_creates_it(self) -> None:
@@ -523,7 +525,7 @@ class ConcurrencyTests(PeopleFacadeTestCase):
             lambda scope: groups.insert_group(scope, "PG-" + "2" * 32, "Parent"),
             lambda: self.library.add_person_group_with_parent_options("Child", parent_name="parent"))
         self.assertEqual(holder, "PG-" + "2" * 32)
-        self.assertEqual(self.library.get_person_group(contender)["parent_id"], "PG-" + "2" * 32)
+        self.assertEqual(require(self.library.get_person_group(contender))["parent_id"], "PG-" + "2" * 32)
         self.assertEqual(self.count("person_groups"), 2)
 
     def test_two_publishers_of_one_name(self) -> None:
@@ -555,8 +557,8 @@ class ConcurrencyTests(PeopleFacadeTestCase):
             person, {"about": "second"}))
         self.assertEqual(holder, (True, 1))
         self.assertIsNone(contender)
-        self.assertEqual(self.library.get_person(person)["about"], "second")
-        self.assertEqual(self.library.get_person_metadata_state(person)["fields"]["about"]["revision"], 2)
+        self.assertEqual(require(self.library.get_person(person))["about"], "second")
+        self.assertEqual(require(self.library.get_person_metadata_state(person))["fields"]["about"]["revision"], 2)
 
     def test_a_member_added_while_the_person_is_deleted(self) -> None:
         person = self.library.add_person("Ann", "Lee")
@@ -607,7 +609,7 @@ class CatalogTestCase(PeopleFacadeTestCase):
         with mock.patch.object(LibraryScope, "execute", autospec=True, side_effect=record):
             return call(), seen
 
-    def plan(self, sql: str) -> str:
+    def plan(self, sql: LiteralString) -> str:
         rows = self.db.command(lambda tx: tx.execute("EXPLAIN " + sql, {"library_id": self.actor.library_id})
                                .fetchall())
         return "\n".join(str(next(iter(row.values()))) for row in rows)

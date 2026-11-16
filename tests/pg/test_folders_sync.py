@@ -26,6 +26,7 @@ from backend.sync.handlers import folder as folder_handlers
 from backend.sync.handlers import work_lifecycle
 from tests.pg.test_folders import FolderTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase, create_payload
+from tests.narrowing import require
 
 _FOLDER_OPERATIONS = frozenset({"CREATE_FOLDER", "SET_FOLDER_FIELD", "DELETE_FOLDER"})
 
@@ -34,7 +35,7 @@ def folder_payload(title: str = "Folder", **changes: str) -> dict[str, str]:
     return {"title": title, "description": "", "parent_id": "", "private_notes": "", **changes}
 
 
-class FolderSyncTestCase(SyncTestCase, FolderTestCase):
+class FolderSyncTestCase(SyncTestCase, FolderTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def setUp(self) -> None:
         super().setUp()
         # The real filing: this lane's Folder, then the People lane's roles.
@@ -54,7 +55,7 @@ class FolderSyncTestCase(SyncTestCase, FolderTestCase):
         self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"), result)
         return data["entity_id"]
 
-    def field(self, folder_id: str, field: str, value: str, base: int, **changes: Any) -> dict[str, Any]:
+    def folder_field(self, folder_id: str, field: str, value: str, base: int, **changes: Any) -> dict[str, Any]:
         return self.envelope("SET_FOLDER_FIELD", folder_id, {"field": field, "value": value}, base, **changes)
 
     def file(self, work_id: str, folder_id: str, base: int, **changes: Any) -> dict[str, Any]:
@@ -137,7 +138,7 @@ class EnvelopeTests(FolderSyncTestCase):
                 self.assertEqual(self.send(self.create("X", bad)), (400, {"code": "INVALID_ENVELOPE"}))
         for name in ("id", "created_at", "title; DROP TABLE folders", ""):
             with self.subTest(field=name):
-                self.assertEqual(self.send(self.field(folder_id, name, "x", 0)), (400, {"code": "INVALID_ENVELOPE"}))
+                self.assertEqual(self.send(self.folder_field(folder_id, name, "x", 0)), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.send(self.envelope("SET_FOLDER_FIELD", folder_id, {"field": "title", "value": "X"})),
                          (400, {"code": "INVALID_BASE_REVISION"}))
         self.assertEqual(self.send(self.envelope("DELETE_FOLDER", folder_id, {}, 0)),
@@ -146,37 +147,37 @@ class EnvelopeTests(FolderSyncTestCase):
 
     def test_an_empty_title_becomes_the_placeholder_on_both_paths(self) -> None:
         folder_id = self.create_folder("   ")
-        self.assertEqual(self.library.get_folder(folder_id)["title"], "Untitled Folder")
+        self.assertEqual(require(self.library.get_folder(folder_id))["title"], "Untitled Folder")
         top = self.create_folder("Top")
-        self.assertEqual(self.library.get_folder(self.library.add_folder("  ", "", top))["title"],
+        self.assertEqual(require(self.library.get_folder(self.library.add_folder("  ", "", top)))["title"],
                          "Untitled Folder")
 
     def test_clearing_a_parent_by_sync_leaves_no_parent(self) -> None:
         top = self.create_folder("Top")
         child = self.create_folder("Child", parent_id=top)
-        self.assertEqual(self.send(self.field(child, "parent_id", "", 0))[1]["server_revision"], 1)
+        self.assertEqual(self.send(self.folder_field(child, "parent_id", "", 0))[1]["server_revision"], 1)
         self.assertEqual(self.sql("SELECT parent_id FROM prks.folders WHERE id = %s", (child,)),
                          [{"parent_id": None}])
-        self.assertIsNone(self.library.get_folder(child)["parent"])
+        self.assertIsNone(require(self.library.get_folder(child))["parent"])
 
 
 class FieldTests(FolderSyncTestCase):
     def test_the_decision_table(self) -> None:
         folder_id, work_id = self.create_folder("Folder"), self.library.add_work("W")
         self.library.add_work_to_folder(folder_id, work_id)
-        renamed = self.send(self.field(folder_id, "title", "Renamed", 0))
+        renamed = self.send(self.folder_field(folder_id, "title", "Renamed", 0))
         self.assertEqual(renamed, (200, {"code": "ACKNOWLEDGED", "folder_id": folder_id, "field": "title",
                                          "server_revision": 1, "changed": True, "value_omitted": True,
                                          "member_work_ids": [work_id]}))
         # A stale base with the same value converges; with another value it conflicts.
-        self.assertEqual(self.send(self.field(folder_id, "title", " Renamed ", 0))[1]["changed"], False)
-        self.assertEqual(self.send(self.field(folder_id, "title", "Stale", 0)), (409, {
+        self.assertEqual(self.send(self.folder_field(folder_id, "title", " Renamed ", 0))[1]["changed"], False)
+        self.assertEqual(self.send(self.folder_field(folder_id, "title", "Stale", 0)), (409, {
             "code": "REVISION_CONFLICT", "folder_id": folder_id, "field": "title", "current_revision": 1,
             "current_value": "Renamed", "requested_value": "Stale"}))
-        self.assertEqual(self.send(self.field(folder_id, "title", "Future", 5))[1]["code"], "FUTURE_REVISION")
-        self.assertEqual(self.send(self.field(folder_id, "private_notes", "Mine", 0))[1]["server_revision"], 1)
+        self.assertEqual(self.send(self.folder_field(folder_id, "title", "Future", 5))[1]["code"], "FUTURE_REVISION")
+        self.assertEqual(self.send(self.folder_field(folder_id, "private_notes", "Mine", 0))[1]["server_revision"], 1)
         missing = generate("F")
-        self.assertEqual(self.send(self.field(missing, "title", "X", 0)),
+        self.assertEqual(self.send(self.folder_field(missing, "title", "X", 0)),
                          (404, {"code": "ENTITY_NOT_FOUND", "folder_id": missing, "field": "title"}))
         self.assertEqual(self.field_revisions(folder_id),
                          {"description": 0, "parent_id": 0, "private_notes": 1, "title": 1})
@@ -188,18 +189,18 @@ class FieldTests(FolderSyncTestCase):
         for value, answer in ((b, (409, "PARENT_CYCLE")), (a, (409, "PARENT_CYCLE")),
                               (generate("F"), (404, "PARENT_NOT_FOUND"))):
             with self.subTest(value=value):
-                status, result = self.send(self.field(a, "parent_id", value, 0))
+                status, result = self.send(self.folder_field(a, "parent_id", value, 0))
                 self.assertEqual((status, result["code"], result["current_revision"]), (*answer, 0))
-        status, result = self.send(self.field(b, "parent_id", "", 0))
+        status, result = self.send(self.folder_field(b, "parent_id", "", 0))
         self.assertEqual((status, result["code"]), (409, "TITLE_TAKEN"))
-        self.assertEqual(self.send(self.field(twin, "parent_id", a, 0))[1]["code"], "TITLE_TAKEN")
-        self.assertEqual(self.send(self.field(b, "parent_id", twin, 0))[1]["server_revision"], 1)
+        self.assertEqual(self.send(self.folder_field(twin, "parent_id", a, 0))[1]["code"], "TITLE_TAKEN")
+        self.assertEqual(self.send(self.folder_field(b, "parent_id", twin, 0))[1]["server_revision"], 1)
         self.assertEqual(self.revisions("folder-field"), {scope_key(b, "parent_id"): 1})
 
     def test_a_rename_that_loses_the_title_index_runs_again_and_ledgers_the_refusal(self) -> None:
         loser = self.create_folder("Loser")
         holder, contender = self.race(self.applying(folder_handlers.CREATE_HANDLER, self.create("Same")),
-                                      lambda: self.send(self.field(loser, "title", "SAME", 0)))
+                                      lambda: self.send(self.folder_field(loser, "title", "SAME", 0)))
         self.assertEqual(holder[1]["changed"], True)
         self.assertEqual(contender, (409, {"code": "TITLE_TAKEN", "folder_id": loser, "field": "title",
                                            "current_revision": 0}))
@@ -207,8 +208,8 @@ class FieldTests(FolderSyncTestCase):
 
     def test_two_crossed_moves_cannot_close_a_cycle(self) -> None:
         a, b = self.create_folder("A"), self.create_folder("B")
-        holder, contender = self.race(self.applying(folder_handlers.FIELD_HANDLER, self.field(a, "parent_id", b, 0)),
-                                      lambda: self.send(self.field(b, "parent_id", a, 0)))
+        holder, contender = self.race(self.applying(folder_handlers.FIELD_HANDLER, self.folder_field(a, "parent_id", b, 0)),
+                                      lambda: self.send(self.folder_field(b, "parent_id", a, 0)))
         self.assertEqual(holder[1]["changed"], True)
         self.assertEqual((contender[0], contender[1]["code"]), (409, "PARENT_CYCLE"))
 
@@ -284,13 +285,13 @@ class DeleteTests(FolderSyncTestCase):
         # Every field was at revision 0 and is now at 1: a base-0 edit is stale.
         for field, value in (("title", "Stale"), ("description", "Stale"), ("private_notes", "Stale")):
             with self.subTest(field=field):
-                status, result = self.send(self.field(folder_id, field, value, 0))
+                status, result = self.send(self.folder_field(folder_id, field, value, 0))
                 self.assertEqual((status, result["code"], result["current_revision"]),
                                  (409, "REVISION_CONFLICT", 1))
         self.assertEqual(self.send(self.envelope("ADD_FOLDER_TAG", folder_id, {"tag_id": tag}, 1,
                                                  entity_type="folder"))[0], 409)
         # A base observed after the recreation is current and applies.
-        self.assertEqual(self.send(self.field(folder_id, "title", "Fresh", 1))[1]["server_revision"], 2)
+        self.assertEqual(self.send(self.folder_field(folder_id, "title", "Fresh", 1))[1]["server_revision"], 2)
 
 
 class CreateWorkFilingTests(FolderSyncTestCase):
@@ -301,9 +302,9 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         uncategorized = result["folder_id"]
         self.assertEqual((result["changed"], result["playlist_id"], result["role_count"]), (True, "", 0))
         self.assertEqual(self.send(second)[1]["folder_id"], uncategorized)
-        self.assertEqual(self.library.get_folder(uncategorized)["title"], "Uncategorized")
+        self.assertEqual(require(self.library.get_folder(uncategorized))["title"], "Uncategorized")
         self.assertEqual(self.library.get_all_folders()[0]["work_count"], 2)
-        self.assertEqual(self.library.get_work(first["entity_id"])["folder_title"], "Uncategorized")
+        self.assertEqual(require(self.library.get_work(first["entity_id"]))["folder_title"], "Uncategorized")
         # Filing is construction: no revision moved.
         self.assertEqual(self.work_folder(first["entity_id"]), (uncategorized, 0))
         self.assertEqual(self.revisions("work-folder"), {})
@@ -403,7 +404,7 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
         self.send(create)
         filed = self.file(work_id, create["entity_id"], 0, depends_on=[create["op_id"]])
         self.assertEqual(self.send(filed)[0], 200)
-        orphan = self.field(create["entity_id"], "title", "X", 0, depends_on=[str(uuid.uuid4())])
+        orphan = self.folder_field(create["entity_id"], "title", "X", 0, depends_on=[str(uuid.uuid4())])
         self.assertEqual(self.send(orphan), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
         self.assertEqual(len(self.ledger()), 2)
 
@@ -413,7 +414,7 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
         self.sql("UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.actor.library_id,))
         self.assertEqual(self.send(create), first)  # a replay of what the restored state holds
         with self.assertRaises(AccessRefused) as caught:
-            self.send(self.field(create["entity_id"], "title", "After", 0))
+            self.send(self.folder_field(create["entity_id"], "title", "After", 0))
         self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
         self.assertEqual(len(self.ledger()), 1)
 
@@ -424,7 +425,7 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
         with facade_context.acting_as(other.context):
             their_work = self.library.add_work("Theirs")
         for data, answer in (
-                (self.field(folder_id, "title", "Theirs", 0),
+                (self.folder_field(folder_id, "title", "Theirs", 0),
                  (404, {"code": "ENTITY_NOT_FOUND", "folder_id": folder_id, "field": "title"})),
                 (self.file(work_id, folder_id, 0), (404, {"code": "ENTITY_NOT_FOUND", "work_id": work_id})),
                 (self.file(their_work, folder_id, 0),
@@ -433,7 +434,7 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
                  (200, {"code": "ACKNOWLEDGED", "folder_id": folder_id, "changed": False}))):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data | device, other.context), answer)
-        self.assertEqual((self.library.get_folder(folder_id)["title"], self.filed()), ("Mine", []))
+        self.assertEqual((require(self.library.get_folder(folder_id))["title"], self.filed()), ("Mine", []))
 
     def test_a_reader_cannot_send_folder_operations(self) -> None:
         reader = self.reader_context()

@@ -24,6 +24,7 @@ from backend.domain.saved_views import views
 from backend.entity_ids import generate
 from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
+from tests.narrowing import require
 
 _ALL = {"mode": "all", "q": "culture", "tag": "", "author": "", "publisher": ""}
 _ADVANCED = {"mode": "advanced", "q": "", "tag": "", "author": "Adorno", "publisher": ""}
@@ -223,7 +224,7 @@ class TimestampAndOrderTests(SavedViewTestCase):
         for refused in ((views.NAME_TAKEN, 409, {"name": "other"}),
                         ("Nothing to update.", 400, {})):
             self.refused(refused[0], refused[1], self.library.update_saved_view, created["id"], **refused[2])
-        self.assertEqual(self.library.get_saved_view(created["id"])["updated_at"], "2020-01-02 03:04:05")
+        self.assertEqual(require(self.library.get_saved_view(created["id"]))["updated_at"], "2020-01-02 03:04:05")
         for change in ({"name": "Dated"}, {"search": _ALL}):  # a write moves it even when nothing differs
             with self.subTest(change=change):
                 self.sql("UPDATE prks.saved_views SET updated_at = '2020-01-02 03:04:05+00' WHERE id = %s",
@@ -355,5 +356,6 @@ class RaceTests(SavedViewTestCase):
         self.assertEqual(holder["search"], _TAG)
         self.assertEqual((contender["name"], contender["search"]), ("New name", _TAG))
         found = self.library.get_saved_view(view["id"])
+        assert found is not None
         self.assertEqual((found["name"], found["search"], found["created_at"]),
                          ("New name", _TAG, view["created_at"]))

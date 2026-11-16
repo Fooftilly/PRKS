@@ -50,7 +50,10 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
         with patch.dict(os.environ, {"PRKS_STORAGE": "/tmp/changed-after-bind", "PRKS_TESTING": "1",
                                      "PRKS_FOR_PROCESSING_DIR": "/tmp/inbox-after-bind"}):
             self.assertEqual(self.server.pdfs_dir, config.pdfs_dir)
+            assert self.server._bound_storage is not None
             self.assertEqual(self.server._bound_storage.pdfs_dir, config.pdfs_dir)
+            assert self.server.db is not None
+            assert self.server.db.storage is not None
             self.assertEqual(self.server.db.storage.pdfs_dir, config.pdfs_dir)
 
     def test_the_binding_opens_no_sqlite_file_and_no_inbox(self) -> None:
@@ -68,6 +71,7 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
         second = self.bind_root(StorageConfig.for_testing(self.root()))
         self.assertIs(self.server._bound_storage, second)
         self.assertIsNot(self.server.db, db)
+        assert self.server.db is not None
         self.assertIs(self.server.db.storage, second)
         self.assertEqual(self.server.pdfs_dir, second.pdfs_dir)
         self.assertNotEqual(second.pdfs_dir, first.pdfs_dir)

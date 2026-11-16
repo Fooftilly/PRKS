@@ -15,6 +15,8 @@ from backend.library import PostgresLibrary
 from backend.storage.config import StorageConfig
 from tests.backend_parity import BackendParityTestCase
 from tests.pg.harness import get_harness
+from tests.library_adapter import TestLibrary
+from tests.narrowing import require
 
 
 def _probe() -> BackendParityTestCase:
@@ -34,7 +36,7 @@ class PostgresLegTests(unittest.TestCase):
         self.root = tmp.name
         self.storage = StorageConfig.for_testing(self.root)
 
-    def _open(self) -> tuple[BackendParityTestCase, PostgresLibrary]:
+    def _open(self) -> tuple[BackendParityTestCase, TestLibrary]:
         probe = _probe()
         library = probe.open_library(self.storage)
         self.assertIsInstance(library, PostgresLibrary)
@@ -66,8 +68,8 @@ class PostgresLegTests(unittest.TestCase):
         self.assertEqual(library.get_all_tags(), [])
         tag_id = library.add_tag("Ethics")["id"]
         self.assertEqual([tag["id"] for tag in library.get_all_tags()], [tag_id])
-        count = library.database.query(lambda tx: tx.execute(
-            "SELECT count(*) AS n FROM prks.tags WHERE id = %s", (tag_id,)).fetchone()["n"])
+        count = library.database.query(lambda tx: require(tx.execute(
+            "SELECT count(*) AS n FROM prks.tags WHERE id = %s", (tag_id,)).fetchone())["n"])
         self.assertEqual(count, 1)
 
 

@@ -25,6 +25,7 @@ from backend.storage import root_binding
 from backend.storage.config import StorageConfig
 from tests.pg.test_readiness import _free_port, _wait_for
 from tests.pg.test_root_pairing import RootPairingTestCase
+from tests.narrowing import require
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _CATALOGUES = ("prks_data.db", "prks_data_testing.db")
@@ -58,7 +59,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         _out, err = proc.communicate(timeout=60)
         self.assertEqual(proc.returncode, 0, err)
 
-    def refused(self, env: dict[str, str], root: str) -> str:
+    def refused_start(self, env: dict[str, str], root: str) -> str:
         proc = self.web(env, root, _free_port())
         _out, err = proc.communicate(timeout=120)
         self.assertEqual(proc.returncode, 2, err)
@@ -297,7 +298,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             status, _body, _headers = self.call(port, "DELETE", f"/api/works/{work_id}", None, headers)
             self.assertEqual(status, 200)
             db = self.db(name)
-            self.assertEqual(db.query(lambda tx: tx.execute("SELECT count(*) AS n FROM prks.works").fetchone())["n"],
+            self.assertEqual(require(db.query(lambda tx: tx.execute("SELECT count(*) AS n FROM prks.works").fetchone()))["n"],
                              0)
 
     def pdf(self, port: int, path: str) -> bytes:
@@ -387,7 +388,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         for value in ("postgres", "sqlite", ""):
             with self.subTest(value=value):
                 root = os.path.join(self.tmp, f"never-opened-{value or 'blank'}")
-                err = self.refused(self.environment(name, PRKS_LIBRARY_BACKEND=value), root)
+                err = self.refused_start(self.environment(name, PRKS_LIBRARY_BACKEND=value), root)
                 self.assertIn("PRKS_LIBRARY_BACKEND is no longer read", err)
                 self.assertIn("Remove PRKS_LIBRARY_BACKEND", err)
                 # Refused before the root was selected, let alone created.
@@ -402,7 +403,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         open(os.path.join(foreign, "holiday.jpg"), "w").close()
         ignored = os.path.join(self.tmp, "ignored")
         env = self.environment(name, PRKS_TESTING="1", PRKS_STORAGE=ignored)
-        err = self.refused(env, foreign)
+        err = self.refused_start(env, foreign)
         self.assertIn("PRKS cannot open its storage root", err)
         self.assertIn("does not look like a PRKS library", err)
         self.assertNotIn("Traceback", err)
@@ -412,7 +413,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
 
     def test_an_unreachable_testing_database_names_the_local_server(self) -> None:
         env = self.environment(None, PRKS_DATABASE_URL="postgresql://nobody@127.0.0.1:1/none?connect_timeout=2")
-        err = self.refused(env, self.new_root())
+        err = self.refused_start(env, self.new_root())
         self.assertIn("scripts/dev-postgres", err)
 
     def test_a_root_holding_a_sqlite_catalogue_is_refused(self) -> None:
@@ -421,5 +422,5 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         self.bootstrapped(name, root)
         with open(os.path.join(root, "prks_data_testing.db"), "wb"):
             pass
-        err = self.refused(self.environment(name), root)
+        err = self.refused_start(self.environment(name), root)
         self.assertIn("holds a pre-0.8 SQLite Library", err)

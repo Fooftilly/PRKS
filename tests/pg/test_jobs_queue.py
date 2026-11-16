@@ -105,6 +105,7 @@ class ClaimTests(JobsTestCase):
         self.assertEqual((first.id, second.id), (high, low))
         self.assertEqual((first.attempts, first.max_attempts), (1, 10))
         self.assertIsNone(self.claim())
+        assert later is not None
         self.assertEqual(self.state(later), "queued")
         row = self.row(first.id)
         self.assertEqual((row["state"], row["locked_by"], row["lease_id"]), ("running", "w1", first.lease_id))
@@ -120,6 +121,7 @@ class ClaimTests(JobsTestCase):
         assert claimed is not None
         self.assertEqual(claimed.id, job_b)
         self.assertIsNone(self.claim())
+        assert job_a is not None
         self.assertEqual(self.state(job_a), "queued")
         self.run_sql("UPDATE prks.libraries SET maintenance = NULL, maintenance_run = NULL")
         again = self.claim()
@@ -172,6 +174,7 @@ class LeaseTests(JobsTestCase):
         self.assertEqual(uuid.UUID(died_id), job_id)
         # The killed worker's write committed; its job is still running under its lease.
         self.assertEqual(self.revisions()[(self.lib_a, "a1")], 7)
+        assert job_id is not None
         row = self.row(job_id)
         self.assertEqual((row["state"], row["locked_by"], str(row["lease_id"])), ("running", "doomed", died_lease))
         # While the lease is live nobody reclaims it.
@@ -200,6 +203,7 @@ class LeaseTests(JobsTestCase):
         # The rerun repeats the same idempotent write and completes once.
         self.assertIs(run_job(self.db, reclaimed, registry=self.registry, lease=LEASE), Outcome.SUCCEEDED)
         self.assertEqual(self.revisions()[(self.lib_a, "a1")], 7)
+        assert job_id is not None
         row = self.row(job_id)
         self.assertEqual((row["state"], row["attempts"], row["lease_id"]), ("succeeded", 2, None))
         self.assertIsNotNone(row["finished_at"])

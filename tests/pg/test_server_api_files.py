@@ -103,6 +103,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
     def test_the_pdf_route_validates_the_whole_suffix(self) -> None:
         work = self.upload("Route Suffix Guard", "route", "route_suffix_guard.pdf")
         name = work["file_path"].rsplit("/", 1)[1]
+        assert self.storage is not None
         target = os.path.join(self.storage.pdfs_dir, name)
         self.assertTrue(os.path.isfile(target))
         for method in ("GET", "HEAD"):
@@ -131,6 +132,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
     def test_linearizing_existing_pdfs_is_refused_as_not_ported(self) -> None:
         """Managed PDFs are immutable stored objects on PostgreSQL; rewriting them in place is not ported."""
         work = self.upload("Linearize Existing Work", "linearize me", "linearize.pdf")
+        assert self.storage is not None
         path = os.path.join(self.storage.pdfs_dir, work["file_path"].rsplit("/", 1)[1])
         with open(path, "rb") as handle:
             before = handle.read()

@@ -33,7 +33,7 @@ from tests.pg.test_http_research import ResearchHttpTestCase
 
 
 class RouteFailureTests(ResearchHttpTestCase):
-    def interfere_command(self, module: Any, name: str, before: Callable[[], None]) -> None:
+    def interfere_command(self, module: Any, name: str, before: Callable[[], object]) -> None:
         """Run ``before`` when the route calls the command ``module.name``, then the command."""
         original = getattr(module, name)
 

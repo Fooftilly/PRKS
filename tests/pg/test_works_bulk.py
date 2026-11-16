@@ -24,6 +24,7 @@ from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment
 from tests.pg.test_folders import FolderTestCase
+from tests.narrowing import require
 
 
 class BulkTestCase(FolderTestCase):
@@ -138,7 +139,7 @@ class ActionTests(BulkTestCase):
         revisions = self.revisions("work-tag")
         self.assertEqual((revisions[links.WORK.scope_id(a, t2)], revisions[links.WORK.scope_id(b, t2)]), (2, 1))
         self.assertNotIn(links.WORK.scope_id(c, t2), revisions)
-        self.assertEqual(self.library.get_work_tag_options(a)["known_absent"], {t2: 2})
+        self.assertEqual(require(self.library.get_work_tag_options(a))["known_absent"], {t2: 2})
 
 
 class RefusalTests(BulkTestCase):

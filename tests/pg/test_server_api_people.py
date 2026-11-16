@@ -65,6 +65,7 @@ class PortraitTests(ServerApiTestCase):
 
         Portrait objects share the directory under their own random names.
         """
+        assert self.storage is not None
         people_dir = self.storage.people_dir
         prefix = prks_person_image_cache_safe_id(person_id) + "_"
         return sorted(n for n in (os.listdir(people_dir) if os.path.isdir(people_dir) else [])

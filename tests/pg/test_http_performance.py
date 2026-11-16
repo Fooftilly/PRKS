@@ -96,6 +96,7 @@ class PerformanceHttpTests(HttpAuthTestCase):
         previous = module.db
         self.addCleanup(self._restore, previous)
         self.storage = module._bound_storage
+        assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
         module.db = self.facade
@@ -247,6 +248,7 @@ class PerformanceHttpTests(HttpAuthTestCase):
     def test_nothing_is_written_under_the_storage_root(self) -> None:
         self.get("/api/search?q=" + SECRET_QUERY)
         self.post("/api/works", {"title": SECRET_NOTE, "status": "Planned"})
+        assert self.storage is not None
         for _dirpath, _dirnames, filenames in os.walk(self.storage.root):
             for name in filenames:
                 for kept in ("performance.db", "metrics.json", "performance.log"):

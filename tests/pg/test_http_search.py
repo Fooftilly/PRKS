@@ -51,6 +51,7 @@ class SearchHttpTests(HttpAuthTestCase):
         return facade_context.acting_as(RequestContext.for_session(valid, epoch=self.library_epoch()))
 
     def pdf_work(self, title: str, text: str, name: str, **fields: Any) -> str:
+        assert self.storage is not None
         with open(os.path.join(self.storage.pdfs_dir, name), "wb") as handle:
             handle.write(pdf_bytes(text))
         with self.acting():

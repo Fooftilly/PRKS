@@ -32,6 +32,7 @@ from backend.domain.works import merge
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
+from tests.narrowing import require
 
 CAP = 10 * 1024 * 1024
 
@@ -447,7 +448,7 @@ class EditTests(QueueTestCase):
         self.run_command(lambda scope: folders.delete(scope, folder))
         self.serializable(lambda scope: persons.delete_person(scope, ada))
         self.library.delete_tag(tag)
-        draft = self.get(item["id"])["draft"]
+        draft = require(self.get(item["id"]))["draft"]
         self.assertEqual((draft["target_folder_id"], draft["roles"], draft["tags"]), ("", [], []))
 
     def test_a_tag_merge_moves_draft_tags(self) -> None:
@@ -456,7 +457,7 @@ class EditTests(QueueTestCase):
         target = self.library.add_tag("maths")["id"]
         self.edit(item["id"], 0, {"tags": [{"id": source}]})
         self.library.merge_tags_into(source, target)
-        self.assertEqual([tag["id"] for tag in self.get(item["id"])["draft"]["tags"]], [target])
+        self.assertEqual([tag["id"] for tag in require(self.get(item["id"]))["draft"]["tags"]], [target])
 
     def test_a_tag_merge_keeps_one_draft_tag_when_the_draft_had_both(self) -> None:
         item = self.ready()
@@ -464,7 +465,7 @@ class EditTests(QueueTestCase):
         target = self.library.add_tag("maths")["id"]
         self.edit(item["id"], 0, {"tags": [{"id": source}, {"id": target}]})
         self.library.merge_tags_into(source, target)
-        self.assertEqual([tag["id"] for tag in self.get(item["id"])["draft"]["tags"]], [target])
+        self.assertEqual([tag["id"] for tag in require(self.get(item["id"]))["draft"]["tags"]], [target])
         self.assertEqual(self.sql("SELECT tag_id FROM prks.processing_item_tags WHERE item_id = %s",
                                   (item["id"],)), [{"tag_id": target}])
 
@@ -475,7 +476,7 @@ class EditTests(QueueTestCase):
         self.library.add_tag_to_work(work, tag)
         self.edit(item["id"], 0, {"tags": [{"id": tag}]})
         self.library.remove_tag_from_work(work, tag)
-        self.assertEqual([row["id"] for row in self.get(item["id"])["draft"]["tags"]], [tag])
+        self.assertEqual([row["id"] for row in require(self.get(item["id"]))["draft"]["tags"]], [tag])
 
 
 class ImportTests(QueueTestCase):
@@ -507,6 +508,7 @@ class ImportTests(QueueTestCase):
                           asset["ingest_sha256"], asset["byte_size"], asset["origin"], asset["thumb_page"]),
                          (key, None, item["sha256"], item["sha256"], item["byte_size"], "processing_import", 3))
         marker = self.get(item["id"])
+        assert marker is not None
         self.assertEqual((marker["status"], marker["imported_work_id"], marker["draft"]),
                          ("imported", done.work_id, None))
         row = self.row(item["id"])
@@ -574,7 +576,7 @@ class ImportTests(QueueTestCase):
         self.assertEqual([result.created for result in results], [True, False, False, False, True, False])
         self.assertEqual(results[0].work_id, results[5].work_id)
         self.assertEqual(self.count("works"), 2)
-        self.assertEqual(self.get(other["id"])["status"], "ready")
+        self.assertEqual(require(self.get(other["id"]))["status"], "ready")
 
     def test_a_database_error_fails_only_its_item(self) -> None:
         from backend.db.errors import RetryTransactionError
@@ -591,7 +593,7 @@ class ImportTests(QueueTestCase):
             results = commands.import_many(self.db, self.actor.context, self.objects,
                                            [first["id"], failing["id"], last["id"]])
         self.assertEqual([result.code for result in results], [None, "RETRY", None])
-        self.assertEqual(self.get(failing["id"])["status"], "ready")
+        self.assertEqual(require(self.get(failing["id"]))["status"], "ready")
         self.assertEqual(self.count("works"), 2)
 
     def test_a_work_merge_plan_lists_the_items_its_source_was_imported_from(self) -> None:
@@ -719,7 +721,7 @@ class IsolationTests(QueueTestCase):
         theirs = self.upload(pdf(), key="k", ctx=other)
         self.assertTrue(theirs.created)
         self.assertNotEqual(theirs.item["id"], item["id"])
-        self.assertEqual(self.get(item["id"])["revision"], 0)
+        self.assertEqual(require(self.get(item["id"]))["revision"], 0)
 
     def test_a_key_another_library_names_cannot_be_adopted(self) -> None:
         item = self.ready()

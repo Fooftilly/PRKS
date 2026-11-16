@@ -20,6 +20,7 @@ from backend.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.playlist_sync import PlaylistRuleError, scope_key
 from tests.pg.test_tags import OrganizationTestCase
+from tests.narrowing import require
 
 _NOT_FOUND = "Playlist or work not found."
 
@@ -70,6 +71,7 @@ class FieldTests(PlaylistTestCase):
     def test_only_a_change_advances_a_field(self) -> None:
         playlist_id = self.add("Course", description="About")
         before = self.library.get_playlist(playlist_id)
+        assert before is not None
         self.assertEqual((before["description"], before["original_url"]), ("About", None))
         self.library.update_playlist(playlist_id, {"title": " Course ", "description": "About ",
                                                    "original_url": None})
@@ -78,13 +80,15 @@ class FieldTests(PlaylistTestCase):
         self.library.update_playlist(playlist_id, {"original_url": "https://example.org", "x": 1})
         self.library.update_playlist(playlist_id, {"original_url": ""})
         self.assertEqual(self.state(playlist_id)[0]["original_url"], 2)
-        self.assertIsNone(self.library.get_playlist(playlist_id)["original_url"])
+        self.assertIsNone(require(self.library.get_playlist(playlist_id))["original_url"])
         self.library.update_playlist(playlist_id, {"title": "  "})
-        self.assertEqual(self.library.get_playlist(playlist_id)["title"], "Untitled playlist")
+        self.assertEqual(require(self.library.get_playlist(playlist_id))["title"], "Untitled playlist")
         self.refused("Playlist not found.", self.library.update_playlist, generate("PL"), {"title": "X"})
 
     def test_what_postgresql_cannot_hold_or_the_schema_bounds_is_refused_before_any_write(self) -> None:
         playlist_id = self.add("Course")
+        call: Callable[..., Any]
+        args: tuple[Any, ...]
         for call, args in ((self.library.add_playlist, ("a\x00b",)), (self.library.add_playlist, ("x" * 301,)),
                            (self.library.add_playlist, ("Ok", "d\x00")),
                            (self.library.update_playlist, (playlist_id, {"description": "é" * 2001})),
@@ -92,8 +96,8 @@ class FieldTests(PlaylistTestCase):
             with self.subTest(args=[str(arg)[:12] for arg in args]), self.assertRaises(ValueError):
                 call(*args)
         self.assertEqual((self.count("playlists"), self.state(playlist_id)), (1, (_UNTOUCHED, 0)))
-        self.assertEqual(self.library.get_playlist(playlist_id)["title"], "Course")  # the batch rolled back
-        self.assertEqual(self.library.get_playlist(self.add("é" * 150))["title"], "é" * 150)  # 300 bytes
+        self.assertEqual(require(self.library.get_playlist(playlist_id))["title"], "Course")  # the batch rolled back
+        self.assertEqual(require(self.library.get_playlist(self.add("é" * 150)))["title"], "é" * 150)  # 300 bytes
 
 
 class MembershipTests(PlaylistTestCase):
@@ -107,6 +111,7 @@ class MembershipTests(PlaylistTestCase):
         self.assertEqual((self.membership(first), self.state(a)[1], self.items(a)),
                          ((a, 1), 2, [(first, 0), (second, 1)]))
         detail = self.library.get_work(first)
+        assert detail is not None
         self.assertEqual((detail["playlist_id"], detail["playlist_title"]), (a, "A"))
         self.library.add_work_to_playlist(b, first)
         self.assertEqual((self.membership(first), self.state(a)[1], self.state(b)[1]), ((b, 2), 3, 1))
@@ -114,7 +119,7 @@ class MembershipTests(PlaylistTestCase):
         self.library.remove_work_from_playlist(a, first)  # not in it: nothing changes
         self.library.remove_work_from_playlist(b, first)
         self.assertEqual((self.membership(first), self.state(b)[1]), (("", 3), 2))
-        self.assertEqual(self.library.get_work(first)["playlist_title"], None)
+        self.assertEqual(require(self.library.get_work(first))["playlist_title"], None)
         self.assertEqual({row["title"]: row["item_count"] for row in self.library.get_all_playlists()},
                          {"A": 1, "B": 0})
 
@@ -125,14 +130,14 @@ class MembershipTests(PlaylistTestCase):
         (work_id,) = self.works("Rollback Work")
         self.library.add_work_to_playlist(playlist_id, work_id)
         before = (self.membership(work_id), self.state(playlist_id), self.items(playlist_id),
-                  self.library.get_playlist(playlist_id)["updated_at"])
+                  require(self.library.get_playlist(playlist_id))["updated_at"])
         # The timestamp write runs after the item is deleted and the order
         # advanced, so failing it is exactly the partial-commit window.
         with mock.patch.object(playlists, "_touch", side_effect=RuntimeError("forced timestamp failure")):
             with self.assertRaises(RuntimeError):
                 self.library.remove_work_from_playlist(playlist_id, work_id)
         self.assertEqual((self.membership(work_id), self.state(playlist_id), self.items(playlist_id),
-                          self.library.get_playlist(playlist_id)["updated_at"]), before)
+                          require(self.library.get_playlist(playlist_id))["updated_at"]), before)
         # The ordinary removal still works once the injected failure is gone.
         self.library.remove_work_from_playlist(playlist_id, work_id)
         self.assertEqual(self.items(playlist_id), [])
@@ -162,7 +167,7 @@ class MembershipTests(PlaylistTestCase):
         self.library.add_work_to_playlist(playlist_id, third, 1)
         self.assertEqual(self.items(playlist_id), [(first, 0), (third, 1), (second, 2)])
         self.assertEqual(self.state(playlist_id)[1], 4)
-        self.assertEqual([item["id"] for item in self.library.get_playlist(playlist_id)["items"]],
+        self.assertEqual([item["id"] for item in require(self.library.get_playlist(playlist_id))["items"]],
                          [first, third, second])
 
 
@@ -208,7 +213,7 @@ class DeleteTests(PlaylistTestCase):
         self.assertEqual(self.revisions("playlist-order"), {playlist_id: 3})
         self.assertEqual(self.revisions("work-playlist"), {member: 2, other: 2})
         self.assertIsNone(self.library.get_playlist(playlist_id))
-        self.assertEqual(self.library.get_work(member)["playlist_id"], None)
+        self.assertEqual(require(self.library.get_work(member))["playlist_id"], None)
         # A Playlist created again under the id starts from the tombstones.
         self.run_command(lambda scope: playlists.insert(scope, playlist_id, "Again"))
         self.assertEqual(self.state(playlist_id), ({"description": 1, "original_url": 1, "title": 2}, 3))
@@ -221,7 +226,7 @@ class DeleteTests(PlaylistTestCase):
         self.assertEqual((self.items(playlist_id), self.state(playlist_id)[1]), ([(kept, 1)], 3))
         # Both tombstoned, the never-listed Work's from revision 0.
         self.assertEqual(self.revisions("work-playlist"), {member: 2, kept: 1, never: 1})
-        self.assertEqual([item["id"] for item in self.library.get_playlist(playlist_id)["items"]], [kept])
+        self.assertEqual([item["id"] for item in require(self.library.get_playlist(playlist_id))["items"]], [kept])
         self.library.delete_playlist(playlist_id)
 
     def test_a_missing_playlist_reads_as_missing_without_a_data_root(self) -> None:
@@ -255,13 +260,14 @@ class IsolationTests(PlaylistTestCase):
         self.library.delete_playlist(theirs)
         with facade_context.acting_as(other.context):
             found = self.library.get_playlist(theirs)
+            assert found is not None
             self.assertEqual((found["title"], [item["id"] for item in found["items"]]), ("Theirs", [their_work]))
 
     def test_a_reader_reads_playlists_but_cannot_change_them(self) -> None:
         work_id = self.library.add_work("W")
         playlist_id = self.add("A", work_id)
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.get_playlist(playlist_id)["title"], "A")
+            self.assertEqual(require(self.library.get_playlist(playlist_id))["title"], "A")
             for call in (lambda: self.library.add_playlist("B"),
                          lambda: self.library.update_playlist(playlist_id, {"title": "B"}),
                          lambda: self.library.remove_work_from_playlist(playlist_id, work_id),

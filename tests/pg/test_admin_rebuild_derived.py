@@ -10,6 +10,7 @@ import io
 from typing import Any
 
 import psycopg
+import psycopg.rows
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -34,9 +35,9 @@ class RebuildDerivedTests(RootPairingTestCase):
         return code, out.getvalue(), err.getvalue()
 
     def jobs(self, name: str | None = None) -> list[dict[str, Any]]:
-        with psycopg.connect(self.harness.conninfo(name or self.name)) as conn:
-            conn.row_factory = psycopg.rows.dict_row
-            return conn.execute("SELECT j.payload, j.state, j.library_id = l.id AS ours FROM prks.jobs j"
+        with psycopg.connect(self.harness.conninfo(name or self.name)) as conn, \
+                conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            return cur.execute("SELECT j.payload, j.state, j.library_id = l.id AS ours FROM prks.jobs j"
                                 " JOIN prks.libraries l ON true WHERE j.kind = 'derived.rebuild'"
                                 " ORDER BY j.created_at").fetchall()
 

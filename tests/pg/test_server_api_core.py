@@ -185,6 +185,7 @@ class CreateRefusalTests(ServerApiTestCase):
     def test_undoing_a_create_never_claims_a_pdf_it_only_adopted(self) -> None:
         """A refused create that adopted an existing managed PDF records no cleanup claim for it."""
         def adopted(name: str) -> str:
+            assert self.storage is not None
             path = os.path.join(self.storage.pdfs_dir, name)
             with open(path, "wb") as handle:
                 handle.write(b"%PDF-1.4\n%ADOPTED\n%%EOF\n")

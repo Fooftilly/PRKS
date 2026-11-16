@@ -34,6 +34,7 @@ from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, annotation
 from tests.pg.test_annotations_materialize import RENDERED, MaterializeTestCase, writing
+from tests.narrowing import require
 
 NEW = b"%PDF-1.7\n% another document\n" + b"n" * 300 + b"\n%%EOF\n"
 LINEARIZED = b"%PDF-1.7\n/Linearized 1\n% qpdf output\n" + b"l" * 200 + b"\n%%EOF\n"
@@ -122,7 +123,7 @@ class SuccessTests(ReplaceTestCase):
                                 "content_sha256": sha(NEW), "ingest_sha256": sha(NEW), "byte_size": len(NEW),
                                 "canonical_annotation_set_revision": 1,
                                 "materialized_pdf_annotation_revision": 1, "stale": False})
-        self.assertEqual(self.library.get_work(work_id)["file_path"], done["file_path"])
+        self.assertEqual(require(self.library.get_work(work_id))["file_path"], done["file_path"])
         # Nothing was modified in place; the old object is claimed and kept until settled.
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
@@ -493,7 +494,7 @@ class RestartTests(ReplaceTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
         library = TestLibrary(self.db, storage=self.storage)
-        self.assertEqual(library.get_work(work_id)["file_path"], done["file_path"])
+        self.assertEqual(require(library.get_work(work_id))["file_path"], done["file_path"])
         status = library.get_work_pdf_materialization(work_id)
         self.assertEqual((status["canonical_annotation_set_revision"], status["stale"]), (2, True))
         self.assertEqual(self.claims(), {"p.pdf"})

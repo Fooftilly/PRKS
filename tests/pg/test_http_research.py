@@ -25,6 +25,7 @@ from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.jobs_fixtures import LEASE
+from tests.narrowing import require
 
 _MISSING_ARGUMENT = "A-" + "0" * 32
 
@@ -266,7 +267,7 @@ class ResearchAccessTests(ResearchHttpTestCase):
         mine = self.ok(self.send("POST", "/api/concepts", {"name": "Ethics"}), 201)["id"]
         self.assertNotEqual(mine, theirs)
         with facade_context.acting_as(stranger.context):
-            self.assertEqual(self.facade.get_concept(theirs)["name"], "Ethics")
+            self.assertEqual(require(self.facade.get_concept(theirs))["name"], "Ethics")
             self.assertIsNotNone(self.facade.get_argument(claim))
 
     def test_a_stale_epoch_is_refused_before_the_route(self) -> None:

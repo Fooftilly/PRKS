@@ -24,6 +24,7 @@ from backend.sync.handlers import playlist as playlist_handlers
 from backend.sync.handlers import work_lifecycle
 from tests.pg.test_playlists import PlaylistTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase, create_payload
+from tests.narrowing import require
 
 _PLAYLIST_OPERATIONS = frozenset({"CREATE_PLAYLIST", "SET_PLAYLIST_FIELD", "REORDER_PLAYLIST_ITEMS",
                                   "DELETE_PLAYLIST"})
@@ -33,7 +34,7 @@ def playlist_payload(title: str = "Playlist", **changes: str) -> dict[str, str]:
     return {"title": title, "description": "", "original_url": "", **changes}
 
 
-class PlaylistSyncTestCase(SyncTestCase, PlaylistTestCase):
+class PlaylistSyncTestCase(SyncTestCase, PlaylistTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def setUp(self) -> None:
         super().setUp()
         # The real filing: the Organization lane's Folder and Playlist, then People's roles.
@@ -53,7 +54,7 @@ class PlaylistSyncTestCase(SyncTestCase, PlaylistTestCase):
         self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"), result)
         return data["entity_id"]
 
-    def field(self, playlist_id: str, field: str, value: str, base: int) -> dict[str, Any]:
+    def playlist_field(self, playlist_id: str, field: str, value: str, base: int) -> dict[str, Any]:
         return self.envelope("SET_PLAYLIST_FIELD", playlist_id, {"field": field, "value": value}, base)
 
     def put(self, work_id: str, playlist_id: str, base: int, **changes: Any) -> dict[str, Any]:
@@ -129,8 +130,8 @@ class EnvelopeTests(PlaylistSyncTestCase):
         for bad in ("PL-ABCD1234", "lectures", "F-" + "A" * 32):
             refused.append(("id " + bad, self.create("X", bad), "INVALID_ENVELOPE"))
         for name in ("item_count", "created_at", "updated_at", "id"):
-            refused.append(("field " + name, self.field(playlist_id, name, "x", 0), "INVALID_ENVELOPE"))
-        refused.append(("oversized", self.field(playlist_id, "description", "x" * 5000, 0), "INVALID_ENVELOPE"))
+            refused.append(("field " + name, self.playlist_field(playlist_id, name, "x", 0), "INVALID_ENVELOPE"))
+        refused.append(("oversized", self.playlist_field(playlist_id, "description", "x" * 5000, 0), "INVALID_ENVELOPE"))
         for index, payload in enumerate(({"work_ids": "abc"}, {"work_ids": [""]}, {"work_ids": [1]},
                                          {"work_ids": ["a"], "extra": 1}, {})):
             refused.append(("order %d" % index, self.envelope("REORDER_PLAYLIST_ITEMS", playlist_id, payload, 0),
@@ -143,7 +144,7 @@ class EnvelopeTests(PlaylistSyncTestCase):
         for label, data, code in refused:
             with self.subTest(label):
                 self.assertEqual(self.send(data), (400, {"code": code}))
-        self.assertEqual((self.ledger(), self.library.get_playlist(playlist_id)["description"]), (before, ""))
+        self.assertEqual((self.ledger(), require(self.library.get_playlist(playlist_id))["description"]), (before, ""))
 
     def test_a_title_may_repeat(self) -> None:
         self.create_playlist("Lectures")
@@ -253,18 +254,18 @@ class DeleteTests(PlaylistSyncTestCase):
         self.send(self.put(work_id, playlist_id, 0))
         self.assertEqual(self.send(self.delete(playlist_id))[1]["changed"], True)
         self.assertEqual(self.send(self.delete(playlist_id))[1]["changed"], False)
-        self.assertEqual(self.send(self.field(playlist_id, "title", "X", 0))[1]["code"], "ENTITY_NOT_FOUND")
+        self.assertEqual(self.send(self.playlist_field(playlist_id, "title", "X", 0))[1]["code"], "ENTITY_NOT_FOUND")
         self.assertEqual(self.send(self.create("New", playlist_id))[1]["changed"], True)
         # Every field was at revision 0 and is now at 1, the order at 2: base-0 edits are stale.
         for field in ("title", "description", "original_url"):
             with self.subTest(field=field):
-                status, result = self.send(self.field(playlist_id, field, "Stale", 0))
+                status, result = self.send(self.playlist_field(playlist_id, field, "Stale", 0))
                 self.assertEqual((status, result["code"], result["current_revision"]),
                                  (409, "REVISION_CONFLICT", 1))
         self.assertEqual(self.send(self.put(work_id, playlist_id, 1))[1]["code"], "REVISION_CONFLICT")
         self.send(self.put(work_id, playlist_id, 2))
         # A base observed after the recreation is current and applies.
-        self.assertEqual(self.send(self.field(playlist_id, "title", "Fresh", 1))[1]["server_revision"], 2)
+        self.assertEqual(self.send(self.playlist_field(playlist_id, "title", "Fresh", 1))[1]["server_revision"], 2)
         self.assertEqual(self.state(playlist_id), ({"description": 1, "original_url": 1, "title": 2}, 3))
 
 
@@ -280,6 +281,7 @@ class CreateWorkFilingTests(PlaylistSyncTestCase):
         self.assertEqual(self.items(playlist_id), [(listed, 0), (data["entity_id"], 1)])
         self.assertEqual((self.membership(data["entity_id"]), self.state(playlist_id)[1]), ((playlist_id, 0), 1))
         detail = self.library.get_work(data["entity_id"])
+        assert detail is not None
         self.assertEqual((detail["playlist_id"], detail["playlist_title"]), (playlist_id, "Talks"))
 
     def test_a_missing_or_foreign_playlist_refuses_the_create(self) -> None:
@@ -348,7 +350,7 @@ class LedgerAndIsolationTests(PlaylistSyncTestCase):
         with facade_context.acting_as(other.context):
             their_work = self.library.add_work("Theirs")
         for data, answer in (
-                (self.field(playlist_id, "title", "Theirs", 0),
+                (self.playlist_field(playlist_id, "title", "Theirs", 0),
                  (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": playlist_id, "field": "title"})),
                 (self.put(work_id, "", 1), (404, {"code": "ENTITY_NOT_FOUND", "work_id": work_id})),
                 (self.put(their_work, playlist_id, 0),
@@ -359,7 +361,7 @@ class LedgerAndIsolationTests(PlaylistSyncTestCase):
                  (200, {"code": "ACKNOWLEDGED", "playlist_id": playlist_id, "changed": False}))):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data | device, other.context), answer)
-        self.assertEqual((self.library.get_playlist(playlist_id)["title"], self.items(playlist_id)),
+        self.assertEqual((require(self.library.get_playlist(playlist_id))["title"], self.items(playlist_id)),
                          ("Mine", [(work_id, 0)]))
 
     def test_an_op_id_of_another_library_is_reuse_and_discloses_nothing(self) -> None:

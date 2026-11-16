@@ -31,7 +31,7 @@ from tests.pg.test_search_rebuild import RebuildTestCase
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-class KillAfterCommitTests(RestoreTestCase, RebuildTestCase):
+class KillAfterCommitTests(RestoreTestCase, RebuildTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def test_a_restore_killed_after_r4_still_rebuilds_search_after_restart(self) -> None:
         kept = self.pdf_work("Analytical engine", "bernoulli numbers", "a.pdf")
         self.run_jobs()
@@ -81,7 +81,7 @@ class KillAfterCommitTests(RestoreTestCase, RebuildTestCase):
         self.assertNotIn(later, self.work_ids())
 
 
-class LongJobTests(RestoreTestCase, RebuildTestCase):
+class LongJobTests(RestoreTestCase, RebuildTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
     def setUp(self) -> None:
         super().setUp()
         self.extracting, self.finish = threading.Event(), threading.Event()

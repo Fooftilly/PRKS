@@ -22,6 +22,7 @@ from typing import Any, Callable
 from unittest.mock import patch
 
 import psycopg
+import psycopg.rows
 from argon2 import PasswordHasher
 
 from backend.db.config import DatabaseConfig

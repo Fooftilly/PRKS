@@ -113,7 +113,7 @@ class HttpAuthTestCase(IdentityTestCase):
 
     def serve(
         self, settings: Optional[WebAuthSettings] = None, *, auth: Any = _SENTINEL, jobs: Any = None
-    ) -> WebAuth:
+    ) -> Optional[WebAuth]:
         """Start a server on a free loopback port; ``auth=None`` serves without ``PRKS_AUTH``.
 
         ``jobs`` is the PRKS_AUTH runtime's ``WebJobs`` (job diagnostics), as
@@ -213,7 +213,7 @@ class HttpAuthTestCase(IdentityTestCase):
             ]
         )
 
-    def add_tag(self, cookies: dict[str, str], name: str = "T", **kwargs: Any) -> Response:
+    def add_tag(self, cookies: Optional[dict[str, str]], name: str = "T", **kwargs: Any) -> Response:
         kwargs.setdefault("epoch", self.library_epoch())
         return self.call("POST", "/api/tags", body={"name": f"{name}-{uuid.uuid4().hex[:8]}"},
                          cookies=cookies, **kwargs)

@@ -32,10 +32,12 @@ class UploadTests(ServerApiTestCase):
         return path[len("/api/pdfs/"):]
 
     def stored(self, name: str) -> bytes:
+        assert self.storage is not None
         with open(os.path.join(os.path.realpath(self.storage.pdfs_dir), name), "rb") as handle:
             return handle.read()
 
     def test_an_upload_is_stored_only_inside_the_pdf_store(self) -> None:
+        assert self.storage is not None
         parent = os.path.dirname(os.path.realpath(self.storage.pdfs_dir))
         before = set(os.listdir(parent))
         name = self.upload("Traversal Upload", "../../escaped.pdf")

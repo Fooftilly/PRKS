@@ -19,6 +19,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import queries, wiki_links
 from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from tests.narrowing import require
 
 _LINK = '<a href="#/{kind}/{id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{name}</a>'
 _UNRESOLVED = '<span class="wiki-link-unresolved" style="color:#ef4444;">[[{raw}]]</span>'
@@ -165,10 +166,11 @@ class SnapshotTests(WikiLinkTestCase):
         with mock.patch.object(queries, "work", side_effect=work_then_a_concurrent_edit):
             detail = self.library.get_work(noted)
         self.assertEqual(changed, [True])
+        assert detail is not None
         self.assertEqual(detail["html_content"],
                          f"See {link('works', target, 'Target')} and {_UNRESOLVED.format(raw='Later')}.")
         later = self.sql("SELECT id FROM prks.works WHERE title = 'Later'")[0]["id"]
-        self.assertEqual(self.library.get_work(noted)["html_content"],
+        self.assertEqual(require(self.library.get_work(noted))["html_content"],
                          f"See {_UNRESOLVED.format(raw='Target')} and {link('works', later, 'Later')}.")
 
 

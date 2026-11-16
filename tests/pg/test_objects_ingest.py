@@ -265,6 +265,7 @@ class FacadeTests(IngestTestCase):
         work_id = self.library._add_work_with_pdf("Paper One.pdf", writer(RAW), title="Uploaded",
                                                   year="2024")
         work = self.library.get_work(work_id)
+        assert work is not None
         self.assertEqual((work["title"], work["year"]), ("Uploaded", "2024"))
         asset = self.asset(work_id)
         self.assertEqual(work["file_path"], "/api/pdfs/" + asset["storage_locator"])
