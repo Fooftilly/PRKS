@@ -126,6 +126,7 @@ def _require_offline_render(page, needle, timeout=30000):
         }""",
         arg=needle,
         timeout=timeout,
+        polling=100,
     )
     page.wait_for_function(
         """() => {
@@ -134,6 +135,7 @@ def _require_offline_render(page, needle, timeout=30000):
             return !!root && !!root.querySelector('[data-prks-role="offline-provenance-banner"]');
         }""",
         timeout=timeout,
+        polling=100,
     )
 
 
