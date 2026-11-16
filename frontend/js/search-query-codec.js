@@ -1,6 +1,6 @@
 var prksSearchQueryCodec = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/features/search/codec.ts
+	// src/features/search/codec.ts
 	/**
 	* Canonical Search / Saved View query codec.
 	*
@@ -154,7 +154,6 @@ var prksSearchQueryCodec = (function(exports) {
 		if (d.publisher) parts.push("Publisher: " + d.publisher);
 		return parts.join(" · ");
 	}
-	//#endregion
 	exports.definitionFromRoute = definitionFromRoute;
 	exports.hashFromDefinition = hashFromDefinition;
 	exports.optionsFromDefinition = optionsFromDefinition;

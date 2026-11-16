@@ -1,6 +1,6 @@
 var prksOwnerResource = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/lifecycle/owner-resource.ts
+	// src/lifecycle/owner-resource.ts
 	/**
 	* Owner-scoped external resource lifetime.
 	*
@@ -176,7 +176,6 @@ var prksOwnerResource = (function(exports) {
 			epoch: host.epoch()
 		};
 	}
-	//#endregion
 	exports.createOwnerResourceRegistry = createOwnerResourceRegistry;
 	exports.resourceTicket = resourceTicket;
 	return exports;
