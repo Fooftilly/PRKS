@@ -233,9 +233,12 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/work_source_sync.py",
     "backend/work_tag_sync.py",
     "backend/server.py",
+    "prks_app.py",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
-PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
+# "basic" is no longer accepted: the slice was raised to "standard" in #69
+# slice 6, and a lower mode would silently drop the checks that added.
+PYRIGHT_TYPED_SLICE_MODES = frozenset({"standard", "strict"})
 # Only __pycache__ exclusions are permitted on the typed slice; anything else
 # that covers a protected scope could silently suppress it.
 PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES = frozenset(
@@ -3997,7 +4000,7 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
                 (
                     "typed-slice typeCheckingMode must be one of "
                     f"{sorted(PYRIGHT_TYPED_SLICE_MODES)} "
-                    f"(found {mode!r}); off would silently disable real type analysis"
+                    f"(found {mode!r}); off or basic would silently weaken type analysis"
                 ),
             )
         )

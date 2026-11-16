@@ -54,9 +54,12 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
             fd = os.open(self.baseFilename, flags, _OWNER_ONLY_MODE)
             try:
+                # TimedRotatingFileHandler always opens in "a" mode (it takes
+                # no mode argument), which matches O_APPEND above. The literal
+                # keeps the stream a TextIOWrapper, as FileHandler._open returns.
                 stream = os.fdopen(
                     fd,
-                    self.mode,
+                    "a",
                     encoding=self.encoding,
                     errors=getattr(self, "errors", None),
                 )
