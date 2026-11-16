@@ -196,7 +196,8 @@
     "backend/work_note_sync.py",
     "backend/work_open_sync.py",
     "backend/work_source_sync.py",
-    "backend/work_tag_sync.py"
+    "backend/work_tag_sync.py",
+    "backend/server.py"
   ],
   "exclude": [
     "**/__pycache__"
