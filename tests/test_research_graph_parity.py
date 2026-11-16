@@ -36,6 +36,7 @@ from backend.research_graph import GraphTooLargeError
 from tests.parity_reference import reference_for
 from tests.backend_parity import parametrize_backends
 from tests.test_arguments_parity import ArgumentParityTestCase, ArgumentSide
+from tests.people_parity_helpers import PeopleSide
 
 Pair = tuple[str, str]
 # A snippet can cut an id short; the cut ids differ per side.
@@ -62,7 +63,7 @@ class ResearchReadParityTests(ArgumentParityTestCase):
 
         return PostgresResearchIndex(self.leg.db._database)
 
-    def on_postgres(self, side: ArgumentSide) -> bool:
+    def on_postgres(self, side: PeopleSide) -> bool:
         return side is self.leg
 
     def run_jobs(self) -> None:
@@ -138,7 +139,7 @@ class ResearchReadParityTests(ArgumentParityTestCase):
 
     # -- reading both sides -------------------------------------------------------
 
-    def graph(self, side: ArgumentSide, include_people: bool = False) -> dict[str, Any]:
+    def graph(self, side: PeopleSide, include_people: bool = False) -> dict[str, Any]:
         if side is self.ref:
             return side.db.apply("tests.test_research_graph_parity:graph_dict", self.indexes[id(side)],
                                  side.db, include_people)

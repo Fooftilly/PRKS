@@ -3402,6 +3402,85 @@ class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
         self.assertIsNotNone(_server_annotation(page, work_id, ann_id))
 
 
+class PdfAnnotationAckDuringLocalWriteTests(_BrowserE2E):
+    """#1212: an ACK that lands while its own local write settles is kept.
+
+    The sync engine can send an operation, and the page apply its ACK, before
+    the local write that recorded it has returned. The write must not then
+    put back the acknowledged list it read before it ran: that list lacks the
+    new highlight, so the projection would take it off the page and the next
+    materialization would export bytes without it under the newer claim.
+    """
+
+    def test_a_highlight_acknowledged_before_its_local_write_returns_stays(self):
+        server, page, collector = self._start_app()
+        self.collector = collector
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        # Hold the next local write open until the server has acknowledged
+        # the operation it recorded and the page has applied that ACK.
+        page.evaluate(
+            """(workId) => {
+                const store = window.prksSync.store;
+                const real = store.savePdfAnnotation;
+                window.__prksAckBeforeWriteReturned = null;
+                store.savePdfAnnotation = async function (...args) {
+                    store.savePdfAnnotation = real;
+                    const recorded = await real.apply(this, args);
+                    const annId = String(args[1] && args[1].annotation_id);
+                    window.prksSync.changed();
+                    const deadline = Date.now() + 20000;
+                    while (Date.now() < deadline) {
+                        const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                        const items = (pdf.annotationCache && pdf.annotationCache.items) || [];
+                        const applied = items.some(a => a && String(a.id) === annId);
+                        const unresolved = await window.prksWorkHasUnresolvedPdfAnnotationOps(workId);
+                        if (applied && !unresolved) {
+                            window.__prksAckBeforeWriteReturned = annId;
+                            break;
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 25));
+                    }
+                    if (window.__prksAckBeforeWriteReturned === null) {
+                        window.__prksAckBeforeWriteReturned = false;
+                    }
+                    return recorded;
+                };
+            }""",
+            work_id,
+        )
+        _commit_pdf_highlight(page)
+        ann_id = _only_viewer_annotation_id(page)
+        page.wait_for_function(
+            "() => window.__prksAckBeforeWriteReturned !== null", timeout=30000)
+        self.assertEqual(
+            page.evaluate("() => window.__prksAckBeforeWriteReturned"), ann_id,
+            "the ACK was not applied while the local write was held")
+        wait_for_async(
+            page,
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return Promise.resolve(pdf._annotationDurableWriteChain).then(() => true);
+            }""",
+        )
+        cached = page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return ((pdf.annotationCache && pdf.annotationCache.items) || [])
+                    .map(a => String(a && a.id));
+            }"""
+        )
+        self.assertEqual(cached, [ann_id], "the write dropped the acknowledged highlight")
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        _wait_pdf_materialized(page, work_id)
+        _wait_pdf_annotation_durable(page)
+        self.assertEqual(_viewer_annotation_ids(page), [ann_id])
+        self.assertIsNotNone(_server_annotation(page, work_id, ann_id))
+        self.assertEqual(len(_managed_pdf_annotation_contents(page, work_id)), 1)
+
+
 class PdfAnnotationCommentEditTests(_BrowserE2E):
     """#401: every comment edit reaches the server, the PDF and a reload."""
 

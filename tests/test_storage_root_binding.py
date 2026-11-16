@@ -1114,6 +1114,7 @@ class TestLeaseAcrossProcesses(RootTestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+        assert proc.stdout is not None
         line = proc.stdout.readline().strip()
         if not line.startswith("SR-"):
             proc.kill()
@@ -1150,6 +1151,7 @@ class TestLeaseAcrossProcesses(RootTestCase):
                 self.open(root)
         finally:
             os.kill(holder.pid, signal.SIGCONT)
+        assert holder.stdin is not None
         holder.stdin.write("\n")
         holder.stdin.flush()
         holder.wait(30)
@@ -1158,6 +1160,7 @@ class TestLeaseAcrossProcesses(RootTestCase):
     def test_orderly_exit_releases_the_lease(self):
         root = self.path("lib")
         holder, _ = self._spawn_holder(root)
+        assert holder.stdin is not None
         holder.stdin.write("\n")
         holder.stdin.flush()
         holder.wait(30)
@@ -1667,12 +1670,14 @@ class TestMarkerWritesNeedTheLease(RootTestCase):
             root_marker.write_marker(root, document)  # type: ignore[call-arg]
         self.assertEqual(self.marker_doc(root), before)
 
-        root_marker.write_marker(root, document, lease=bound.lease)
+        lease = bound.lease
+        assert isinstance(lease, ExclusiveFileLock)
+        root_marker.write_marker(root, document, lease=lease)
         self.assertEqual(self.marker_doc(root)["future_field"], 1)
 
         bound.release()
         with self.assertRaises(StorageRootRefused) as ctx:
-            root_marker.write_marker(root, before, lease=bound.lease)
+            root_marker.write_marker(root, before, lease=lease)
         self.assertEqual(ctx.exception.reason, "marker_write_without_lease")
         self.assertEqual(self.marker_doc(root)["future_field"], 1)
 

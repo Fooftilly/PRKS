@@ -27,13 +27,13 @@ class AssessmentClassificationTests(unittest.TestCase):
     def _facts(
         self,
         *,
-        playwright_installed="1.63.0",
+        playwright_installed: str | None = "1.63.0",
         playwright_pinned="1.63.0",
         chromium_available=True,
         cpu_effective=4,
         memory_limit_bytes=16 * AGENT_MEMORY_PER_JOB_BYTES,
-        shm_avail=2 * 1024 * 1024 * 1024,
-        temp_avail=8 * 1024 * 1024 * 1024,
+        shm_avail: int | None = 2 * 1024 * 1024 * 1024,
+        temp_avail: int | None = 8 * 1024 * 1024 * 1024,
         agent_default_workers=2,
     ):
         return {

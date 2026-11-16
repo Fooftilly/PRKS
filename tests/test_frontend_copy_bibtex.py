@@ -11,7 +11,7 @@ _TEST = os.path.join(_ROOT, "tests", "browser", "run_copy_bibtex_selftest.js")
 class WorkBibTeXClipboardTests(unittest.TestCase):
     def test_browser_code_in_node(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "Node is required for BibTeX clipboard tests")
+        assert node is not None, "Node is required for BibTeX clipboard tests"
         result = subprocess.run(
             [node, _TEST],
             cwd=_ROOT,

@@ -57,7 +57,7 @@ class ResearchMarkupTests(unittest.TestCase):
 
     def test_python_js_agreement(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for research-links parser agreement")
+        assert node is not None, "node is required for research-links parser agreement"
         self.assertTrue(os.path.isfile(_JS))
         proc = subprocess.run(
             [node, _RUNNER],

@@ -21,6 +21,7 @@ if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
 from tests.e2e import policy
+from tests.narrowing import require
 
 
 FAKE_IDS = [
@@ -60,13 +61,16 @@ class _RuntimeImports(ast.NodeVisitor):
     def _add(self, *names: str) -> None:
         (self.deferred if self._function_depth else self.imports).update(names)
 
-    def visit_FunctionDef(self, node):
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
         self._function_depth += 1
         self.generic_visit(node)
         self._function_depth -= 1
 
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_Lambda = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Lambda(self, node):
+        self.visit_FunctionDef(node)
 
     def visit_If(self, node):
         # Type-only imports do not activate a persistence backend.
@@ -1481,7 +1485,7 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(rule, "e2e-framework")
         self.assertFalse(skip)
         self.assertEqual(feats, ("smoke", "wait-async"))
-        self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+        self.assertEqual(require(policy._affected_rule(rule)).get("ci_mode"), "full")
         self.assertEqual(policy.plan_ci_e2e([e2e_gate])["mode"], "full")
 
         test_gate = ".github/workflows/test-gate.yml"
@@ -1543,6 +1547,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
             path = Path(raw) / "e2e-last-failed.json"
             policy.save_last_failed(path, ["a.b.C.test_x"], meta={"tier": "feature"})
             data = policy.load_last_failed(path)
+            assert data is not None
             self.assertEqual(data["test_ids"], ["a.b.C.test_x"])
             self.assertEqual(data["meta"]["tier"], "feature")
 
@@ -1550,7 +1555,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "nested" / "e2e-last-failed.json"
             self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_x"]))
-            self.assertEqual(policy.load_last_failed(path)["test_ids"], ["a.b.C.test_x"])
+            self.assertEqual(require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_x"])
             self.assertEqual(
                 sorted(q.name for q in path.parent.iterdir()),
                 ["e2e-last-failed.json"],
@@ -1567,7 +1572,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
                 self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(
-                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+                require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_keep"]
             )
             # The uncommitted temp file must not linger next to the real state.
             self.assertEqual(
@@ -1589,7 +1594,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
                 self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(
-                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+                require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_keep"]
             )
             self.assertEqual(
                 sorted(q.name for q in path.parent.iterdir()),
@@ -1626,7 +1631,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
             for name in seen:
                 self.assertEqual(Path(name).parent, path.parent)
             self.assertEqual(
-                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_two"]
+                require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_two"]
             )
 
     def test_corrupt_or_missing_returns_none(self):
@@ -1724,6 +1729,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
             }
             self.assertTrue(policy.save_failure_diagnostics(path, payload))
             loaded = policy.load_failure_diagnostics(path)
+            assert loaded is not None
             self.assertEqual(loaded["stuck_test_id"], "tests.e2e.fake.T.test_hung")
             self.assertEqual(loaded["last_stage"], "APP_READY")
             self.assertTrue(loaded["watchdog"])
@@ -2080,6 +2086,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
         tid = "tests.e2e.test_app.DummyTests.test_skipped"
         self.assertIsNone(runner._unexpected_skips_error([]))
         message = runner._unexpected_skips_error(self.skipped_result(tid).skipped)
+        assert message is not None
         self.assertIn(tid, message)
         self.assertIn("skipped 1 selected test", message)
         self.assertNotIn("private unsupported-browser detail", message)
@@ -2150,7 +2157,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
         subtest.test_case = parent
         subtest.id.return_value = parent.id() + " (private='confidential')"
         self.assertEqual(runner._skipped_test_ids([(subtest, "secret reason")]), [parent.id()])
-        self.assertNotIn("confidential", runner._unexpected_skips_error([(subtest, "secret reason")]))
+        self.assertNotIn("confidential", require(runner._unexpected_skips_error([(subtest, "secret reason")])))
 
     def test_skip_diagnostics_only_include_validated_parent_ids(self):
         from tests.e2e import run as runner
@@ -2192,6 +2199,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(observed, {tid: 0.1})
         self.assertEqual(failed, [tid])
+        assert saved is not None
         self.assertEqual(saved["kind"], "unexpected-skip")
         self.assertEqual(saved["failed_ids"], [tid])
         self.assertEqual(saved["stuck_test_id"], tid)
@@ -2224,12 +2232,15 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
         b = "tests.e2e.test_app.FooTests.test_second"
         c = "tests.e2e.test_app.FooTests.test_unselected"
         missing = runner._external_shard_completion_error([a, b], {a: 1.0})
+        assert missing is not None
         self.assertIn("missing=1", missing)
         self.assertIn(b, missing)
         extra = runner._external_shard_completion_error([a], {a: 1.0, c: 2.0})
+        assert extra is not None
         self.assertIn("unexpected=1", extra)
         self.assertIn(c, extra)
         duplicate = runner._external_shard_completion_error([a, a], {a: 1.0})
+        assert duplicate is not None
         self.assertIn("duplicate test IDs", duplicate)
 
     def test_duplicate_execution_count_fails_despite_matching_timing_keys(self):
@@ -2240,7 +2251,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
         observed = {a: 1.0, b: 2.0}
         self.assertIsNone(runner._external_shard_completion_error([a, b], observed))
         self.assertIn(
-            "selected=2 completed=3", runner._execution_count_error([a, b], 3)
+            "selected=2 completed=3", require(runner._execution_count_error([a, b], 3))
         )
         self.assertIsNone(runner._execution_count_error([a, b], 2))
 
@@ -2303,7 +2314,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
 
         a = "tests.e2e.test_app.FooTests.test_first"
         b = "tests.e2e.test_app.FooTests.test_second"
-        detail = runner._execution_count_error([a, b], 3)
+        detail = require(runner._execution_count_error([a, b], 3))
         self.assertEqual(
             runner._privacy_safe_detail(
                 {"kind": "execution-count-mismatch", "detail": detail},
@@ -2349,6 +2360,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
                 )
                 self.assertFalse(ok)
                 self.assertEqual(failed, [])
+                assert saved is not None
                 self.assertEqual(saved["kind"], expected_kind)
                 self.assertEqual(saved["failed_ids"], [])
                 self.assertEqual(saved["stuck_test_id"], "")
@@ -2736,7 +2748,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 # Selected set was [1,2,3]; if merge used selection, 2 and 3
                 # would be dropped as "passed". They must remain unresolved.
                 data = policy.load_last_failed(last_path)
-                self.assertIsNotNone(data)
+                assert data is not None
                 self.assertEqual(
                     data["test_ids"],
                     [
@@ -3723,7 +3735,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 self.assertNotEqual(timings_path.read_bytes(), prior_timings_bytes)
                 # Ordinary success still merges last-failed (unexecuted priors remain).
                 data = policy.load_last_failed(last_path)
-                self.assertIsNotNone(data)
+                assert data is not None
                 self.assertEqual(data["test_ids"], prior_failed)
         finally:
             if previous is None:
@@ -3797,10 +3809,10 @@ class CrashLastFailedRetentionTests(unittest.TestCase):
                                                 )
                 self.assertEqual(code, 1)
                 data = policy.load_last_failed(last_path)
-                self.assertIsNotNone(data)
+                assert data is not None
                 self.assertEqual(data["test_ids"], [crash_id])
                 loaded = policy.load_failure_diagnostics(diag_path)
-                self.assertIsNotNone(loaded)
+                assert loaded is not None
                 self.assertIn(crash_id, loaded["failed_ids"])
                 self.assertNotEqual(loaded.get("kind"), "pointer-capture")
         finally:
@@ -3853,7 +3865,7 @@ class CrashLastFailedRetentionTests(unittest.TestCase):
                 retained = (data or {}).get("test_ids") or []
                 self.assertNotIn(finished_id, retained)
                 loaded = policy.load_failure_diagnostics(diag_path)
-                self.assertIsNotNone(loaded)
+                assert loaded is not None
                 self.assertNotIn(finished_id, loaded.get("failed_ids") or [])
         finally:
             if previous is None:
@@ -3955,7 +3967,7 @@ class PointerCaptureDiagnosticsTests(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         pointer.assert_not_called()
-        self.assertIsNotNone(loaded)
+        assert loaded is not None
         self.assertEqual(loaded["kind"], "worker-crash")
         self.assertEqual(loaded["failed_ids"], [test_id])
         self.assertEqual(loaded["last_stage"], "APP_READY")

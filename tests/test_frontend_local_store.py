@@ -204,7 +204,7 @@ class FrontendLocalStoreTests(unittest.TestCase):
 
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for local store tests")
+        assert node is not None, "node is required for local store tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,

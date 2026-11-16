@@ -52,13 +52,16 @@ def _settings_route(db: Any, method: str, data: Any = None, *, reference: bool =
     route's commands become those calls (``SettingsCommandsOver``).
     """
     handler = _Handler()
-    route = settings_api.handle_get if method == "GET" else settings_api.handle_patch
-    args = (handler, db, settings_api.PATH) if method == "GET" else (handler, db, settings_api.PATH, data)
+    def route() -> bool:
+        if method == "GET":
+            return settings_api.handle_get(handler, db, settings_api.PATH)
+        return settings_api.handle_patch(handler, db, settings_api.PATH, data)
+
     if reference:
         with route_commands_over(settings_api, SettingsCommandsOver(db)):
-            handled = route(*args)
+            handled = route()
     else:
-        handled = route(*args)
+        handled = route()
     assert handled, method
     return handler.calls[-1]
 

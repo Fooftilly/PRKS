@@ -132,7 +132,7 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
             css,
             re.S | re.M,
         )
-        self.assertIsNotNone(pane)
+        assert pane is not None
         self.assertIn("container-type: inline-size;", pane.group(1))
         self.assertIn("container-name: prks-pdf-pane;", pane.group(1))
         drawer = re.search(
@@ -140,7 +140,7 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
             css,
             re.S | re.M,
         )
-        self.assertIsNotNone(drawer)
+        assert drawer is not None
         self.assertIn("width: min(var(--pdf-annotation-drawer-width, 22rem), 100%);", drawer.group(1))
         drawer_host = css[
             css.index('.document-view--work [data-prks-role="pdf-annotation-drawer-host"]') :

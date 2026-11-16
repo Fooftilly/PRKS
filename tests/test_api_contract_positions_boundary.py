@@ -85,11 +85,13 @@ class PositionBoundaryUnitTests(unittest.TestCase):
     def test_create_request_rejects_non_object(self):
         model, err = parse_position_request(PositionCreateRequest, ["x"])
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_request")
 
     def test_create_request_wrong_type_name_preserves_domain_code(self):
         model, err = parse_position_request(PositionCreateRequest, {"name": 12})
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_name")
         self.assertEqual(err["error"], "Name must be a string.")
 
@@ -98,6 +100,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionCreateRequest, {"name": "ok", "description": 5}
         )
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_text")
         self.assertEqual(err["error"], "Text must be a string.")
 
@@ -110,6 +113,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
                     {"name": "Falsy desc", "description": falsy},
                 )
                 self.assertIsNone(model)
+                assert err is not None
                 self.assertEqual(err["code"], "invalid_text")
                 self.assertEqual(err["error"], "Text must be a string.")
 
@@ -119,6 +123,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionCreateRequest, {"name": "Null desc", "description": None}
         )
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_text")
         self.assertEqual(err["error"], "Text must be a string.")
 
@@ -127,6 +132,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionCreateRequest, {"name": "No desc"}
         )
         self.assertIsNone(err)
+        assert model is not None
         self.assertEqual(model.description, "")
 
     def test_create_request_passes_plain_values(self):
@@ -134,6 +140,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionCreateRequest, {"name": "Realism", "description": "note"}
         )
         self.assertIsNone(err)
+        assert model is not None
         self.assertIsInstance(model.name, str)
         self.assertEqual(model.name, "Realism")
         # Domain receives plain attrs, not the model as business state.
@@ -142,6 +149,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
     def test_update_request_tracks_which_fields_were_sent(self):
         model, err = parse_position_request(PositionUpdateRequest, {"name": "Only name"})
         self.assertIsNone(err)
+        assert model is not None
         self.assertEqual(model.domain_field_kwargs(), {"name": "Only name"})
 
     def test_update_explicit_null_description_is_invalid_text(self):
@@ -150,12 +158,14 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionUpdateRequest, {"description": None}
         )
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_text")
         self.assertEqual(err["error"], "Text must be a string.")
 
     def test_update_explicit_null_name_is_invalid_name(self):
         model, err = parse_position_request(PositionUpdateRequest, {"name": None})
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_name")
         self.assertEqual(err["error"], "Name must be a string.")
 
@@ -164,6 +174,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionUpdateRequest, {"name": "Keep desc"}
         )
         self.assertIsNone(err)
+        assert model is not None
         self.assertNotIn("description", model.domain_field_kwargs())
 
     def test_update_empty_description_clears(self):
@@ -171,6 +182,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionUpdateRequest, {"description": ""}
         )
         self.assertIsNone(err)
+        assert model is not None
         self.assertEqual(model.domain_field_kwargs(), {"description": ""})
 
     def test_update_name_with_null_description_is_invalid_text(self):
@@ -178,12 +190,14 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionUpdateRequest, {"name": "Renamed", "description": None}
         )
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_text")
         self.assertEqual(err["error"], "Text must be a string.")
 
     def test_update_request_wrong_type_name_preserves_domain_code(self):
         model, err = parse_position_request(PositionUpdateRequest, {"name": 1})
         self.assertIsNone(model)
+        assert err is not None
         self.assertEqual(err["code"], "invalid_name")
         self.assertEqual(err["error"], "Name must be a string.")
 
@@ -197,6 +211,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             "arguments": [],
         }
         out = dump_response(PositionDetail, payload)
+        assert isinstance(out, dict)
         self.assertEqual(out["id"], "P-TEST")
         self.assertEqual(out["arguments"], [])
         self.assertIn("description", out)

@@ -5,6 +5,7 @@ import subprocess
 import unittest
 
 from backend import playlist_sync, sync_protocol
+from tests.narrowing import must_search
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -112,7 +113,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         aggregate -- so what it can name is bounded by what an envelope
         carries."""
         at = self.store.index('const PLAYLIST_MAX_ITEMS =')
-        value = int(re.search(r'= (\d+);', self.store[at: at + 60]).group(1))
+        value = int(must_search(r'= (\d+);', self.store[at: at + 60]).group(1))
         self.assertEqual(value, playlist_sync.MAX_ITEMS)
 
     def test_a_video_title_keeps_using_the_work_metadata_family(self):

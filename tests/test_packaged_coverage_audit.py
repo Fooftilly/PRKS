@@ -16,7 +16,7 @@ from tests.e2e import policy, run
 
 def complete_fixture():
     """Synthetic *complete for its declared modules* suite, no browser needed."""
-    ids = set(policy.SMOKE_TEST_IDS) | set(staged.EXTRA_PACKAGED_SMOKE_IDS)
+    ids: set[str] = set(policy.SMOKE_TEST_IDS) | set(staged.EXTRA_PACKAGED_SMOKE_IDS)
     ids.update(test_id for _, test_id in staged.CRITICAL_BROWSER_OBLIGATIONS)
     all_ids = sorted(ids)
     modules = sorted({test_id.rsplit(".", 2)[0] for test_id in all_ids})

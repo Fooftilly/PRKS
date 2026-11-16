@@ -181,7 +181,7 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         settings_block = css.split(".modal--settings {", 1)[1].split("}", 1)[0]
         self.assertIn("94vw", settings_block)
         m = re.search(r"(?m)^\.modal \{([^}]*)\}", css)
-        self.assertIsNotNone(m, "base .modal rule not found")
+        assert m is not None, "base .modal rule not found"
         self.assertIn("500px", m.group(1))
 
     def test_settings_close_is_not_an_unsaved_discard(self):

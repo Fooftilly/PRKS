@@ -23,6 +23,7 @@ from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootInUse, StorageRootRefused
 from backend.storage.file_lock import ExclusiveFileLock, LockBusy, SharedFileLock
 from backend.storage.root_marker import StartState
+from tests.narrowing import require
 
 INSTANCE = "IN-" + "A" * 32
 OTHER_INSTANCE = "IN-" + "B" * 32
@@ -120,7 +121,7 @@ class TestSharedLease(RootClaimTestCase):
 
     def test_a_shared_lease_never_passes_as_the_exclusive_marker_lease(self):
         self.assertFalse(isinstance(self.lease, ExclusiveFileLock))
-        doc = root_marker.read_marker(self.root).document
+        doc = require(root_marker.read_marker(self.root)).document
         self.assert_refused(
             "marker_write_without_lease", root_marker.write_marker, self.root, doc, lease=self.lease
         )
@@ -148,6 +149,7 @@ class TestSharedLease(RootClaimTestCase):
 class TestPairingFields(RootClaimTestCase):
     def test_unclaimed_marker_has_generation_zero_and_no_token(self):
         marker = root_marker.read_marker(self.root)
+        assert marker is not None
         self.assertIsNone(marker.instance_id)
         self.assertEqual(marker.start_state, StartState(0, None))
 
@@ -160,16 +162,16 @@ class TestPairingFields(RootClaimTestCase):
         }
         for reason, fields in cases.items():
             with self.subTest(reason=reason):
-                doc = dict(root_marker.read_marker(self.root).document)
+                doc = dict(require(root_marker.read_marker(self.root)).document)
                 doc.update(fields)
                 payload = json.dumps(doc).encode("utf-8")
                 self.assert_refused("marker_" + reason, root_marker.parse_marker, payload)
-        doc = dict(root_marker.read_marker(self.root).document)
+        doc = dict(require(root_marker.read_marker(self.root)).document)
         doc["start_generation"] = True
         self.assert_refused(
             "marker_start_generation_invalid", root_marker.parse_marker, json.dumps(doc).encode()
         )
-        doc = dict(root_marker.read_marker(self.root).document)
+        doc = dict(require(root_marker.read_marker(self.root)).document)
         doc["start_token"] = TOKEN
         self.assert_refused(
             "marker_pairing_incomplete", root_marker.parse_marker, json.dumps(doc).encode()
@@ -180,10 +182,11 @@ class TestPairingFields(RootClaimTestCase):
         self.lease.release()
         lock = ExclusiveFileLock.acquire(root_marker.lease_path(self.root))
         self.addCleanup(lock.release)
-        doc = dict(root_marker.read_marker(self.root).document)
+        doc = dict(require(root_marker.read_marker(self.root)).document)
         doc["unrelated"] = "kept"
         root_marker.write_marker(self.root, doc, lease=lock)
         marker = root_marker.read_marker(self.root)
+        assert marker is not None
         self.assertEqual((marker.instance_id, marker.start_state), (INSTANCE, StartState(1, TOKEN)))
         before = self.marker_bytes()
         for change in (
@@ -208,19 +211,23 @@ class TestPairingFields(RootClaimTestCase):
         bound = root_binding.open_storage_root(StorageConfig.for_testing(self.root), register=False)
         bound.release()
         marker = root_marker.read_marker(self.root)
+        assert marker is not None
         self.assertEqual((marker.instance_id, marker.start_state), (INSTANCE, StartState(1, TOKEN)))
 
     def test_relocation_carries_pairing_fields_unchanged(self):
         self.claim()
         source = root_marker.read_marker(self.root)
+        assert source is not None
         destination = dict(source.document, relocation={"id": "r1", "role": "destination"})
         destination.update({"instance_id": OTHER_INSTANCE, "start_generation": 9, "start_token": OTHER_TOKEN})
+        assert source is not None
         carried = root_marker.carry_pairing_fields(source, destination)
         self.assertEqual(carried["instance_id"], INSTANCE)
         self.assertEqual(carried["start_generation"], 1)
         self.assertEqual(carried["start_token"], TOKEN)
         self.assertEqual(carried["relocation"], {"id": "r1", "role": "destination"})
         unclaimed = root_marker.read_marker(self.new_root("fresh"))
+        assert unclaimed is not None
         stripped = root_marker.carry_pairing_fields(unclaimed, destination)
         for name in root_marker.PAIRING_FIELDS:
             self.assertNotIn(name, stripped)
@@ -232,6 +239,7 @@ class TestClaimRoot(RootClaimTestCase):
         self.assertEqual(marker.instance_id, INSTANCE)
         self.assertEqual(marker.start_state, StartState(1, TOKEN))
         on_disk = root_marker.read_marker(self.root)
+        assert on_disk is not None
         self.assertEqual((on_disk.instance_id, on_disk.start_state), (INSTANCE, StartState(1, TOKEN)))
         self.assertEqual(on_disk.storage_root_id, marker.storage_root_id)
         self.assertTrue(os.path.isfile(root_marker.claim_lock_path(self.root)))
@@ -347,6 +355,7 @@ class TestClaimRoot(RootClaimTestCase):
         self.assertEqual(results["first"].instance_id, INSTANCE)
         self.assertEqual(results["second"].reason, "root_claimed_by_other")
         marker = root_marker.read_marker(self.root)
+        assert marker is not None
         self.assertEqual((marker.instance_id, marker.start_state), (INSTANCE, StartState(1, TOKEN)))
 
     def test_claim_lock_wait_is_bounded(self):
@@ -371,8 +380,8 @@ class TestBumpStartGeneration(RootClaimTestCase):
         marker, durable = self.bump(StartState(1, TOKEN), StartState(2, NEXT_TOKEN))
         self.assertTrue(durable)
         self.assertEqual(marker.start_state, StartState(2, NEXT_TOKEN))
-        self.assertEqual(root_marker.read_marker(self.root).start_state, StartState(2, NEXT_TOKEN))
-        self.assertEqual(root_marker.read_marker(self.root).instance_id, INSTANCE)
+        self.assertEqual(require(root_marker.read_marker(self.root)).start_state, StartState(2, NEXT_TOKEN))
+        self.assertEqual(require(root_marker.read_marker(self.root)).instance_id, INSTANCE)
 
     def test_bump_already_at_target_is_a_no_op(self):
         self.bump(StartState(1, TOKEN), StartState(2, NEXT_TOKEN))

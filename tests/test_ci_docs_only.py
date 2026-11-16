@@ -230,7 +230,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
                 + r"\n(.*?)(?=^      - name: |\Z)",
                 unit,
             )
-            self.assertIsNotNone(match, name)
+            assert match is not None, name
             return match.group(1)
 
         for name in (
@@ -312,7 +312,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
                 + r":\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
                 workflow,
             )
-            self.assertIsNotNone(match)
+            assert match is not None
             return match.group(1)
 
         for job_id, required_name in (
@@ -324,7 +324,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
                 self.assertIn("name: " + required_name, block)
                 self.assertIn("needs: docs-only-plan", block)
                 guard = re.search(r"(?m)^    if: >-\n((?:      .*\n)+)", block)
-                self.assertIsNotNone(guard)
+                assert guard is not None
                 self.assertEqual(
                     " ".join(line.strip() for line in guard.group(1).splitlines()),
                     expected_guard,
