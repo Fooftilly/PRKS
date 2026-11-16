@@ -3270,6 +3270,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             // Always end the catch-up gate here — never hand it to materialization.
             prksEndAnnotationMaterializationGate(runtime);
+            // Here, not after the try: the stale branch returns from it.
+            if (staleSnapshot && stillLive()) scheduleStaleSnapshotCatchUp();
         }
         // Independent materialization gate: only after catch-up gate is gone.
         // Handoff block (if shouldMaterialize) keeps mutation disabled until
@@ -3277,7 +3279,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (shouldMaterialize && stillLive()) {
             void requestFlush('materialize');
         }
-        if (staleSnapshot && stillLive()) scheduleStaleSnapshotCatchUp();
     }
 
     // The server already committed the ACK the stale snapshot predates, so a
