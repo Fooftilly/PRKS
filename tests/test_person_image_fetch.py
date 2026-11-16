@@ -31,6 +31,7 @@ from backend.person_image import (  # noqa: E402
     normalize_person_image_url,
     read_legacy_portrait_bytes,
 )
+from tests.narrowing import require
 
 
 def _png_bytes(width=16, height=16, color=(10, 20, 30)):
@@ -128,8 +129,8 @@ class FakeSocket:
         self.closed = False
         self.connect_error = connect_error
         self.family = None
-        self.type = None
-        self.proto = None
+        self.type: int | None = None
+        self.proto: int | None = None
 
     def settimeout(self, t):
         self.timeouts.append(t)
@@ -321,6 +322,7 @@ class TestFraming(unittest.TestCase):
         ok = person_image._parse_response_framing(
             _http_message(**{"Content-Length": "8"})
         )
+        assert ok is not None
         self.assertEqual(ok[0], 8)
         self.assertIsNone(
             person_image._parse_response_framing(
@@ -511,7 +513,7 @@ class TestPinnedFetch(unittest.TestCase):
         sa = ("8.8.8.8", 443)
         info = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sa)]
         result, created, ctx = self._fetch("https://example.com/a.jpg?x=1", body, info)
-        self.assertIsNotNone(result)
+        assert result is not None
         self.assertEqual(result.subtype, "webp")
         self.assertEqual(identify_cached_portrait_subtype(result.body), "webp")
         self.assertEqual(len(created), 1)
@@ -884,7 +886,7 @@ class TestDecodeAndTranscode(unittest.TestCase):
     def test_raster_formats_and_output(self):
         for raw in (_png_bytes(), _jpeg_bytes(), _webp_bytes(), _gif_bytes()):
             encoded = decode_and_transcode(raw, None)
-            self.assertIsNotNone(encoded)
+            assert encoded is not None
             out, subtype = encoded
             self.assertIn(subtype, ("webp", "jpeg"))
             self.assertEqual(identify_cached_portrait_subtype(out), subtype)
@@ -940,7 +942,7 @@ class TestDecodeAndTranscode(unittest.TestCase):
         raw = buf.getvalue()
         with patch.object(person_image, "_encode_webp", return_value=None):
             encoded = decode_and_transcode(raw, None)
-        self.assertIsNotNone(encoded)
+        assert encoded is not None
         out, subtype = encoded
         self.assertEqual(subtype, "jpeg")
         self.assertEqual(identify_cached_portrait_subtype(out), "jpeg")
@@ -959,7 +961,7 @@ class TestLegacyBinRead(unittest.TestCase):
                 ok_path = os.path.join(tmp, "ok.bin")
                 with open(ok_path, "wb") as fp:
                     fp.write(b"a" * cap)
-                self.assertEqual(len(read_legacy_portrait_bytes(ok_path)), cap)
+                self.assertEqual(len(require(read_legacy_portrait_bytes(ok_path))), cap)
 
                 big_path = os.path.join(tmp, "big.bin")
                 with open(big_path, "wb") as fp:

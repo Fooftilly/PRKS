@@ -115,6 +115,7 @@ class E2EIsolationTests(unittest.TestCase):
 
         action, err = decide_e2e_browser_setup("1.63.1", "1.63.0", False)
         self.assertEqual(action, "fail")
+        assert err is not None
         self.assertIn("Installed Playwright 1.63.1 does not match project pin 1.63.0.", err)
         self.assertIn("-m pip install -r requirements-dev.txt", err)
         calls = []

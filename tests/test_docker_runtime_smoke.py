@@ -115,7 +115,7 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                 with self.subTest(kind=kind, case=label):
                     self.assertFalse(valid_browser_asset(raw, mime, kind, digest))
         self.assertFalse(valid_browser_asset(bundle, "text/javascript", "unknown", hashlib.sha256(bundle).hexdigest()))
-        self.assertFalse(valid_browser_asset(bundle.decode(), "text/javascript", "bundle", hashlib.sha256(bundle).hexdigest()))
+        self.assertFalse(valid_browser_asset(bundle.decode(), "text/javascript", "bundle", hashlib.sha256(bundle).hexdigest()))  # pyright: ignore[reportArgumentType]
 
     def test_browser_asset_cli_rejects_fallback_and_truncation_even_with_http_200(self):
         bundle = b";\n/* bundled source: /js/icons.js */\n" + b"window.prksReady = true;\n" * 20

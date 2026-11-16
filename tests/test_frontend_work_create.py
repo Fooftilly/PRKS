@@ -7,6 +7,8 @@ import re
 import subprocess
 import unittest
 
+from tests.narrowing import must_search
+
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _INDEX = os.path.join(_FRONTEND, "index.html")
@@ -141,9 +143,9 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertEqual(body.count("data-prks-count-for="), 2)
         # Requiredness is text, and the controls say so to assistive tech.
         self.assertIn('class="prks-field__required"', essentials)
-        folder = re.search(r'<input[^>]*id="work-folder-search"[^>]*>', modal).group(0)
+        folder = must_search(r'<input[^>]*id="work-folder-search"[^>]*>', modal).group(0)
         self.assertIn('aria-required="true"', folder)
-        url = re.search(r'<input[^>]*id="work-video-url"[^>]*>', modal).group(0)
+        url = must_search(r'<input[^>]*id="work-video-url"[^>]*>', modal).group(0)
         self.assertIn('aria-required="true"', url)
 
     def test_people_have_no_role_surface_before_a_person(self):
@@ -155,7 +157,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertNotIn("addRoleToUploadList()", modal)
         self.assertNotIn("Search, then Link", modal)
         self.assertIn('id="upload-roles-list"', modal)
-        roles_list = re.search(r'<ul[^>]*id="upload-roles-list"[^>]*>', modal).group(0)
+        roles_list = must_search(r'<ul[^>]*id="upload-roles-list"[^>]*>', modal).group(0)
         self.assertIn("hidden", roles_list)
         # The shared credit picker is parked (hidden) until a row asks for it.
         parking = modal.split('id="upload-role-credit-parking"', 1)[1][:40]

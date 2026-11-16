@@ -29,7 +29,7 @@ class WorkRoleSyncFrontendTests(unittest.TestCase):
     def test_the_credit_bound_matches_on_both_sides(self):
         source = (FRONTEND / 'work-role-state.js').read_text()
         match = re.search(r'MAX_CREDIT_NAME_BYTES = (\d+)', source)
-        self.assertIsNotNone(match)
+        assert match is not None
         self.assertEqual(int(match.group(1)), work_role_sync.MAX_CREDIT_NAME_BYTES)
 
     def test_the_family_is_registered_everywhere_it_must_be(self):

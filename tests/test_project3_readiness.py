@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone

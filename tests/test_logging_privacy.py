@@ -240,6 +240,7 @@ class TestPrivacySafeFormatter(unittest.TestCase):
         def _raise_secret():
             raise RuntimeError(f"{SECRET_TITLE} {SECRET_PATH}")
 
+        text = ""
         try:
             _raise_secret()
         except RuntimeError:
@@ -251,6 +252,7 @@ class TestPrivacySafeFormatter(unittest.TestCase):
         self.assertNotIn("PRIVATE_BOOK_X9Q7", text)
         self.assertNotIn(_PROJECT_DIR, text)
 
+        external = ""
         try:
             json.loads("{")
         except json.JSONDecodeError:

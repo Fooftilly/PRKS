@@ -36,11 +36,13 @@ class LocalStorageTestCase(unittest.TestCase):
         super().tearDown()
         self._tmp.cleanup()
 
-    def make_backend(self):
+    def make_backend(self) -> LocalFilesystemStorage:
         return LocalFilesystemStorage(self.root)
 
 
-class TestLocalFilesystemStorageContract(StorageBackendContract, LocalStorageTestCase):
+class TestLocalFilesystemStorageContract(
+    StorageBackendContract[LocalFilesystemStorage], LocalStorageTestCase
+):
     """The same suite a future object-storage backend must pass."""
 
 

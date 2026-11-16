@@ -136,7 +136,7 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
 
     def test_nested_tiling_recursive_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace tiling tests")
+        assert node is not None, "node is required for workspace tiling tests"
         runner = os.path.join(_PROJECT_DIR, "tests", "browser", "run_workspace_tiling_recursive_selftest.js")
         self.assertTrue(os.path.isfile(runner))
         proc = subprocess.run(
@@ -179,7 +179,7 @@ class FrontendWorkspaceSplitTests(unittest.TestCase):
 
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for workspace split tests")
+        assert node is not None, "node is required for workspace split tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,

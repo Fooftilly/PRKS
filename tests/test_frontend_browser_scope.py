@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import unittest
 
+from tests.narrowing import must_search
+
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _JS = os.path.join(_FRONTEND, "js")
@@ -78,21 +80,21 @@ class BrowserScopeStructure(unittest.TestCase):
             ("POINTER_KEY", "SCOPE_POINTER_KEY"),
             ("BIND_MESSAGE", "SCOPE_BIND_MESSAGE"),
         ):
-            page_value = re.search(r"const %s = '([^']+)';" % page_const, scope).group(1)
-            sw_value = re.search(r"const %s = '([^']+)';" % sw_const, sw).group(1)
+            page_value = must_search(r"const %s = '([^']+)';" % page_const, scope).group(1)
+            sw_value = must_search(r"const %s = '([^']+)';" % sw_const, sw).group(1)
             with self.subTest(constant=page_const):
                 self.assertEqual(page_value, sw_value)
         self.assertEqual(
-            re.search(r"pdf: '([^']+)'", scope).group(1),
-            re.search(r"const PDF_CACHE_BASE = '([^']+)';", sw).group(1),
+            must_search(r"pdf: '([^']+)'", scope).group(1),
+            must_search(r"const PDF_CACHE_BASE = '([^']+)';", sw).group(1),
         )
         self.assertEqual(
-            re.search(r"const POINTER_DB_VERSION = (\d+);", scope).group(1),
-            re.search(r"const SCOPE_POINTER_DB_VERSION = (\d+);", sw).group(1),
+            must_search(r"const POINTER_DB_VERSION = (\d+);", scope).group(1),
+            must_search(r"const SCOPE_POINTER_DB_VERSION = (\d+);", sw).group(1),
         )
         self.assertEqual(
-            re.search(r"ID_PATTERN = (/[^;]+/);", scope).group(1),
-            re.search(r"SCOPE_ID_PATTERN = (/[^;]+/);", sw).group(1),
+            must_search(r"ID_PATTERN = (/[^;]+/);", scope).group(1),
+            must_search(r"SCOPE_ID_PATTERN = (/[^;]+/);", sw).group(1),
         )
 
     def test_sync_runtime_checks_the_session_before_each_claim(self) -> None:

@@ -749,7 +749,7 @@ class ContractParityTests(unittest.TestCase):
         )
         mq = match.group(1)
         px_match = re.fullmatch(r"\(max-width:\s*(\d+)px\)", mq)
-        self.assertIsNotNone(px_match, f"unexpected small-screen MQ: {mq!r}")
+        assert px_match is not None, f"unexpected small-screen MQ: {mq!r}"
         px = int(px_match.group(1))
         self.assertEqual(px, 900)
         self.assertIn("prksMatchesSmallScreenViewport", ui)

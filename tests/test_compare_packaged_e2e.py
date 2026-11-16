@@ -209,9 +209,9 @@ class PackagedCostComparisonTests(unittest.TestCase):
         for invalid in ([None], ["not a job"], [smoke_jobs()[0], None]):
             with self.subTest(invalid=invalid):
                 with self.assertRaisesRegex(InvalidBenchmark, "must be JSON objects"):
-                    summarize(run(1), invalid, "smoke")
+                    summarize(run(1), invalid, "smoke")  # pyright: ignore[reportArgumentType]
         with self.assertRaisesRegex(InvalidBenchmark, "Workflow run must be a JSON object"):
-            summarize(None, smoke_jobs(), "smoke")
+            summarize(None, smoke_jobs(), "smoke")  # pyright: ignore[reportArgumentType]
 
     def test_refuses_rerun_attempts_and_unknown_attempts(self):
         for attempt in (2, None):

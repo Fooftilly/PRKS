@@ -195,7 +195,7 @@ class TestResearchGraphNoSingletonFallback(unittest.TestCase):
         resolve_fn = re.search(
             r"function resolveActiveRuntime\(\)\s*\{(.*?)\}", src, re.S
         )
-        self.assertIsNotNone(resolve_fn, "resolveActiveRuntime not found")
+        assert resolve_fn is not None, "resolveActiveRuntime not found"
         self.assertNotIn(
             "activeRuntime", resolve_fn.group(1),
             "resolveActiveRuntime still references activeRuntime"
@@ -220,7 +220,7 @@ class TestLatePdfInitProtection(unittest.TestCase):
             src,
             re.S,
         )
-        self.assertIsNotNone(stale_block, "stale guard block not found")
+        assert stale_block is not None, "stale guard block not found"
         self.assertIn(
             "viewer.destroy", stale_block.group(1),
             "viewer.destroy missing in stale guard"

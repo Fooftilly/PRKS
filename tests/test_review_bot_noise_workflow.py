@@ -18,6 +18,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.narrowing import must_search
+
 _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "suppress-noisy-bot-comments.yml"
 _SIGNAL = _ROOT / ".github" / "workflows" / "review-event-signal.yml"
@@ -389,7 +391,7 @@ class NoiseRuleTableTests(unittest.TestCase):
 
     def test_comment_job_prefilter_lists_exactly_the_rule_bots(self) -> None:
         section = _job_section(_TEXT, "minimize-noise-comment")
-        listed = json.loads(re.search(r"fromJSON\('(\[.*?\])'\)", section).group(1))
+        listed = json.loads(must_search(r"fromJSON\('(\[.*?\])'\)", section).group(1))
         self.assertEqual(set(listed), {rule["login"] for rule in self._rules()})
 
 
