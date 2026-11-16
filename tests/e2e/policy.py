@@ -265,6 +265,7 @@ FEATURES = {
         "selectors": (
             "tests.e2e.test_app.PdfPersistenceTests",
             "tests.e2e.test_app.PdfAnnotationCommentEditTests",
+            "tests.e2e.test_app.PdfAnnotationAckDuringLocalWriteTests",
             "tests.e2e.test_offline.OfflineFoundationTests",
         ),
     },
