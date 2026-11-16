@@ -197,13 +197,14 @@
     "backend/work_open_sync.py",
     "backend/work_source_sync.py",
     "backend/work_tag_sync.py",
-    "backend/server.py"
+    "backend/server.py",
+    "prks_app.py"
   ],
   "exclude": [
     "**/__pycache__"
   ],
   "pythonVersion": "3.12",
-  "typeCheckingMode": "basic",
+  "typeCheckingMode": "standard",
   "reportUndefinedVariable": "error",
   "reportUnboundVariable": "error",
   "reportUnusedExcept": "error"
