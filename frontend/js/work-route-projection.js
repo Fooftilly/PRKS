@@ -1,6 +1,6 @@
 var prksWorkRoute = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/features/work/projection.ts
+	// src/features/work/projection.ts
 	var RESOURCE = "workRouteProjection";
 	var PLACEMENT_FIELDS = [
 		"folder_id",
@@ -111,8 +111,7 @@ var prksWorkRoute = (function(exports) {
 	function workOpenShouldRecord(internalRefresh, workValue) {
 		return !internalRefresh && !!workValue;
 	}
-	//#endregion
-	//#region src/features/work/browser-entry.ts
+	// src/features/work/browser-entry.ts
 	/**
 	* Classic-script entry. The maintainer build emits frontend/js/work-route-projection.js.
 	* The Vue application does not import this module. No Vue mount, Pinia, or Vue Router.
@@ -122,7 +121,6 @@ var prksWorkRoute = (function(exports) {
 	root.prksPublishWorkRouteProjection = publishWorkRouteProjection;
 	root.prksReplaceWorkRoutePlacement = replaceWorkRoutePlacement;
 	root.prksWorkOpenShouldRecord = workOpenShouldRecord;
-	//#endregion
 	exports.projectWorkRoute = projectWorkRoute;
 	exports.publishWorkRouteProjection = publishWorkRouteProjection;
 	exports.replaceWorkRoutePlacement = replaceWorkRoutePlacement;

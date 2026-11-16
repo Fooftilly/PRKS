@@ -1,6 +1,6 @@
 var prksWorkspaceModel = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/workspace/constants.ts
+	// src/workspace/constants.ts
 	/** In-memory workspace snapshot version. Not the persistence schema version. */
 	var WORKSPACE_STATE_VERSION = 1;
 	/** Main region width / usable root split width. */
@@ -9,16 +9,14 @@ var prksWorkspaceModel = (function(exports) {
 	var DEFAULT_NESTED_SPLIT_RATIO = .5;
 	/** 1 Main + at most 3 Secondary leaves mounted at once. */
 	var MAX_VISIBLE_PANES = 4;
-	//#endregion
-	//#region src/workspace/types.ts
+	// src/workspace/types.ts
 	function asTabId(value) {
 		return String(value);
 	}
 	function asSplitId(value) {
 		return String(value);
 	}
-	//#endregion
-	//#region src/workspace/tree.ts
+	// src/workspace/tree.ts
 	/**
 	* Pure Secondary-tree transforms. No DOM, history, TabContext, or module-level
 	* id counter. Callers pass `nextSplitId` when a new split node is created.
@@ -283,8 +281,7 @@ var prksWorkspaceModel = (function(exports) {
 	function leafCount(tree) {
 		return collectLeafTabIds(tree).length;
 	}
-	//#endregion
-	//#region src/workspace/derive.ts
+	// src/workspace/derive.ts
 	function visualTiled(state, presentation) {
 		return state.mode === "tiled" && !presentation.narrowFallback && !!state.secondaryTree;
 	}
@@ -302,8 +299,7 @@ var prksWorkspaceModel = (function(exports) {
 	function secondaryLeafCapReached(tree) {
 		return leafCount(tree) >= 3;
 	}
-	//#endregion
-	//#region src/workspace/transitions.ts
+	// src/workspace/transitions.ts
 	/**
 	* Pure workspace transitions. Each function returns the next canonical state
 	* and does not touch DOM, history, TabContext, or its inputs.
@@ -804,8 +800,7 @@ var prksWorkspaceModel = (function(exports) {
 			mode
 		});
 	}
-	//#endregion
-	//#region src/workspace/commands.ts
+	// src/workspace/commands.ts
 	/**
 	* Leave preflights for workspace-tabs.js, plus an internal effect sketch.
 	*
@@ -839,8 +834,7 @@ var prksWorkspaceModel = (function(exports) {
 			nextHash: oldMain.route
 		};
 	}
-	//#endregion
-	//#region src/workspace/invariants.ts
+	// src/workspace/invariants.ts
 	function push(errors, message) {
 		errors.push(message);
 	}
@@ -890,8 +884,7 @@ var prksWorkspaceModel = (function(exports) {
 			errors
 		};
 	}
-	//#endregion
-	//#region src/workspace/snapshot.ts
+	// src/workspace/snapshot.ts
 	function copyTree(node) {
 		if (!node) return null;
 		if (node.type === "leaf") return node.tabId ? {
@@ -939,7 +932,6 @@ var prksWorkspaceModel = (function(exports) {
 			mainSplitRatio: state.mainSplitRatio
 		};
 	}
-	//#endregion
 	exports.DEFAULT_MAIN_SPLIT_RATIO = DEFAULT_MAIN_SPLIT_RATIO;
 	exports.MAX_VISIBLE_PANES = MAX_VISIBLE_PANES;
 	exports.WORKSPACE_STATE_VERSION = WORKSPACE_STATE_VERSION;

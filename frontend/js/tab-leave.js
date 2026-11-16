@@ -1,6 +1,6 @@
 var prksTabLeave = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/lifecycle/tab-leave.ts
+	// src/lifecycle/tab-leave.ts
 	var BLOCKING = /* @__PURE__ */ new Set([
 		"rejected-unsaved-edit",
 		"rejected-pending-pdf-sync",
@@ -168,8 +168,7 @@ var prksTabLeave = (function(exports) {
 			flushOwner
 		};
 	}
-	//#endregion
-	//#region src/lifecycle/browser-entry.ts
+	// src/lifecycle/browser-entry.ts
 	/**
 	* Classic-script entry. The maintainer build emits `frontend/js/tab-leave.js`
 	* as the global `prksTabLeave`. Vue does not import this module.
@@ -184,7 +183,6 @@ var prksTabLeave = (function(exports) {
 	var registerFlush = leave.registerFlush;
 	var assessOwner = leave.assessOwner;
 	var flushOwner = leave.flushOwner;
-	//#endregion
 	exports.assessOwner = assessOwner;
 	exports.flushOwner = flushOwner;
 	exports.registerFlush = registerFlush;
