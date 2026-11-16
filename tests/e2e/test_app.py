@@ -3282,6 +3282,101 @@ _SAME_MOUNTED_VIEWER_JS = """() => {
 }"""
 
 
+class PdfAnnotationStaleSnapshotTests(_BrowserE2E):
+    """#1212: a catch-up snapshot read before an ACK the page applied is not used.
+
+    A catch-up reads ``/annotations-snapshot`` and applies it later. When an
+    annotation's ACK reaches the page in between, that snapshot predates the
+    page's acknowledged state. Applied, it drops the annotation while the
+    pending overlay no longer holds it, so the projection takes it off the
+    page and a materialization claims a revision the server has moved past.
+    """
+
+    def test_a_snapshot_read_before_an_applied_ack_is_read_again(self):
+        server, page, collector = self._start_app()
+        self.collector = collector
+        work_id = server.ids["work_a"]
+        _open_work_from_home(page, WORK_A_TITLE)
+        _wait_pdf_viewer(page)
+        _wait_pdf_annotation_durable(page)
+        # Hold the next snapshot response, read from the server as usual,
+        # until the test releases it.
+        page.evaluate(
+            """(workId) => {
+                const path = '/api/works/' + workId + '/annotations-snapshot';
+                const real = window.fetch;
+                let release;
+                const released = new Promise(resolve => { release = resolve; });
+                window.__prksReleaseSnapshot = release;
+                window.__prksSnapshotHeld = false;
+                window.fetch = async function (input, init) {
+                    const url = typeof input === 'string' ? input : (input && input.url) || '';
+                    const response = await real.call(this, input, init);
+                    if (window.__prksSnapshotHeld === false &&
+                            new URL(url, location.href).pathname === path) {
+                        window.__prksSnapshotHeld = true;
+                        window.fetch = real;
+                        await released;
+                    }
+                    return response;
+                };
+            }""",
+            work_id,
+        )
+        # The first highlight's ACK starts the catch-up whose snapshot is held.
+        _commit_pdf_highlight(page)
+        first_id = _only_viewer_annotation_id(page)
+        page.wait_for_function("() => window.__prksSnapshotHeld === true", timeout=30000)
+        # A second highlight is recorded and acknowledged meanwhile.
+        second_id = page.evaluate(
+            """async ([workId, firstId]) => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                const first = ((pdf.annotationCache && pdf.annotationCache.items) || [])
+                    .find(a => a && String(a.id) === firstId);
+                const second = JSON.parse(JSON.stringify(first));
+                second.id = crypto.randomUUID();
+                const shift = r => ({ origin: { x: r.origin.x, y: r.origin.y - 120 },
+                                      size: r.size });
+                second.rect = shift(second.rect);
+                second.segmentRects = (second.segmentRects || []).map(shift);
+                await window.prksSavePdfAnnotationDurably(
+                    workId,
+                    { annotation_id: second.id, annotation: second },
+                    { annotation_id: second.id, present: false, revision: 0, annotation: null },
+                );
+                return second.id;
+            }""",
+            [work_id, first_id],
+        )
+        page.wait_for_function(
+            """(id) => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return ((pdf.annotationCache && pdf.annotationCache.items) || [])
+                    .some(a => a && String(a.id) === id);
+            }""",
+            arg=second_id,
+            timeout=30000,
+        )
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        page.evaluate("() => window.__prksReleaseSnapshot()")
+
+        _wait_pdf_materialized(page, work_id)
+        _wait_pdf_annotation_durable(page)
+        _wait_pdf_annotation_ops_drained(page, work_id)
+        expected = sorted([first_id, second_id])
+        cached = page.evaluate(
+            """() => {
+                const pdf = window.prksGetFocusedTabContext().getResource('pdf');
+                return ((pdf.annotationCache && pdf.annotationCache.items) || [])
+                    .map(a => String(a && a.id));
+            }"""
+        )
+        self.assertEqual(sorted(cached), expected, "the stale snapshot was applied")
+        self.assertEqual(sorted(_viewer_annotation_ids(page)), expected)
+        self.assertIsNotNone(_server_annotation(page, work_id, second_id))
+        self.assertEqual(len(_managed_pdf_annotation_contents(page, work_id)), 2)
+
+
 class PdfAnnotationSaveKeepsViewerTests(_BrowserE2E):
     """An annotation-only save never reloads the open document.
 

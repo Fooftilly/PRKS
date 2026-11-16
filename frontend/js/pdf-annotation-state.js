@@ -456,8 +456,50 @@
         return row;
     }
 
+    /**
+     * Acknowledged annotation state on a runtime only moves forward (#1212).
+     *
+     * The server's canonical annotation set revision orders every ACK and
+     * every `/annotations-snapshot`. A runtime records the newest revision an
+     * applied ACK carried and the revision of the snapshot it holds, so a
+     * snapshot read before an ACK the page already applied, or an ACK that a
+     * newer snapshot already contains, can never put older state back. Older
+     * state would drop or revert an acknowledged annotation while the pending
+     * overlay no longer holds it, and the projection would take it off the
+     * page.
+     */
+    function snapshotPredatesRuntime(runtime, setRevision) {
+        if (!runtime || !Number.isSafeInteger(setRevision)) return false;
+        const ack = runtime._annotationAckSetRevision;
+        const snap = runtime._annotationSnapshotSetRevision;
+        return (Number.isSafeInteger(ack) && setRevision < ack) ||
+            (Number.isSafeInteger(snap) && setRevision < snap);
+    }
+
+    function noteRuntimeSnapshotRevision(runtime, setRevision) {
+        if (!runtime || !Number.isSafeInteger(setRevision)) return;
+        runtime._annotationSnapshotSetRevision = setRevision;
+    }
+
+    function ackPredatesRuntimeSnapshot(runtime, setRevision) {
+        const snap = runtime && runtime._annotationSnapshotSetRevision;
+        return Number.isSafeInteger(setRevision) && Number.isSafeInteger(snap) &&
+            setRevision < snap;
+    }
+
     function patchRuntimeAcknowledged(runtime, data) {
         if (!runtime || !data || !data.annotation_id) return false;
+        // A snapshot newer than this ACK already holds its change and any
+        // later one: patching it in would revert them.
+        if (ackPredatesRuntimeSnapshot(runtime, data.canonical_annotation_set_revision)) {
+            return false;
+        }
+        if (Number.isSafeInteger(data.canonical_annotation_set_revision)) {
+            const seen = runtime._annotationAckSetRevision;
+            if (!Number.isSafeInteger(seen) || data.canonical_annotation_set_revision > seen) {
+                runtime._annotationAckSetRevision = data.canonical_annotation_set_revision;
+            }
+        }
         const annotationId = String(data.annotation_id);
         const present = data.present !== false && !!data.annotation;
         const ackList =
@@ -666,6 +708,8 @@
         prksLoadAcknowledgedPdfAnnotationState: loadAcknowledgedAnnotationState,
         prksLoadAcknowledgedPdfAnnotationSnapshot: loadAcknowledgedAnnotationSnapshot,
         prksApplyPdfAnnotationAckToLiveRuntimes: applyAckToLiveRuntimes,
+        prksPdfAnnotationSnapshotPredatesRuntime: snapshotPredatesRuntime,
+        prksNotePdfAnnotationSnapshotRevision: noteRuntimeSnapshotRevision,
         prksIsPdfAnnotationsStateShape: isAnnotationsStateShape,
         prksIsPdfAnnotationsSnapshotShape: isAnnotationsSnapshotShape,
         prksPdfAnnotationSnapshotToState: snapshotToState,
