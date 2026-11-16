@@ -1,6 +1,6 @@
 var prksEditorRecovery = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/lifecycle/editor-recovery/fingerprint.ts
+	// src/lifecycle/editor-recovery/fingerprint.ts
 	/**
 	* Deterministic 128-bit text fingerprint and exact body equality.
 	*
@@ -140,8 +140,7 @@ var prksEditorRecovery = (function(exports) {
 		if (a.revision === null || b.revision === null) return false;
 		return a.revision === b.revision && a.length === b.length && a.fingerprint !== null && a.fingerprint === b.fingerprint;
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/schema.ts
+	// src/lifecycle/editor-recovery/schema.ts
 	/**
 	* Browser-local editor draft recovery (#466): names, budgets and record shapes.
 	*
@@ -257,8 +256,7 @@ var prksEditorRecovery = (function(exports) {
 		const r = record;
 		return typeof r.v === "number" && r.v >= 1 && r.v <= 1 && typeof r.draftId === "string" && isDraftKind(r.kind) && typeof r.generation === "number" && !!r.owner && typeof r.owner.pageInstanceId === "string";
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/store.ts
+	// src/lifecycle/editor-recovery/store.ts
 	/**
 	* IndexedDB store for editor recovery drafts (`prks-editor-recovery-v1`).
 	*
@@ -791,8 +789,7 @@ var prksEditorRecovery = (function(exports) {
 			} catch {}
 		}
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/emergency.ts
+	// src/lifecycle/editor-recovery/emergency.ts
 	/**
 	* Unload emergency entry: one synchronous localStorage key per page load
 	* (`prks.editorRecovery.emergency.v1.<pageInstanceId>`), written at
@@ -1572,8 +1569,7 @@ var prksEditorRecovery = (function(exports) {
 			discard
 		};
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/identity.ts
+	// src/lifecycle/editor-recovery/identity.ts
 	/**
 	* Page and runtime identity for editor recovery.
 	*
@@ -1977,8 +1973,7 @@ var prksEditorRecovery = (function(exports) {
 			}
 		};
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/lineage.ts
+	// src/lifecycle/editor-recovery/lineage.ts
 	function isAdoptable(lineageClass) {
 		return lineageClass === "same-runtime-orphan" || lineageClass === "dead-runtime";
 	}
@@ -2004,8 +1999,7 @@ var prksEditorRecovery = (function(exports) {
 		if (!gone || pageAlive !== false || runtimeAlive !== false) return "unknown";
 		return "dead-runtime";
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/writer.ts
+	// src/lifecycle/editor-recovery/writer.ts
 	/**
 	* Page-level writer registry: one coalescing writer per editor lineage.
 	*
@@ -2940,8 +2934,7 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/runtime.ts
+	// src/lifecycle/editor-recovery/runtime.ts
 	/**
 	* One editor-recovery runtime per page: store, identity and writer registry.
 	*
@@ -3278,8 +3271,7 @@ var prksEditorRecovery = (function(exports) {
 			return null;
 		}
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery/research-notes.ts
+	// src/lifecycle/editor-recovery/research-notes.ts
 	/**
 	* Research Notes restore decision (#466 slices 2 and 3).
 	*
@@ -3452,8 +3444,7 @@ var prksEditorRecovery = (function(exports) {
 		if (c.record.base.source === "unknown" || c.record.base.revision === null) return "base-unverified";
 		return null;
 	}
-	//#endregion
-	//#region src/lifecycle/editor-recovery-entry.ts
+	// src/lifecycle/editor-recovery-entry.ts
 	/**
 	* Classic-script entry. The maintainer build emits `frontend/js/editor-recovery.js`
 	* as the global `prksEditorRecovery`. Loading the script starts nothing;
@@ -3560,7 +3551,6 @@ var prksEditorRecovery = (function(exports) {
 		pageDiagnostics = createRecoveryDiagnostics(rt);
 		return pageDiagnostics;
 	}
-	//#endregion
 	exports.BODIES_STORE = BODIES_STORE;
 	exports.CLAIM_WAIT_MS = CLAIM_WAIT_MS;
 	exports.CLOSED_PAGES_KEPT = CLOSED_PAGES_KEPT;
