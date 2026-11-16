@@ -104,7 +104,7 @@ class RouteModelContracts(unittest.TestCase):
         self.assertNotIn("route-parser-legacy-oracle", INDEX.read_text(encoding="utf-8"))
         self.assertNotIn("route-parser-legacy-oracle", SW.read_text(encoding="utf-8"))
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for the route-model differential selftest")
+        assert node is not None, "node is required for the route-model differential selftest"
         proc = subprocess.run(
             [node, str(DIFFERENTIAL)],
             cwd=ROOT,

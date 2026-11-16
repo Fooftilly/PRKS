@@ -45,6 +45,7 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
 
     def test_live_snapshot_matches_the_response_model(self):
         body = dump_response(PerformanceSnapshot, snapshot())
+        assert isinstance(body, dict)
         self.assertEqual(body["requests"]["total"], 0)
         self.assertEqual(body["routes"], [])
         self.assertEqual(set(body["counters"]), set(COUNTER_NAMES))
@@ -95,6 +96,7 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         )
         api = OpenAPI.from_dict(document)
         body = dump_response(PerformanceSnapshot, snapshot())
+        assert isinstance(body, dict)
         request = MockRequest(
             host_url="http://127.0.0.1",
             method="get",

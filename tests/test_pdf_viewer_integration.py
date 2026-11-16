@@ -184,7 +184,7 @@ class PdfViewerIntegrationTests(unittest.TestCase):
             factory,
             re.S,
         )
-        self.assertIsNotNone(guarded, "controller.ready must be awaited inside a cleanup guard")
+        assert guarded is not None, "controller.ready must be awaited inside a cleanup guard"
         body = guarded.group("body")
         self.assertIn("handle.destroy();", body)
         self.assertIn("throw error;", body)
@@ -445,7 +445,7 @@ console.log('ok');
             self.assertTrue(tokens, cap)
             for token in tokens:
                 match = _COVERAGE_TOKEN.fullmatch(token)
-                self.assertIsNotNone(match, f"{cap}: {token}")
+                assert match is not None, f"{cap}: {token}"
                 kind, slug = match.group(1), match.group(2)
                 marker = _parity_marker(kind, slug)
                 self.assertIn(marker, _parity_artifact_text(kind), f"{cap}: missing {marker}")

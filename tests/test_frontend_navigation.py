@@ -118,7 +118,7 @@ class FrontendNavigationTests(unittest.TestCase):
 
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for navigation parser tests")
+        assert node is not None, "node is required for navigation parser tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,
@@ -134,7 +134,7 @@ class FrontendNavigationTests(unittest.TestCase):
 
     def test_missing_tab_leave_script_cancels_direct_route(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for the missing leave-script test")
+        assert node is not None, "node is required for the missing leave-script test"
         proc = subprocess.run(
             [node, _MISSING_LEAVE_RUNNER],
             cwd=_PROJECT_DIR,

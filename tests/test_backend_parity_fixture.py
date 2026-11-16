@@ -40,7 +40,8 @@ class FixtureSelectionTests(unittest.TestCase):
             pass
 
         with self.assertRaises(TypeError):
-            parametrize_backends(Plain)
+            # Deliberately not a BackendParityTestCase subclass.
+            parametrize_backends(Plain)  # pyright: ignore[reportArgumentType]
 
     def test_parity_runner_selects_the_opted_in_modules(self):
         with open(os.path.join(_PROJECT_DIR, "scripts", "test-postgres"), encoding="utf-8") as handle:

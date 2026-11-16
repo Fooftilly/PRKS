@@ -10,10 +10,17 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
+# The checker sees the mixin as a TestResult; at runtime it stays a plain mixin.
+if TYPE_CHECKING:
+    _ResultBase = unittest.TestResult
+else:
+    _ResultBase = object
 
-class JUnitResultMixin:
+
+class JUnitResultMixin(_ResultBase):
     """Record completed unittest cases without changing pass/fail semantics."""
 
     def __init__(self, *args, **kwargs):
@@ -71,7 +78,7 @@ class JUnitResultMixin:
 
     def addSubTest(self, test, subtest, err):
         if err is not None:
-            kind = "failure" if issubclass(err[0], test.failureException) else "error"
+            kind = "failure" if err[0] is not None and issubclass(err[0], test.failureException) else "error"
             self._record(test, kind)
         super().addSubTest(test, subtest, err)
 

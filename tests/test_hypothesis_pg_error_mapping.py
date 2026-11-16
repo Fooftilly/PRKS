@@ -58,12 +58,13 @@ class SyntheticPgError(psycopg.Error):
         self._synthetic_diag = SimpleNamespace(constraint_name=constraint, table_name=table)
         super().__init__(PRIVATE_MESSAGE)
 
+    # Replaces psycopg's C-level attributes with synthetic values on purpose.
     @property
-    def sqlstate(self) -> str | None:
+    def sqlstate(self) -> str | None:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self._synthetic_sqlstate
 
     @property
-    def diag(self):
+    def diag(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return self._synthetic_diag
 
 
