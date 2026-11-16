@@ -22,6 +22,7 @@ import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Any
 
 from tests.e2e.install_browser import (
     INSTALL_HINT,
@@ -1010,7 +1011,7 @@ class AppServer:
     def start(self):
         if self.library is None:
             try:
-                kwargs = {"members": self._members}
+                kwargs: dict[str, Any] = {"members": self._members}
                 if self._auth is not None:
                     kwargs["auth"] = self._auth
                 with profile_e2e_phase("postgres_provision"):
@@ -1058,6 +1059,7 @@ class AppServer:
                 # Keep failed/retried probes separate from the successful
                 # attempt's inclusive server_start and its two detail phases.
                 if profiled:
+                    assert spawned is not None
                     _profile_phase("server_spawn_failed", spawned - started)
                     _profile_phase("server_http_ready_failed", time.perf_counter() - spawned)
                 # Read the captured output *before* teardown: the log files live
@@ -1081,6 +1083,7 @@ class AppServer:
             ready = time.perf_counter()
             # Only successful attempts train the historical inclusive phase.
             if profiled:
+                assert spawned is not None
                 _profile_phase("server_spawn", spawned - started)
                 _profile_phase("server_http_ready", ready - spawned)
             _profile_phase("server_start", ready - started)
@@ -1264,13 +1267,19 @@ def _profile_browser_navigation(page) -> None:
         "domContentLoadedEventStart", "domContentLoadedEventEnd",
     )
     values = [timing.get(key) for key in keys]
-    if not all(type(value) in (int, float) and math.isfinite(value) for value in values):
+    if not all((type(value) is int or type(value) is float) and math.isfinite(value) for value in values):
         return
     fetch, response_start, response_end, interactive, dcl_start, dcl_end = values
+    assert fetch is not None
+    assert response_start is not None
+    assert response_end is not None
+    assert interactive is not None
+    assert dcl_start is not None
     if not 0 <= fetch <= response_start <= response_end <= interactive <= dcl_start <= dcl_end:
         return
     _profile_phase("nav_response_wait", (response_start - fetch) / 1000)
     _profile_phase("nav_response_body", (response_end - response_start) / 1000)
+    assert dcl_end is not None
     _profile_phase("nav_dom_content_loaded", (dcl_end - response_end) / 1000)
     # Browser event milestones partition post-response DCL time, but cannot
     # distinguish parser work from synchronous JavaScript and resource stalls.
@@ -1319,6 +1328,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
         page.goto(origin + "/#/folders", wait_until="domcontentloaded")
         if profiled:
             now = time.perf_counter()
+            assert stages is not None
             stages[stage] = now - stage_start
             stage_start = now
 
@@ -1326,6 +1336,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
         page.wait_for_selector("#sidebar")
         if profiled:
             now = time.perf_counter()
+            assert stages is not None
             stages[stage] = now - stage_start
             stage_start = now
 
@@ -1333,6 +1344,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
         page.wait_for_selector(".prks-folder-library")
         if profiled:
             now = time.perf_counter()
+            assert stages is not None
             stages[stage] = now - stage_start
             stage_start = now
 
@@ -1340,14 +1352,18 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
         page.wait_for_function("() => location.hash === '#/folders'")
     except Exception:
         if profiled:
+            assert stages is not None
             stages[stage] = time.perf_counter() - stage_start
+            assert stages is not None
             for name, seconds in stages.items():
                 _profile_phase(name + "_failed", seconds)
         raise
 
     ready = time.perf_counter()
     if profiled:
+        assert stages is not None
         stages[stage] = ready - stage_start
+        assert stages is not None
         for name, seconds in stages.items():
             _profile_phase(name, seconds)
     # Real readiness failures still propagate; this inclusive phase is for

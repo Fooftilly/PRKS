@@ -29,6 +29,7 @@ import time
 import unittest
 from io import StringIO
 from pathlib import Path
+from typing import cast
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -1003,7 +1004,8 @@ def run_worker(
             failfast=fail_fast,
             resultclass=_result_factory,
         )
-        result = runner.run(_suite_for(test_ids))
+        # resultclass=_result_factory makes every run return a _TimingResult.
+        result = cast(_TimingResult, runner.run(_suite_for(test_ids)))
         report["duration"] = time.perf_counter() - started
         report["tests"] = result.testsRun
         report["failures"] = len(result.failures)
@@ -1809,7 +1811,8 @@ def run_serial(
     )
     started = time.perf_counter()
     try:
-        result = runner.run(_suite_for(test_ids))
+        # resultclass=_result_factory makes every run return a _TimingResult.
+        result = cast(_TimingResult, runner.run(_suite_for(test_ids)))
     except KeyboardInterrupt:
         stop_all_servers()
         raise
@@ -2218,7 +2221,7 @@ def _main(argv=None) -> int:
         # interpret missing or malformed outputs as false: that previously
         # let the required check approve a skip when the matrix was missing.
         def _env_bool(name: str) -> bool | None:
-            return {"true": True, "false": False}.get(os.environ.get(name))
+            return {"true": True, "false": False}.get(os.environ.get(name, ""))
 
         plan_run = _env_bool("PLAN_RUN")
         plan_pointer = _env_bool("PLAN_POINTER")

@@ -24,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVE = ROOT / "tests" / "browser" / "serve.py"
@@ -107,7 +108,7 @@ def main() -> int:
             page = None
             browser = None
             last_err = None
-            launch_attempts = ({"headless": True},)
+            launch_attempts: tuple[dict[str, Any], ...] = ({"headless": True},)
             if os.environ.get("PRKS_E2E") != "1":
                 launch_attempts = (
                     {"headless": True, "channel": "chrome"},

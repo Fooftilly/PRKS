@@ -664,6 +664,7 @@ def assign_shards(
         duration = estimate_seconds(test_id, timings, default)
         if module_affinity:
             module = module_of(test_id)
+            assert assigned_modules is not None
             target = min(
                 range(jobs),
                 key=lambda i: (

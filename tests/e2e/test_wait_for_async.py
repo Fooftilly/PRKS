@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import time
 import unittest
+from typing import Any
 
 from tests.e2e import harness
 
@@ -248,7 +249,7 @@ class WaitForAsyncParityTests(unittest.TestCase):
                 self.send_response(200)
                 self.end_headers()
 
-            def log_message(self, *_args):
+            def log_message(self, format: str, *_args: Any) -> None:  # noqa: A002 - base name
                 pass
 
         sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)

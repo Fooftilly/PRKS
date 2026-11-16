@@ -29,6 +29,7 @@ from tests.e2e.harness import (
     wait_for_async,
 )
 from tests.e2e.pdf_readiness import _wait_pdf_tab, _wait_pdf_viewer
+from tests.narrowing import require
 from tests.ux_tour.fixtures import TAG_NAMES, seed_ux_tour_library
 
 NOTES = """# E2E Research Note
@@ -4409,6 +4410,7 @@ class RequestCoordinatorTests(_BrowserE2E):
         self.assertEqual(result["status"], 200)
         session = result["body"]
         self.assertEqual(session["auth_mode"], "loopback-owner")
+        assert library is not None
         self.assertEqual(session["instance_id"], library.instance_id)
         self.assertEqual(session["user"]["id"], library.user_id)
         self.assertEqual(session["library"]["id"], library.library_id)
@@ -4541,8 +4543,10 @@ class MarkdownFixtureTests(_BrowserE2E):
         self.addCleanup(server.stop)
         server.start()
         for suffix in ("", "?dompurify=absent", "?dompurify=unsupported"):
+            assert _BROWSER is not None
             page = _BROWSER.new_page()
             try:
+                assert server.origin is not None
                 page.goto(
                     server.origin + "/tests/browser/markdown_security.html" + suffix,
                     wait_until="domcontentloaded",
@@ -4593,18 +4597,20 @@ class DesignSystemGalleryTests(_BrowserE2E):
         server.start()
         widths = (1440, 900, 600, 390)
         for theme in ("light", "dark"):
+            assert _BROWSER is not None
             page = _BROWSER.new_page()
             errors = []
             failed = []
             page.on("pageerror", lambda err: errors.append(str(err)))
+            origin = require(server.origin, "server origin")
             page.on(
                 "requestfailed",
-                lambda req: failed.append(req.url) if req.url.startswith(server.origin) else None,
+                lambda req: failed.append(req.url) if req.url.startswith(origin) else None,
             )
             try:
                 page.set_viewport_size({"width": 1440, "height": 900})
                 page.goto(
-                    server.origin + "/tests/browser/design_system.html?theme=" + theme,
+                    origin + "/tests/browser/design_system.html?theme=" + theme,
                     wait_until="domcontentloaded",
                 )
                 page.wait_for_selector(".prks-gallery__wrap")

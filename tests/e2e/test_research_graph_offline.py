@@ -465,18 +465,19 @@ class ResearchGraphOfflineTests(unittest.TestCase):
                     # Only profile-mode runs wrap these functions; normal
                     # E2E runs retain the exact old action/assertion path.
                     profile_person = kind == 'person' and env_flag_enabled(PROFILE_ENV)
+                    # Count requests actually observed by the browser
+                    # context, including service-worker-initiated traffic.
+                    # Store only the HTTP method, not URLs/record IDs.
+                    person_detail_methods: list[str] = []
+                    samples: list[dict] = []
+                    detail_path = '/api/persons/' + str(rid)
+
+                    def observe_person_request(request):
+                        if urlsplit(request.url).path == detail_path:
+                            person_detail_methods.append(request.method)
+
                     if profile_person:
                         page.evaluate(PERSON_RETURN_PROBE_INSTALL)
-                        # Count requests actually observed by the browser
-                        # context, including service-worker-initiated traffic.
-                        # Store only the HTTP method, not URLs/record IDs.
-                        person_detail_methods = []
-                        detail_path = '/api/persons/' + str(rid)
-
-                        def observe_person_request(request):
-                            if urlsplit(request.url).path == detail_path:
-                                person_detail_methods.append(request.method)
-
                         context.on('request', observe_person_request)
                     try:
                         with profile_e2e_phase(f'graph_nav_stage_{index}_{kind}_return'):

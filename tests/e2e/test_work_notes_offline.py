@@ -12,6 +12,7 @@ thin reconnect conflict park, and browser-local recovery of Research Notes
 import os
 import time
 import unittest
+from typing import TYPE_CHECKING
 
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
@@ -33,7 +34,14 @@ def tearDownModule():
     _BROWSER.close(); _PW.stop()
 
 
-class _WorkNotesPage:
+# The checker sees these page mixins as TestCases; at runtime they stay plain mixins.
+if TYPE_CHECKING:
+    _PageBase = unittest.TestCase
+else:
+    _PageBase = object
+
+
+class _WorkNotesPage(_PageBase):
     def start(self, without_locks=False):
         server = AppServer(seed_fn=seed_library)
         self.addCleanup(server.stop); server.start()

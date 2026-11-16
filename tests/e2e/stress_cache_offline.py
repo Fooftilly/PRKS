@@ -66,7 +66,6 @@ def _wait_entity_cached(page, kind, entity_id, settle_ms=0, timeout=15000):
         }""",
         arg=[kind, entity_id],
         timeout=timeout,
-        polling=100,
     )
     if settle_ms:
         page.wait_for_timeout(settle_ms)
@@ -80,7 +79,6 @@ def _wait_list_cached(page, list_key, settle_ms=0, timeout=15000):
         }""",
         arg=list_key,
         timeout=timeout,
-        polling=100,
     )
     if settle_ms:
         page.wait_for_timeout(settle_ms)
@@ -128,7 +126,6 @@ def _require_offline_render(page, needle, timeout=30000):
         }""",
         arg=needle,
         timeout=timeout,
-        polling=100,
     )
     page.wait_for_function(
         """() => {
@@ -137,7 +134,6 @@ def _require_offline_render(page, needle, timeout=30000):
             return !!root && !!root.querySelector('[data-prks-role="offline-provenance-banner"]');
         }""",
         timeout=timeout,
-        polling=100,
     )
 
 
