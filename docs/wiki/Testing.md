@@ -92,7 +92,7 @@ Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the exis
 - A shared annotation id is adopted once.
 - Linearization writes a copy, keeps the source on a qpdf refusal, or reports `disabled` or `missing-qpdf` when qpdf is absent.
 
-Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). On Linux, the peak resident size is reset before the run and its growth is bounded, and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
+Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). Where Linux `/proc/self/clear_refs` is available, the peak resident size is reset before the run and its growth is bounded (elsewhere that check is skipped), and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
 
 ## TypeScript property-based workspace tests (#854)
 
