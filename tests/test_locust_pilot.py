@@ -102,11 +102,12 @@ class LocustPilotSafeguards(unittest.TestCase):
                 summary_path(Path(bad))
 
     def test_comparison_is_per_route_and_same_tier_only(self):
-        run = {"pilot": "locust-readonly", "tier": "small", "routes": {ROUTES[0]: numbers()}}
+        run = {"pilot": "locust-readonly", "tier": "small", "prks_version": "y", "routes": {ROUTES[0]: numbers()}}
         baseline = {"pilot": "locust-readonly", "tier": "small", "prks_version": "x",
                     "routes": {ROUTES[0]: {**numbers(), "p95_ms": 10.0, "rps": 4.0}}}
         self.assertEqual(compare(run, baseline),
-                         {"baseline_prks_version": "x", "routes": {ROUTES[0]: {"p95": 2.0, "rps": 0.5}}})
+                         {"same_prks_version": False, "routes": {ROUTES[0]: {"p95": 2.0, "rps": 0.5}}})
+        self.assertTrue(compare(run, {**baseline, "prks_version": "y"})["same_prks_version"])
         with self.assertRaisesRegex(ValueError, "same pilot and tier"):
             compare(run, {**baseline, "tier": "medium"})
 

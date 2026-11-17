@@ -139,7 +139,11 @@ def problems(routes: dict[str, dict[str, Any]], generator_cpu_share: float = 0.0
 
 
 def compare(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
-    """Per route, this run's p95 and requests per second as ratios of ``baseline``'s."""
+    """Per route, this run's p95 and requests per second as ratios of ``baseline``'s.
+
+    Only numbers and one boolean come out: no text from the baseline file is
+    copied into the new summary.
+    """
     if (baseline.get("pilot"), baseline.get("tier")) != (current["pilot"], current["tier"]):
         raise ValueError("a baseline compares only with a run of the same pilot and tier")
     ratios: dict[str, dict[str, float | None]] = {}
@@ -147,11 +151,12 @@ def compare(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]
         then = baseline.get("routes", {}).get(route)
         if not then:
             continue
+        then_p95, then_rps = float(then["p95_ms"]), float(then["rps"])
         ratios[route] = {
-            "p95": round(now["p95_ms"] / then["p95_ms"], 2) if then["p95_ms"] else None,
-            "rps": round(now["rps"] / then["rps"], 2) if then["rps"] else None,
+            "p95": round(now["p95_ms"] / then_p95, 2) if then_p95 else None,
+            "rps": round(now["rps"] / then_rps, 2) if then_rps else None,
         }
-    return {"baseline_prks_version": baseline.get("prks_version"), "routes": ratios}
+    return {"same_prks_version": baseline.get("prks_version") == current.get("prks_version"), "routes": ratios}
 
 
 def database_activity(database: str) -> dict[str, int]:
