@@ -18,6 +18,10 @@ export interface PrksCreateFormsApi {
   prepareGroup: () => Promise<void>
   resetPlaylistFields: () => void
   afterPersonReset: () => void
+  /** Focuses the first field of an owned dialog that `openModal` just showed. */
+  focusInitial: (modalId: string) => void
+  /** Clears the Folder and Group drafts once `closeModals` has hidden them. */
+  resetClosed: () => void
 }
 
 export const CREATE_FORM_MODAL_IDS = [

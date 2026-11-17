@@ -5,6 +5,7 @@ import PrksField from '../../components/PrksField.vue'
 import { fieldValue } from './dom'
 import { createPersonSaveGate } from './person-save'
 import { createPersonDurably, finishPersonCreate, type PersonPayload } from './submit'
+import { createSubmitKeyHandler, focusField } from './keyboard'
 
 const personBusy = ref(false)
 const gate = createPersonSaveGate()
@@ -99,11 +100,17 @@ function afterReset(): void {
   personBusy.value = false
 }
 
-defineExpose({ afterReset })
+const onKeydown = createSubmitKeyHandler(['person-fname', 'person-lname'], () => void onSave())
+
+function focusInitial(): void {
+  focusField('person-fname')
+}
+
+defineExpose({ afterReset, focusInitial })
 </script>
 
 <template>
-  <div class="form-pane">
+  <div class="form-pane" @keydown="onKeydown">
     <PrksField v-slot="{ labelledBy, describedBy }" label="First name" for-id="person-fname">
       <input
         id="person-fname"

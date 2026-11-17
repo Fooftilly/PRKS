@@ -10,6 +10,7 @@ import {
   readPendingPlaylistAttach,
   type PlaylistPending,
 } from './submit'
+import { createSubmitKeyHandler, focusField } from './keyboard'
 
 const playlistError = ref('')
 const playlistBusy = ref(false)
@@ -100,11 +101,17 @@ async function onSave(): Promise<void> {
   })
 }
 
-defineExpose({ resetFields })
+const onKeydown = createSubmitKeyHandler(['playlist-title'], () => void onSave())
+
+function focusInitial(): void {
+  focusField('playlist-title')
+}
+
+defineExpose({ resetFields, focusInitial })
 </script>
 
 <template>
-  <div class="form-pane">
+  <div class="form-pane" @keydown="onKeydown">
     <p class="modal-helper">Playlists group related videos (e.g. course lectures) and keep an ordered sequence.</p>
     <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="playlist-title">
       <input

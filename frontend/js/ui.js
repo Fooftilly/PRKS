@@ -622,6 +622,10 @@ function openModal(id) {
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
     if (!deferBaseline) prksScheduleModalBaselineCapture(id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(modalEl);
+    // The Vue create forms take focus into their first field (#603, #589).
+    if (window.prksCreateForms && window.prksCreateForms.owns(id)) {
+        window.prksCreateForms.focusInitial(id);
+    }
 }
 
 // —— In-app help hints (popover + Settings toggle) ——
@@ -1061,6 +1065,11 @@ function closeModals() {
     const playlistWasOpen = playlistModal && !playlistModal.classList.contains('hidden');
     document.getElementById('modal-backdrop').classList.add('hidden');
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+    // A closed Folder or Group dialog drops its draft (#373). An opener that
+    // prefills the form writes it after this, right before openModal.
+    if (window.prksCreateForms && typeof window.prksCreateForms.resetClosed === 'function') {
+        window.prksCreateForms.resetClosed();
+    }
 
     // If playlist modal was opened from "New File" flow, return to it.
     if (playlistWasOpen && window.__prksReturnToWorkModalAfterPlaylist === true) {
