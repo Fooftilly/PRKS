@@ -57,6 +57,14 @@ The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg
 
 Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the existing runtime and unit/test dependency pins. These are **pure mapper tests**, not evidence that PostgreSQL, session authorization, or HTTP translation passed: `tests/pg/test_db_errors.py` remains the real disposable-PostgreSQL integration authority. No extra runner or package is installed.
 
+## PostgreSQL crash-point matrix (#1284)
+
+`tests/pg/test_crash_points.py` runs whole write workflows in a child process (`tests/pg/crash_point_child.py`) that `os._exit`s at a named point, so no `finally`, rollback or cleanup of the killed process runs. The parent then restarts as a new process does (backup/restore recovery, the orphan sweep, cleanup claims settled) and checks one shared set of invariants: every key a row names is stored, every stored object is named, no write temporary or leftover claim remains, and imported/ready Processing items are complete. The matrix covers Processing upload (mid-write, after the store, after the commit), Processing import (mid-transaction, after the commit), managed-PDF replacement (after the store, inside the command, after the commit), the cleanup settle (after the unlink), a backup killed mid-archive, and a sync write whose connection the server ends (`pg_terminate_backend`). A retry of an acknowledged-but-unanswered request must return the first answer and apply nothing twice. The tests run in the ordinary PostgreSQL helper job on disposable databases and data roots:
+
+```bash
+scripts/test-postgres tests.pg.test_crash_points
+```
+
 ## TypeScript property-based workspace tests (#854)
 
 The frontend has a bounded **fast-check + Vitest** pilot for the canonical workspace tree and tab transitions. This checks generated move/remove/reorder sequences for leaf uniqueness, split-tree validity, identity preservation, and unchanged Main/focus. It imports the real pure workspace transitions; it does not implement a second workspace store or exercise the browser.
