@@ -215,6 +215,30 @@ Locally, install the existing exact pins with `python scripts/ci/install_pinned_
 The workflow runs manually or for changes to the pilot/Publishers schema/dependency pins. Its only reported outcome is a small sanitized route/method/seed/elapsed/exit summary. On failure, reproduce from a new disposable test server with the fixed seed; use `python scripts/ci/schemathesis_pilot.py --debug-local` for full raw Schemathesis details **only on a private local machine**. The flag is rejected in GitHub Actions, and logs are sanitized by default. No generated payloads, raw request/response bodies, cookies, secrets, research documents, database paths or dynamic query strings are uploaded to CI artifacts. Before expanding API coverage, verify the real HTTP contract for the new family and require explicit allowlisting of every method/path. Existing deterministic Pydantic/openapi-core tests remain the primary contract gate.
 
 
+## Schemathesis — bounded mutation scan of allowlisted families (fuzzing slice 2)
+
+The [mutation scan workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-mutations.yml) runs `scripts/ci/schemathesis_mutations.py`. Unlike the read-only pilot above, it sends writes, so it is held tighter, not looser:
+
+- It targets only a fresh `AppServer --testing` on loopback, on its own disposable PostgreSQL database seeded with synthetic data. It refuses `PRKS_AUTH` in the calling shell.
+- It scans three families: Positions, Saved Views and Publishers. Each has an exact operation allowlist in the script. If a family's checked-in fragment (`docs/api/openapi-*.json`) differs from its Pydantic builder or from the live `/api/openapi/<family>.json`, or gains or loses an operation, the scan stops before any request.
+- Every request carries the instance's own `Origin` and `PRKS-Library-Epoch`, so generated input reaches the route rather than the admission refusal.
+- Limits: fixed seed 855, 50 examples per operation, examples and fuzzing phases only (no stateful sequences, no coverage phase), one worker, 50 requests per second, and a 120-second timeout per family.
+- It checks for server errors and for status codes, content types and response bodies the fragment does not document.
+- NUL is not generated. The server refuses NUL in the request target before routing, with a status the family fragments do not document.
+
+Its first run found five ways a request got a 500 or no answer at all:
+
+- a body that is not UTF-8;
+- JSON nested past the decoder's recursion limit;
+- a `\ud800` escape that reached psycopg;
+- `%00` in a query or path, which reached a PostgreSQL bind.
+
+`backend/server.py` now answers all of these with 400. They are pinned in `tests/pg/test_http_request_fuzz_regressions.py`, and the scan's own safeguards are in `tests/test_schemathesis_mutations.py`.
+
+To run it locally, start a disposable PostgreSQL server and install the pins with `./.venv/bin/python scripts/ci/install_pinned_python.py schemathesis`. Then run `PRKS_TESTING=1 PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/postgres ./.venv/bin/python scripts/ci/schemathesis_mutations.py`.
+
+Output is sanitized the same way as the pilot's, and `--debug-local` is likewise refused in GitHub Actions. The workflow is advisory. It runs manually, or when a pull request changes the scanned families, the server, the harness or the pins.
+
 ## Disposable PostgreSQL application-read readiness baseline (#765, T06)
 
 This initial small/medium baseline **reuses** the existing `scripts/test-postgres --profile` and `pg_stat_statements` implementation. It is **PostgreSQL facade** timing, not HTTP, browser, SQLite, a production migration or a claim of cold startup. The [existing manual/path-relevant profile workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/pg-stat-profile.yml) measures **12 and 48 synthetic Works and the same number of linked Concepts**. It covers five ported Work facade reads (full list, browse catalog, detail, bounded recently-added browse up to 10 Works, ordered batch summaries up to 10 Works) plus the genuinely ported PostgreSQL Research Graph *read adapter* from #946. The bare hierarchy graph uses a single synthetic Concept-parent chain (one node per Concept, one edge per non-root Concept), with no invented Work/mention/Person nodes; all node IDs, labels, ordering and exact parent endpoints are checked. A second isolated Library per tier seeds exactly one Research Note mention per Work, processes its queued PostgreSQL reindex jobs before measurement, and profiles a **real indexed Work-to-Concept mention graph** (2N nodes, N mention edges). It checks every node and derived edge on each measured read, failing rather than timing an unindexed or partially indexed graph. All calls, including warmups and measured samples, must pass per-path count/shape checks. Recently Added validates the exact newest IDs in PostgreSQL's second-precision creation-time order with the ID tie-breaker, derived independently from the seeded catalog. The batch lookup uses a deliberately non-natural input sequence and verifies exact requested order. Incorrect or missing results abort before timings are published. Search, generic offset pagination, mixed Argument/citation graph, full authenticated HTTP/route cutover and a real user-shaped library remain unmeasured. These synthetic fixtures are separate Library-local graph microbenchmarks, not full application load tests.

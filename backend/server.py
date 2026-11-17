@@ -106,6 +106,34 @@ PRKS_TESTING_DEFAULT_PORT = 8070
 # Minimum uncompressed JSON size before gzip (Accept-Encoding: gzip).
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
 _PRKS_MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
+_URL_NUL = re.compile(r"%00|\x00")
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _url_holds_nul(raw_path: str) -> bool:
+    """NUL in the request target, raw or percent-encoded."""
+    return _URL_NUL.search(raw_path or "") is not None
+
+
+def _json_holds_lone_surrogate(value) -> bool:
+    """A lone surrogate anywhere in a decoded JSON document (keys included).
+
+    Iterative: the document may be nested as deep as the decoder allows.
+    """
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if _LONE_SURROGATE.search(item):
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
+
+
 # No Content-Length, or a zero-length document. Distinct from {} and from JSON null.
 _JSON_BODY_ABSENT = object()
 # Distinct from JSON null. _read_json_body already sent the error response.
@@ -775,6 +803,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """
         self._prks_library_epoch = None
         self._prks_request_context = None
+        if _url_holds_nul(self.path):
+            # No identifier or query PRKS stores can hold NUL, and psycopg
+            # refuses to bind one (a ValueError, answered 500 before).
+            self._reject_request(400, "invalid_request", "url_nul")
+            return False
         method = (getattr(self, "command", "") or "").upper()
         auth = getattr(self.server, "prks_auth", None)
         if auth is None:
@@ -856,10 +889,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if not payload:
             return _JSON_BODY_ABSENT
         try:
-            return json.loads(payload)
-        except json.JSONDecodeError:
+            data = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+            # Not UTF-8 (UnicodeDecodeError) or nested past the decoder's
+            # recursion limit: before, either escaped and dropped the
+            # connection without an answer.
             self.send_json(400, {"error": "invalid_json"})
             return _JSON_BODY_REJECTED
+        if _json_holds_lone_surrogate(data):
+            # A "\\ud800" escape decodes to text that is not UTF-8: no column,
+            # log line or response can carry it (a 500 from psycopg before).
+            self.send_json(400, {"error": "invalid_json"})
+            return _JSON_BODY_REJECTED
+        return data
 
     def _parse_client_error_payload(self, data):
         return client_error_log_fields(data)
