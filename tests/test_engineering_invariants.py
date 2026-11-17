@@ -1527,6 +1527,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/server.py",
                 "prks_app.py",
                 "scripts",
+                "tests",
             ),
         )
 
