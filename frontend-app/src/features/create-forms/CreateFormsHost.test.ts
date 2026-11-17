@@ -297,6 +297,13 @@ describe('create form host', () => {
     expect(document.getElementById('playlist-error')?.getAttribute('role')).toBe('alert')
     expect(document.getElementById('playlist-title-error')).toBeNull()
     expect(title.getAttribute('aria-invalid')).toBeNull()
+
+    // Retrying with an empty title replaces the stale failure.
+    title.value = ''
+    document.getElementById('save-playlist-btn')?.click()
+    await flush()
+    expect(document.getElementById('playlist-error')?.textContent).toBe('')
+    expect(document.getElementById('playlist-title-error')?.textContent).toContain('Playlist title is required.')
   })
 
   it('keeps a reopened Person draft when an older create is still pending', async () => {
