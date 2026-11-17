@@ -81,7 +81,11 @@ export async function finishFolderCreate(
       try {
         work = await w.fetchWorkDetails(attachWid)
       } catch {
-        // The folder is attached; the panel refreshes on its next read.
+        // The folder is attached; leave folder-edit mode and let the panel
+        // re-read on its next refresh.
+        if (!still()) return
+        if (opener && opener.ui) opener.ui.workFolderEditing = false
+        if (w.prksTabContextIsFocused?.(opener)) w.updatePanelContent?.('details')
         return
       }
       if (work && w.prksOfflineCacheEntityIfCurrent && attachCoherenceToken != null) {

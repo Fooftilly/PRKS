@@ -144,6 +144,26 @@ describe('folder create follow-up', () => {
     expect(w.__prksPendingWorkFolderAttach).toBe(newer)
   })
 
+  it('leaves folder-edit mode when the Work re-read fails after the attach', async () => {
+    const w = effects()
+    const opener = { ui: { workFolderEditing: true } }
+    const panels: string[] = []
+    w.prksGetTabContext = () => opener
+    w.prksCapturedWorkPanelStill = () => true
+    w.patchWorkFolder = async () => null
+    w.closeModals = () => {}
+    w.fetchWorkDetails = async () => {
+      throw new Error('offline')
+    }
+    w.prksTabContextIsFocused = () => true
+    w.updatePanelContent = (tab) => {
+      panels.push(tab)
+    }
+    await finishFolderCreate('F-6', null, () => true, { workId: 'W-1', tabId: 'tab-1' })
+    expect(opener.ui.workFolderEditing).toBe(false)
+    expect(panels).toEqual(['details'])
+  })
+
   it('does not attach anything when no Work picker opened this Save', async () => {
     const w = effects()
     // A pending attach left by an earlier, cancelled picker is not this Save's.
