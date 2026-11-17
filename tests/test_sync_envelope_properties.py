@@ -45,8 +45,8 @@ TAG_ID = "T-" + "0" * 32
 # Characters that broke or nearly broke a boundary before: NUL and lone
 # surrogates (PostgreSQL cannot store them), whitespace PRKS folds, a BOM, a
 # combining mark (NFC), and astral and right-to-left text.
-SPECIAL_CHARS = ("\x00", "\ud800", "\udfff", "􏰀", " ", "\t", "\n", " ", " ",
-                 "　", "﻿", "́", "\U0001f600", "‮", "[[", "]]", "\\", '"')
+SPECIAL_CHARS = ("\x00", "\ud800", "\udfff", "\udbff\udc00", " ", "\t", "\n", "\u00a0", "\u2028",
+                 "\u3000", "\ufeff", "\u0301", "\U0001f600", "\u202e", "[[", "]]", "\\", '"')
 
 nasty_text = st.lists(st.one_of(st.characters(), st.sampled_from(SPECIAL_CHARS)), max_size=12).map("".join)
 _scalars = st.one_of(
