@@ -5,7 +5,7 @@ import os
 import unittest
 
 from tests.e2e.fixtures import PERSON_DISPLAY, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.test_app import _open_details_drawer_if_tiled, _open_work_from_home
 
 
@@ -284,7 +284,8 @@ class ModalLifecycleTests(unittest.TestCase):
         # An independent create opens the Folder library; an attach would
         # have kept the Work page instead.
         page.wait_for_function("() => location.hash === '#/folders'", timeout=20000)
-        page.wait_for_function(
+        wait_for_async(
+            page,
             """async () => {
                 const res = await prksRequest('/api/folders');
                 if (!res.ok) return false;
@@ -293,16 +294,17 @@ class ModalLifecycleTests(unittest.TestCase):
                 return list.some((f) => f.title === 'Independent Global Folder');
             }""",
             timeout=20000,
-            polling=200,
+            message="the global New Folder never reached the server",
         )
         # Give a stray attach every chance to land before checking the Work.
-        page.wait_for_function(
+        wait_for_async(
+            page,
             """async () => {
                 const rows = await prksSync.store.listOperations();
                 return !rows.some((op) => op.status !== 'conflict');
             }""",
             timeout=30000,
-            polling=200,
+            message="durable operations never drained",
         )
         self.assertEqual(page.evaluate(folder_of, work_id), folder_before)
 
