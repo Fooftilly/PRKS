@@ -1,0 +1,66 @@
+{
+  "module": "tests/test_sync_protocol.py",
+  "tests": {
+    "SyncProtocolTests.test_registered_families": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_every_operation_of_the_protocol_has_one_postgresql_handler"
+      ]
+    },
+    "SyncProtocolTests.test_unregistered_operation_is_refused_and_unledgered": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_envelope_refusals_never_reach_a_handler_or_the_ledger"
+      ]
+    },
+    "SyncProtocolTests.test_each_family_answers_only_its_own_shape": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_each_family_answers_only_its_own_shape"
+      ]
+    },
+    "SyncProtocolTests.test_base_revision_expectations_are_per_family": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_envelope_refusals_never_reach_a_handler_or_the_ledger"
+      ]
+    },
+    "SyncProtocolTests.test_normalization_makes_equivalent_spellings_one_operation": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_equivalent_spellings_are_one_operation"
+      ]
+    },
+    "SyncProtocolTests.test_registration_refuses_a_second_owner": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_registration_refuses_a_second_owner_and_an_unknown_operation"
+      ]
+    },
+    "SyncProtocolTests.test_wrong_entity_type_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_envelope_refusals_never_reach_a_handler_or_the_ledger"
+      ]
+    },
+    "SyncProtocolTests.test_unsatisfied_dependency_is_not_ledgered": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_a_dependency_must_be_an_acknowledged_operation_of_the_same_device"
+      ]
+    },
+    "SyncProtocolTests.test_self_dependency_is_an_envelope_error": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_envelope_refusals_never_reach_a_handler_or_the_ledger"
+      ]
+    },
+    "SyncProtocolTests.test_acknowledged_same_device_dependency_allows_apply": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_a_dependency_must_be_an_acknowledged_operation_of_the_same_device"
+      ]
+    },
+    "SyncProtocolTests.test_other_device_dependency_is_unsatisfied": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_a_dependency_must_be_an_acknowledged_operation_of_the_same_device"
+      ]
+    },
+    "SyncProtocolTests.test_domain_modules_do_not_reimplement_the_protocol": {
+      "replaced_by": [
+        "tests/pg/test_sync_protocol.py::ProtocolTests.test_family_handlers_do_not_reimplement_the_protocol"
+      ],
+      "note": "On PostgreSQL the family handlers are backend/sync/handlers/*; every one of them is checked, not a sample of four rule modules."
+    }
+  }
+}

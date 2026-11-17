@@ -15,7 +15,7 @@ import {
 } from '../../route-surface/lifecycle'
 import { listProcessingItems } from '../../api/processing-items'
 import type { LeaveAssessResult, LeaveProbe } from '../../lifecycle/tab-leave'
-import type { ProcessingRouteInstance } from '../processing/route'
+import type { ProcessingRouteInstance } from './route'
 import {
   ProcessingQueue,
   browserProcessingQueueApi,

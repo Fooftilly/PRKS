@@ -1,0 +1,101 @@
+{
+  "module": "tests/test_wiki_link_resolution.py",
+  "tests": {
+    "WikiLinkResolutionTests.test_single_work_link": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_works_and_people_by_id_and_by_name",
+        "tests/pg/test_works_wiki_links.py::AuthorizationTests.test_a_reader_resolves"
+      ]
+    },
+    "WikiLinkResolutionTests.test_single_person_link": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_works_and_people_by_id_and_by_name",
+        "tests/pg/test_works_wiki_links.py::OrderingTests.test_people_follow_the_same_rule"
+      ]
+    },
+    "WikiLinkResolutionTests.test_unresolved_target": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_names_and_ids_are_escaped"
+      ]
+    },
+    "WikiLinkResolutionTests.test_multiple_distinct_markers": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_works_and_people_by_id_and_by_name",
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_repeated_markers_and_many_distinct_targets"
+      ]
+    },
+    "WikiLinkResolutionTests.test_case_and_whitespace_semantics": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_case_whitespace_and_markers"
+      ]
+    },
+    "WikiLinkResolutionTests.test_work_detail_html_content_is_unchanged": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_a_research_note_renders_in_the_work_detail",
+        "tests/pg/test_works_wiki_links.py::SnapshotTests.test_the_work_detail_and_its_links_are_one_snapshot"
+      ]
+    },
+    "WikiLinkResolutionTests.test_output_matches_per_marker_implementation": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_case_whitespace_and_markers",
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_a_work_wins_over_a_person_and_the_first_row_wins",
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_an_id_that_is_another_rows_name",
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_names_and_ids_are_escaped"
+      ]
+    },
+    "WikiLinkResolutionTests.test_precedence_and_first_row_are_explicit": {
+      "replaced_by": [
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_a_work_wins_over_a_person_and_the_first_row_wins",
+        "tests/pg/test_works_wiki_links.py::OrderingTests.test_the_earliest_created_row_wins_then_the_id"
+      ]
+    },
+    "WikiLinkResolutionTests.test_text_without_markers_is_returned_unchanged_without_queries": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::BatchingTests.test_text_without_markers_looks_nothing_up",
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_text_without_markers_is_unchanged"
+      ]
+    },
+    "WikiLinkResolutionTests.test_repeated_markers_cost_one_lookup_per_table": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::BatchingTests.test_repeated_markers_cost_one_lookup_per_table"
+      ]
+    },
+    "WikiLinkResolutionTests.test_more_occurrences_of_the_same_markers_add_no_queries": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::BatchingTests.test_more_occurrences_of_the_same_markers_add_no_lookups"
+      ]
+    },
+    "WikiLinkResolutionTests.test_more_distinct_markers_stay_within_one_chunk_per_table": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::BatchingTests.test_hundreds_of_distinct_targets_use_bounded_batches"
+      ]
+    },
+    "WikiLinkResolutionTests.test_work_only_targets_skip_the_person_lookup": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::BatchingTests.test_repeated_markers_cost_one_lookup_per_table"
+      ],
+      "note": "The second half of the replacement resolves only Work targets and asserts one Works lookup."
+    },
+    "WikiLinkResolutionTests.test_first_row_wins_even_when_its_targets_straddle_chunks": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::OrderingTests.test_the_first_row_wins_whatever_batch_its_targets_fall_in",
+        "tests/test_works_wiki_links_parity.py::WikiLinkParityTests.test_repeated_markers_and_many_distinct_targets"
+      ]
+    },
+    "WikiLinkResolutionTests.test_many_distinct_targets_use_bounded_chunks": {
+      "replaced_by": [
+        "tests/pg/test_works_wiki_links.py::BatchingTests.test_hundreds_of_distinct_targets_use_bounded_batches"
+      ]
+    },
+    "WikiLinkSpanTests.test_spans_are_the_markers_the_pattern_finds": {
+      "replaced_by": [
+        "tests/test_wiki_link_rules.py::WikiLinkSpanTests.test_spans_are_the_markers_the_pattern_finds"
+      ]
+    },
+    "WikiLinkSpanTests.test_unclosed_markers_scan_in_linear_time": {
+      "replaced_by": [
+        "tests/test_wiki_link_rules.py::WikiLinkSpanTests.test_unclosed_markers_scan_in_linear_time"
+      ]
+    }
+  }
+}

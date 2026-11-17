@@ -29,6 +29,7 @@ from backend.domain.maintenance import backup, tables
 from backend.domain.maintenance.backup import BackupFailed, BackupResult
 from backend.domain.objects import lifecycle
 from tests.pg.test_objects_lifecycle import ObjectsTestCase
+from backend.storage.objects import StorageKey
 
 VERSION = "0.8.0-test"
 
@@ -92,6 +93,30 @@ class ArchiveLayoutTests(BackupTestCase):
         self.assertEqual(manifest["objects"], {f"asset-objects/{obj.key.name}": {"size": obj.size,
                                                                                  "sha256": obj.sha256}})
         self.assertEqual(self.member(result, f"objects/asset-objects/{obj.key.name}"), b"%PDF-1.4 one")
+
+    def test_the_roots_own_files_never_enter_the_archive(self) -> None:
+        """The marker, lease, claim and content locks are operational state, never backup payload."""
+        from backend.storage import root_marker
+
+        maintenance = os.path.join(self.storage.root, root_marker.MAINTENANCE_DIRNAME)
+        os.makedirs(maintenance, exist_ok=True)
+        own = [os.path.join(maintenance, name) for name in
+               (root_marker.ROOT_LOCK_NAME, root_marker.CLAIM_LOCK_NAME, root_marker.CONTENT_LOCK_NAME)]
+        own.append(os.path.join(self.storage.root, root_marker.MARKER_FILENAME))
+        for path in own:
+            if not os.path.exists(path):
+                with open(path, "wb") as handle:
+                    handle.write(b"{}")
+        self.create(self.put(b"%PDF-1.4 claimed root"))
+        result = self.backup()
+        with zipfile.ZipFile(result.path) as archive:
+            names = archive.namelist()
+        self.assertEqual(sorted(names), sorted(backup.members(result.manifest)))
+        for name in names:
+            self.assertTrue(name in (backup.MANIFEST_NAME, backup.USERS_MEMBER, backup.DEVICES_MEMBER)
+                            or name.startswith(("db/", "objects/")), name)
+            for path in own:
+                self.assertNotIn(os.path.basename(path), name)
 
     def test_the_interchange_contract_and_csv_headers_name_stored_columns_only(self) -> None:
         self.create(self.put())
@@ -174,7 +199,7 @@ class ObjectSafetyTests(BackupTestCase):
         self.create(obj)
         real = self.objects.open_read
 
-        def closing_badly(key: str) -> Any:
+        def closing_badly(key: StorageKey) -> Any:
             handle = real(key)
             close = handle.close
 

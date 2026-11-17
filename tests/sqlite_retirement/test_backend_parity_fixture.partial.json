@@ -1,0 +1,100 @@
+{
+  "module": "tests/test_backend_parity_fixture.py",
+  "partial": true,
+  "tests": {
+    "EnabledBackendsTests.test_default_is_sqlite_only": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "EnabledBackendsTests.test_both_legs_in_canonical_order": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "EnabledBackendsTests.test_unknown_or_sqlite_less_selection_is_refused": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "FixtureSelectionTests.test_default_run_adds_no_postgres_twin": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "FixtureSelectionTests.test_parity_run_adds_a_postgres_twin_with_the_same_tests": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "FixtureSelectionTests.test_sqlite_leg_opens_prksdatabase_in_its_own_root": {
+      "replaced_by": [
+        "tests/pg/test_backend_parity.py::PostgresLegTests.test_postgres_leg_never_opens_the_sqlite_database",
+        "tests/pg/test_backend_parity.py::PostgresLegTests.test_each_open_gets_its_own_harness_database_dropped_afterwards"
+      ],
+      "note": "The SQLite leg is gone; the PostgreSQL library each test opens is checked to be its own and to leave the data root untouched."
+    },
+    "FixtureSelectionTests.test_default_suite_has_no_postgres_classes": {
+      "replaced_by": [
+        "tests/test_backend_parity_fixture.py::FixtureSelectionTests.test_without_a_test_server_the_default_suite_skips_the_parity_tests"
+      ],
+      "note": "The default suite ran the parity classes on SQLite only. It now has no SQLite leg: without PRKS_TEST_DATABASE_URL every parity test is skipped, and the Backend parity job runs them on PostgreSQL."
+    },
+    "SkipBehaviorTests.test_unported_call_skips_with_the_method_named": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_failure_after_an_unported_call_is_a_skip_not_a_failure": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_swallowed_refusal_is_a_skip_not_a_pass": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_an_unported_call_in_setup_skips_the_test": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_ported_method_swallowing_a_nested_refusal_is_a_skip": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_nested_refusal_the_test_catches_is_a_skip": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_ported_calls_run_real_assertions": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_an_unported_call_inside_a_subtest_is_a_skip": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_failing_subtest_on_ported_calls_fails_the_run": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_an_unported_call_in_a_cleanup_skips_the_test": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_cleanup_after_a_skip_reports_the_test_once": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_an_unrelated_cleanup_error_after_a_skip_still_errors": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_looking_up_a_ported_method_is_not_evidence": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_real_cleanup_error_still_errors": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_a_test_reaching_no_library_method_is_not_parity_evidence": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_sqlite_leg_is_unaffected_by_the_guard": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "SkipBehaviorTests.test_the_recorder_is_read_only_and_logs_per_test": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "ReportTests.test_counts_and_ok": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "ReportTests.test_a_ported_method_without_a_passing_postgres_test_fails": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "ReportTests.test_any_failure_or_an_empty_postgres_leg_fails": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "ReportTests.test_an_unsuccessful_unittest_result_fails_even_if_counters_look_clean": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    },
+    "ReportTests.test_registry_problems_fail": {
+      "obsolete": "The parity fixture ran each parity class on SQLite and, under PRKS_PARITY_BACKENDS=sqlite,postgres, added a PostgreSQL twin whose calls to unported methods became skips; scripts/run_backend_parity.py counted both legs and the ported methods. PG-C2 deleted SQLite and the ported-method registry: every parity class runs once, on PostgreSQL, against SQLite's recorded answers (tests/parity_reference.py), and a NotPortedError fails the test like any other error. There is no second leg, twin, skip rule or coverage report left to test."
+    }
+  }
+}

@@ -19,8 +19,154 @@ function prksManagedPdfApiPath(filePath) {
 function prksViewerBoundToManagedPath(runtime, path) {
     if (!runtime || !runtime.viewer) return false;
     const want = prksManagedPdfApiPath(path);
+    if (!want) return false;
     const bound = prksManagedPdfApiPath(runtime.viewerFilePath);
-    return !!(want && bound && want === bound);
+    if (bound && want === bound) return true;
+    // The same document under a new storage key: the server stored this
+    // viewer's own export there and confirmed its bytes (see
+    // prksStoredExportMatches). The loaded path stays as it was; this records
+    // what else the open document is known to be, for this viewer only.
+    const stored = runtime.viewerStoredExport;
+    return !!(stored && stored.viewer === runtime.viewer &&
+        prksManagedPdfApiPath(stored.path) === want);
+}
+
+const PRKS_SHA256_K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+/**
+ * SHA-256 of `buffer` in plain JavaScript (FIPS 180-4), for origins without
+ * Web Crypto (`crypto.subtle` exists only in secure contexts, so not on a
+ * plain-HTTP LAN origin). Returns lowercase hex.
+ */
+function prksSha256HexSync(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const length = bytes.length;
+    const blocks = Math.ceil((length + 9) / 64);
+    const tail = new Uint8Array(blocks * 64 - Math.floor(length / 64) * 64);
+    const tailStart = Math.floor(length / 64) * 64;
+    tail.set(bytes.subarray(tailStart));
+    tail[length - tailStart] = 0x80;
+    const tailView = new DataView(tail.buffer);
+    const bits = length * 8;
+    tailView.setUint32(tail.length - 8, Math.floor(bits / 0x100000000));
+    tailView.setUint32(tail.length - 4, bits >>> 0);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const h = new Uint32Array([
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]);
+    const w = new Uint32Array(64);
+    for (let block = 0; block < blocks; block += 1) {
+        const offset = block * 64;
+        const fromTail = offset >= tailStart;
+        const source = fromTail ? tailView : view;
+        const base = fromTail ? offset - tailStart : offset;
+        for (let i = 0; i < 16; i += 1) w[i] = source.getUint32(base + i * 4);
+        for (let i = 16; i < 64; i += 1) {
+            const a = w[i - 15];
+            const b = w[i - 2];
+            const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
+            const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
+            w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+        }
+        let a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], k = h[7];
+        for (let i = 0; i < 64; i += 1) {
+            const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+            const ch = (e & f) ^ (~e & g);
+            const t1 = (k + S1 + ch + PRKS_SHA256_K[i] + w[i]) >>> 0;
+            const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+            const maj = (a & b) ^ (a & c) ^ (b & c);
+            const t2 = (S0 + maj) >>> 0;
+            k = g; g = f; f = e; e = (d + t1) >>> 0;
+            d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+        }
+        h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+        h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + k) >>> 0;
+    }
+    let hex = '';
+    for (let i = 0; i < 8; i += 1) hex += h[i].toString(16).padStart(8, '0');
+    return hex;
+}
+
+async function prksSha256Hex(buffer) {
+    const subtle = typeof crypto !== 'undefined' && crypto && crypto.subtle;
+    if (subtle && typeof subtle.digest === 'function') {
+        const digest = new Uint8Array(await subtle.digest('SHA-256', buffer));
+        let hex = '';
+        for (let i = 0; i < digest.length; i += 1) hex += digest[i].toString(16).padStart(2, '0');
+        return hex;
+    }
+    return prksSha256HexSync(buffer);
+}
+
+/**
+ * Whether a successful PDF write stored `buffer`, the bytes this viewer
+ * exported. The server names the upload as `export_sha256`: linearization
+ * may rewrite the stored working file (`content_sha256`), which is still
+ * this document. A response without the export hash is compared on
+ * `content_sha256`. The decision is always the SHA-256 of `buffer`, from
+ * Web Crypto or, where it is unavailable (plain-HTTP LAN origins), from
+ * `prksSha256HexSync`; a size is never proof of the same bytes. Without a
+ * hash to compare, or if hashing fails, the answer is false and the caller
+ * remounts.
+ */
+async function prksStoredExportMatches(body, buffer, bufferSha) {
+    if (!body || !buffer || typeof buffer.byteLength !== 'number') return false;
+    const named = typeof body.export_sha256 === 'string' ? body.export_sha256 : body.content_sha256;
+    const want = typeof named === 'string' ? named.toLowerCase() : '';
+    if (!/^[0-9a-f]{64}$/.test(want)) return false;
+    try {
+        const have = typeof bufferSha === 'string' && bufferSha ? bufferSha : await prksSha256Hex(buffer);
+        return have === want;
+    } catch (_eDigest) {
+        return false;
+    }
+}
+
+/**
+ * The bytes a successful PDF write stored under `path`, to seed the
+ * whole-file cache with. An immutable key must only ever be served with its
+ * own bytes, so when the response names the stored working file
+ * (`content_sha256`) and it is not `buffer` (linearization rewrote it, or the
+ * stored document is another one), the stored bytes are read from the
+ * network and must hash to `content_sha256`. Anything else throws, which
+ * keeps the materialization claim for a retry. The read goes through
+ * `prksRequest` (`fetchImpl` replaces it in tests). A response that names no
+ * stored hash (the SQLite adapter writes in place) seeds `buffer`, as before.
+ * `bufferSha` is the caller's hash of `buffer`, when it has one.
+ */
+async function prksStoredPdfBytes(body, path, buffer, bufferSha, fetchImpl) {
+    const raw = body && typeof body.content_sha256 === 'string' ? body.content_sha256 : '';
+    if (!raw) return buffer;
+    const want = raw.toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(want)) throw new Error('PDF cache update failed');
+    const have = typeof bufferSha === 'string' && bufferSha ? bufferSha : await prksSha256Hex(buffer);
+    if (have === want) return buffer;
+    // A first-party read: through the request coordinator (bounded reads,
+    // safe GET retry on network errors and 502/503/504), never cached.
+    const doFetch = fetchImpl || (typeof prksRequest === 'function'
+        ? (url, init) => prksRequest(url, init, { dedupe: false, freshForMs: 0 })
+        : null);
+    if (!doFetch || !path) throw new Error('PDF cache update failed');
+    let stored = null;
+    try {
+        const res = await doFetch(path, { credentials: 'same-origin', cache: 'no-store' });
+        if (res && res.status === 200) stored = await res.arrayBuffer();
+    } catch (_eFetch) {
+        stored = null;
+    }
+    if (!stored || !stored.byteLength || (await prksSha256Hex(stored)) !== want) {
+        throw new Error('PDF cache update failed');
+    }
+    return stored;
 }
 
 function prksResolvePdfCtx(element) {
@@ -700,7 +846,10 @@ window.deletePdfAnnotationFromList = async function (ctx, annId) {
             : window.confirm('Delete this annotation from the PDF?');
     if (!confirmed) return false;
     if (owner && owner.destroyed) return false;
-    await prksWaitOutAnnotationMaterialization(pdf);
+    const until = prksAnnotationMutationWaitDeadline();
+    do {
+        await prksWaitOutAnnotationMaterialization(pdf, { deadline: until });
+    } while (prksAnnotationMaterializationReclaimed(pdf, until));
     if (owner && owner.destroyed) return false;
     if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return false;
     if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
@@ -935,28 +1084,19 @@ function prksKnownAbsentAnnotationSeed(runtime) {
  * and catch-up→materialize handoff under one deadline/lifecycle loop — never
  * an unbounded `await gate` (destroy/pause does not resolve the gate Promise).
  */
-async function prksWaitOutAnnotationMaterialization(pdf) {
+async function prksWaitOutAnnotationMaterialization(pdf, opts) {
     if (!pdf) return;
-    const deadline = Date.now() + 30000;
+    // The handoff marks a claimed materialization that has not yet taken its
+    // gate. Its pass drains the durable write chain before taking the gate,
+    // so a write on that chain must not wait for the handoff to clear: the
+    // pass would wait on the write and the write on the pass.
+    const waitForHandoff = !(opts && opts.handoff === false);
+    const deadline = opts && Number.isFinite(opts.deadline)
+        ? opts.deadline
+        : prksAnnotationMutationWaitDeadline();
 
-    function lifecycleEscape() {
-        if (pdf._destroyed) return true;
-        const persistence = pdf.annotationPersistence;
-        if (persistence && (persistence.destroyed || persistence.paused)) return true;
-        return false;
-    }
-
-    function stillBusy() {
-        if (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff) {
-            return true;
-        }
-        const gate = pdf._annotationMaterializationGate;
-        return !!(gate && typeof gate.then === 'function');
-    }
-
-    while (stillBusy()) {
-        if (lifecycleEscape()) return;
-        if (Date.now() >= deadline) return;
+    while (prksAnnotationMaterializationBusy(pdf, waitForHandoff)) {
+        if (prksAnnotationMaterializationWaitOver(pdf, deadline)) return;
         const gate = pdf._annotationMaterializationGate;
         const slice = Math.min(25, Math.max(0, deadline - Date.now()));
         const timeout = new Promise(function (resolve) { setTimeout(resolve, slice); });
@@ -971,6 +1111,37 @@ async function prksWaitOutAnnotationMaterialization(pdf) {
             await timeout;
         }
     }
+}
+
+function prksAnnotationMutationWaitDeadline() {
+    return Date.now() + 30000;
+}
+
+function prksAnnotationMaterializationBusy(pdf, waitForHandoff) {
+    if (!pdf) return false;
+    if (pdf._annotationMaterializing) return true;
+    if (waitForHandoff && pdf._annotationMaterializationHandoff) return true;
+    const gate = pdf._annotationMaterializationGate;
+    return !!(gate && typeof gate.then === 'function');
+}
+
+/** Destroyed, paused, or past the deadline: stop waiting; the caller's checks decide. */
+function prksAnnotationMaterializationWaitOver(pdf, deadline) {
+    const persistence = pdf.annotationPersistence;
+    const lifecycleEscape = !!(pdf._destroyed ||
+        (persistence && (persistence.destroyed || persistence.paused)));
+    return lifecycleEscape || Date.now() >= deadline;
+}
+
+/**
+ * A user annotation edit resumes a few microtasks after its wait ends. The
+ * next materialization (an earlier save's acknowledgement) can take the gate
+ * in between, which is a reason to wait again rather than refuse the edit.
+ * Callers loop on this, then run their capability checks synchronously.
+ */
+function prksAnnotationMaterializationReclaimed(pdf, deadline) {
+    if (!prksAnnotationMaterializationBusy(pdf, true)) return false;
+    return !prksAnnotationMaterializationWaitOver(pdf, deadline);
 }
 
 function prksPdfUserMutationStillAllowed(pdf) {
@@ -1006,7 +1177,10 @@ window.deletePdfAnnotationFromEditor = async function (ctx, captured) {
     if (!confirmed) return;
     if (owner && owner.destroyed) return;
     try {
-        await prksWaitOutAnnotationMaterialization(pdf);
+        const until = prksAnnotationMutationWaitDeadline();
+        do {
+            await prksWaitOutAnnotationMaterialization(pdf, { deadline: until });
+        } while (prksAnnotationMaterializationReclaimed(pdf, until));
         if (owner && owner.destroyed) return;
         if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
         if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
@@ -1039,7 +1213,10 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
     const ticket = pdf.captureAnnotationPopupTicket(captured);
     if (!ticket || !ticket.annId || ticket.direct) return;
     const val = (text == null ? '' : String(text)).trim();
-    await prksWaitOutAnnotationMaterialization(pdf);
+    const until = prksAnnotationMutationWaitDeadline();
+    do {
+        await prksWaitOutAnnotationMaterialization(pdf, { deadline: until });
+    } while (prksAnnotationMaterializationReclaimed(pdf, until));
     if (owner && owner.destroyed) return;
     if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
     if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
@@ -1054,7 +1231,10 @@ window.savePdfAnnotationComment = async function (ctx, text, captured) {
         return;
     }
     try {
-        await prksWaitOutAnnotationMaterialization(pdf);
+        const untilGate = prksAnnotationMutationWaitDeadline();
+        do {
+            await prksWaitOutAnnotationMaterialization(pdf, { deadline: untilGate });
+        } while (prksAnnotationMaterializationReclaimed(pdf, untilGate));
         if (owner && owner.destroyed) return;
         if (!prksAnnotationPopupGenerationCurrent(owner, ticket)) return;
         if (typeof pdf.annotationPopupWriteStill === 'function' && !pdf.annotationPopupWriteStill(ticket)) {
@@ -1661,9 +1841,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
             : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
         if (snapOk) {
-            applyAnnotationSnapshotToRuntime(snapBody, 'DB');
-            if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+            // A snapshot this runtime refuses as stale (#1212) is neither the
+            // page's base nor a base to publish for a later reopen: retry.
+            if (applyAnnotationSnapshotToRuntime(snapBody, 'DB')) {
+                if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
+                    await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+                }
+            } else if (!runtime.annotationBaseReady) {
+                runtime._annotationBaseHydrationNeedsRetry = true;
             }
         } else if (snapRes && !snapRes.ok) {
             // Transient non-OK must not strand online_awaiting_base forever.
@@ -1697,6 +1882,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
             : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
         if (!snapOk) return false;
+        // Never apply a snapshot read before state this runtime already
+        // holds (an ACK applied while it was in flight): see
+        // prksPdfAnnotationSnapshotPredatesRuntime (#1212).
+        if (typeof window.prksPdfAnnotationSnapshotPredatesRuntime === 'function' &&
+            window.prksPdfAnnotationSnapshotPredatesRuntime(
+                runtime, snapBody.canonical_annotation_set_revision)) {
+            return false;
+        }
         const saved = snapBody.items;
         runtime.annotationCache = {
             allItems: saved,
@@ -1714,6 +1907,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             };
         runtime.annotationBaseReady = true;
         runtime._annotationBaseHydrationNeedsRetry = false;
+        if (typeof window.prksNotePdfAnnotationSnapshotRevision === 'function') {
+            window.prksNotePdfAnnotationSnapshotRevision(
+                runtime, snapBody.canonical_annotation_set_revision);
+        }
         if (Number.isSafeInteger(snapBody.canonical_annotation_set_revision)) {
             runtime.acknowledgedAnnotationSetRevision =
                 snapBody.canonical_annotation_set_revision;
@@ -2062,6 +2259,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (runtime && runtime.viewer === oldViewer) {
             runtime.viewer = null;
             runtime.viewerFilePath = '';
+            runtime.viewerStoredExport = null;
         }
         if (viewer === oldViewer) viewer = null;
     }
@@ -2250,6 +2448,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         viewer = newViewer;
         runtime.viewer = newViewer;
         runtime.viewerFilePath = managedPdfApiPath(newPath) || String(newPath || '').split('?')[0];
+        runtime.viewerStoredExport = null;
         runtime._cowRemountPendingPath = '';
         const searchGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : runtime._searchGeneration;
         if (typeof bindPdfSurfaceSearch === 'function') {
@@ -2267,6 +2466,35 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             newViewer.onAnnotationEvent(onAnnotationEvent);
         }
         runtime._annotationEventHandler = onAnnotationEvent;
+        return true;
+    }
+
+    /**
+     * The Work's bytes moved to a new storage key holding this viewer's own
+     * export (PostgreSQL stores every write under a fresh immutable key). The
+     * open document is unchanged, so the viewer stays mounted with its page,
+     * zoom, scroll, search, selection and editor state: the canonical path
+     * and the scoped cache move to the new key, and the viewer is recorded as
+     * showing that key's document. The cache gets `storedBytes`, the key's
+     * own bytes (prksStoredPdfBytes), which may be a linearized copy of the
+     * export. A document actually replaced elsewhere does not come through
+     * here (its bytes are not this export) and remounts.
+     */
+    async function rebindViewerToStoredExport(newPath, storedBytes, exportViewer) {
+        const path = managedPdfApiPath(newPath);
+        if (!path || !exportViewer || liveAnnotationViewer() !== exportViewer) return false;
+        // Seed the cache first; a failed put stays retryable (the claim is
+        // kept) and leaves the runtime on the previous key.
+        const seeded = await cacheManagedPdfBytes(path, storedBytes);
+        if (!seeded) throw new Error('PDF cache update failed');
+        if (!stillLive() || liveAnnotationViewer() !== exportViewer) return false;
+        runtime.filePath = path;
+        if (runtime.work && typeof runtime.work === 'object') {
+            runtime.work.file_path = path;
+        }
+        runtime.viewerStoredExport = { viewer: exportViewer, path: path };
+        runtime._cowRemountPendingPath = '';
+        runtime._cowRemountRetryAttempt = 0;
         return true;
     }
 
@@ -2367,10 +2595,25 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             const pendingCow = runtime && managedPdfApiPath(runtime._cowRemountPendingPath);
             const needsRetarget = canonical !== current
                 || (pendingCow === canonical && !viewerBoundToManagedPath(canonical));
+            // Hash the export once; both checks below compare against it.
+            let bufferSha = '';
+            try {
+                bufferSha = await prksSha256Hex(buffer);
+            } catch (_eDigest) {
+                bufferSha = '';
+            }
+            // The key's own bytes, which linearization may have rewritten:
+            // never the export under a key that names other bytes.
+            const stored = await prksStoredPdfBytes(okBody, canonical, buffer, bufferSha);
             if (needsRetarget) {
-                await applyCowPdfRetarget(canonical, buffer);
+                // Same document, new key: keep the viewer. Anything else (the
+                // bytes there are not this export, or cannot be confirmed to
+                // be) is a replacement and remounts.
+                const sameDocument = await prksStoredExportMatches(okBody, buffer, bufferSha)
+                    && await rebindViewerToStoredExport(canonical, stored, activeViewer);
+                if (!sameDocument) await applyCowPdfRetarget(canonical, stored);
             } else {
-                const cached = await cacheManagedPdfBytes(canonical, buffer);
+                const cached = await cacheManagedPdfBytes(canonical, stored);
                 if (!cached) throw new Error('PDF cache update failed');
             }
         } catch (eCow) {
@@ -2903,6 +3146,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         let acceptedSnapshot = false;
         let projectionReady = false;
         let shouldMaterialize = false;
+        let staleSnapshot = false;
         try {
             const catchUpLock = liveAnnotationViewer();
             if (catchUpLock && typeof catchUpLock.setMutationEnabled === 'function') {
@@ -2923,7 +3167,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 return;
             }
             if (!stillLive()) return;
+            if (snapBody && typeof window.prksPdfAnnotationSnapshotPredatesRuntime === 'function' &&
+                window.prksPdfAnnotationSnapshotPredatesRuntime(
+                    runtime, snapBody.canonical_annotation_set_revision)) {
+                // Read before an ACK this page already applied: read again.
+                staleSnapshot = true;
+                return;
+            }
             if (!applyAnnotationSnapshotToRuntime(snapBody, 'DB')) return;
+            runtime._annotationStaleSnapshotRetries = 0;
             // Snapshot/revision state is now accepted. Pending hydration and
             // viewer projection are fail-closed from here: do not unlock user
             // mutation until effective ack+pending is successfully visible.
@@ -3023,6 +3275,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             // Always end the catch-up gate here — never hand it to materialization.
             prksEndAnnotationMaterializationGate(runtime);
+            // Here, not after the try: the stale branch returns from it.
+            if (staleSnapshot && stillLive()) scheduleStaleSnapshotCatchUp();
         }
         // Independent materialization gate: only after catch-up gate is gone.
         // Handoff block (if shouldMaterialize) keeps mutation disabled until
@@ -3030,6 +3284,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (shouldMaterialize && stillLive()) {
             void requestFlush('materialize');
         }
+    }
+
+    // The server already committed the ACK the stale snapshot predates, so a
+    // fresh read catches up; the bound only stops a misbehaving server.
+    function scheduleStaleSnapshotCatchUp() {
+        const attempt = Number(runtime._annotationStaleSnapshotRetries) || 0;
+        if (attempt >= 5) return;
+        runtime._annotationStaleSnapshotRetries = attempt + 1;
+        setTimeout(function () {
+            if (stillLive()) void maybeCatchUpMaterialization();
+        }, 50 * (attempt + 1));
     }
 
     function scheduleCatchUpProjectionRetry() {
@@ -3139,27 +3404,32 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const observed = acknowledgedPdfAnnotationBase(ackList, state, id);
         if (evt.kind === 'delete') {
             observed.annotation_id = id;
-            return { id: id, ackList: ackList, desired: null, observed: observed };
+            return { id: id, desired: null, observed: observed };
         }
         const raw = rawViewerAnnotation(evt, id);
         if (!raw) return null;
         return {
             id: id,
-            ackList: ackList,
             desired: { annotation_id: id, annotation: raw },
             observed: observed,
         };
     }
 
-    function adoptDurableAnnotationCache(ackList) {
-        // Refresh local projection from effective overlay, including the live
-        // viewer — ACK-only materialize may have removed a pending create/update
-        // that this deferred write restored.
-        const ackOnly = Array.isArray(ackList) ? ackList : [];
+    function adoptDurableAnnotationCache() {
+        // A local write leaves acknowledged state as it is, so keep the
+        // acknowledged items the runtime holds now. Never put back the list
+        // this write read before it was recorded: the sync engine can send
+        // the operation and apply its ACK (or a catch-up snapshot) while the
+        // write is still settling, and the older list would drop that
+        // acknowledged annotation. The next projection would then take it
+        // off the page, and a materialization would export bytes without it
+        // under the newer claim (#1212).
+        const current = runtime.annotationCache || {};
+        const ackOnly = Array.isArray(current.items) ? current.items : [];
         const cacheViewer = liveAnnotationViewer();
         runtime.annotationCache = {
-            allItems: ackOnly,
-            rawItems: ackOnly,
+            allItems: Array.isArray(current.allItems) ? current.allItems : ackOnly,
+            rawItems: Array.isArray(current.rawItems) ? current.rawItems : ackOnly,
             items: ackOnly,
             docId: cacheViewer && cacheViewer.getDocumentId
                 ? cacheViewer.getDocumentId()
@@ -3321,8 +3591,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             typeof window.prksSavePdfAnnotationDurably === 'function') {
             void enqueueDurableAnnotationWrite(async function () {
                 // Wait out materialization/projection gate if a race slipped
-                // past the user-input lock; then commit durably.
-                await prksWaitOutAnnotationMaterialization(runtime);
+                // past the user-input lock; then commit durably. Not the
+                // handoff: the pass it hands to drains this chain first.
+                await prksWaitOutAnnotationMaterialization(runtime, { handoff: false });
                 if (!stillLive()) return;
                 const intent = durableAnnotationWriteIntent(evt);
                 if (!intent) return;
@@ -3333,7 +3604,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         intent.observed
                     );
                     if (!stillLive()) return;
-                    adoptDurableAnnotationCache(intent.ackList);
+                    adoptDurableAnnotationCache();
                     // Annotations with a later edit still to be recorded (e.g.
                     // a second Save while this one was writing) keep the
                     // viewer's newer value for that write to read (#401).
@@ -4015,6 +4286,7 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
     if (runtime.lastPage && typeof runtime.lastPage.setViewer === 'function') runtime.lastPage.setViewer(viewer);
     runtime.viewer = viewer;
     runtime.viewerFilePath = prksManagedPdfApiPath(work.file_path) || String(work.file_path || '').split('?')[0];
+    runtime.viewerStoredExport = null;
     if (
         runtime.annotationDrawer &&
         runtime.annotationDrawer.open &&

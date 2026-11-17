@@ -1,0 +1,86 @@
+{
+  "module": "tests/test_work_note_sync.py",
+  "tests": {
+    "WorkNoteSyncTests.test_ordinary_and_durable_research_writes_share_canonical_processing": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::MentionTests.test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index",
+        "tests/pg/test_research_index.py::MentionTests.test_a_failed_note_write_rolls_back_its_concepts_and_job"
+      ]
+    },
+    "WorkNoteSyncTests.test_durable_research_write_still_feeds_reference_indexing": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::MentionTests.test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index",
+        "tests/pg/test_research_index.py::MentionTests.test_concept_and_argument_references_become_mentions"
+      ]
+    },
+    "WorkNoteSyncTests.test_private_notes_do_not_create_concepts_or_index_mentions": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::MentionTests.test_a_private_note_creates_no_concept_and_no_mention"
+      ]
+    },
+    "WorkNoteSyncTests.test_research_and_private_revisions_are_independent": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_the_two_notes_advance_their_own_revisions_on_either_path",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_notes"
+      ]
+    },
+    "WorkNoteSyncTests.test_ordinary_private_patch_advances_only_the_private_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_the_two_notes_advance_their_own_revisions_on_either_path"
+      ]
+    },
+    "WorkNoteSyncTests.test_a_stale_research_base_against_a_different_value_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::NoteDecisionTests.test_each_row_of_the_decision_table",
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_acknowledgements_and_conflicts_carry_sizes_never_prose",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_notes"
+      ]
+    },
+    "WorkNoteSyncTests.test_equal_desired_canonical_text_converges": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_acknowledgements_and_conflicts_carry_sizes_never_prose",
+        "tests/pg/test_works_mutations.py::NoteDecisionTests.test_each_row_of_the_decision_table",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_notes"
+      ]
+    },
+    "WorkNoteSyncTests.test_a_future_revision_is_refused": {
+      "replaced_by": [
+        "tests/pg/test_works_mutations.py::NoteDecisionTests.test_each_row_of_the_decision_table",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_notes"
+      ]
+    },
+    "WorkNoteSyncTests.test_compact_conflict_results_omit_note_bodies": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_acknowledgements_and_conflicts_carry_sizes_never_prose"
+      ]
+    },
+    "WorkNoteSyncTests.test_acknowledgement_omits_the_body": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_acknowledgements_and_conflicts_carry_sizes_never_prose",
+        "tests/pg/test_works_mutations.py::NoteDecisionTests.test_each_row_of_the_decision_table"
+      ]
+    },
+    "WorkNoteSyncTests.test_a_missing_work_is_terminal": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_refusals_match_the_ordinary_path",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_notes"
+      ]
+    },
+    "WorkNoteSyncTests.test_control_character_and_size_validation_parity": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_refusals_match_the_ordinary_path"
+      ]
+    },
+    "WorkNoteSyncTests.test_the_two_scopes_do_not_share_a_payload_or_a_base": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_refusals_match_the_ordinary_path",
+        "tests/test_works_sync_parity.py::WorksSyncParityTests.test_notes"
+      ]
+    },
+    "WorkNoteSyncTests.test_notes_state_starts_at_revision_zero": {
+      "replaced_by": [
+        "tests/pg/test_works_sync.py::NoteSyncTests.test_the_two_notes_advance_their_own_revisions_on_either_path"
+      ]
+    }
+  }
+}

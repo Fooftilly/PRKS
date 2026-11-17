@@ -1,0 +1,137 @@
+{
+  "module": "tests/test_pdf_annotation_sync.py",
+  "tests": {
+    "PdfAnnotationSyncTests.test_create_stores_under_client_id_at_revision_zero": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_create"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_create_idempotent_when_identical": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_create"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_create_colliding_different_state_is_named": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_create"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_create_rejects_non_null_base": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_create"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_create_missing_work": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_create",
+        "tests/pg/test_annotations.py::PersistenceTests.test_a_work_without_a_managed_pdf"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_advances_revision_on_change": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_identical_is_ack_without_advance": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_stale_identical_converges": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_stale_identical_can_ack_far_above_base_plus_one": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_coherent_snapshot_is_one_transaction": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_the_state_and_the_snapshot_read_one_transaction"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_stale_different_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_future_revision": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_requires_base": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_missing_annotation": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_set"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_delete_advances_and_removes_row": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_delete"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_delete_already_absent_converges": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_delete"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_delete_stale_while_present_conflicts": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_delete"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_create_after_delete_refuses_reuse": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_delete"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_exact_replay_preserves_original_result": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_an_exact_replay_answers_the_first_result"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_full_list_replace_advances_revisions_like_sync": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_the_full_list_replace_advances_the_same_revisions"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_identical_full_list_replace_does_not_advance": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_the_full_list_replace_advances_the_same_revisions"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_full_list_replace_refuses_known_absent_id": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_the_full_list_replace_advances_the_same_revisions"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_full_list_replace_rejects_stale_base_set_revision": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_a_stale_full_list_replace_is_refused"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_set_ink_list_change_is_detected_and_persisted": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_an_ink_list_change_is_detected_and_stored"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_annotations_state_lists_present": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::DecisionTableTests.test_the_state_and_the_snapshot_read_one_transaction"
+      ]
+    },
+    "PdfAnnotationSyncTests.test_create_cross_work_id_conflict": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::PersistenceTests.test_one_viewer_id_on_two_assets_is_two_annotations"
+      ],
+      "note": "PostgreSQL keys an annotation by its Asset, so one viewer id on two Works' files is two annotations; SQLite's ANNOTATION_ID_CONFLICT has no PostgreSQL counterpart by design (L-A-1 #635)."
+    }
+  }
+}

@@ -1,15 +1,114 @@
-# Build with pruning of replaced-tag leftovers: ./docker-build.sh
+# PRKS on PostgreSQL, the only Library backend (docs/postgresql-architecture.md
+# §12.3; L-D-1 #630, PG-C2 #641). Build with ./docker-build.sh, then:
+#
+#   docker compose up -d
+#
+# README.md, "Docker", covers the secrets to create first, first-run setup,
+# upgrades and the one-database-per-root rule.
+
+x-prks: &prks
+  build: .
+  image: prks:latest
+  # The role is the command (serve, migrate or worker), run without the
+  # image's shell entrypoint so each role is the container's main process.
+  entrypoint: ["python", "/app/prks_app.py"]
+  user: "${UID:-1000}:${GID:-1000}"
+  volumes:
+    - "${PRKS_DATA_DIR:-./data}:/data"
+  # Compose grants a secret only to the services that list it.
+  secrets:
+    - prks_database_url
+  # SIGTERM: web finishes in-flight requests, worker finishes or releases its job.
+  stop_grace_period: 30s
+
+x-prks-env: &prks-env
+  PRKS_DATABASE_URL_FILE: /run/secrets/prks_database_url
+  PRKS_STORAGE: /data
+  # The one-shot migrate service is the only schema runner. Every service
+  # still runs the start check and bumps the start generation once (§11.1).
+  PRKS_MIGRATE_ON_START: "0"
+
 services:
-  prks:
-    build: .
-    image: prks:latest
-    user: "${UID:-1000}:${GID:-1000}"
-    ports:
-      - "${PRKS_PUBLISH_HOST:-127.0.0.1}:8080:8080"
+  db:
+    # Match scripts/test-postgres and CI parity tests; update together after validation.
+    image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
     environment:
-      PRKS_STORAGE: /data
+      POSTGRES_DB: prks
+      POSTGRES_USER: prks
+      POSTGRES_PASSWORD_FILE: /run/secrets/prks_db_password
+      POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=PG_UNICODE_FAST"
+    secrets:
+      - prks_db_password
+    volumes:
+      # PostgreSQL 18 keeps a versioned PGDATA under /var/lib/postgresql.
+      # Never mount at /var/lib/postgresql/data (the pre-18 layout).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U prks -d prks"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # Applies the schema, then (once setup is ready) runs the start check and
+  # bump under the data root's shared lease, beside a running web and worker.
+  migrate:
+    <<: *prks
+    command: ["migrate"]
+    environment:
+      <<: *prks-env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *prks
+    command: ["serve", "--host", "0.0.0.0"]
+    environment:
+      <<: *prks-env
+      PRKS_AUTH: session
+      # Jobs run in the worker service, not in a thread of web.
+      PRKS_EMBEDDED_WORKER: "0"
       PRKS_PDF_LINEARIZE: "1"
       PRKS_TRUSTED_HOSTS: "${PRKS_TRUSTED_HOSTS:-}"
-    volumes:
-      - ./data:/data
+      PRKS_PUBLIC_ORIGIN: "${PRKS_PUBLIC_ORIGIN:-}"
+      PRKS_TRUSTED_PROXIES: "${PRKS_TRUSTED_PROXIES:-}"
+    ports:
+      - "${PRKS_PUBLISH_HOST:-127.0.0.1}:${PRKS_PUBLISH_PORT:-8080}:8080"
+    healthcheck:
+      # /readyz: pool, schema, setup ready, root still paired. A first run
+      # stays unhealthy until setup is complete.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=4)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+
+  worker:
+    <<: *prks
+    command: ["worker"]
+    environment:
+      <<: *prks-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+secrets:
+  prks_db_password:
+    file: "${PRKS_DB_PASSWORD_FILE:-./secrets/db_password}"
+  prks_database_url:
+    file: "${PRKS_DB_URL_FILE:-./secrets/database_url}"

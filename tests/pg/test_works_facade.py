@@ -23,12 +23,13 @@ from backend.db.database import Database
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import library_query
 from backend.domain.identity.request_context import RequestContext
-from backend.domain.works import queries
-from backend.pg_facade import PostgresLibrary
-from backend.pg_facade import context as facade_context
+from backend.domain.works import queries, work_commands
+from tests.library_adapter import TestLibrary
+from tests import acting_context as facade_context
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import Actor, provision_actor
 from tests.pg.harness import PostgresHarness, get_harness
+from tests.narrowing import require
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -52,7 +53,7 @@ class WorksFacadeTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         self.storage = StorageConfig.for_testing(tmp)
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
-        self.library = PostgresLibrary(self.db, storage=self.storage)
+        self.library = TestLibrary(self.db, storage=self.storage)
         self.actor = provision_actor(self.db)
         self.bind(self.actor.context)
 
@@ -127,7 +128,7 @@ class ActorTests(WorksFacadeTestCase):
     def test_a_reader_reads_but_cannot_create(self) -> None:
         work_id = self.library.add_work("Shared")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.get_work(work_id)["title"], "Shared")
+            self.assertEqual(require(self.library.get_work(work_id))["title"], "Shared")
             with self.assertRaises(AccessRefused) as caught:
                 self.library.add_work("Refused")
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
@@ -144,7 +145,7 @@ class ActorTests(WorksFacadeTestCase):
             with facade_context.acting_as(reader):
                 return call()
 
-        with mock.patch.object(PostgresLibrary, "_managed_file",
+        with mock.patch.object(work_commands, "_managed_file",
                                side_effect=AssertionError("file touched")) as touched:
             for path in (existing, missing):
                 with self.assertRaises(facade_context.NoRequestContext):
@@ -296,11 +297,37 @@ class CreateTests(WorksFacadeTestCase):
         self.assertEqual((self.core(without)["text_content"], self.core(without)["private_notes"]),
                          ("", None))
 
+    def test_the_catalog_leaves_out_the_notes_the_detail_has(self) -> None:
+        text = "x" * 5000
+        work_id = self.library.add_work("Notes", text_content=text, private_notes="secret")
+        summary = next(row for row in self.library.get_all_works() if row["id"] == work_id)
+        self.assertNotIn("text_content", summary)
+        self.assertNotIn("private_notes", summary)
+        self.assertNotIn("secret", repr(summary))
+        detail = self.library.get_work(work_id)
+        assert detail is not None
+        self.assertEqual((detail["text_content"], detail["private_notes"]), (text, "secret"))
+
+    def test_an_invalid_thumbnail_page_is_created_as_none(self) -> None:
+        # A video Work has an Asset, so the page has somewhere to land.
+        def create(page: Any) -> Any:
+            work_id = self.library.add_work("Clip", source_kind="video", source_url=_VIDEO,
+                                            provider="youtube", provider_id="dQw4w9WgXcQ",
+                                            thumb_page=page, private_notes="")
+            work = self.library.get_work(work_id)
+            assert work is not None
+            return work["thumb_page"]
+
+        for page in ("x", "0", "-3", 0, "1.5", ""):
+            with self.subTest(page=page):
+                self.assertIsNone(create(page))
+        self.assertEqual(create("4"), 4)
+
     def test_a_research_note_renders_its_wiki_links(self) -> None:
         work_id = self.library.add_work("Linked", text_content="See [[Other]]")
-        self.assertEqual(self.library.get_work(work_id)["html_content"],
+        self.assertEqual(require(self.library.get_work(work_id))["html_content"],
                          'See <span class="wiki-link-unresolved" style="color:#ef4444;">[[Other]]</span>')
-        self.assertNotIn("html_content", self.library.get_work(self.library.add_work("Plain")))
+        self.assertNotIn("html_content", require(self.library.get_work(self.library.add_work("Plain"))))
 
     def test_concurrent_creates_all_commit(self) -> None:
         errors: list[BaseException] = []
@@ -369,7 +396,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0,
                                           pool_max=2))
         self.addCleanup(self.db.close)
-        self.library = PostgresLibrary(self.db, storage=self.storage)
+        self.library = TestLibrary(self.db, storage=self.storage)
         self.assertEqual(self.library.get_all_works()[0]["created_at"], "2026-06-01 10:00:00")
 
     def harness_db_name(self) -> str:

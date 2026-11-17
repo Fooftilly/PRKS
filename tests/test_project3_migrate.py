@@ -11,7 +11,10 @@ import tempfile
 import unittest
 import unittest.mock
 import urllib.error
+from collections.abc import Callable
 from pathlib import Path
+
+from tests.narrowing import must_search
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "scripts" / "project3_migrate.py"
@@ -36,10 +39,10 @@ class FakeAPI:
         self.calls: list[str] = []
         self.mutations: list[tuple[str, dict]] = []
         # Called before each mutation is applied, with (name, variables).
-        self.before_mutation = None
+        self.before_mutation: Callable[[str, dict], object] | None = None
         # Native "Item added" for issues: None (off), "now" (applied with the
         # add) or "late" (applied when the run sleeps to let workflows settle).
-        self.item_added = None
+        self.item_added: str | None = None
         self.pending: list = []
         self.fail_next_set = 0
         # Repository issues and PRs for plan-backfill: number -> (title, state, labels)
@@ -53,7 +56,7 @@ class FakeAPI:
     def add_content(self, kind, number, state="OPEN", repo="Fooftilly/PRKS"):
         self.content[number] = {"__typename": kind, "id": f"N{number}", "number": number, "state": state, "repo": repo}
 
-    def put(self, kind, number, state="OPEN", archived=False, **values):
+    def put(self, kind, number, state="OPEN", archived: object = False, **values):
         self.add_content(kind, number, state)
         self.items[f"I{number}"] = {"number": number, "archived": archived, "values": dict(values)}
 
@@ -91,7 +94,7 @@ class FakeAPI:
         return {"user": {"projectV2": {"id": self.project_id, "number": 3, "owner": {"login": "Fooftilly"}, "fields": {"nodes": fields}}}}
 
     def _mutation(self, query, variables):
-        name = re.search(r"\{(\w+)\(", query).group(1)
+        name = must_search(r"\{(\w+)\(", query).group(1)
         if self.before_mutation:
             self.before_mutation(name, variables)
         if name == "updateProjectV2ItemFieldValue" and self.fail_next_set:

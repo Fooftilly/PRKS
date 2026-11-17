@@ -20,16 +20,16 @@ from unittest import mock
 from backend import sync_protocol
 from backend.db.database import Isolation
 from backend.db.errors import DatabaseError
-from backend.domain.identity import library_scope
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
-from backend.domain.works import commands, lifecycle, merge
+from backend.domain.works import commands, lifecycle, merge, work_commands
 from backend.entity_ids import generate
-from backend.pg_facade import PostgresLibrary
-from backend.pg_facade import context as facade_context
+from backend.library import PostgresLibrary
+from tests import acting_context as facade_context
 from backend.sync import protocol
 from tests.pg.test_works_sync import SyncTestCase, create_payload
+from tests.narrowing import require
 
 T = TypeVar("T")
 _PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -175,7 +175,7 @@ class SyncGateTests(MergeTestCase):
                                 depends_on=[pending])
         self.assertEqual(self.send(waiting), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(self.library.get_work(live)["title"], "Live")
+        self.assertEqual(require(self.library.get_work(live))["title"], "Live")
 
     def test_playlist_reorder_with_a_merged_payload_work_is_terminal_and_ledgered(self) -> None:
         # REORDER_PLAYLIST_ITEMS has entity_type=playlist and a Playlist id
@@ -567,16 +567,16 @@ class IsolationTests(MergeTestCase):
             with self.subTest(operation=operation):
                 self.assertIs(protocol._HANDLERS[operation].isolation, Isolation.SERIALIZABLE)
 
-    def test_a_note_written_through_the_facade_runs_serializable(self) -> None:
+    def test_a_note_written_through_the_work_patch_runs_serializable(self) -> None:
         work_id = self.library.add_work("Noted")
         seen: list[Isolation] = []
-        real = library_scope.library_command
+        real = work_commands.library_command
 
         def traced(*args: Any, **kwargs: Any) -> Any:
             seen.append(kwargs.get("isolation", Isolation.READ_COMMITTED))
             return real(*args, **kwargs)
 
-        with mock.patch.object(library_scope, "library_command", traced):
+        with mock.patch.object(work_commands, "library_command", traced):
             self.library.update_work_metadata(work_id, {"text_content": "A note"})
             self.library.update_work_metadata(work_id, {"title": "Renamed"})
         self.assertEqual(seen, [Isolation.SERIALIZABLE, Isolation.READ_COMMITTED])
@@ -594,7 +594,7 @@ class OwnershipTests(MergeTestCase):
 
         with self.refused_by("23503"):
             self.command(move_primary)  # checked at COMMIT: the source's pointer names a moved row
-        self.assertEqual(self.library.get_work(source)["id"], source)
+        self.assertEqual(require(self.library.get_work(source))["id"], source)
 
     def test_a_work_with_manifestations_cannot_be_deleted(self) -> None:
         work_id = self.library.add_work("W")

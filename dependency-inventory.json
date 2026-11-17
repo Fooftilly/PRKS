@@ -535,7 +535,6 @@
       "generated_assets": [
         "frontend-app/src/api/generated/publishers.ts",
         "frontend-app/src/api/generated/saved-views.ts",
-        "frontend-app/src/api/generated/processing-files.ts",
         "frontend-app/src/api/generated/performance-diagnostics.ts",
         "frontend-app/src/api/generated/positions.ts"
       ],

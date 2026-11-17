@@ -1,0 +1,75 @@
+{
+  "module": "tests/test_api_contract_positions.py",
+  "tests": {
+    "PositionHttpContractTests.test_create_list_get_patch_delete_round_trip": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_create_list_get_patch_sync_and_delete"
+      ]
+    },
+    "PositionHttpContractTests.test_delete_in_use_returns_409_matching_openapi": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_a_position_an_argument_targets_is_in_use"
+      ]
+    },
+    "PositionHttpContractTests.test_domain_still_refuses_empty_name": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_the_domain_refuses_an_empty_or_null_field"
+      ]
+    },
+    "PositionHttpContractTests.test_invalid_json_object_uses_common_envelope": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_a_body_that_is_not_an_object_uses_the_common_envelope"
+      ]
+    },
+    "PositionHttpContractTests.test_openapi_core_validates_create_request_and_response": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_openapi_core_validates_a_create"
+      ]
+    },
+    "PositionHttpContractTests.test_openapi_endpoint_serves_positions_slice": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_the_openapi_endpoint_serves_the_positions_slice"
+      ]
+    },
+    "PositionHttpContractTests.test_patch_null_fields_rejected_empty_description_clears": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_a_null_update_is_refused_and_an_empty_description_clears"
+      ]
+    },
+    "PositionHttpContractTests.test_post_and_patch_415_and_413_documented": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_415_and_413_are_answered_as_documented"
+      ]
+    },
+    "PositionHttpContractTests.test_post_falsy_non_string_description_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_wrong_types_on_create_keep_the_domain_codes"
+      ]
+    },
+    "PositionHttpContractTests.test_post_null_description_rejected": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_the_domain_refuses_an_empty_or_null_field"
+      ]
+    },
+    "PositionHttpContractTests.test_sync_state_304_when_etag_matches": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_the_sync_state_is_304_when_the_etag_matches"
+      ]
+    },
+    "PositionHttpContractTests.test_wrong_type_description_on_post_preserves_invalid_text": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_wrong_types_on_create_keep_the_domain_codes"
+      ]
+    },
+    "PositionHttpContractTests.test_wrong_type_name_and_description_on_patch": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_wrong_types_on_update_keep_the_domain_codes"
+      ]
+    },
+    "PositionHttpContractTests.test_wrong_type_name_on_post_preserves_invalid_name": {
+      "replaced_by": [
+        "tests/pg/test_http_positions_contract.py::PositionHttpContractTests.test_wrong_types_on_create_keep_the_domain_codes"
+      ]
+    }
+  }
+}

@@ -195,9 +195,6 @@ class TestNewAndAdoptedRoots(RootTestCase):
         def people_file(root):
             open(os.path.join(root, "people"), "w").close()
 
-        def inbox_file(root):
-            open(os.path.join(root, "for_processing"), "w").close()
-
         def text_index_dir(root):
             os.mkdir(os.path.join(root, "prks_text_index.db"))
 
@@ -223,7 +220,6 @@ class TestNewAndAdoptedRoots(RootTestCase):
             "maintenance_file": (maintenance_file, "db", "root_malformed"),
             "thumbs_file": (thumbs_file, "pdfs", "root_malformed"),
             "people_file": (people_file, "db", "root_malformed"),
-            "inbox_file": (inbox_file, "pdfs", "root_malformed"),
             "text_index_dir": (text_index_dir, "pdfs", "root_malformed"),
             "research_index_link": (research_index_link, "db", "root_contains_link"),
             "log_dir": (log_dir, "pdfs", "root_malformed"),
@@ -249,18 +245,15 @@ class TestNewAndAdoptedRoots(RootTestCase):
         config = StorageConfig.for_testing(root)
         names = root_binding.component_root_names(config)
         self.assertEqual(
-            names["component_dirs"], {"pdfs", "thumbs", "people", "for_processing"}
+            names["component_dirs"], {"pdfs", "thumbs", "people"}
         )
         self.assertEqual(
             names["component_files"],
             {"prks_text_index.db", "prks_research_index.db", "prks-errors.log"},
         )
         # Overrides placed outside the root reserve nothing in it.
-        moved = replace(
-            config, processing_dir=self.path("inbox"), log_file=self.path("errors.log")
-        )
+        moved = replace(config, log_file=self.path("errors.log"))
         names = root_binding.component_root_names(moved)
-        self.assertNotIn("for_processing", names["component_dirs"])
         self.assertNotIn("prks-errors.log", names["component_files"])
         # Plain components of the right type beside proof are still adopted.
         os.makedirs(os.path.join(root, "pdfs"))
@@ -628,16 +621,29 @@ class TestLinksAndFilesystems(RootTestCase):
             self.open(root)
         self.assertEqual(ctx.exception.reason, "root_contains_link")
 
-    def test_inbox_outside_the_root_is_not_this_roots_business(self):
-        root = self.path("lib")
-        inbox_target = self.path("inbox-real")
-        os.mkdir(inbox_target)
-        link = self.path("inbox-link")
-        _symlink_or_skip(self, inbox_target, link)
-        cfg = replace(StorageConfig.for_testing(root), processing_dir=link)
-        bound = root_binding.open_storage_root(cfg, register=False)
-        self._bound.append(bound)
-        self.assertTrue(bound.created)
+    def test_a_leftover_inbox_entry_is_not_a_reserved_name(self):
+        # PG-C2 #641: the SQLite processing inbox is gone, so ``for_processing``
+        # is no longer a component name. A leftover entry of either type is the
+        # user's, beside proof the root is still adopted, and it is left as it is.
+        for label, plant in (
+            ("file", lambda path: open(path, "w").close()),
+            ("directory", os.mkdir),
+        ):
+            with self.subTest(label):
+                root = self.path(f"lib-{label}")
+                os.makedirs(os.path.join(root, "pdfs"))
+                plant(os.path.join(root, "for_processing"))
+                bound = self.open(root)
+                self.assertTrue(bound.adopted)
+                self.assertEqual(
+                    os.path.isdir(os.path.join(root, "for_processing")), label == "directory"
+                )
+        # Without proof a leftover inbox alone is still not a library.
+        root = self.path("lib-inbox-only")
+        os.makedirs(os.path.join(root, "for_processing"))
+        with self.assertRaises(StorageRootRefused) as ctx:
+            self.open(root)
+        self.assertEqual(ctx.exception.reason, "root_foreign")
 
     def _other_device_for(self, target):
         real_lstat = root_binding._lstat
@@ -958,7 +964,8 @@ class TestLeaseInProcess(RootTestCase):
         self.assertIs(root_binding.active_bound_root(), bound)
         root_binding.assert_config_matches_bound_root(root)
         with self.assertRaises(StorageRootRefused) as ctx:
-            server.bind_storage(StorageConfig.for_testing(other))
+            # The lease is checked before the Library's database is touched.
+            server.bind_storage(StorageConfig.for_testing(other), library_database=object())
         self.assertEqual(ctx.exception.reason, "root_not_leased")
         self.assertFalse(os.path.exists(other))
         bound.release()
@@ -1107,6 +1114,7 @@ class TestLeaseAcrossProcesses(RootTestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+        assert proc.stdout is not None
         line = proc.stdout.readline().strip()
         if not line.startswith("SR-"):
             proc.kill()
@@ -1143,6 +1151,7 @@ class TestLeaseAcrossProcesses(RootTestCase):
                 self.open(root)
         finally:
             os.kill(holder.pid, signal.SIGCONT)
+        assert holder.stdin is not None
         holder.stdin.write("\n")
         holder.stdin.flush()
         holder.wait(30)
@@ -1151,6 +1160,7 @@ class TestLeaseAcrossProcesses(RootTestCase):
     def test_orderly_exit_releases_the_lease(self):
         root = self.path("lib")
         holder, _ = self._spawn_holder(root)
+        assert holder.stdin is not None
         holder.stdin.write("\n")
         holder.stdin.flush()
         holder.wait(30)
@@ -1178,16 +1188,20 @@ class TestProcessEntry(RootTestCase):
         args = build_parser().parse_args(["--testing", "--storage-root", "/srv/lib"])
         self.assertEqual(args.storage_root, "/srv/lib")
 
-    def test_root_is_opened_before_restore_recovery_and_binding(self):
+    def test_root_is_opened_before_anchoring_and_binding(self):
+        # The SQLite restore journal recovery that ran between them left with
+        # the SQLite store (PG-C2 #641); a PostgreSQL restore recovers
+        # through its jobs (backend.domain.maintenance).
         with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
             src = handle.read()
         main = src[src.index('if __name__ == "__main__":'):]
+        self.assertNotIn("recover_incomplete_restore", src)
         order = [
             main.index("ensure_runtime_or_exit()"),
             main.index("StorageConfig.from_env(cli_root=args.storage_root)"),
             main.index("open_storage(config"),
             main.index("refuse_sqlite_catalogue(library_database, bound_root)"),
-            main.index("recover_incomplete_restore(config)"),
+            main.index("bound_root.anchor(config)"),
             main.index("bind_storage(config, library_database=library_database)"),
             # The source report needs logging configured, or INFO is dropped.
             main.index("setup_logging(config)"),
@@ -1228,25 +1242,6 @@ class TestProcessEntry(RootTestCase):
         with patch.object(prks_app, "open_storage_root") as opened:
             prks_app.open_storage(StorageConfig.for_testing(self.path("lib")))
         self.assertTrue(opened.call_args.kwargs.get("defer_logs"))
-
-    def test_refused_root_exits_cleanly_before_touching_storage(self):
-        foreign = self.path("foreign")
-        os.mkdir(foreign)
-        open(os.path.join(foreign, "holiday.jpg"), "w").close()
-        env = dict(os.environ, PRKS_TESTING="1", PRKS_STORAGE=self.path("ignored"))
-        env.pop("PRKS_LOG_FILE", None)
-        proc = subprocess.run(
-            [sys.executable, os.path.join(_PROJECT_DIR, "prks_app.py"), "--testing",
-             "--storage-root", foreign, "--port", "1"],
-            cwd=_PROJECT_DIR, env=env, capture_output=True, text=True, timeout=120,
-        )
-        self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("PRKS cannot open its storage root", proc.stderr)
-        self.assertIn("does not look like a PRKS library", proc.stderr)
-        self.assertNotIn("Traceback", proc.stderr)
-        self.assertEqual(os.listdir(foreign), ["holiday.jpg"])
-        # --storage-root won over PRKS_STORAGE: the env root was never created.
-        self.assertFalse(os.path.exists(self.path("ignored")))
 
     def test_invalid_cli_root_is_a_clean_startup_error(self):
         env = dict(os.environ, PRKS_TESTING="1")
@@ -1356,14 +1351,14 @@ class TestRootSnapshot(RootTestCase):
         os.remove(link)
         os.symlink(target_b, link)
 
-        from backend.db_manager import PRKSDatabase
-
-        PRKSDatabase(storage=anchored, schema_path=os.path.join(_PROJECT_DIR, "backend", "db_schema.sql"))
-        os.makedirs(anchored.pdfs_dir, exist_ok=True)
-        with open(os.path.join(anchored.pdfs_dir, "x.pdf"), "wb") as handle:
-            handle.write(b"%PDF")
-        self.assertTrue(os.path.isfile(os.path.join(target_a, "prks_data.db")))
+        # Runtime IO goes through the anchored config's paths: managed
+        # objects and derived thumbnails land on the leased target.
+        for directory, name in ((anchored.pdfs_dir, "x.pdf"), (anchored.thumbs_dir, "x.webp")):
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, name), "wb") as handle:
+                handle.write(b"%PDF")
         self.assertTrue(os.path.isfile(os.path.join(target_a, "pdfs", "x.pdf")))
+        self.assertTrue(os.path.isfile(os.path.join(target_a, "thumbs", "x.webp")))
         self.assertEqual(os.listdir(target_b), [])
         self.assertEqual(anchored.configured_root, cfg.configured_root)
         root_binding.assert_config_matches_bound_root(anchored.root)
@@ -1392,20 +1387,20 @@ class TestRootSnapshot(RootTestCase):
     def test_anchoring_rewrites_only_root_relative_components(self):
         cfg = replace(
             StorageConfig.for_testing(self.path("lib")),
-            processing_dir="/srv/inbox",
             log_file="/var/log/prks.log",
         )
         anchored = cfg.anchored_to(self.path("real"))
         self.assertEqual(anchored.root, self.path("real"))
         for name in ("db_path", "pdfs_dir", "thumbs_dir", "people_dir", "index_db_path", "research_index_db_path"):
             self.assertTrue(getattr(anchored, name).startswith(self.path("real") + os.sep), name)
-        self.assertEqual(anchored.processing_dir, "/srv/inbox")
         self.assertEqual(anchored.log_file, "/var/log/prks.log")
 
-    def test_process_entry_anchors_before_recovery(self):
+    def test_process_entry_anchors_before_binding(self):
+        # Every open after the root lease stays beneath the validated root.
         with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
             main = handle.read().split('if __name__ == "__main__":', 1)[1]
-        self.assertLess(main.index("bound_root.anchor(config)"), main.index("recover_incomplete_restore(config)"))
+        self.assertLess(main.index("bound_root.anchor(config)"),
+                        main.index("bind_storage(config, library_database=library_database)"))
 
 
 class TestWholeRootInvariants(RootTestCase):
@@ -1675,12 +1670,14 @@ class TestMarkerWritesNeedTheLease(RootTestCase):
             root_marker.write_marker(root, document)  # type: ignore[call-arg]
         self.assertEqual(self.marker_doc(root), before)
 
-        root_marker.write_marker(root, document, lease=bound.lease)
+        lease = bound.lease
+        assert isinstance(lease, ExclusiveFileLock)
+        root_marker.write_marker(root, document, lease=lease)
         self.assertEqual(self.marker_doc(root)["future_field"], 1)
 
         bound.release()
         with self.assertRaises(StorageRootRefused) as ctx:
-            root_marker.write_marker(root, before, lease=bound.lease)
+            root_marker.write_marker(root, before, lease=lease)
         self.assertEqual(ctx.exception.reason, "marker_write_without_lease")
         self.assertEqual(self.marker_doc(root)["future_field"], 1)
 

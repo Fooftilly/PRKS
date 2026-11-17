@@ -11,6 +11,12 @@ from unittest import mock
 from tests.e2e import harness
 
 
+def _constant(node: ast.expr) -> object:
+    """The literal value of an AST argument the test expects to be a constant."""
+    assert isinstance(node, ast.Constant), ast.dump(node)
+    return node.value
+
+
 class GraphNavigationPhaseProfileTests(unittest.TestCase):
     def tearDown(self):
         harness.finish_test_profile("graph-phase")
@@ -170,7 +176,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         # interaction sequence; the separate check below asserts that the
         # click/card timers and the opt-in trial stay inside inclusive recent.
         helper_stages = [
-            call.args[0].value
+            _constant(call.args[0])
             for call in sorted(
                 (
                     node for node in ast.walk(nav_helpers[0])
@@ -203,7 +209,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
         self.assertEqual(len(recent_scopes), 1)
         self.assertEqual(
             [
-                item.context_expr.args[0].value
+                _constant(item.context_expr.args[0])
                 for node in recent_scopes[0].body
                 if isinstance(node, ast.With)
                 for item in node.items
@@ -294,7 +300,7 @@ class OfflinePersonProfileWorkflowTargetTests(unittest.TestCase):
                 self.assertEqual(len(helpers), 1, target)
                 nodes += helpers
             phases = {
-                call.args[0].value
+                _constant(call.args[0])
                 for node in nodes
                 for call in ast.walk(node)
                 if isinstance(call, ast.Call)
@@ -740,7 +746,7 @@ class StartupReadinessProfileTests(unittest.TestCase):
             "app_route_wait": 1.0,
             "request_routing": 6.0,
             "routing_decision": 0.1,
-            "seed_clone": 0.5,
+            "seed_build": 0.5,
             # Browser-native details are diagnostic overlaps, not new work.
             "nav_response_wait": 0.5,
             "nav_response_body": 0.2,

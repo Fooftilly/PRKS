@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
+from typing import LiteralString
 import tempfile
 import unittest
-from unittest import mock
 
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
@@ -24,7 +24,7 @@ class E2ELibraryTests(unittest.TestCase):
         self.root = os.path.join(tmp.name, "storage")
         os.mkdir(self.root)
 
-    def rows(self, conninfo: str, query: str) -> list[dict]:
+    def rows(self, conninfo: str, query: LiteralString) -> list[dict]:
         db = Database(DatabaseConfig(conninfo=conninfo, role="test", pool_min=0, pool_max=1))
         try:
             return db.command(lambda tx: tx.execute(query).fetchall())
@@ -49,15 +49,10 @@ class E2ELibraryTests(unittest.TestCase):
         )
         instance = self.rows(library.conninfo, "SELECT id FROM prks.instance")
         self.assertEqual([row["id"] for row in instance], [library.instance_id])
-        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: ""}):
-            self.assertEqual(
-                library.server_env(),
-                {
-                    "PRKS_AUTH": "loopback-owner",
-                    "PRKS_DATABASE_URL": library.conninfo,
-                    "PRKS_EMBEDDED_WORKER": "0",
-                },
-            )
+        self.assertEqual(
+            library.server_env(),
+            {"PRKS_AUTH": "loopback-owner", "PRKS_DATABASE_URL": library.conninfo},
+        )
 
     def test_session_mode_adds_editors_who_sign_in_with_the_e2e_password(self) -> None:
         library = postgres_identity.provision_library(self.root, auth="session", members=("reader",))
@@ -109,26 +104,19 @@ if __name__ == "__main__":
 
 
 class PostgresLibraryLegTests(unittest.TestCase):
-    """``PRKS_E2E_LIBRARY_BACKEND=postgres``: the seed and the server on PostgreSQL (PG-C1 #640)."""
+    """The seed and the server on PostgreSQL, the only backend (PG-C1 #640, PG-C2 #641)."""
 
+    root: str  # set by the shared setUp
     setUp = E2ELibraryTests.setUp
     rows = E2ELibraryTests.rows
-
-    def test_the_selection_is_read_from_the_environment(self) -> None:
-        self.assertFalse(postgres_identity.postgres_library({}))
-        self.assertTrue(postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}))
-        with self.assertRaises(ValueError):
-            postgres_identity.postgres_library({postgres_identity.LIBRARY_BACKEND_ENV: "sqlite"})
 
     def test_the_server_serves_postgresql_and_runs_its_worker(self) -> None:
         library = postgres_identity.provision_library(self.root)
         self.addCleanup(library.drop)
-        with mock.patch.dict(os.environ, {postgres_identity.LIBRARY_BACKEND_ENV: "postgres"}):
-            env = library.server_env()
-        self.assertEqual(env, {
+        # No PRKS_EMBEDDED_WORKER=0: the worker runs the seed's jobs.
+        self.assertEqual(library.server_env(), {
             "PRKS_AUTH": "loopback-owner",
             "PRKS_DATABASE_URL": library.conninfo,
-            "PRKS_LIBRARY_BACKEND": "postgres",
         })
 
     def test_the_seed_writes_the_library_through_the_facade(self) -> None:
@@ -148,12 +136,34 @@ class PostgresLibraryLegTests(unittest.TestCase):
         for name in ("prks_data.db", "prks_data_testing.db"):
             self.assertFalse(os.path.lexists(os.path.join(self.root, name)))
 
-    def test_the_seeds_call_only_ported_facade_methods(self) -> None:
+    def test_a_seeded_research_note_is_indexed_before_the_server_starts(self) -> None:
+        """The seed runs the note's reindex itself: no test waits on the worker for its mentions.
+
+        A Work is a Research Graph node only through mentions, so a graph or
+        mention count read before the queued job ran showed none (the Research
+        Graph E2E timeouts on the PostgreSQL leg).
+        """
+        from tests.e2e import fixtures
+
+        library = postgres_identity.provision_library(self.root)
+        self.addCleanup(library.drop)
+        ids = postgres_identity.seed_postgres_library(fixtures.seed_graph_context_library, self.root, library)
+        mentioned = self.rows(library.conninfo, "SELECT DISTINCT work_id FROM derived.concept_mentions")
+        self.assertEqual([row["work_id"] for row in mentioned], [ids["work_a"]])
+        states = self.rows(
+            library.conninfo,
+            "SELECT n.work_id, s.content_hash = encode(sha256(convert_to(n.body, 'UTF8')), 'hex') AS current "
+            "FROM prks.work_notes n LEFT JOIN derived.work_note_state s USING (library_id, work_id) "
+            "WHERE n.kind = 'research'",
+        )
+        current = {row["work_id"]: row["current"] for row in states}
+        self.assertIs(current.get(ids["work_a"]), True, "the index is the current note's")
+
+    def test_the_seeds_call_only_methods_the_test_library_has(self) -> None:
         import ast
 
-        from backend.pg_facade import PostgresLibrary
-        from backend.pg_facade.registry import ported_methods
         from tests.e2e import fixtures
+        from tests.library_adapter import TestLibrary
 
         with open(fixtures.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
@@ -163,7 +173,7 @@ class PostgresLibraryLegTests(unittest.TestCase):
             and isinstance(node.func.value, ast.Name) and node.func.value.id == "db"
         }
         self.assertTrue(called)
-        self.assertEqual(sorted(called - set(ported_methods(PostgresLibrary))), [])
+        self.assertEqual(sorted(name for name in called if not hasattr(TestLibrary, name)), [])
 
     def test_the_people_seeds_fill_the_postgresql_library(self) -> None:
         from tests.e2e import fixtures

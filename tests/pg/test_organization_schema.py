@@ -542,7 +542,7 @@ class SavedViewTests(OrganizationSchemaTestCase):
         for field, value in (("q", " padded"), ("q", "x" * 501), ("author", "x" * 201), ("q", "line\nbreak")):
             with self.subTest(field=field, value=value):
                 self.assert_refused(psycopg.errors.CheckViolation, lambda field=field, value=value: self.saved_view(
-                    "Bounded", "advanced", **{field: value}))
+                    "Bounded", "advanced", **{field: value}))  # pyright: ignore[reportArgumentType]
         self.saved_view("At the bounds", "advanced", "x" * 500, "", "a" * 200, "p" * 200)
 
     def test_names_are_unique_by_identity_key_per_library(self) -> None:

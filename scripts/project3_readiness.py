@@ -373,23 +373,24 @@ def read_items(gql: ReadOnlyGraphQL, *, include_assignees: bool = True) -> tuple
             # null content: deleted, or from a repository the token cannot see.
             skipped["redacted_or_unknown"] += 1
             continue
-        repo = _obj(_obj(content, "issue content").get("repository"), "issue repository")
+        issue = _obj(content, "issue content")
+        repo = _obj(issue.get("repository"), "issue repository")
         if repo.get("nameWithOwner") != REPOSITORY:
             skipped["other_repositories"] += 1
             continue
         if _bool(repo.get("isPrivate"), "repository isPrivate"):
             raise Confidential(f"{REPOSITORY} is private; no snapshot was written")
-        number = _int(content.get("number"), "issue number")
+        number = _int(issue.get("number"), "issue number")
         if number in issues:
             raise Malformed(f"issue #{number} has more than one Project #3 item")
         issues[number] = {
             "number": number,
-            "state": _str(content.get("state"), f"issue #{number} state"),
+            "state": _str(issue.get("state"), f"issue #{number} state"),
             "in_project": True,
             "project_item_id": item_id,
             "archived": _bool(node.get("isArchived"), f"issue #{number} isArchived"),
             **{key: _field_value(node.get(key), f"issue #{number} {name}") for key, name in FIELDS.items()},
-            "assignees": (_assignees(content, f"issue #{number}")
+            "assignees": (_assignees(issue, f"issue #{number}")
                           if include_assignees else []),
         }
     return issues, skipped
@@ -631,7 +632,7 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
          now: Optional[Callable[[], datetime]] = None) -> int:
     env = os.environ if env is None else env
     clock = now or (lambda: datetime.now(timezone.utc))
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
     snap = sub.add_parser("snapshot", help="write a snapshot (read-only)")
     snap.add_argument("--out", required=True, help="output .json path, outside the repository")

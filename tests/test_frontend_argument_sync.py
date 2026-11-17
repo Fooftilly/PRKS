@@ -102,10 +102,16 @@ class ArgumentSyncFrontendTests(unittest.TestCase):
         self.assertNotIn("SET_ARGUMENT_TARGETS", create)
         self.assertEqual(argument_sync.SOURCES_SCOPE_TYPE, "argument-sources")
         self.assertEqual(argument_sync.TARGETS_SCOPE_TYPE, "argument-targets")
-        backend = (ROOT / "backend/argument_sync.py").read_text()
+        backend = (ROOT / "backend/domain/research/arguments.py").read_text()
         self.assertIn("argument_target_positions", backend)
         self.assertIn("argument_target_arguments", backend)
-        self.assertIn("network._replace_targets_on_conn", backend)
+        at = backend.index("\ndef _write_targets(")
+        write = backend[at:backend.index("\ndef ", at + 5)]
+        self.assertIn("for statement in _DELETE_TARGETS_SQL:", write)
+        at = backend.index("_DELETE_TARGETS_SQL: ")
+        deletes = backend[at:backend.index("\n)", at)]
+        self.assertIn("DELETE FROM prks.argument_target_positions", deletes)
+        self.assertIn("DELETE FROM prks.argument_target_arguments", deletes)
 
     def test_effective_reads_precede_kind_filter_and_server_fetch(self):
         start = self.app.index("case 'arguments': {")

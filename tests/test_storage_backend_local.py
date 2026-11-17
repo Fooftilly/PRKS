@@ -36,11 +36,13 @@ class LocalStorageTestCase(unittest.TestCase):
         super().tearDown()
         self._tmp.cleanup()
 
-    def make_backend(self):
+    def make_backend(self) -> LocalFilesystemStorage:
         return LocalFilesystemStorage(self.root)
 
 
-class TestLocalFilesystemStorageContract(StorageBackendContract, LocalStorageTestCase):
+class TestLocalFilesystemStorageContract(
+    StorageBackendContract[LocalFilesystemStorage], LocalStorageTestCase
+):
     """The same suite a future object-storage backend must pass."""
 
 
@@ -337,11 +339,11 @@ class TestLocalSpecifics(LocalStorageTestCase):
 
     def test_backend_is_not_wired_into_production_paths_yet(self):
         # Phase A adds the abstraction only; Phase B routes operations through
-        # it. Phase B starts on PostgreSQL (L-A-1 #635): the facade, which the
-        # running app does not construct yet, the PostgreSQL workers' object
-        # maintenance, which a SQLite root never gets, and the Processing
-        # queue's routes, which answer only with a PostgreSQL library bound
-        # (L-PR-1 #636), are the only other users.
+        # it. Phase B starts on PostgreSQL (L-A-1 #635): the PostgreSQL
+        # workers' object maintenance, which a SQLite root never gets, the
+        # Processing queue's routes, which answer only with a PostgreSQL
+        # library bound (L-PR-1 #636), and the Person, annotation and Work
+        # routes' objects (PG-C3 #642) are the only other users.
         import subprocess
 
         out = subprocess.run(
@@ -350,9 +352,9 @@ class TestLocalSpecifics(LocalStorageTestCase):
         )
         if out.returncode not in (0, 1):  # pragma: no cover - no git
             self.skipTest("git unavailable")
-        self.assertEqual(out.stdout.split(), ["backend/api/processing.py", "backend/domain/objects/jobs.py",
-                                              "backend/pg_facade/annotations.py", "backend/pg_facade/works.py",
-                                              "backend/storage/objects.py"])
+        self.assertEqual(out.stdout.split(), ["backend/api/annotations.py", "backend/api/persons.py",
+                                              "backend/api/processing.py", "backend/api/works.py",
+                                              "backend/domain/objects/jobs.py", "backend/storage/objects.py"])
 
 
 if __name__ == "__main__":

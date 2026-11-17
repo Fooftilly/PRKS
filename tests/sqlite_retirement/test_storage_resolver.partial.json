@@ -1,0 +1,12 @@
+{
+  "module": "tests/test_storage_resolver.py",
+  "partial": true,
+  "tests": {
+    "TestExistingDefaultsUnchanged.test_config_file_root_uses_root_relative_inbox": {
+      "replaced_by": [
+        "tests/test_storage_resolver.py::TestExistingDefaultsUnchanged.test_config_file_root_derives_root_relative_components"
+      ],
+      "note": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value. The test now checks the remaining root-relative components (pdfs/, the log) under a bootstrap-file root."
+    }
+  }
+}

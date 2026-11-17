@@ -10,10 +10,6 @@ A Research Note's derived mentions are rebuilt by the
 mention reads; ``graph`` projects the Research Graph from the canonical
 tables and those mentions (read only).
 
-The running application imports only ``reindex`` (the jobs worker, to
-register its handler): SQLite stays the only backend until the cutover
-slices (§15.3).
-
 **Lock order.** Every Research command takes its locks in one order, so two
 commands that share rows queue instead of deadlocking:
 
@@ -57,13 +53,44 @@ created again.
 KEY SHARE``, then its note ``FOR SHARE``, and writes only ``derived`` rows,
 which no command locks: a note write or a Work delete waits for it at most
 once and never holds anything it waits on.
+
+**Differences from SQLite**, each deliberate (the recorded parity tests
+avoid them). The commands that routes call are ``concept_commands``,
+``position_commands``, ``argument_commands`` and ``note_commands`` (PG-C3
+#642; the facade's ``ResearchMixin`` is gone); a SQLite method name below
+is the one ``tests/library_adapter.py`` keeps. Refusals are SQLite's
+``ResearchError`` codes, messages and statuses.
+
+- Names and aliases compare by ``prks.identity_key`` (§8.1), which is
+  ``normalize_concept_key``; resolution reads the ``concept_keys`` index
+  instead of scanning every Concept, and since no two Concepts can share a
+  key, ``ambiguous_concept`` is never answered.
+- A delete leaves every scope the Concept owned one revision on (its
+  definition, identity and parents, never-edited ones too) and advances
+  ``concept-parents`` of each Concept on the other end of an edge (SQLite
+  advances the identity and those neighbours), so a base observed before
+  the delete is stale on a Concept created again under the id.
+- Aliases with equal ``LOWER()`` are ordered by spelling, and the parents
+  and children of a command's answer by name and then id (SQLite gives
+  storage order).
+- An id holding NUL is no Concept, Position or Argument (``not_found``;
+  PostgreSQL text cannot hold it).
+- A citation pins a Version (``docs/work-identity-model.md`` §8.5): a
+  replaced entry keeps the Version of the one stored row it matches by Work
+  and pages, a new one with pages is pinned to the Work's only Version, and
+  an entry the legacy shape cannot pin (it matches several stored rows, or
+  its Work has several Versions) refuses the list with
+  ``argument_source_version_required`` (409). SQLite pins the primary.
+- ``create_argument`` and ``replace_argument_sources`` also take a
+  Version-aware list, ``[{work_id, manifestation_id, pages}]``
+  (``manifestation_id`` null for the Work in general), which may cite one
+  Work several times and refuses ``argument_source_version_not_found``
+  (404) and ``argument_source_version_mismatch`` (409); every citation row
+  read back carries ``manifestation_id`` (:mod:`backend.domain.research.arguments`).
+- A Work delete removes its citations and advances each citing Argument's
+  ``argument-sources`` (SQLite's cascade advances nothing).
+- A delete of a Position or an Argument leaves every scope it owned one
+  revision on, never-edited ones too (SQLite leaves them).
+- Ties SQLite leaves to storage (equal ``order_index`` in a list, Authors
+  of equal order and last name) are broken by id.
 """
-
-from backend.db import register_constraint
-
-# The name and every alias of every Concept are one key namespace
-# (``concept_keys``, §8.1). A rename or an alias written while a concurrent
-# writer holds the key fails on the primary key when that writer commits;
-# the command then runs once more and refuses from what it reads
-# (``concepts.KEY_INDEX``).
-register_constraint("concept_keys_pkey", "CONCEPT_EXISTS")

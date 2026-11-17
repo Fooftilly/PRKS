@@ -1,8 +1,9 @@
 # First-time setup: `prks admin bootstrap`
 
-PostgreSQL deployments only (L-ID-1, #626; design in
-`docs/postgresql-architecture.md` §9.2). Nothing in the running SQLite
-application uses this yet. Run the command as `python prks_app.py admin …`
+L-ID-1 (#626); design in `docs/postgresql-architecture.md` §9.2. Every new
+PRKS instance needs it once: until setup completes, the web process waits and
+serves nothing (a `--testing` run on a fresh testing database bootstraps its
+own owner instead). Run the command as `python prks_app.py admin …`
 (the same as `python -m backend.domain.identity.admin …`, used below).
 
 Setup needs a **one-time bootstrap token**. Getting a token and using it are

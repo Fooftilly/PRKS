@@ -962,7 +962,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingImportResults"];
                 };
             };
-            /** @description item_ids missing, empty, not strings, or more than 500 (VALIDATION_ERROR). */
+            /** @description item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR). */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -36,9 +36,9 @@ from backend import argument_sync as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
-from backend import research_network as network
+from backend.domain.research import rules as research_rules
 from backend.domain.research import arguments
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 from backend.sync.families import Environment, FamilyHandler, Result
 
 _VERSIONED_KEYS = frozenset({"work_id", "manifestation_id", "pages"})
@@ -65,7 +65,7 @@ def _check_versioned_sources(sources: list[Any]) -> None:
         if not isinstance(pages, str):
             raise ValueError("INVALID_ENVELOPE")
         try:
-            identity = (work_id, pin, network._pages(pages))
+            identity = (work_id, pin, research_rules._pages(pages))
         except ResearchError:
             raise ValueError("INVALID_ENVELOPE") from None
         if identity in seen:

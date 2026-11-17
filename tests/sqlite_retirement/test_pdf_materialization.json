@@ -1,0 +1,61 @@
+{
+  "module": "tests/test_pdf_materialization.py",
+  "tests": {
+    "PdfMaterializationTests.test_schema_has_materialization_columns": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::PersistenceTests.test_create_update_delete_and_set_revisions"
+      ],
+      "note": "On PostgreSQL both revisions are prks.assets columns."
+    },
+    "PdfMaterializationTests.test_create_bumps_canonical_not_materialized": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::PersistenceTests.test_create_update_delete_and_set_revisions"
+      ]
+    },
+    "PdfMaterializationTests.test_mark_materialized_clears_stale": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::SuccessTests.test_the_rendered_bytes_become_the_works_pdf_at_the_claimed_revision",
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_marking_only_lowers_the_materialized_revision"
+      ],
+      "note": "PostgreSQL acknowledges only bytes it committed, so marking can lower but never raise the materialized revision."
+    },
+    "PdfMaterializationTests.test_claimed_future_revision_rejected": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_invalid_future_and_stale_claims_write_nothing"
+      ]
+    },
+    "PdfMaterializationTests.test_claimed_stale_revision_rejected": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_invalid_future_and_stale_claims_write_nothing"
+      ]
+    },
+    "PdfMaterializationTests.test_exact_claim_marks_materialized": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_no_acknowledgement_without_committed_bytes"
+      ]
+    },
+    "PdfMaterializationTests.test_noninteger_materialization_claims_do_not_acknowledge_generation": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_no_non_integer_claim_or_revision_is_an_acknowledgement",
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_invalid_future_and_stale_claims_write_nothing"
+      ]
+    },
+    "PdfMaterializationTests.test_noninteger_explicit_materialization_revisions_do_not_update_state": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_no_non_integer_claim_or_revision_is_an_acknowledgement",
+        "tests/pg/test_annotations_materialize.py::ClaimTests.test_marking_only_lowers_the_materialized_revision"
+      ]
+    },
+    "PdfMaterializationTests.test_identical_set_does_not_bump_canonical": {
+      "replaced_by": [
+        "tests/pg/test_annotations.py::ReplaceTests.test_an_identical_replace_does_not_advance_the_set"
+      ]
+    },
+    "PdfMaterializationTests.test_require_current_raises_stale": {
+      "replaced_by": [
+        "tests/pg/test_annotations_materialize.py::AdoptionTests.test_stale_bytes_are_never_adopted_even_from_an_empty_viewer"
+      ],
+      "note": "require_current_materialization_on_conn is SQLite's; on PostgreSQL the check is the adoption's own stale refusal (backend/domain/annotations/operations.adopt)."
+    }
+  }
+}

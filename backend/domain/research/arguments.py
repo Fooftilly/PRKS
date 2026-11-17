@@ -71,12 +71,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional, Sequence
 
+import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend import argument_sync as rules
-from backend import research_network as network
+from backend.domain.research import rules as research_rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
 from backend.research_markup import ARGUMENT_ID_RE, parse_research_markup
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 SOURCES_SCOPE_TYPE = rules.SOURCES_SCOPE_TYPE
@@ -464,7 +465,7 @@ def _clean_sources(scope: LibraryScope, argument_id: str, raw_sources: Any, held
         seen.add(work_id)
         if work_id not in works:
             raise ResearchError("work_not_found", "Source Work not found.", 404)
-        cleaned.append((work_id, network._pages(raw.get("pages"))))
+        cleaned.append((work_id, research_rules._pages(raw.get("pages"))))
     return _pin(scope, argument_id, cleaned)
 
 
@@ -492,7 +493,7 @@ def _clean_versioned(raw_sources: list[Any], held: Held) -> list[Citation]:
                 raise _refuse(_VERSION_NOT_FOUND)
             if held.versions[pin] != work_id:
                 raise _refuse(_VERSION_MISMATCH)
-        citation = Citation(work_id, pin, network._pages(raw.get("pages")))
+        citation = Citation(work_id, pin, research_rules._pages(raw.get("pages")))
         if citation in seen:
             raise ResearchError("invalid_sources", "Duplicate citation.")
         seen.add(citation)
@@ -940,7 +941,7 @@ def _detail_or_refuse(scope: LibraryScope, argument_id: str) -> dict[str, Any]:
 
 def catalog(scope: LibraryScope, kind: Optional[str] = None) -> list[dict[str, Any]]:
     """``list_arguments``: every Argument (or every one of ``kind``) by name, with its lists."""
-    if kind and kind not in network.ARGUMENT_KINDS:
+    if kind and kind not in research_rules.ARGUMENT_KINDS:
         raise ResearchError("invalid_kind", "Invalid Argument kind.")
     targets, sources = _targets(scope, None), _sources(scope, None)
     responses = {str(row["id"]): int(row["n"]) for row in scope.execute(_RESPONSE_COUNTS_SQL)}

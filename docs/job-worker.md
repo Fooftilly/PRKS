@@ -1,8 +1,8 @@
 # Job worker: `PRKS_EMBEDDED_WORKER` and `prks worker`
 
-PostgreSQL deployments only (L-J-1, #627; design in
-`docs/postgresql-architecture.md` §12). The SQLite application without
-`PRKS_AUTH` has no job worker and never loads the PostgreSQL driver.
+L-J-1 (#627); design in `docs/postgresql-architecture.md` §12. Every PRKS
+deployment runs on PostgreSQL (PG-C2 #641), so every web process has a job
+worker: its embedded one or a separate `prks worker`.
 
 Background jobs (`prks.jobs`) are claimed and run by a worker. A worker
 starts claiming only once the database applied exactly this code's schema
@@ -49,19 +49,17 @@ It acts on the storage root `prks_app.py` selects for every role
 worker with the root given directly.
 
 It joins a data root the web process already bound and holds that root's
-**shared** lease while it runs. A web process with `PRKS_AUTH` holds the
-root shared too, so `prks worker` runs beside it (set
-`PRKS_EMBEDDED_WORKER=0` on that web process). The SQLite web process,
-without `PRKS_AUTH`, holds the root exclusively, so a worker is refused
-beside it, and so is a worker that meets a web process at the moment it
-binds a new root; started again, it joins. Exit status: 0 after a graceful stop
+**shared** lease while it runs. The web process holds the root shared too,
+so `prks worker` runs beside it (set `PRKS_EMBEDDED_WORKER=0` on that web
+process). A worker that meets a web process at the moment it binds a new
+root is refused; started again, it joins. Exit status: 0 after a graceful stop
 (SIGTERM or SIGINT), 1 when the start check refuses, 2 for a usage or
 configuration error. Output is fixed text, never a connection string.
 
 ## Diagnostics
 
 The Library owner can read `GET /api/diagnostics/jobs` (other roles get
-403; the SQLite runtime answers 404). Contract:
+403). Contract:
 `docs/api/openapi-job-diagnostics.json`.
 
 - `embedded_worker`: `null` with `PRKS_EMBEDDED_WORKER=0`; otherwise its

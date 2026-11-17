@@ -7,11 +7,11 @@ operations reach the server in an order that can succeed.
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -88,7 +88,7 @@ class OfflinePersonCreateTests(unittest.TestCase):
         }""", count)
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
 
     def people(self, server):
         return {(p['first_name'], p['last_name']) for p in self.db_for(server).get_all_persons()}

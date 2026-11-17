@@ -337,7 +337,9 @@ class ShardAssignmentTests(unittest.TestCase):
         for bad in (float("nan"), float("inf"), float("-inf"), 0.5, "nan"):
             with self.assertRaises(ValueError):
                 aggregate_timing_baseline(
-                    exact, class_outlier_ratio=bad, min_class_samples=3
+                    exact,
+                    class_outlier_ratio=bad,  # pyright: ignore[reportArgumentType]
+                    min_class_samples=3,
                 )
 
     def test_aggregate_timing_baseline_rejects_bad_options_before_empty_input(self):
@@ -895,7 +897,7 @@ class EarlyFailureMarkersTests(unittest.TestCase):
         # setUpModule/setUpClass failures have an id but are not TestCase objects.
         # Early reporting must never turn one failure into a worker crash.
         with _import_runner() as runner:
-            holder = unittest.suite._ErrorHolder(
+            holder = getattr(unittest.suite, "_ErrorHolder")(
                 "setUpModule (tests.e2e.test_app)"
             )
             result = unittest.TextTestRunner(
@@ -940,7 +942,7 @@ class EarlyFailureMarkersTests(unittest.TestCase):
                     except AssertionError:
                         err = sys.exc_info()
                         if index == 0:
-                            subtest = unittest.case._SubTest(
+                            subtest = getattr(unittest.case, "_SubTest")(
                                 case, "PRIVATE_SUBTEST_MESSAGE",
                                 {"private": "PRIVATE_SUBTEST_PARAMETER"},
                             )
@@ -1594,6 +1596,7 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 },
                 [own],
             )
+            assert report is not None
             self.assertEqual(report["failed_ids"], [own])
             self.assertEqual(report["stage"], "unknown")
             self.assertEqual(report["detail"], "")
@@ -1608,6 +1611,7 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                  "stage": "APP_READY", "detail": foreign_detail},
                 [own],
             )
+            assert forged is not None
             self.assertEqual(forged["failed_ids"], [])
             self.assertEqual(forged["detail"], "")
 
@@ -1623,6 +1627,7 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 },
                 [own],
             )
+            assert clean is not None
             self.assertEqual(clean["failed_ids"], [own])
             self.assertEqual(clean["stage"], "START")
             self.assertEqual(clean["detail"], detail)
@@ -1654,6 +1659,7 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                 worker = {"heartbeat_file": hb}
                 exceeded, data, age = runner._worker_exceeded_watchdog(worker, 5)
                 self.assertTrue(exceeded)
+                assert data is not None
                 self.assertEqual(data.get("stage"), "CHROMIUM_LAUNCH")
                 self.assertGreaterEqual(age, 5.0)
 
@@ -1678,7 +1684,7 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                         "tests.e2e.fake.T.test_hung"
                     )
                 loaded = policy.load_last_failed(path)
-                self.assertIsNotNone(loaded)
+                assert loaded is not None
                 self.assertIn("tests.e2e.fake.T.test_hung", loaded["test_ids"])
                 self.assertIn("tests.e2e.old.T.test_prior", loaded["test_ids"])
 
@@ -1722,7 +1728,7 @@ class HungWorkerDiagnosticsTests(unittest.TestCase):
                         },
                     )
                 loaded = policy.load_failure_diagnostics(diag_path)
-                self.assertIsNotNone(loaded)
+                assert loaded is not None
                 self.assertEqual(loaded["stuck_test_id"], "tests.e2e.fake.T.test_hung")
                 self.assertEqual(loaded["last_stage"], "APP_READY")
                 self.assertTrue(loaded["watchdog"])

@@ -29,6 +29,12 @@ ENV_DATABASE_URL = "PRKS_DATABASE_URL"
 ENV_DATABASE_URL_FILE = "PRKS_DATABASE_URL_FILE"
 ENV_POOL_MAX = "PRKS_DB_POOL_MAX"
 
+# The database of a ``--testing`` process that names none: the local
+# development server ``scripts/dev-postgres`` starts (``docs/postgresql-architecture.md``
+# §12.2). Only a testing process uses it, and the start check refuses it
+# unless its instance row says ``testing`` (§11.1).
+TESTING_DEFAULT_DATABASE_URL = "postgresql://prks:prks@127.0.0.1:55433/prks_testing"
+
 # Process roles and their pool ceilings (§4.3). ``test`` is the harness.
 DEFAULT_POOL_MAX = {"web": 10, "worker": 4, "test": 4}
 
@@ -150,6 +156,19 @@ def _pool_max(environ: Mapping[str, str], role: str) -> int:
     if value < 1:
         raise DatabaseConfigError("invalid_pool_size", f"{ENV_POOL_MAX} must be at least 1.")
     return value
+
+
+def with_testing_default(environ: Mapping[str, str]) -> dict[str, str]:
+    """``environ`` with :data:`TESTING_DEFAULT_DATABASE_URL` when it names no database.
+
+    For a ``--testing`` process only: a deployment always names its database.
+    """
+    env = dict(environ)
+    url = (env.get(ENV_DATABASE_URL) or "").strip()
+    url_file = (env.get(ENV_DATABASE_URL_FILE) or "").strip()
+    if not url and not url_file:
+        env[ENV_DATABASE_URL] = TESTING_DEFAULT_DATABASE_URL
+    return env
 
 
 def load_database_config(

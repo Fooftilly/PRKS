@@ -1,0 +1,234 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * Same document under a new storage key, or a different document.
+ *
+ * On PostgreSQL every PDF write is stored under a fresh immutable key. When
+ * the server confirms it stored exactly the bytes this viewer exported, the
+ * open document is that object and the viewer stays mounted
+ * (`prksStoredExportMatches`, by SHA-256 even without Web Crypto); the loaded path is not rewritten, and the new
+ * key is recorded for that viewer instance only
+ * (`prksViewerBoundToManagedPath`). Anything else remounts. The whole-file
+ * cache for the new key gets that key's own bytes (`prksStoredPdfBytes`):
+ * after linearization, the stored copy read back and checked against
+ * `content_sha256`, never the export.
+ *
+ * Drives the real helpers from works-pdf.js.
+ */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createHash } = require('crypto');
+const strict = require('assert/strict');
+
+let checks = 0;
+const assert = new Proxy(function (...args) { checks += 1; return strict(...args); }, {
+    get: (_t, k) => (...args) => { checks += 1; return strict[k](...args); },
+});
+
+const rootDir = path.resolve(__dirname, '../..');
+global.window = global;
+
+let pdfSource = fs.readFileSync(path.join(rootDir, 'frontend/js/components/works-pdf.js'), 'utf8');
+pdfSource = pdfSource.replace(
+    "import { prksPdfCacheInstallOutcome, prksPostPdfCacheInstall } from '/js/pdf-cache-install.js';\nimport { createPrksPdfViewer } from '/js/pdf-viewer-runtime.js';\n",
+    'const prksPdfCacheInstallOutcome = null;\nconst prksPostPdfCacheInstall = null;\nconst createPrksPdfViewer = null;\n'
+);
+pdfSource = pdfSource.replace('export function initPdfViewerForWork', 'function initPdfViewerForWork');
+const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prks-pdf-stored-export-'));
+const scriptFile = path.join(scriptDir, 'works-pdf.cjs');
+fs.writeFileSync(scriptFile, pdfSource + '\nmodule.exports = { prksStoredExportMatches, prksStoredPdfBytes, prksViewerBoundToManagedPath, prksSha256HexSync };\n');
+const {
+    prksStoredExportMatches: matches,
+    prksStoredPdfBytes: storedBytes,
+    prksViewerBoundToManagedPath: bound,
+    prksSha256HexSync: sha256Sync,
+} = require(scriptFile);
+
+function bytes(text) {
+    return new TextEncoder().encode(text).buffer;
+}
+
+function sha256(buffer) {
+    return createHash('sha256').update(Buffer.from(buffer)).digest('hex');
+}
+
+async function withoutWebCrypto(fn) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+    Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true });
+    try {
+        return await fn();
+    } finally {
+        Object.defineProperty(globalThis, 'crypto', original);
+    }
+}
+
+async function storedExport() {
+    const exported = bytes('%PDF-1.7 exported by this viewer');
+    const other = bytes('%PDF-1.7 a different document!!!');
+    assert.equal(exported.byteLength, other.byteLength);
+
+    // The server's SHA-256 of what it stored decides.
+    assert.equal(await matches({ content_sha256: sha256(exported), byte_size: exported.byteLength }, exported), true);
+    assert.equal(await matches({ content_sha256: sha256(exported).toUpperCase() }, exported), true);
+    assert.equal(await matches({ content_sha256: sha256(other), byte_size: other.byteLength }, exported), false,
+        'other bytes of the same size are another document');
+
+    // Linearization rewrote the stored bytes: the export fields still name
+    // this viewer's upload, and they decide over the stored file's hash.
+    const linearized = { content_sha256: sha256(other), byte_size: other.byteLength + 9 };
+    assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
+        export_byte_size: exported.byteLength }, linearized), exported), true);
+    assert.equal(await matches(Object.assign({ export_sha256: sha256(other),
+        export_byte_size: other.byteLength }, { content_sha256: sha256(exported) }), exported), false,
+        'an export that is not these bytes is not rescued by the stored hash');
+
+    // No answer to compare against is not a match: the caller remounts.
+    assert.equal(await matches({ byte_size: exported.byteLength }, exported), false);
+    assert.equal(await matches({}, exported), false);
+    assert.equal(await matches(null, exported), false);
+    assert.equal(await matches({ content_sha256: sha256(exported) }, null), false);
+
+    // Without Web Crypto (plain-HTTP LAN origin) the bytes are still hashed,
+    // in JavaScript: a size is never proof of the same document.
+    await withoutWebCrypto(async () => {
+        assert.equal(await matches({ content_sha256: sha256(exported), byte_size: exported.byteLength }, exported), true);
+        assert.equal(await matches({ content_sha256: sha256(other), byte_size: exported.byteLength }, exported), false,
+            'same size, other bytes');
+        assert.equal(await matches({ export_sha256: sha256(other), export_byte_size: exported.byteLength }, exported), false,
+            'an export of the same length with another hash is another document');
+        assert.equal(await matches({ byte_size: exported.byteLength }, exported), false);
+        assert.equal(await matches(Object.assign({ export_sha256: sha256(exported),
+            export_byte_size: exported.byteLength }, linearized), exported), true);
+        assert.equal(await matches({ content_sha256: 'not-a-hash', byte_size: exported.byteLength }, exported), false);
+    });
+}
+
+function plainHash() {
+    // The JavaScript SHA-256 agrees with Node's on every padding boundary.
+    const sizes = [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129, 1000, 4096, 65537, 1048583];
+    for (const size of sizes) {
+        const data = new Uint8Array(size);
+        for (let i = 0; i < size; i += 1) data[i] = (i * 31 + (i >>> 8) * 7 + 13) & 0xff;
+        assert.equal(sha256Sync(data.buffer), sha256(data.buffer), 'size ' + size);
+    }
+    assert.equal(sha256Sync(bytes('abc')),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+}
+
+function boundPath() {
+    const viewer = { id: 'mounted' };
+    const loaded = '/api/pdfs/works/W-1/object-a.pdf';
+    const stored = '/api/pdfs/works/W-1/object-b.pdf';
+    const runtime = { viewer, viewerFilePath: loaded + '?v=1' };
+
+    assert.equal(bound(runtime, loaded), true, 'the loaded path');
+    assert.equal(bound(runtime, stored), false, 'an unconfirmed new key');
+
+    // The confirmed export: bound for this viewer, loaded path unchanged.
+    runtime.viewerStoredExport = { viewer, path: stored };
+    assert.equal(bound(runtime, stored + '?v=2'), true);
+    assert.equal(bound(runtime, loaded), true);
+    assert.equal(runtime.viewerFilePath, loaded + '?v=1');
+    assert.equal(bound(runtime, '/api/pdfs/works/W-1/object-c.pdf'), false);
+    assert.equal(bound(runtime, '/files/object-b.pdf'), false, 'only managed PDF paths');
+
+    // It belongs to the viewer instance, not the runtime: a replacement
+    // viewer does not inherit it.
+    runtime.viewer = { id: 'replacement' };
+    assert.equal(bound(runtime, stored), false);
+    runtime.viewer = null;
+    assert.equal(bound(runtime, loaded), false);
+}
+
+async function cachedBytesAreTheKeys() {
+    const exported = bytes('%PDF-1.7 exported by the viewer');
+    const linearized = bytes('%PDF-1.7 linearized working copy of it');
+    const path = '/api/pdfs/works/W-1/object-b.pdf';
+    const calls = [];
+    const serve = (body, status = 200) => async (url, init) => {
+        calls.push({ url, init });
+        return { status, arrayBuffer: async () => body };
+    };
+    const noFetch = async () => { throw new Error('must not fetch'); };
+
+    // Stored unchanged: the export is the key's bytes, nothing is fetched.
+    const same = { content_sha256: sha256(exported), export_sha256: sha256(exported) };
+    assert.equal(await storedBytes(same, path, exported, '', noFetch), exported);
+    assert.equal(await storedBytes(same, path, exported, sha256(exported), noFetch), exported);
+    assert.equal(await storedBytes({ ...same, content_sha256: sha256(exported).toUpperCase() }, path, exported, '', noFetch), exported);
+
+    // Linearized: the stored copy is read back and checked, and that is
+    // what the cache gets.
+    const lin = { content_sha256: sha256(linearized), export_sha256: sha256(exported) };
+    calls.length = 0;
+    const got = await storedBytes(lin, path, exported, sha256(exported), serve(linearized));
+    assert.equal(sha256(got), sha256(linearized), 'cached bytes hash to content_sha256');
+    assert.notEqual(sha256(got), sha256(exported));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, path);
+    assert.equal(calls[0].init.cache, 'no-store');
+
+    // The same without Web Crypto.
+    await withoutWebCrypto(async () => {
+        const plain = await storedBytes(lin, path, exported, '', serve(linearized));
+        assert.equal(sha256(plain), sha256(linearized));
+    });
+
+    // Never the export, and never unchecked bytes: each of these throws so
+    // the claim is kept for a retry.
+    const refused = [
+        ['wrong bytes served', serve(bytes('%PDF-1.7 something else'))],
+        ['the export served back', serve(exported)],
+        ['not found', serve(linearized, 404)],
+        ['a range response', serve(linearized, 206)],
+        ['offline', async () => { throw new TypeError('Failed to fetch'); }],
+        ['empty body', serve(new ArrayBuffer(0))],
+    ];
+    for (const [label, fetchImpl] of refused) {
+        await assert.rejects(storedBytes(lin, path, exported, sha256(exported), fetchImpl), /PDF cache update failed/, label);
+    }
+    await assert.rejects(storedBytes({ content_sha256: 'abc' }, path, exported, '', noFetch), /PDF cache update failed/, 'malformed hash');
+
+    // By default the read goes through the request coordinator, uncached.
+    const viaCoordinator = [];
+    global.prksRequest = async (url, init, policy) => {
+        viaCoordinator.push({ url, init, policy });
+        return { status: 200, arrayBuffer: async () => linearized };
+    };
+    try {
+        const routed = await storedBytes(lin, path, exported, sha256(exported));
+        assert.equal(sha256(routed), sha256(linearized));
+        assert.equal(viaCoordinator.length, 1);
+        assert.equal(viaCoordinator[0].url, path);
+        assert.equal(viaCoordinator[0].init.cache, 'no-store');
+        assert.deepEqual(viaCoordinator[0].policy, { dedupe: false, freshForMs: 0 });
+    } finally {
+        delete global.prksRequest;
+    }
+    await assert.rejects(storedBytes(lin, path, exported, sha256(exported)), /PDF cache update failed/, 'no transport');
+
+    // A response without a stored hash (the SQLite adapter writes in place)
+    // seeds the export, as before.
+    assert.equal(await storedBytes({ file_path: path }, path, exported, '', noFetch), exported);
+    assert.equal(await storedBytes(null, path, exported, '', noFetch), exported);
+
+    // The export check takes the caller's hash when given one.
+    assert.equal(await matches({ export_sha256: sha256(exported) }, exported, sha256(exported)), true);
+    assert.equal(await matches({ export_sha256: sha256(exported) }, exported, sha256(linearized)), false);
+}
+
+async function main() {
+    await storedExport();
+    await cachedBytesAreTheKeys();
+    plainHash();
+    boundPath();
+    console.log(`PDF stored-export selftest: ${checks} checks passed`);
+}
+
+main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+});

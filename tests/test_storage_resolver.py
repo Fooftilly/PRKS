@@ -15,7 +15,7 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-from backend.storage import bootstrap_config, distribution, paths, resolver
+from backend.storage import bootstrap_config, distribution, resolver
 from backend.storage.config import StorageConfig
 from backend.storage.errors import BootstrapConfigError, InvalidStorageRoot
 
@@ -300,19 +300,13 @@ class TestExistingDefaultsUnchanged(unittest.TestCase):
         self.assertEqual(cfg.index_db_path, os.path.join(REPO_DATA, "prks_text_index.db"))
         self.assertEqual(cfg.research_index_db_path, os.path.join(REPO_DATA, "prks_research_index.db"))
         self.assertEqual(cfg.log_file, os.path.join(REPO_DATA, "prks-errors.log"))
-        # The Docker-shaped inbox special case is kept unchanged in Phase A.
-        self.assertEqual(cfg.processing_dir, "/data/for_processing")
-        self.assertEqual(cfg.processing_dir, paths.PROCESSING_PROD_PREFERRED)
-        self.assertTrue(cfg.processing_fallback_allowed)
-        self.assertEqual(paths.processing_prod_fallback(), os.path.join(REPO_DATA, "for_processing"))
 
     def test_testing_default(self):
         cfg = self._cfg(PRKS_TESTING="1")
         self.assertEqual(cfg.root, REPO_DATA_TESTING)
         self.assertEqual(cfg.db_path, os.path.join(REPO_DATA_TESTING, "prks_data_testing.db"))
         self.assertEqual(cfg.pdfs_dir, os.path.join(REPO_DATA_TESTING, "pdfs"))
-        self.assertEqual(cfg.processing_dir, os.path.join(REPO_DATA_TESTING, "for_processing"))
-        self.assertFalse(cfg.processing_fallback_allowed)
+        self.assertEqual(cfg.log_file, os.path.join(REPO_DATA_TESTING, "prks-errors.log"))
 
     def test_container_and_explicit_env_root(self):
         # docker-compose.yml: PRKS_STORAGE=/data
@@ -323,35 +317,33 @@ class TestExistingDefaultsUnchanged(unittest.TestCase):
         self.assertEqual(cfg.pdfs_dir, "/data/pdfs")
         self.assertEqual(cfg.thumbs_dir, "/data/thumbs")
         self.assertEqual(cfg.people_dir, "/data/people")
-        self.assertEqual(cfg.processing_dir, "/data/for_processing")
         self.assertEqual(cfg.index_db_path, "/data/prks_text_index.db")
         self.assertEqual(cfg.research_index_db_path, "/data/prks_research_index.db")
         self.assertEqual(cfg.log_file, "/data/prks-errors.log")
-        self.assertFalse(cfg.processing_fallback_allowed)
 
     def test_component_overrides_still_apply(self):
-        cfg = self._cfg(PRKS_STORAGE="/srv/prks", PRKS_FOR_PROCESSING_DIR="/inbox", PRKS_LOG_FILE="/var/log/p.log")
-        self.assertEqual(cfg.processing_dir, "/inbox")
+        cfg = self._cfg(PRKS_STORAGE="/srv/prks", PRKS_LOG_FILE="/var/log/p.log")
         self.assertEqual(cfg.log_file, "/var/log/p.log")
-        cfg = self._cfg(PRKS_FOR_PROCESSING_DIR="/inbox")
-        self.assertEqual(cfg.processing_dir, "/inbox")
-        self.assertFalse(cfg.processing_fallback_allowed)
+        self.assertEqual(cfg.pdfs_dir, "/srv/prks/pdfs")
+        cfg = self._cfg(PRKS_LOG_FILE="/var/log/p.log")
+        self.assertEqual(cfg.log_file, "/var/log/p.log")
+        self.assertEqual(cfg.root, REPO_DATA)
 
     def test_cli_root_derives_like_an_explicit_root(self):
         cfg = StorageConfig.from_env(cli_root="/srv/cli", environ={"PRKS_STORAGE": "/srv/env"})
         self.assertEqual(cfg.root_source, "cli")
         self.assertEqual(cfg.root, "/srv/cli")
         self.assertEqual(cfg.db_path, "/srv/cli/prks_data.db")
-        self.assertEqual(cfg.processing_dir, "/srv/cli/for_processing")
+        self.assertEqual(cfg.pdfs_dir, "/srv/cli/pdfs")
 
-    def test_config_file_root_uses_root_relative_inbox(self):
+    def test_config_file_root_derives_root_relative_components(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_file = os.path.join(tmp, "config.json")
             _write_config(config_file, "/srv/lib")
             cfg = StorageConfig.from_env(environ={"PRKS_CONFIG_FILE": config_file})
         self.assertEqual(cfg.root_source, "config_file")
-        self.assertEqual(cfg.processing_dir, "/srv/lib/for_processing")
-        self.assertFalse(cfg.processing_fallback_allowed)
+        self.assertEqual(cfg.pdfs_dir, "/srv/lib/pdfs")
+        self.assertEqual(cfg.log_file, "/srv/lib/prks-errors.log")
 
 
 if __name__ == "__main__":

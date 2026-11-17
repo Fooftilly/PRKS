@@ -1,18 +1,15 @@
-"""Where a web process keeps its Library's content (PG-C1 #640, ``docs/postgresql-architecture.md`` §15.3).
+"""The retired ``PRKS_LIBRARY_BACKEND`` selection (PG-C2 #641).
 
-``PRKS_LIBRARY_BACKEND=postgres`` makes a ``PRKS_AUTH`` web process serve
-its Library from PostgreSQL: ``backend.server`` binds
-:class:`~backend.pg_facade.PostgresLibrary` with the PostgreSQL research and
-text index adapters, and every route acts for the admitted
-``RequestContext``. Nothing falls back to SQLite: a route whose method is
-not ported answers through ``NotPortedError``.
+Until 0.8 a web process kept its Library in a SQLite store under the root
+unless ``PRKS_LIBRARY_BACKEND=postgres`` asked for PostgreSQL (PG-C1 #640).
+PostgreSQL is now the only backend, so the variable chooses nothing. A
+process that still finds it set refuses to start instead of ignoring it:
+an operator who set it, to either value, expected a choice this version no
+longer offers, and an environment or Compose file that carries it was
+written for an earlier release.
 
-Unset, the web process keeps the SQLite content store under its root. The
-choice exists only until PG-C2 (#641), which makes PostgreSQL the only
-backend and removes this module.
-
-The module imports nothing from PostgreSQL, so the SQLite runtime can read
-the choice without loading psycopg.
+The module imports nothing from PostgreSQL, so every process role can run
+the check before it loads psycopg.
 """
 
 from __future__ import annotations
@@ -20,18 +17,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 ENV = "PRKS_LIBRARY_BACKEND"
-POSTGRES = "postgres"
 
 
 class LibraryBackendError(ValueError):
-    """``PRKS_LIBRARY_BACKEND`` holds a value this build does not know."""
+    """``PRKS_LIBRARY_BACKEND`` is set; this version no longer reads it."""
 
 
-def postgres_selected(environ: Mapping[str, str]) -> bool:
-    """Whether ``environ`` asks for the PostgreSQL Library; refuses an unknown value."""
-    value = (environ.get(ENV) or "").strip()
-    if not value:
-        return False
-    if value == POSTGRES:
-        return True
-    raise LibraryBackendError(f"{ENV} must be unset or {POSTGRES!r}.")
+def refuse_stale_selection(environ: Mapping[str, str]) -> None:
+    """Raise :class:`LibraryBackendError` when ``environ`` still sets ``PRKS_LIBRARY_BACKEND``.
+
+    Any value counts, ``postgres`` and an empty string included: the
+    variable is stale configuration wherever it appears.
+    """
+    if ENV not in environ:
+        return
+    raise LibraryBackendError(
+        f"{ENV} is no longer read: PostgreSQL is the only Library backend. "
+        f"Remove {ENV} from the environment (and from any .env or Compose file that sets it); "
+        "the Library's database is PRKS_DATABASE_URL."
+    )

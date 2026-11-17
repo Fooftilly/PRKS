@@ -456,8 +456,91 @@
         return row;
     }
 
+    /**
+     * Acknowledged annotation state on a runtime only moves forward (#1212).
+     *
+     * The server's canonical annotation set revision orders every ACK and
+     * every `/annotations-snapshot`. A runtime records the newest revision an
+     * applied ACK carried and the revision of the snapshot it holds, so a
+     * snapshot read before an ACK the page already applied, or an ACK that a
+     * newer snapshot already contains, can never put older state back. Older
+     * state would drop or revert an acknowledged annotation while the pending
+     * overlay no longer holds it, and the projection would take it off the
+     * page.
+     */
+    function snapshotPredatesRuntime(runtime, setRevision) {
+        if (!runtime || !Number.isSafeInteger(setRevision)) return false;
+        const ack = runtime._annotationAckSetRevision;
+        const snap = runtime._annotationSnapshotSetRevision;
+        return (Number.isSafeInteger(ack) && setRevision < ack) ||
+            (Number.isSafeInteger(snap) && setRevision < snap);
+    }
+
+    function noteRuntimeSnapshotRevision(runtime, setRevision) {
+        if (!runtime || !Number.isSafeInteger(setRevision)) return;
+        runtime._annotationSnapshotSetRevision = setRevision;
+    }
+
+    function ackPredatesRuntimeSnapshot(runtime, setRevision) {
+        const snap = runtime && runtime._annotationSnapshotSetRevision;
+        return Number.isSafeInteger(setRevision) && Number.isSafeInteger(snap) &&
+            setRevision < snap;
+    }
+
+    /**
+     * The per-annotation revision the runtime already holds for an id: its
+     * acknowledged row's revision, or its deletion tombstone's. The server
+     * bumps an annotation's revision on every change, delete included, and
+     * never reuses an id, so it orders ACKs for that one annotation.
+     */
+    function runtimeAnnotationRevision(runtime, annotationId) {
+        const state = runtime && runtime.annotationState;
+        if (!state || typeof state !== 'object') return null;
+        const rows = Array.isArray(state.annotations) ? state.annotations : [];
+        for (let i = 0; i < rows.length; i += 1) {
+            const row = rows[i];
+            if (row && String(row.annotation_id) === annotationId &&
+                Number.isSafeInteger(row.revision)) {
+                return { revision: row.revision, present: true };
+            }
+        }
+        const absent = state.known_absent && state.known_absent[annotationId];
+        return Number.isSafeInteger(absent) ? { revision: absent, present: false } : null;
+    }
+
+    /**
+     * Whether an ACK is older than what the runtime holds for its annotation.
+     * A lower revision is older. At the same revision an absent ACK is older
+     * than a present row: a delete always bumps the revision, so the only
+     * absent-then-present pair at one revision is a convergent delete of a
+     * never-created id (revision 0) followed by its CREATE (also 0).
+     */
+    function ackPredatesRuntimeAnnotation(runtime, data) {
+        if (!Number.isSafeInteger(data.server_revision)) return false;
+        const held = runtimeAnnotationRevision(runtime, String(data.annotation_id));
+        if (!held) return false;
+        if (data.server_revision !== held.revision) return data.server_revision < held.revision;
+        const present = data.present !== false && !!data.annotation;
+        return held.present && !present;
+    }
+
     function patchRuntimeAcknowledged(runtime, data) {
         if (!runtime || !data || !data.annotation_id) return false;
+        // A snapshot newer than this ACK already holds its change and any
+        // later one: patching it in would revert them.
+        if (ackPredatesRuntimeSnapshot(runtime, data.canonical_annotation_set_revision)) {
+            return false;
+        }
+        // ACK callbacks can finish out of order, so an older ACK for this
+        // annotation can arrive after a newer one: it must not put the older
+        // body (or presence) back. ACKs for other annotations are independent.
+        if (ackPredatesRuntimeAnnotation(runtime, data)) return false;
+        if (Number.isSafeInteger(data.canonical_annotation_set_revision)) {
+            const seen = runtime._annotationAckSetRevision;
+            if (!Number.isSafeInteger(seen) || data.canonical_annotation_set_revision > seen) {
+                runtime._annotationAckSetRevision = data.canonical_annotation_set_revision;
+            }
+        }
         const annotationId = String(data.annotation_id);
         const present = data.present !== false && !!data.annotation;
         const ackList =
@@ -666,6 +749,8 @@
         prksLoadAcknowledgedPdfAnnotationState: loadAcknowledgedAnnotationState,
         prksLoadAcknowledgedPdfAnnotationSnapshot: loadAcknowledgedAnnotationSnapshot,
         prksApplyPdfAnnotationAckToLiveRuntimes: applyAckToLiveRuntimes,
+        prksPdfAnnotationSnapshotPredatesRuntime: snapshotPredatesRuntime,
+        prksNotePdfAnnotationSnapshotRevision: noteRuntimeSnapshotRevision,
         prksIsPdfAnnotationsStateShape: isAnnotationsStateShape,
         prksIsPdfAnnotationsSnapshotShape: isAnnotationsSnapshotShape,
         prksPdfAnnotationSnapshotToState: snapshotToState,

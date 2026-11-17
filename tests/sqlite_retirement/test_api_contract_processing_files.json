@@ -1,0 +1,32 @@
+{
+  "module": "tests/test_api_contract_processing_files.py",
+  "tests": {
+    "ProcessingFilesContractTests.test_typescript_keys_match_pydantic_fields": {
+      "obsolete": "The path-based Files for Processing inbox belonged to the SQLite runtime: the server stopped serving /api/processing-files when PostgreSQL became the only backend (PG-C2 #641), and this PR deletes its contract, OpenAPI artifact, generated client and page. The hand-written TypeScript client whose keys it compared is deleted with the Pydantic models."
+    },
+    "ProcessingFilesContractTests.test_typescript_statuses_match_the_schema": {
+      "obsolete": "The path-based Files for Processing inbox belonged to the SQLite runtime: the server stopped serving /api/processing-files when PostgreSQL became the only backend (PG-C2 #641), and this PR deletes its contract, OpenAPI artifact, generated client and page. Its inbox statuses (pending, missing, imported, error) have no counterpart; the queue's item statuses are pinned by the processing-items contract and its generated types."
+    },
+    "ProcessingFilesContractTests.test_contract_version_matches_the_typescript_client": {
+      "obsolete": "The path-based Files for Processing inbox belonged to the SQLite runtime: the server stopped serving /api/processing-files when PostgreSQL became the only backend (PG-C2 #641), and this PR deletes its contract, OpenAPI artifact, generated client and page. No client or document carries PROCESSING_FILES_CONTRACT_VERSION any more."
+    },
+    "ProcessingFilesContractTests.test_checked_in_openapi_artifact_matches_generator": {
+      "replaced_by": [
+        "tests/test_api_contract_processing_items.py::ProcessingItemsContractTests.test_checked_in_openapi_artifact_matches_generator",
+        "tests/test_openapi_typescript_types.py::OpenApiTypescriptTypesTests.test_hand_written_clients_reexport_generated_transport_types"
+      ],
+      "note": "The processing-items document still carries the role and tag schemas the two families shared (moved into backend/api_contract/processing_items.py under their old names, so it is unchanged); the second test checks the processing-files artifact is gone."
+    },
+    "ProcessingFilesContractTests.test_openapi_core_accepts_the_document": {
+      "replaced_by": [
+        "tests/test_api_contract_processing_items.py::ProcessingItemsContractTests.test_openapi_core_accepts_the_document"
+      ]
+    },
+    "ProcessingFilesContractTests.test_response_models_refuse_unknown_keys_and_bad_values": {
+      "replaced_by": [
+        "tests/test_api_contract_processing_items.py::ProcessingItemsContractTests.test_models_refuse_unknown_keys_and_bad_values"
+      ],
+      "note": "The shared role and tag models keep extra=forbid in processing_items.py; the inbox-only ProcessingFile and ProcessingFileImported models are deleted."
+    }
+  }
+}

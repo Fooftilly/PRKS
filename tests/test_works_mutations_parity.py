@@ -1,7 +1,7 @@
 """Work open, metadata, notes and delete: PostgreSQL matches SQLite (L-W-1 #628).
 
-Same fixture as ``tests/test_works_core_parity.py``: every call runs on this
-leg's library object and on a reference SQLite ``PRKSDatabase``, and the
+Same fixture as ``tests/test_works_core_parity.py``: every call runs on the
+facade and on the recorded SQLite ``PRKSDatabase``, and the
 results, the Work JSON and the synchronization state are compared after ids
 and timestamps are replaced by labels.
 """

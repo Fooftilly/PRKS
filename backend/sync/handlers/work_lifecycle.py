@@ -1,6 +1,6 @@
 """``CREATE_WORK`` and ``DELETE_WORK`` on PostgreSQL (L-W-1 #628).
 
-The SQLite family's rules (``backend/work_lifecycle_sync.py``), imported:
+The family's rules (``backend/work_lifecycle_sync.py``), imported:
 construction is a video only, its payload is validated and canonicalized by
 ``canonical_create_payload``, and its source by ``_canonical_new_source``,
 the boundary ``add_work`` and ``SET_WORK_SOURCE`` share. A create of an id
@@ -71,7 +71,7 @@ def new_work(work_id: str, fields: dict[str, Any], identity: dict[str, Any]) -> 
 
 def apply_create(scope: LibraryScope, op: dict[str, Any], received_at: datetime,
                  env: Environment) -> Result:
-    from backend.db_manager import _canonical_new_source
+    from backend.domain.works.rules import _canonical_new_source
 
     del received_at
     work_id = op["entity_id"]

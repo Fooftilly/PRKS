@@ -1,0 +1,48 @@
+{
+ "module": "tests/test_person_sync.py",
+ "tests": {
+  "PersonSyncTests.test_base_revision_is_construction": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person"
+   ]
+  },
+  "PersonSyncTests.test_create_stores_the_client_id": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person",
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_role_may_depend_on_the_creation_of_its_person"
+   ]
+  },
+  "PersonSyncTests.test_create_then_dependent_role": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_role_may_depend_on_the_creation_of_its_person",
+    "tests/pg/test_people_sync.py::CreateWorkRoleFilingTests.test_a_new_work_is_born_with_its_roles"
+   ]
+  },
+  "PersonSyncTests.test_legacy_eight_hex_id_is_refused_for_creation": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger"
+   ]
+  },
+  "PersonSyncTests.test_ordinary_add_person_still_mints_a_distributed_id": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_role_may_depend_on_the_creation_of_its_person"
+   ]
+  },
+  "PersonSyncTests.test_replay_is_exact": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::LedgerTests.test_a_replay_answers_as_the_first_time_and_a_reuse_is_refused"
+   ]
+  },
+  "PersonSyncTests.test_role_before_create_is_unsatisfied": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_role_may_depend_on_the_creation_of_its_person"
+   ]
+  },
+  "PersonSyncTests.test_second_envelope_for_an_existing_id_does_not_overwrite": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person",
+    "tests/pg/test_people_sync.py::PersonRaceTests.test_creates_of_one_id_queue_and_the_second_converges"
+   ]
+  }
+ }
+}

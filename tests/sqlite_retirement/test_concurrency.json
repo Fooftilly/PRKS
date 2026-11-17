@@ -1,0 +1,49 @@
+{
+  "module": "tests/test_concurrency.py",
+  "tests": {
+    "LiveHttpConcurrencyTests.test_http_reads_overlap_on_separate_threads": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_reads_overlap_on_separate_threads"
+      ]
+    },
+    "LiveHttpConcurrencyTests.test_http_mutations_serialize": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_mutations_serialize"
+      ]
+    },
+    "LiveHttpConcurrencyTests.test_http_backup_blocks_mutations_allows_reads": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_a_backup_holds_no_gate"
+      ],
+      "note": "The PostgreSQL backup is written by the worker from one snapshot, so the request takes no gate (server._library_access) and reads and writes both continue. The /api/processing-files?rescan=1 mutation the SQLite test also held off is the legacy inbox scan, which PostgreSQL does not have."
+    },
+    "LiveHttpConcurrencyTests.test_http_restore_prevents_stale_binding": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_a_read_during_a_restore_waits_and_sees_the_restored_library",
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_backup_and_restore_round_trip_and_fence_the_old_epoch"
+      ],
+      "note": "A PostgreSQL restore rebinds nothing: the facade keeps its pool and the restore replaces the Library's rows. A read that arrives during the restore waits on the gate and sees the restored Library, and the old epoch is fenced."
+    },
+    "LiveHttpConcurrencyTests.test_sqlite_thread_ownership_two_reads": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_two_reads_run_in_the_facade_at_once"
+      ],
+      "note": "SQLite connections are owned by one thread; each PostgreSQL request borrows its own pooled connection, so two reads run in the facade at the same time."
+    },
+    "LiveHttpConcurrencyTests.test_partial_restore_json_body_does_not_hold_gate": {
+      "replaced_by": [
+        "tests/pg/test_postgres_library_start.py::PostgresLibraryStartTests.test_a_stalled_restore_body_does_not_hold_the_library_gate"
+      ]
+    },
+    "LiveHttpConcurrencyTests.test_partial_mutation_json_body_does_not_set_mutation_active": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_a_mutation_whose_body_is_still_arriving_holds_no_scope"
+      ]
+    },
+    "LiveHttpConcurrencyTests.test_stage_unexpected_oserror_is_internal_error_and_releases_gate": {
+      "replaced_by": [
+        "tests/pg/test_http_concurrency.py::LibraryGateHttpTests.test_an_unexpected_stage_failure_is_an_internal_error_and_frees_the_gate"
+      ]
+    }
+  }
+}

@@ -3,7 +3,7 @@
 Each call, and each Concept semantic operation, runs on this leg's library
 and on a reference SQLite library holding the same Concepts, and the
 results must be equal after generated ids and timestamps become labels.
-Inputs avoid the documented differences (``backend/pg_facade/research.py``):
+Inputs avoid the documented differences (``backend/domain/research/__init__.py``):
 names differ beyond ASCII case, no two aliases of a Concept share a
 ``LOWER()`` spelling, and no Concept is created again under a deleted id.
 """
@@ -23,7 +23,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.research_network import ResearchError
+from backend.domain.research.rules import ResearchError
 from tests.backend_parity import parametrize_backends
 from tests.test_tags_parity import SyncParityTestCase, TagSide, both
 

@@ -1,10 +1,10 @@
-"""A real signed-in actor for facade tests (L-W-1 #628).
+"""A real signed-in actor for Library tests (L-W-1 #628).
 
-The facade acts for the :class:`RequestContext` bound with
-:mod:`backend.pg_facade.context`. Tests get one the way a browser does: a
-Library, an owner with a membership, a device of that owner and a session
-resolved from its token, so every facade call is authorized by the same
-``authorize()`` checks a request is.
+The test adapters act for the :class:`RequestContext` bound with
+:mod:`tests.acting_context`, and the domain commands take one directly.
+Tests get one the way a browser does: a Library, an owner with a
+membership, a device of that owner and a session resolved from its token, so
+every call is authorized by the same ``authorize()`` checks a request is.
 """
 
 from __future__ import annotations

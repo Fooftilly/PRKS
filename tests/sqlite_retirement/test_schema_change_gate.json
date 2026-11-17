@@ -1,0 +1,220 @@
+{
+  "module": "tests/test_schema_change_gate.py",
+  "tests": {
+    "GateRepoTests.test_non_schema_change_passes": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_schema_comment_and_whitespace_edits_need_no_migration": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_schema_change_without_version_or_migration_fails": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_version_bump_without_migration_fails": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_migration_without_version_bump_fails": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_removing_shipped_migration_fails": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_whitespace_inside_quoted_default_is_a_schema_change": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_bracket_identifier_content_is_a_schema_change": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_comment_markers_inside_bracket_identifiers_are_content": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_block_comments_are_not_schema_changes": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_duplicate_migration_target_fails": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_reordered_shipped_migrations_fail": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_repointed_shipped_migration_apply_fails": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_positional_migration_arguments_are_understood": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_split_concatenated_upsert_is_still_checked": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_unresolvable_upsert_table_fails": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_docstrings_mentioning_upserts_are_ignored": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_repeated_conflict_target_column_fails": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_complete_schema_migration_version_change_passes": {
+      "replaced_by": [
+        "tests/pg/test_migrate.py::MigrateTests.test_changed_applied_file_is_refused_with_the_recreate_message",
+        "tests/pg/test_migrate.py::MigrateTests.test_renamed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_removed_applied_file_is_refused",
+        "tests/pg/test_migrate.py::MigrateTests.test_new_file_sorting_before_applied_files_is_refused",
+        "tests/pg/test_migrate.py::SchemaFileLoadingTests.test_checked_in_files_are_the_baseline"
+      ],
+      "note": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot."
+    },
+    "GateRepoTests.test_complete_new_load_bearing_table_passes": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_load_bearing_table_missing_pk_registry_fails": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_registry_disagreeing_with_schema_pk_fails": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot"
+      ],
+      "note": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_derived_index_tables_are_out_of_scope": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_allowlist_is_per_table_and_must_not_go_stale": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_allowlisted_table_still_checks_explicit_conflict_target": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_canonical_table_matching_ignores_identifier_case_and_quotes": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_schema_qualified_insert_target_is_checked": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_expression_conflict_target_is_reported_not_dropped": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_unparseable_backend_source_fails_closed": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_schema_load_cannot_attach_files": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "GateRepoTests.test_every_on_conflict_clause_is_checked": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_quoted_table_name_is_matched_whole": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_temp_schema_table_is_not_the_canonical_table": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_typo_upsert_table_in_backend_code_fails": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_unknown_literal_upsert_table_in_canonical_code_fails": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_derived_table_is_exempt_only_in_its_owning_module": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_attached_schema_upsert_is_out_of_scope": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_quoted_dotted_main_table_is_not_treated_as_attached": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_upserted_table_without_pk_and_empty_registry_fails": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_targetless_do_nothing_does_not_bypass_missing_pk": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_upserted_tables_with_real_single_and_composite_pks_pass": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_clause_text_inside_literals_and_comments_is_ignored": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_clause_text_and_semicolons_inside_quoted_identifiers_are_ignored": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_quoted_conflict_column_containing_comma_is_one_column": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "GateRepoTests.test_cli_exit_codes": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "ParsingTests.test_upsert_sites_ignore_create_table_conflict_clauses": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "CurrentRepoTests.test_current_tree_passes_against_head": {
+      "obsolete": "SCHEMA-GATE-001/002 kept backend/db_schema.sql, LATEST_SCHEMA_VERSION and the ordered SQLite MIGRATIONS registry in step. PG-C2 deleted all three. The PostgreSQL schema is the ordered files under backend/db/schema/: the runner applies each once with its checksum and refuses an edited, renamed, removed or reordered applied file, and the checked-in files are pinned as the pre-1.0 baseline and by the schema snapshot. Nothing parses SQLite schema text or a Python migration list any more."
+    },
+    "CurrentRepoTests.test_live_derived_tables_are_upserted_by_their_owning_module": {
+      "obsolete": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "CurrentRepoTests.test_live_allowlisted_tables_have_primary_keys": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot"
+      ],
+      "note": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    },
+    "CurrentRepoTests.test_live_registry_matches_runtime_module": {
+      "replaced_by": [
+        "tests/pg/test_schema_snapshot.py::SchemaSnapshotTests.test_fresh_database_matches_the_snapshot"
+      ],
+      "note": "SCHEMA-GATE-003..009 checked that every SQLite INSERT ... ON CONFLICT target in backend code was a registered, schema-backed primary key, because SQLite only validated _CURRENT_TABLE_PKS at startup. PG-C2 deleted the SQLite schema, the PK registry and every SQLite upsert; PostgreSQL itself refuses an ON CONFLICT target that is not a unique index (42P10), and the schema snapshot pins every table's keys."
+    }
+  }
+}

@@ -1,12 +1,10 @@
 """Persons, Person Groups and publishers: the PostgreSQL facade returns SQLite's JSON (L-P-1 #632).
 
-Each test runs the same calls on the library object of its leg and on a
-reference ``PRKSDatabase`` built in the same test, and compares the results
-after replacing generated ids, timestamps and ETag digests
-(``tests/people_parity_helpers.py``). On the SQLite leg both sides are
-SQLite; on the ``postgres`` leg (``scripts/test-postgres --parity``) the left
-side is :class:`backend.pg_facade.PostgresLibrary`. Inputs avoid the
-documented differences (``backend/pg_facade/people.py``): aliases are
+Each test runs the same calls on :class:`tests.library_adapter.TestLibrary`
+and on the recorded SQLite ``PRKSDatabase``, and compares the results after
+replacing generated ids, timestamps and ETag digests
+(``tests/people_parity_helpers.py``). Inputs avoid the
+documented differences (``backend/domain/people/__init__.py``): aliases are
 written in their canonical ``", "`` form and names differ in ASCII letters
 only where case matters.
 """
@@ -24,6 +22,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from tests.backend_parity import parametrize_backends
+from backend.etags import etag_for_representation
 from tests.people_parity_helpers import PeopleParityTestCase
 
 _PROFILE = {
@@ -64,8 +63,8 @@ class PersonParityTests(PeopleParityTestCase):
         self.ref.db.add_person_to_group(first[1], group[1])
         rows = self.same("get_all_persons")
         self.assertEqual(rows[0]["groups"], [{"id": group[0], "name": "Thinkers"}])
-        etags = (self.leg.db.etag_persons_catalog(rows), self.ref.db.etag_persons_catalog(rows))
-        self.assertEqual(etags[0], etags[1])
+        # Both backends derive a catalog ETag from the rows by one shared rule.
+        self.assertEqual(self.leg.db.etag_persons_catalog(rows), etag_for_representation("persons", rows))
 
     def test_profile_fields_advance_only_when_they_change(self) -> None:
         ids = self.person_both("Weil", first_name="Simone")
@@ -136,7 +135,7 @@ class PersonGroupParityTests(PeopleParityTestCase):
         self.assertEqual([(row["name"], row["child_count"]) for row in rows],
                          [("Frankfurt School", 0), ("Philosophy", 1)])
         self.assertEqual(self.leg.db.etag_person_groups_catalog(rows),
-                         self.ref.db.etag_person_groups_catalog(rows))
+                         etag_for_representation("person-groups", rows))
         self.same_state_for("get_person_group_sync_state", child)
 
     def test_an_existing_parent_is_found_by_name(self) -> None:

@@ -1,0 +1,31 @@
+{
+  "module": "tests/test_frontend_processing_page.py",
+  "partial": true,
+  "tests": {
+    "FrontendProcessingPageTests.test_route_rescans_and_paints_vue": {
+      "replaced_by": [
+        "tests/test_frontend_processing_page.py::FrontendProcessingPageTests.test_content_mode_waits_for_a_confirmed_answer_and_learns_it_without_reload",
+        "tests/test_frontend_tags_page.py::FrontendTagsPageTests.test_route_loads_used_tags_and_paints_vue"
+      ],
+      "note": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). The route no longer rescans an inbox; these pin that it mounts the queue page once the content is confirmed."
+    },
+    "FrontendProcessingPageTests.test_legacy_module_owns_preview_lifetime_and_catalog_helpers": {
+      "obsolete": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). The module that owned the inbox preview iframe, its resize listener and the tag, folder and person quick-create helpers is gone, so there is no lifetime left to own. The PostgreSQL upload queue that replaced it is covered in frontend-app/src/features/processing-queue/ (queue.test.ts, session.test.ts, ProcessingQueueRoute.test.ts) and tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests."
+    },
+    "FrontendProcessingPageTests.test_vue_sources_use_work_html_slot": {
+      "obsolete": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). Its ProcessingFileCard.vue mounted classic widgets into work-html-slot hosts; the queue card uses Vue fields only. The PostgreSQL upload queue that replaced it is covered in frontend-app/src/features/processing-queue/ (queue.test.ts, session.test.ts, ProcessingQueueRoute.test.ts) and tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests."
+    },
+    "FrontendProcessingPageTests.test_route_unmount_releases_preview_resources": {
+      "obsolete": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). ProcessingFilesRoute.vue and the preview resources it released on unmount are deleted. The PostgreSQL upload queue that replaced it is covered in frontend-app/src/features/processing-queue/ (queue.test.ts, session.test.ts, ProcessingQueueRoute.test.ts) and tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests."
+    },
+    "FrontendProcessingPageTests.test_failed_reads_keep_the_painted_inbox_and_people": {
+      "obsolete": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). prksReloadProcessingFiles and prksLoadProcessingInbox, which kept a painted inbox and people catalogue on a failed rescan, are deleted with it. The PostgreSQL upload queue that replaced it is covered in frontend-app/src/features/processing-queue/ (queue.test.ts, session.test.ts, ProcessingQueueRoute.test.ts) and tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests."
+    },
+    "FrontendProcessingPageTests.test_quick_create_failures_stay_on_the_card": {
+      "obsolete": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). The inbox card's tag, folder and person quick-creates are deleted with it; the queue card drafts only the fields its PATCH accepts. The PostgreSQL upload queue that replaced it is covered in frontend-app/src/features/processing-queue/ (queue.test.ts, session.test.ts, ProcessingQueueRoute.test.ts) and tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests."
+    },
+    "FrontendProcessingPageTests.test_processing_records_own_inbox_reads_and_file_writes": {
+      "obsolete": "The path-based Files for Processing page (frontend/js/components/processing-files.js and frontend-app/src/features/processing/) belonged to the SQLite runtime and is deleted by PG-C2 (#641). The records service (prksProcessingRecords) and its prksQueryKeys.processingFiles keys owned /api/processing-files reads and writes, which the server no longer serves. The PostgreSQL upload queue that replaced it is covered in frontend-app/src/features/processing-queue/ (queue.test.ts, session.test.ts, ProcessingQueueRoute.test.ts) and tests/e2e/test_postgres_library_flows.py::ProcessingQueueTests."
+    }
+  }
+}

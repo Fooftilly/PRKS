@@ -8,7 +8,6 @@ the right helper is exactly the failure a unit test cannot see.
 import os
 import unittest
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
@@ -25,6 +24,7 @@ from tests.e2e.harness import (
     require_chromium,
     wait_for_async,
 )
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -199,7 +199,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
 
     def roles(self, server, work_id):
         return {(r['id'], r['role_type']) for r in self.db_for(server).get_work_roles(work_id)}

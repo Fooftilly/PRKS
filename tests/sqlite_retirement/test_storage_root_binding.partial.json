@@ -1,0 +1,9 @@
+{
+  "module": "tests/test_storage_root_binding.py",
+  "partial": true,
+  "tests": {
+    "TestLinksAndFilesystems.test_inbox_outside_the_root_is_not_this_roots_business": {
+      "obsolete": "The SQLite processing inbox is retired (PG-C2 #641; docs/postgresql-architecture.md \u00a711.5): Files for Processing is an upload queue of managed objects, so StorageConfig has no processing_dir and no /data/for_processing fallback, and a set PRKS_FOR_PROCESSING_DIR is refused at start whatever its value. There is no inbox path outside the root left to configure, so nothing outside the root can be checked or ignored; a for_processing entry inside the root is still walked like any other entry (TestLinksAndFilesystems.test_linked_inbox_inside_the_root_is_refused, test_inbox_on_another_filesystem_is_refused) and is no longer a reserved name (TestLinksAndFilesystems.test_a_leftover_inbox_entry_is_not_a_reserved_name)."
+    }
+  }
+}

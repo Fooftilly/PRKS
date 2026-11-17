@@ -487,14 +487,14 @@ class DesignSystemContractTests(unittest.TestCase):
     def test_doc_type_badge_border_carries_the_per_type_token(self):
         css = _read(_CSS)
         match = re.search(r"\n\.doc-type-badge\s*\{([^{}]*)\}", css)
-        self.assertIsNotNone(match, "the doc-type badge base rule")
+        assert match is not None, "the doc-type badge base rule"
         block = match.group(1)
         self.assertIn("var(--doc-type-color", block)
         # The token has to be on the `border` declaration itself. Finding it
         # anywhere in the rule is what the regression looked like: the value was
         # present, on a `border-color` a later shorthand had already discarded.
         border_decl = re.search(r"(?<![-\w])border\s*:([^;]*);", block)
-        self.assertIsNotNone(border_decl, block)
+        assert border_decl is not None, block
         self.assertIn("var(--doc-type-border", border_decl.group(1))
 
     def test_every_visible_input_has_an_accessible_name(self):

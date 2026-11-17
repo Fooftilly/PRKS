@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from backend.db.database import Database
     from backend.jobs.runner import JobRun
 
-Handler = Callable[["JobRun"], None]
+# A handler's return value is ignored; it fails by raising.
+Handler = Callable[["JobRun"], object]
 # Runs on the worker's idle tick; raises only DatabaseError (logged, retried next tick).
 IdleTask = Callable[["Database"], None]
 

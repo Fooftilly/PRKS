@@ -1,0 +1,8 @@
+{
+  "module": "tests/test_hypothesis_migrations.py",
+  "tests": {
+    "MigrationReentryProperties.test_v16_upgrade_preserves_generated_records_and_second_start_is_stable": {
+      "obsolete": "Exercises the SQLite v16 to v17 Work identity migration and its re-entry; PostgreSQL starts from its own schema and pre-1.0 policy migrates no SQLite data, so the migration PG-C2 deletes has no PostgreSQL counterpart."
+    }
+  }
+}

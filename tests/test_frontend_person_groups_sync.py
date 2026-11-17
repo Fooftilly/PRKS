@@ -97,8 +97,9 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
         self.assertIn('base_revision: null', body)
         backend = (ROOT / 'backend' / 'person_group_sync.py').read_text()
         at = backend.index('def validate_delete(')
+        end = backend.find('\ndef ', at + 5)
         self.assertIn('if op["base_revision"] is not None',
-                      backend[at: backend.index('\ndef ', at + 5)])
+                      backend[at: end if end != -1 else len(backend)])
 
     def test_deletion_cancels_only_what_was_never_sent(self):
         """An envelope that may be on the wire stays immutable -- rewriting one

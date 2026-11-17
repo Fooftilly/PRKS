@@ -10,10 +10,7 @@ Order matters. Bootstrap claims the storage root only while the root holds no
 objects (``docs/postgresql-architecture.md`` §9.2), so the empty root is
 marked and paired first and the seed is copied in afterwards.
 
-By default Library data still comes from the SQLite seed, and this module
-only gives the browser a real session, identity and Library epoch. With
-``PRKS_E2E_LIBRARY_BACKEND=postgres`` (PG-C1 #640) the server serves the
-Library from this database too (``PRKS_LIBRARY_BACKEND=postgres``): the seed
+The server serves its Library from this database (PG-C2 #641): the seed
 writes through the PostgreSQL facade as the owner (:func:`seed_postgres_library`),
 and the embedded worker runs the jobs the seed queued.
 """
@@ -22,6 +19,7 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import contextmanager
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Optional
@@ -32,8 +30,6 @@ SESSION_MODE = "session"
 OWNER_LOGIN = "owner"
 OWNER_DISPLAY_NAME = "E2E Owner"
 LIBRARY_NAME = "E2E Library"
-# PRKS_E2E_LIBRARY_BACKEND=postgres: Library data on PostgreSQL too.
-LIBRARY_BACKEND_ENV = "PRKS_E2E_LIBRARY_BACKEND"
 # Every E2E account's password. Loopback-owner never signs in; session-mode
 # tests sign in through POST /api/login with it.
 PASSWORD = "e2e account passphrase"
@@ -62,18 +58,10 @@ class E2ELibrary:
     def server_env(self) -> dict[str, str]:
         """Environment for ``prks_app.py --testing`` on this database.
 
-        With the SQLite Library the embedded worker stays off: its object
-        sweep treats every object PostgreSQL does not reference as an
-        orphan, and the seeded PDFs are referenced only by SQLite. With the
-        PostgreSQL Library it runs, so the seed's text and research jobs
+        The embedded worker runs, so the seed's text and research jobs
         complete.
         """
-        env = {"PRKS_AUTH": self.auth, "PRKS_DATABASE_URL": self.conninfo}
-        if postgres_library():
-            env["PRKS_LIBRARY_BACKEND"] = "postgres"
-        else:
-            env["PRKS_EMBEDDED_WORKER"] = "0"
-        return env
+        return {"PRKS_AUTH": self.auth, "PRKS_DATABASE_URL": self.conninfo}
 
     def drop(self) -> None:
         from tests.pg.harness import get_harness
@@ -81,33 +69,20 @@ class E2ELibrary:
         get_harness().drop_database(self.database)
 
 
-def postgres_library(environ=None) -> bool:
-    """Whether this run serves Library data from PostgreSQL (``PRKS_E2E_LIBRARY_BACKEND``)."""
-    value = ((os.environ if environ is None else environ).get(LIBRARY_BACKEND_ENV) or "").strip()
-    if not value:
-        return False
-    if value == "postgres":
-        return True
-    raise ValueError(f"{LIBRARY_BACKEND_ENV} must be unset or 'postgres'")
+@contextmanager
+def owner_facade(library: E2ELibrary, storage_root: str):
+    """The :class:`~tests.library_adapter.TestLibrary` of ``library``, and its owner's context.
 
-
-def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> dict:
-    """Run ``seed_fn(storage_root)`` against ``library``'s PostgreSQL Library, as its owner.
-
-    The seed functions (``tests/e2e/fixtures.py``) call the public method
-    names both stores share, so the same seed fills either one; here they
-    reach :class:`~backend.pg_facade.PostgresLibrary` acting for a session
-    of the bootstrap owner. Managed PDFs are copied into the root first, as
-    the SQLite seed copies them, and adopted by the create.
+    The context is a fresh session of the bootstrap owner at the Library's
+    current epoch; calls on the facade must run inside
+    ``acting_as(context)``. The database pool closes when the block ends.
     """
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
     from backend.domain.identity import sessions
     from backend.domain.identity.request_context import RequestContext
-    from backend.pg_facade import PostgresLibrary
-    from backend.pg_facade.context import acting_as
+    from tests.library_adapter import TestLibrary
     from backend.storage.config import StorageConfig
-    from tests.e2e.fixtures import seeding_into
 
     db = Database(DatabaseConfig(conninfo=library.conninfo, role="test", pool_min=0, pool_max=2))
     try:
@@ -120,12 +95,28 @@ def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> di
         new, epoch = db.command(owner_session)
         valid = sessions.resolve_session(db, new.token.reveal())
         if valid is None:  # pragma: no cover - the session was just created
-            raise RuntimeError("the E2E seed session does not resolve")
-        facade = PostgresLibrary(db, storage=StorageConfig.for_testing(os.path.realpath(storage_root)))
-        with acting_as(RequestContext.for_session(valid, epoch=epoch)), seeding_into(facade):
-            return seed_fn(storage_root) or {}
+            raise RuntimeError("the E2E owner session does not resolve")
+        facade = TestLibrary(db, storage=StorageConfig.for_testing(os.path.realpath(storage_root)))
+        yield facade, RequestContext.for_session(valid, epoch=epoch)
     finally:
         db.close()
+
+
+def seed_postgres_library(seed_fn, storage_root: str, library: E2ELibrary) -> dict:
+    """Run ``seed_fn(storage_root)`` against ``library``'s PostgreSQL Library, as its owner.
+
+    The seed functions (``tests/e2e/fixtures.py``) call the public method
+    names both stores share, so the same seed fills either one; here they
+    reach :class:`~tests.library_adapter.TestLibrary` acting for a session
+    of the bootstrap owner. Managed PDFs are copied into the root first, as
+    the SQLite seed copies them, and adopted by the create.
+    """
+    from tests.acting_context import acting_as
+    from tests.e2e.fixtures import seeding_into
+
+    with owner_facade(library, storage_root) as (facade, ctx):
+        with acting_as(ctx), seeding_into(facade):
+            return seed_fn(storage_root) or {}
 
 
 def require_server() -> None:

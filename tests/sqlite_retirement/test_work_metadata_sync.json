@@ -1,0 +1,441 @@
+{
+  "module": "tests/test_work_metadata_sync.py",
+  "tests": {
+    "WorkMetadataSyncTests.test_every_supported_field_round_trips": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_synchronized_fields",
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_every_supported_field_round_trips"
+      ]
+    },
+    "WorkMetadataSyncTests.test_an_unsupported_field_never_reaches_the_column": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_an_unsupported_or_malformed_envelope_is_refused_unledgered"
+      ]
+    },
+    "WorkMetadataSyncTests.test_value_shape_is_bounded_and_typed": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_an_unsupported_or_malformed_envelope_is_refused_unledgered"
+      ]
+    },
+    "WorkMetadataSyncTests.test_envelope_requires_a_base_revision_and_an_exact_payload": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_an_unsupported_or_malformed_envelope_is_refused_unledgered"
+      ]
+    },
+    "WorkMetadataSyncTests.test_values_are_stored_exactly_as_patch_would_store_them": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_values_are_stored_exactly_as_patch_stores_them"
+      ]
+    },
+    "WorkMetadataSyncTests.test_null_and_empty_are_one_logical_value": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::FieldRegistryTests.test_null_and_empty_are_one_logical_value"
+      ]
+    },
+    "WorkMetadataSyncTests.test_scalar_conflict_matrix": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictRuleTests.test_scalar_conflict_matrix_and_exact_replay"
+      ]
+    },
+    "WorkMetadataSyncTests.test_idempotency_normalization_and_reuse": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictRuleTests.test_a_reused_op_id_is_refused_and_changes_nothing"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_stale_but_convergent_edit_is_not_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictRuleTests.test_a_stale_but_convergent_edit_is_not_a_conflict"
+      ]
+    },
+    "WorkMetadataSyncTests.test_missing_work_is_terminal": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictRuleTests.test_a_missing_work_is_terminal_and_replays"
+      ]
+    },
+    "WorkMetadataSyncTests.test_different_fields_never_conflict_with_each_other": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictRuleTests.test_different_fields_never_conflict_with_each_other"
+      ]
+    },
+    "WorkMetadataSyncTests.test_one_field_conflicting_leaves_the_others_writable": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictRuleTests.test_different_fields_never_conflict_with_each_other"
+      ]
+    },
+    "WorkMetadataSyncTests.test_patch_advances_only_the_fields_it_actually_changed": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_patch_advances_only_the_fields_it_changed"
+      ]
+    },
+    "WorkMetadataSyncTests.test_every_synchronized_field_advances_its_revision_through_the_patch": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_every_synchronized_field_advances_its_revision_through_the_patch"
+      ]
+    },
+    "WorkMetadataSyncTests.test_bulk_status_advances_the_same_revisions_every_other_path_uses": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_bulk_status_advances_the_revisions_every_other_path_uses"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_no_op_bulk_status_manufactures_no_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_a_no_op_bulk_status_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_bulk_status_values_and_revisions_roll_back_together": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_bulk_status_values_and_revisions_roll_back_together"
+      ],
+      "note": "The SQLite trigger injection becomes a revision advance that raises on the second Work."
+    },
+    "WorkMetadataSyncTests.test_a_bulk_change_makes_an_offline_device_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_a_bulk_change_makes_an_offline_device_conflict"
+      ]
+    },
+    "WorkMetadataSyncTests.test_status_is_validated_by_allowlist_on_every_mutation_path": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_status_is_validated_by_allowlist_on_every_mutation_path",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_byte_limited_fields_count_utf8_bytes_and_small_ones_code_points"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_convergent_status_edit_is_not_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_a_status_edit_converges_and_its_conflict_blocks_nothing_else"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_status_conflict_leaves_every_other_field_writable": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::StatusTests.test_a_status_edit_converges_and_its_conflict_blocks_nothing_else"
+      ]
+    },
+    "WorkMetadataSyncTests.test_creation_does_not_manufacture_a_status_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_creation_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_author_text_has_one_size_contract_on_every_path": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_author_text_has_one_byte_limit_on_both_paths",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_documented_bounds"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_author_text_limit_counts_utf8_bytes_not_characters": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_author_text_has_one_byte_limit_on_both_paths",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_byte_limited_fields_count_utf8_bytes_and_small_ones_code_points"
+      ]
+    },
+    "WorkMetadataSyncTests.test_whitespace_is_not_stripped_server_side": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_author_text_has_one_byte_limit_on_both_paths"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_large_author_text_acknowledgement_stays_out_of_the_ledger": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_a_large_acknowledgement_stays_out_of_the_ledger"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_large_author_text_conflict_fits_the_durable_result_bound": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_conflicts_report_sizes_and_previews_within_the_bound"
+      ]
+    },
+    "WorkMetadataSyncTests.test_provenance_url_is_field_scoped_only_where_it_is_provenance": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_source_url_is_a_field_only_where_it_is_provenance",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_documented_bounds"
+      ]
+    },
+    "WorkMetadataSyncTests.test_provenance_url_is_byte_limited_like_the_other_large_scalars": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_a_large_acknowledgement_stays_out_of_the_ledger",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_documented_bounds"
+      ]
+    },
+    "WorkMetadataSyncTests.test_title_has_one_size_contract_and_a_compact_acknowledgement": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_a_large_acknowledgement_stays_out_of_the_ledger",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_byte_limited_fields_count_utf8_bytes_and_small_ones_code_points"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_large_title_conflict_is_bounded": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_conflicts_report_sizes_and_previews_within_the_bound"
+      ]
+    },
+    "WorkMetadataSyncTests.test_title_revisions_and_independence": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_fields_follow_the_ordinary_scalar_rule"
+      ]
+    },
+    "WorkMetadataSyncTests.test_search_finds_a_renamed_work_after_synchronization": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::SearchTests.test_search_finds_a_synchronized_title_and_author_text"
+      ]
+    },
+    "WorkMetadataSyncTests.test_creation_does_not_manufacture_a_title_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_creation_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_doc_type_normalizes_on_patch_and_is_strict_on_the_wire": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::DocTypeTests.test_doc_type_normalizes_on_patch_and_is_strict_on_the_wire",
+        "tests/test_work_metadata_rules.py::CodecTests.test_doc_type_normalizes_to_the_canonical_set"
+      ]
+    },
+    "WorkMetadataSyncTests.test_doc_type_revisions_behave_like_every_other_scalar": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::DocTypeTests.test_doc_type_revisions_behave_like_every_other_scalar"
+      ]
+    },
+    "WorkMetadataSyncTests.test_creation_does_not_manufacture_a_doc_type_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_creation_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_codec_input_contract_is_explicit_for_page_and_identity_fields": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::CodecTests.test_the_input_contract_is_explicit_for_page_and_identity_fields"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_thumb_page_codec_accepts_only_page_numbers": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::CodecTests.test_the_thumb_page_codec_accepts_only_page_numbers"
+      ]
+    },
+    "WorkMetadataSyncTests.test_an_invalid_thumb_page_never_reaches_the_column": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_an_invalid_page_never_reaches_the_column"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_column_stays_typed_whichever_path_writes_it": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_the_column_stays_typed_whichever_path_writes_it"
+      ]
+    },
+    "WorkMetadataSyncTests.test_representation_differences_are_not_changes": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_representation_differences_are_not_changes"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_stale_but_convergent_typed_value_is_not_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_a_stale_but_convergent_page_is_not_a_conflict"
+      ]
+    },
+    "WorkMetadataSyncTests.test_metadata_state_reports_the_wire_form_and_the_work_the_typed_one": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ThumbPageTests.test_metadata_state_reports_the_wire_form_and_the_work_the_typed_one"
+      ]
+    },
+    "WorkMetadataSyncTests.test_creation_does_not_manufacture_a_thumb_page_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_creation_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_every_conflict_result_fits_what_the_browser_can_store": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictBoundTests.test_every_conflict_result_fits_what_the_browser_can_store"
+      ],
+      "note": "PostgreSQL text cannot hold NUL, so the NUL case is replaced by the protocol refusing a NUL on the wire."
+    },
+    "WorkMetadataSyncTests.test_a_small_scalar_conflict_degrades_to_previews_only_when_it_must": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictBoundTests.test_a_small_scalar_degrades_to_previews_only_when_it_must"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_preview_is_shortened_only_as_far_as_it_has_to_be": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictBoundTests.test_the_preview_is_the_longest_whole_prefix_that_fits"
+      ]
+    },
+    "WorkMetadataSyncTests.test_a_surrogate_pair_is_never_split_by_the_preview_bound": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictBoundTests.test_the_preview_is_the_longest_whole_prefix_that_fits",
+        "tests/test_work_metadata_rules.py::ResultBoundTests.test_a_preview_never_splits_a_surrogate_pair"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_server_measures_at_least_what_the_browser_stores": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ConflictBoundTests.test_the_server_measures_at_least_what_the_browser_stores"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_server_and_the_browser_agree_on_the_result_bound": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::ResultBoundTests.test_the_server_and_the_browser_agree_on_the_result_bound"
+      ]
+    },
+    "WorkMetadataSyncTests.test_metadata_state_carries_the_author_text_revision_only": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_a_large_acknowledgement_stays_out_of_the_ledger"
+      ]
+    },
+    "WorkMetadataSyncTests.test_author_text_conflicts_are_field_scoped_like_any_other_scalar": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_fields_follow_the_ordinary_scalar_rule"
+      ]
+    },
+    "WorkMetadataSyncTests.test_creation_does_not_manufacture_an_author_text_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_creation_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_patch_and_sync_are_the_only_existing_work_author_text_writers": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::WriterAuditTests.test_only_the_field_writer_and_the_source_aggregate_update_a_synchronized_column",
+        "tests/test_work_metadata_rules.py::WriterAuditTests.test_the_oembed_author_fill_only_reaches_a_create"
+      ],
+      "note": "The SQLite regex over 'UPDATE works SET' becomes an AST scan of every prks.works/manifestations/assets UPDATE; author_text is one of the audited columns."
+    },
+    "WorkMetadataSyncTests.test_search_finds_the_new_author_text_after_synchronization": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::SearchTests.test_search_finds_a_synchronized_title_and_author_text"
+      ]
+    },
+    "WorkMetadataSyncTests.test_pending_author_text_is_not_a_server_search_term": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::SearchTests.test_a_value_never_sent_is_not_a_search_term"
+      ]
+    },
+    "WorkMetadataSyncTests.test_no_other_backend_statement_writes_a_synchronized_column": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::WriterAuditTests.test_only_the_field_writer_and_the_source_aggregate_update_a_synchronized_column",
+        "tests/test_work_metadata_rules.py::WriterAuditTests.test_the_field_writer_builds_its_statements_from_the_field_registry_only"
+      ],
+      "note": "Sanctioned writers on PostgreSQL are backend/domain/works/metadata.py and source.py; SQLite's db_migrations.py has no PostgreSQL counterpart (pre-1.0 migrates no SQLite data)."
+    },
+    "WorkMetadataSyncTests.test_unrelated_metadata_never_advances_a_field_revision": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_unrelated_metadata_never_advances_a_field_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_patch_commits_values_and_revisions_together": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_patch_commits_values_and_revisions_together"
+      ],
+      "note": "The SQLite trigger injection becomes a revision advance that raises on the second field."
+    },
+    "WorkMetadataSyncTests.test_work_creation_does_not_manufacture_revisions": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::PatchBoundaryTests.test_creation_manufactures_no_revision"
+      ]
+    },
+    "WorkMetadataSyncTests.test_projection_lists_every_supported_field_and_nothing_else": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_projection_lists_every_field_of_its_own_work_only"
+      ]
+    },
+    "WorkMetadataSyncTests.test_projection_is_scoped_to_its_own_work": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_projection_lists_every_field_of_its_own_work_only"
+      ]
+    },
+    "WorkMetadataSyncTests.test_etag_moves_for_any_value_or_revision_change": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_etag_moves_for_any_value_or_revision_change"
+      ]
+    },
+    "WorkMetadataSyncTests.test_recently_added_carries_publisher_for_its_local_filter": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_recently_added_carries_publisher_for_its_local_filter",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_projection_map_names_every_dependency"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_projection_map_names_every_dependency": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_projection_map_names_every_dependency"
+      ]
+    },
+    "WorkMetadataSyncTests.test_embedded_summary_fields_are_named": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::RegistryTests.test_embedded_summary_fields_are_named"
+      ]
+    },
+    "WorkMetadataSyncTests.test_year_and_published_date_are_independent_conflict_units": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_year_and_published_date_are_independent_conflict_units"
+      ]
+    },
+    "WorkMetadataSyncTests.test_published_date_is_stored_in_one_canonical_representation": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_year_and_published_date_are_independent_conflict_units"
+      ]
+    },
+    "WorkMetadataSyncTests.test_publisher_and_location_behave_like_every_other_field": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_publisher_and_location_are_ordinary_independent_fields"
+      ]
+    },
+    "WorkMetadataSyncTests.test_publisher_and_location_are_independent_of_each_other": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_publisher_and_location_are_ordinary_independent_fields"
+      ]
+    },
+    "WorkMetadataSyncTests.test_new_fields_keep_their_documented_bounds": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_the_small_scalars_keep_their_code_point_limits",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_documented_bounds"
+      ]
+    },
+    "WorkMetadataSyncTests.test_multi_place_locations_are_stored_verbatim": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_publisher_and_location_are_ordinary_independent_fields"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_projection_reads_only_this_works_scopes": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::ProjectionTests.test_projection_lists_every_field_of_its_own_work_only"
+      ],
+      "note": "get_field_state_on_conn is SQLite's; the PostgreSQL projection is checked to read revisions once, for exactly this Work's scope ids."
+    },
+    "WorkMetadataSyncTests.test_abstract_limit_is_the_same_contract_on_both_paths": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_abstract_has_one_byte_limit_on_both_paths",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_documented_bounds"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_abstract_limit_counts_utf8_bytes_not_characters": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_abstract_has_one_byte_limit_on_both_paths"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_small_scalars_keep_their_code_point_limits": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_the_small_scalars_keep_their_code_point_limits",
+        "tests/test_work_metadata_rules.py::RegistryTests.test_the_documented_bounds"
+      ]
+    },
+    "WorkMetadataSyncTests.test_abstract_uses_the_ordinary_scalar_conflict_path": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_fields_follow_the_ordinary_scalar_rule"
+      ]
+    },
+    "WorkMetadataSyncTests.test_an_abstract_conflict_is_small_enough_to_persist": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_conflicts_report_sizes_and_previews_within_the_bound"
+      ]
+    },
+    "WorkMetadataSyncTests.test_small_fields_still_report_their_values_in_a_conflict": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_large_conflicts_report_sizes_and_previews_within_the_bound"
+      ]
+    },
+    "WorkMetadataSyncTests.test_the_ledger_never_becomes_a_second_copy_of_the_abstract": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_a_large_acknowledgement_stays_out_of_the_ledger"
+      ]
+    },
+    "WorkMetadataSyncTests.test_small_fields_still_echo_their_value": {
+      "replaced_by": [
+        "tests/pg/test_works_metadata_sync.py::LargeFieldTests.test_a_large_acknowledgement_stays_out_of_the_ledger"
+      ]
+    },
+    "WorkMetadataSyncTests.test_scope_keys_are_structural": {
+      "replaced_by": [
+        "tests/test_work_metadata_rules.py::CodecTests.test_scope_keys_are_structural"
+      ]
+    }
+  }
+}

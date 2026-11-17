@@ -4,7 +4,6 @@ import os
 import unittest
 from urllib.parse import quote
 
-from backend.db_manager import PRKSDatabase
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE, seed_library
@@ -16,6 +15,7 @@ from tests.e2e.harness import (
     open_app_page,
     wait_for_async,
 )
+from tests.e2e.library_store import library_for
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -60,6 +60,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.addCleanup(server.stop)
         server.start()
         e2e_diag("SERVER_READY", tid)
+        assert _HOLDER is not None
         page, context, collector = open_app_page(
             _HOLDER.get_browser(), server.origin, service_workers='allow'
         )
@@ -67,6 +68,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         def _after_context():
             e2e_diag("CONTEXT_CLOSED", tid)
+            assert _HOLDER is not None
             _HOLDER.after_context_closed()
 
         self.addCleanup(_after_context)
@@ -129,6 +131,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
             message='listOperations did not settle',
         )
+        assert result is not None
         return result['rows']
 
     def pending(self, page, count, timeout=None):
@@ -154,7 +157,18 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def db_for(self, server):
-        return PRKSDatabase(storage=StorageConfig.for_testing(server.storage_root))
+        return library_for(server)
+
+    def ledger(self, server):
+        """The server-ledger rows of SET_WORK_METADATA_FIELD: op_id, status, result_json (text)."""
+        return library_for(server).query(
+            postgres="SELECT op_id::text AS op_id, status, result::text AS result_json"
+                     " FROM prks.sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'"
+                     " ORDER BY applied_at, op_id")
+
+    def stored_abstract(self, server, work_id):
+        return library_for(server).query(
+            postgres="SELECT abstract FROM prks.works WHERE id = %s", params=(work_id,))[0]['abstract']
 
     def server_fields(self, server, work_id):
         return self.db_for(server).get_work_metadata_state(work_id)['fields']
@@ -259,8 +273,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(state['doi']['value'], 'device-doi')
         self.assertEqual(state['isbn']['value'], 'other-device-isbn',
                          'the other device\'s field survived')
-        self.assertEqual([r['status'] for r in self.db_for(server).execute_query(
-            "SELECT status FROM sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'")],
+        self.assertEqual([r['status'] for r in self.ledger(server)],
             ['ACKNOWLEDGED'], 'no conflict was produced')
 
     def test_a_convergent_edit_is_not_a_conflict(self):
@@ -339,8 +352,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 0)
         self.assertEqual(self.server_fields(server, work)['doi'],
                          {'value': 'device-doi', 'revision': 2})
-        ledger = {r['op_id']: r['status'] for r in self.db_for(server).execute_query(
-            "SELECT op_id, status FROM sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'")}
+        ledger = {r['op_id']: r['status'] for r in self.ledger(server)}
         self.assertEqual(ledger.pop(original), 'REVISION_CONFLICT')
         self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'],
                          'a NEW operation carried the reapplied value')
@@ -455,6 +467,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS,
             message='recently-added list did not settle',
         )
+        assert result is not None
         return result['value']
 
     def test_pending_publisher_is_searchable_in_recently_added_before_it_syncs(self):
@@ -584,6 +597,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS,
             message='cached list read did not settle',
         )
+        assert result is not None
         return result['value']
 
     def cached_person_work_field(self, page, person_id, work_id, field):
@@ -603,6 +617,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS,
             message='cached person read did not settle',
         )
+        assert result is not None
         return result['value']
 
     def test_a_pending_year_reaches_every_surface_that_shows_one(self):
@@ -1246,9 +1261,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(
             self.db_for(server).get_work(work)['author_text'], big,
             'while the Work record has the whole value')
-        ledger = self.db_for(server).execute_query(
-            "SELECT result_json FROM sync_operations "
-            "WHERE operation_type = 'SET_WORK_METADATA_FIELD'")[0]['result_json']
+        ledger = self.ledger(server)[0]['result_json']
         self.assertNotIn(big, ledger, 'the ledger never became a second copy of it')
         self.assertLess(len(ledger), 1024)
 
@@ -1959,8 +1972,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.progress(page)
         shown = self.progress_excerpt(page, work)
-        expected = db.execute_query(
-            "SELECT SUBSTR(?, 1, 100) AS e", (pending,))[0]['e']
+        expected = db.query(postgres="SELECT substr(%s, 1, 100) AS e", params=(pending,))[0]['e']
         self.assertIn(expected, shown,
                       'the pending excerpt equals what SQLite would produce')
         self.assertEqual(len(expected), 100)
@@ -1971,8 +1983,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(db.execute_query(
-            "SELECT abstract FROM works WHERE id = ?", (work,))[0]['abstract'], pending,
+        self.assertEqual(self.stored_abstract(server, work), pending,
             'the server received the whole Abstract, not the excerpt')
         after = page.evaluate("""id => window.createPrksOfflineStore().getList('works-browse:index')
             .then(row => row.value.find(w => w.id === id).abstract_excerpt)""", work)
@@ -2021,12 +2032,11 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        saved = db.execute_query("SELECT abstract FROM works WHERE id = ?", (work,))[0]['abstract']
+        saved = self.stored_abstract(server, work)
         self.assertGreater(len(saved), 150 * 1024, 'the server received the whole value')
         self.assertTrue(saved.startswith('Beyond the old ceiling.'))
         # The ledger keeps the outcome, never a second copy of the text.
-        ledger = db.execute_query(
-            "SELECT result_json FROM sync_operations WHERE operation_type = 'SET_WORK_METADATA_FIELD'")
+        ledger = self.ledger(server)
         self.assertTrue(ledger)
         for row in ledger:
             self.assertLess(len(row['result_json']), 2048)

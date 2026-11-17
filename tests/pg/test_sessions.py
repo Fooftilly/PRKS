@@ -6,6 +6,7 @@ import pickle
 import threading
 import unittest
 from datetime import timedelta
+from typing import Any
 
 from backend.domain.identity import sessions
 from backend.domain.identity.secret_tokens import LoginDeviceToken, SessionToken
@@ -57,7 +58,7 @@ class SessionTests(IdentityTestCase):
             )
         )
 
-    def row(self, session: sessions.NewSession) -> dict[str, object]:
+    def row(self, session: sessions.NewSession) -> dict[str, Any]:
         return self.run_sql(
             "SELECT last_used_at, expires_at, revoked_at, expires_at - created_at AS idle "
             "FROM prks.sessions WHERE id = %s",

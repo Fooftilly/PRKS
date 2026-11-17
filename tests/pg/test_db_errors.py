@@ -216,11 +216,11 @@ class ConnectionErrorMappingTests(unittest.TestCase):
                 super().__init__("private constraint value")
 
             @property
-            def sqlstate(self) -> str:
+            def sqlstate(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
                 return self._state
 
             @property
-            def diag(self) -> None:
+            def diag(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
                 return None
 
         registry = ConstraintRegistry()

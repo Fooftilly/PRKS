@@ -1,6 +1,6 @@
 """Saved Views on PostgreSQL: what parity cannot show (L-O-1 #633).
 
-``tests/test_saved_views_parity.py`` proves the facade returns SQLite's JSON
+``tests/test_saved_views_parity.py`` proves the commands return SQLite's JSON
 and refusals. These tests cover what only PostgreSQL has: names compared by
 identity key, the unique index as the backstop of a name race, Library
 isolation and reader refusals, timestamps, the rollback of a failed write,
@@ -18,12 +18,13 @@ import unicodedata
 from typing import Any, Callable
 from unittest import mock
 
-from backend.db_manager import PRKS_SAVED_VIEW_MAX, SavedViewError
+from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
+from tests.narrowing import require
 
 _ALL = {"mode": "all", "q": "culture", "tag": "", "author": "", "publisher": ""}
 _ADVANCED = {"mode": "advanced", "q": "", "tag": "", "author": "Adorno", "publisher": ""}
@@ -142,6 +143,16 @@ class CrudTests(SavedViewTestCase):
         self.refused("Name is required.", 400, self.library.update_saved_view, _MISSING, name=" ")
         self.assertEqual(self.library.get_saved_views(), [kept])
 
+    def test_deleting_a_view_leaves_the_works_it_finds(self) -> None:
+        work_id = self.library.add_work("Kept Work")
+        view = self.create("Everything", {**_ALL, "q": "kept"})
+        self.library.delete_saved_view(view["id"])
+        self.assertIsNone(self.library.get_saved_view(view["id"]))
+        work = self.library.get_work(work_id)
+        assert work is not None
+        self.assertEqual(work["title"], "Kept Work")
+        self.assertEqual(self.count("works"), 1)
+
 
 class NameTests(SavedViewTestCase):
     def test_names_compare_by_identity_key(self) -> None:
@@ -213,7 +224,7 @@ class TimestampAndOrderTests(SavedViewTestCase):
         for refused in ((views.NAME_TAKEN, 409, {"name": "other"}),
                         ("Nothing to update.", 400, {})):
             self.refused(refused[0], refused[1], self.library.update_saved_view, created["id"], **refused[2])
-        self.assertEqual(self.library.get_saved_view(created["id"])["updated_at"], "2020-01-02 03:04:05")
+        self.assertEqual(require(self.library.get_saved_view(created["id"]))["updated_at"], "2020-01-02 03:04:05")
         for change in ({"name": "Dated"}, {"search": _ALL}):  # a write moves it even when nothing differs
             with self.subTest(change=change):
                 self.sql("UPDATE prks.saved_views SET updated_at = '2020-01-02 03:04:05+00' WHERE id = %s",
@@ -345,5 +356,6 @@ class RaceTests(SavedViewTestCase):
         self.assertEqual(holder["search"], _TAG)
         self.assertEqual((contender["name"], contender["search"]), ("New name", _TAG))
         found = self.library.get_saved_view(view["id"])
+        assert found is not None
         self.assertEqual((found["name"], found["search"], found["created_at"]),
                          ("New name", _TAG, view["created_at"]))

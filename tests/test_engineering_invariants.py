@@ -1278,6 +1278,14 @@ class EngineeringInvariantTests(unittest.TestCase):
             if scope.endswith(".py"):
                 (root / scope).parent.mkdir(parents=True, exist_ok=True)
                 (root / scope).write_text("", encoding="utf-8")
+            else:
+                (root / scope).mkdir(parents=True, exist_ok=True)
+        for path in checker.PYRIGHT_TYPED_SLICE_STRICT:
+            if path.endswith(".py"):
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text("", encoding="utf-8")
+            else:
+                (root / path).mkdir(parents=True, exist_ok=True)
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "pyrightconfig.json").write_text(
             json.dumps(
@@ -1295,8 +1303,9 @@ class EngineeringInvariantTests(unittest.TestCase):
             json.dumps(
                 {
                     "include": list(checker.PYRIGHT_TYPED_SLICE_SCOPES),
+                    "strict": list(checker.PYRIGHT_TYPED_SLICE_STRICT),
                     "exclude": ["**/__pycache__"],
-                    "typeCheckingMode": "basic",
+                    "typeCheckingMode": "standard",
                     "reportUndefinedVariable": "error",
                     "reportUnboundVariable": "error",
                     "reportUnusedExcept": "error",
@@ -1337,6 +1346,17 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/library_backend.py",
                 "backend/log_safety.py",
                 "backend/person_image.py",
+                "backend/derived_caches.py",
+                "backend/managed_pdf_names.py",
+                "backend/domain/works/rules.py",
+                "backend/domain/saved_views/rules.py",
+                "backend/domain/settings/rules.py",
+                "backend/domain/people/errors.py",
+                "backend/domain/works/bibtex_format.py",
+                "backend/domain/people/rules.py",
+                "backend/etags.py",
+                "backend/domain/research/rules.py",
+                "backend/pdf_text.py",
                 "backend/db/config.py",
                 "backend/db/errors.py",
                 "backend/db/database.py",
@@ -1358,8 +1378,6 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/identity/root_pairing.py",
                 "backend/domain/identity/admin.py",
                 "backend/api/session.py",
-                "backend/work_identity.py",
-                "backend/work_projection.py",
                 "backend/work_metadata_sync.py",
                 "backend/work_role_sync.py",
                 "backend/domain/works/__init__.py",
@@ -1376,33 +1394,49 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/works/lifecycle.py",
                 "backend/domain/works/merge.py",
                 "backend/domain/works/wiki_links.py",
+                "backend/domain/works/work_commands.py",
                 "backend/domain/people/__init__.py",
                 "backend/domain/people/persons.py",
                 "backend/domain/people/groups.py",
+                "backend/domain/people/group_commands.py",
+                "backend/domain/people/person_commands.py",
+                "backend/domain/people/role_commands.py",
                 "backend/domain/people/publishers.py",
+                "backend/domain/people/publisher_commands.py",
                 "backend/domain/people/queries.py",
                 "backend/domain/people/roles.py",
                 "backend/domain/organization/__init__.py",
                 "backend/domain/organization/folders.py",
+                "backend/domain/organization/folder_commands.py",
                 "backend/domain/organization/lifecycle.py",
                 "backend/domain/organization/links.py",
                 "backend/domain/organization/playlists.py",
+                "backend/domain/organization/playlist_commands.py",
                 "backend/domain/organization/tags.py",
+                "backend/domain/organization/tag_commands.py",
                 "backend/domain/research/__init__.py",
                 "backend/domain/research/arguments.py",
                 "backend/domain/research/concepts.py",
+                "backend/domain/research/concept_commands.py",
+                "backend/domain/research/position_commands.py",
+                "backend/domain/research/argument_commands.py",
+                "backend/domain/research/note_commands.py",
                 "backend/domain/research/graph.py",
+                "backend/domain/research/index_commands.py",
+                "backend/library.py",
                 "backend/domain/research/positions.py",
                 "backend/domain/research/reindex.py",
                 "backend/domain/search/__init__.py",
                 "backend/domain/search/refresh.py",
                 "backend/domain/search/queries.py",
                 "backend/domain/search/text.py",
+                "backend/domain/search/search_commands.py",
                 "backend/domain/search/rebuild.py",
                 "backend/domain/annotations/__init__.py",
                 "backend/domain/annotations/materialize.py",
                 "backend/domain/annotations/operations.py",
                 "backend/domain/annotations/store.py",
+                "backend/domain/annotations/annotation_commands.py",
                 "backend/domain/objects/__init__.py",
                 "backend/domain/objects/ingest.py",
                 "backend/domain/objects/jobs.py",
@@ -1425,9 +1459,11 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/maintenance/staging.py",
                 "backend/domain/maintenance/tables.py",
                 "backend/domain/saved_views/__init__.py",
+                "backend/domain/saved_views/commands.py",
                 "backend/domain/saved_views/views.py",
                 "backend/domain/settings/__init__.py",
                 "backend/domain/settings/app_settings.py",
+                "backend/domain/settings/commands.py",
                 "backend/jobs/queue.py",
                 "backend/jobs/handlers.py",
                 "backend/jobs/runner.py",
@@ -1457,6 +1493,48 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/sync/handlers/work_open.py",
                 "backend/sync/handlers/work_role.py",
                 "backend/sync/handlers/work_source.py",
+                "backend/api",
+                "backend/domain/__init__.py",
+                "backend/domain/identity/__init__.py",
+                "backend/domain/maintenance/upload.py",
+                "backend/domain/people/constraints.py",
+                "backend/domain/research/constraints.py",
+                "backend/domain/saved_views/constraints.py",
+                "backend/db/testing_guard.py",
+                "backend/jobs/__init__.py",
+                "backend/services/__init__.py",
+                "backend/services/work_pdf_replace.py",
+                "backend/api_contract",
+                "backend/argument_sync.py",
+                "backend/concept_sync.py",
+                "backend/dependency_gate.py",
+                "backend/folder_sync.py",
+                "backend/folder_tag_sync.py",
+                "backend/log_config.py",
+                "backend/pdf_annotation_adopt.py",
+                "backend/pdf_annotation_sync.py",
+                "backend/pdf_annotations.py",
+                "backend/pdf_materialization.py",
+                "backend/performance.py",
+                "backend/person_group_sync.py",
+                "backend/person_metadata_sync.py",
+                "backend/person_sync.py",
+                "backend/playlist_sync.py",
+                "backend/position_sync.py",
+                "backend/research_graph.py",
+                "backend/startup_profile.py",
+                "backend/sync_protocol.py",
+                "backend/tag_color.py",
+                "backend/tag_sync.py",
+                "backend/work_lifecycle_sync.py",
+                "backend/work_note_sync.py",
+                "backend/work_open_sync.py",
+                "backend/work_source_sync.py",
+                "backend/work_tag_sync.py",
+                "backend/server.py",
+                "prks_app.py",
+                "scripts",
+                "tests",
             ),
         )
 
@@ -1473,6 +1551,68 @@ class EngineeringInvariantTests(unittest.TestCase):
                 json.dumps(typed), encoding="utf-8"
             )
             self.assertEqual(checker.check_pyright_configs(root), [])
+
+    def _rewrite_typed_slice(self, root: Path, **changes: object) -> None:
+        path = root / "pyrightconfig.typed-slice.json"
+        typed = json.loads(path.read_text())
+        typed.update(changes)
+        path.write_text(json.dumps(typed), encoding="utf-8")
+
+    def test_pyright_typed_slice_strict_list_is_a_ratchet(self):
+        """Strict-clean paths cannot leave the strict list; extra ones may join."""
+        dropped = checker.PYRIGHT_TYPED_SLICE_STRICT[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self._rewrite_typed_slice(
+                root, strict=[p for p in checker.PYRIGHT_TYPED_SLICE_STRICT if p != dropped]
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+            self.assertIn(repr([dropped]), findings[0].message)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self._rewrite_typed_slice(root, strict=None)
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / "tests" / "extra.py").write_text("", encoding="utf-8")
+            self._rewrite_typed_slice(
+                root,
+                strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "tests/extra.py"],
+            )
+            self.assertEqual(checker.check_pyright_configs(root), [])
+
+    def test_pyright_typed_slice_rejects_missing_strict_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self._rewrite_typed_slice(
+                root, strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/gone.py"]
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+            self.assertIn("'backend/gone.py' does not exist", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_strict_path_outside_include(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / "backend" / "uncovered.py").write_text("", encoding="utf-8")
+            self._rewrite_typed_slice(
+                root, strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/uncovered.py"]
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+            self.assertIn("outside every typed-slice include scope", findings[0].message)
+
+    def test_pyright_typed_slice_strict_pins_are_included(self):
+        for path in checker.PYRIGHT_TYPED_SLICE_STRICT:
+            with self.subTest(path=path):
+                self.assertTrue(checker._under_typed_slice_scope(path))
 
     def test_pyright_typed_slice_rejects_dropped_scope(self):
         for dropped in checker.PYRIGHT_TYPED_SLICE_SCOPES:
@@ -1531,7 +1671,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["include"].append("backend/api_contract")
+            typed["include"].append("tests")
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
@@ -1606,14 +1746,16 @@ class EngineeringInvariantTests(unittest.TestCase):
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
             for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
-                self.assertIn(scope, findings[0].message)
+                if scope.startswith("backend/"):
+                    self.assertIn(scope, findings[0].message)
+            self.assertNotIn("prks_app.py", findings[0].message)
 
     def test_pyright_typed_slice_allows_unrelated_backend_exclude(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
             typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["exclude"] = ["**/__pycache__", "backend/api_contract"]
+            typed["exclude"] = ["**/__pycache__", "docs"]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
@@ -1628,6 +1770,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 json.dumps(
                     {
                         "include": list(checker.PYRIGHT_TYPED_SLICE_INCLUDE),
+                        "strict": list(checker.PYRIGHT_TYPED_SLICE_STRICT),
                         "typeCheckingMode": "off",
                         "reportUndefinedVariable": "error",
                         "reportUnboundVariable": "error",
@@ -1636,6 +1779,19 @@ class EngineeringInvariantTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+            self.assertIn("typeCheckingMode", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_basic_mode(self):
+        """The slice was raised to standard; dropping back must fail."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            typed_path = root / "pyrightconfig.typed-slice.json"
+            typed = json.loads(typed_path.read_text())
+            typed["typeCheckingMode"] = "basic"
+            typed_path.write_text(json.dumps(typed), encoding="utf-8")
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
             self.assertIn("typeCheckingMode", findings[0].message)
@@ -2554,53 +2710,6 @@ class ManagedPdfRemovalTests(unittest.TestCase):
 
     def _real(self, relpath: str) -> str:
         return (_ROOT / relpath).read_text(encoding="utf-8")
-
-    def test_approved_survivor_aware_cleanup_passes(self):
-        """The real _remove_managed_pdf / retry pass hold the capability."""
-        deletion = "backend/work_deletion.py"
-        self.assertEqual(_codes(self._real(deletion), deletion), [])
-        replace = "backend/services/work_pdf_replace.py"
-        self.assertEqual(_codes(self._real(replace), replace), [])
-
-    def test_capability_is_function_level_not_file_level(self):
-        rogue = (
-            "\n\ndef _fast_delete(db, filename):\n"
-            "    os.remove(safe_pdf_path_under_dir(db.storage.pdfs_dir, filename))\n"
-        )
-        deletion = "backend/work_deletion.py"
-        self.assertEqual(_codes(self._real(deletion) + rogue, deletion), ["INV-STORAGE-002"])
-        nested = (
-            "import os\n"
-            "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
-            "    def later():\n"
-            "        os.remove(os.path.join(pdfs_dir, filename))\n"
-            "    return later\n"
-        )
-        self.assertEqual(_codes(nested, deletion), ["INV-STORAGE-002"])
-        # The approved name in another module is not the capability.
-        moved = (
-            "import os\n"
-            "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
-            "    os.remove(os.path.join(pdfs_dir, filename))\n"
-        )
-        self.assertEqual(_codes(moved, "backend/server.py"), ["INV-STORAGE-002"])
-        self.assertEqual(_codes(moved, deletion), [])
-        # Deferred bodies run outside the capability's lock and re-check.
-        deferred = {
-            "lambda": (
-                "import os\n"
-                "def _remove_managed_pdf(db, filename, pdfs_dir):\n"
-                "    return lambda: os.remove(os.path.join(pdfs_dir, filename))\n"
-            ),
-            "generator": (
-                "import os\n"
-                "def _remove_managed_pdf(db, names, pdfs_dir):\n"
-                "    return (os.remove(os.path.join(pdfs_dir, n)) for n in names)\n"
-            ),
-        }
-        for label, source in deferred.items():
-            with self.subTest(deferred=label):
-                self.assertEqual(_codes(source, deletion), ["INV-STORAGE-002"])
 
     def test_raw_unlink_helper_is_reserved_for_minted_rollback(self):
         call_sites = {
@@ -4186,9 +4295,9 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
                 "    sorted(paths, key=os.path.basename)\n"
             ),
             "approved_helper_callbacks": (
-                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "from backend.pdf_linearize import linearize_pdf_to, is_pdf_linearized\n"
                 "def f(executor, paths):\n"
-                "    executor.submit(maybe_linearize_pdf_in_place, paths[0], context='bulk')\n"
+                "    executor.submit(linearize_pdf_to, paths[0], paths[1], context='bulk')\n"
                 "    list(filter(is_pdf_linearized, paths))\n"
             ),
             "local_callbacks": (
@@ -4411,7 +4520,7 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
             self.assertIn("store_new_managed_pdf_bytes", finding.message)
         self.assertEqual(len(process), 1)
         self.assertIn("backend.pdf_linearize", process[0].message)
-        self.assertIn("maybe_linearize_pdf_in_place", process[0].message)
+        self.assertIn("linearize_pdf_to", process[0].message)
 
     def test_same_orchestration_passes_in_focused_modules(self):
         """The rules are scoped to the adapter: the focused modules that own
@@ -4442,12 +4551,12 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
         cases = {
             "approved_storage_and_linearize_helpers": (
                 "from backend.services import work_pdf_replace\n"
-                "from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized\n"
+                "from backend.pdf_linearize import linearize_pdf_to, is_pdf_linearized\n"
                 "def post(name, data):\n"
                 "    stored = work_pdf_replace.store_new_managed_pdf_bytes(pdfs_dir, name, data)\n"
                 "    abs_path = _safe_pdf_path_in_pdfs_dir(stored)\n"
                 "    if abs_path and not is_pdf_linearized(abs_path):\n"
-                "        maybe_linearize_pdf_in_place(abs_path, context='upload')\n"
+                "        linearize_pdf_to(abs_path, abs_path + '.linearized', context='upload')\n"
             ),
             "serve_managed_pdf": (
                 "import os\ndef get(path):\n"

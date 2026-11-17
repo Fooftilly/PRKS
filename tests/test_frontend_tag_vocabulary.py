@@ -53,12 +53,14 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         """Operations already queued behind the creation name the id this
         device minted. Silently pointing them at a different Tag is exactly
         what the Work-Tag family refuses to do for a merged Tag."""
-        backend = (ROOT / 'backend' / 'tag_sync.py').read_text()
-        at = backend.index('def apply_create(')
+        backend = (ROOT / 'backend' / 'domain' / 'organization' / 'tags.py').read_text()
+        at = backend.index('\ndef apply_create(')
         body = backend[at: backend.index('\ndef ', at + 5)]
         self.assertIn('"NAME_TAKEN"', body)
         self.assertIn('target_tag_id', body, 'the client is told what it collided with')
-        self.assertNotIn('insert_tag_on_conn(conn, taken', body)
+        # Only the minted id is ever constructed, never the Tag it collided with.
+        self.assertIn('create_if_absent(scope, tag_id, clean, color)', body)
+        self.assertEqual(body.count('create_if_absent('), 1)
         # And the client refuses an obvious local collision early -- a better
         # error sooner, never the authoritative answer.
         at = self.store.index('function createTag(')

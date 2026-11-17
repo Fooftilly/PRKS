@@ -1,5 +1,13 @@
 # PostgreSQL canonical backend for PRKS 1.0: design (#613)
 
+**Implementation status (2026-11-13).** PostgreSQL is the running and only
+Library backend: PG-C1 (#640) made it the web runtime and PG-C2 (#641)
+deleted the SQLite runtime, its schema, migrations, backup format 1 and the
+processing inbox. Text below that describes SQLite code (module names such as
+`db_manager.py` or `backup_restore.py`, format 1, the inbox) records the state
+this design was written against; that code no longer exists. Whether v0.8 is
+complete is decided by the #614 gates, not by this note.
+
 **Status: approved design (maintainer review of #619 at `7bb9545`,
 2026-10-12).** This is the design gate that #613 requires before any
 PostgreSQL implementation starts. It adds no code, schema, migration,
@@ -114,6 +122,8 @@ answers to the questions that needed an explicit choice.
 ---
 
 ## 1. Current-state inventory
+
+This section records PRKS as it was when this design was written, before 0.8. It is the baseline the design starts from, not a description of the current code. In particular, every `/api/` route except sign-in now needs a signed-in session (§9.3, `docs/login-security.md`).
 
 ### 1.1 Process and request path
 
@@ -632,6 +642,22 @@ for its family in its own mixin file, so lanes do not edit a shared file. The
 facade is the strangler seam, not the target: after cutover, route families
 move to calling the domain directly under #67, and the facade shrinks to
 nothing.
+
+**Status (PG-C3, #642).** Done. Every route family is a module in
+`backend/api/<family>.py` calling domain commands and queries with the
+served Library's database and the admitted `RequestContext`, which
+`library_command` and `library_query` authorize inside each transaction; no
+actor is bound beside the call. The `backend/pg_facade` package is deleted:
+`backend/library.py` keeps `PostgresLibrary` as the database-plus-storage
+handle the routes hold, and `NotPortedError` (answered 501). A Work's
+Research refs and the Research Graph are
+`backend/domain/research/index_commands.py`; the PDF text rebuild route is
+`search_commands.queue_text_rebuild`. Tests keep the facade's old method
+names, and the old index objects' names, over the same commands
+(`tests/library_adapter.py`, `tests/research_index_adapter.py`,
+`tests/text_index_adapter.py`, with the actor bound by
+`tests/acting_context.py`), so the recorded SQLite parity answers still
+replay.
 
 ---
 
@@ -3122,13 +3148,13 @@ stops for maintainer review. No PR is merged without explicit approval.
 | --- | --- | --- |
 | Foundation (PG-1, PG-2, PG-3) | `backend/db/**`, `backend/db/schema/000_*.sql`–`020_*.sql`, `tests/pg/**` harness, CI workflow DB service, `requirements*.txt`, `dependency-inventory.json`, `backend/pg_facade/__init__.py` | domain packages |
 | Identity (L-ID) | `backend/domain/identity/**` (including `root_pairing.py`, §11.1), `020_identity.sql` (after PG-2 hands it over), `backend/api/session.py`, auth admission hook in `server.py` (one function), `claim_root` and `bump_start_generation` in `backend/storage/root_marker.py`, and in `backend/storage/**` only the pairing-field carry in relocation's destination marker and the `root.claim` entries in the inventory, scaffold and teardown rules (§11.1) | other domain packages |
-| Works (L-W) | `backend/domain/works/**`, `100_works.sql`, `backend/pg_facade/works.py`, `backend/sync/handlers/work_*.py` | people/organization/research files |
-| People (L-P) | `backend/domain/people/**`, `110_people.sql`, `pg_facade/people.py`, `sync/handlers/person*.py`, `work_role` handler | works schema (references only) |
-| Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `pg_facade/organization.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
-| Research (L-R) | `backend/domain/research/**`, `130_research.sql`, `derived` mention tables, `pg_facade/research.py`, concept/position/argument/note handlers | |
-| Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `pg_facade/annotations.py` | works projection (calls it) |
-| Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, `pg_facade/processing.py`, the Processing API routes, the Processing clause of the reference checks in `backend/domain/objects/lifecycle.py` (§11.5; L-A-1 is closed) | |
-| Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `pg_facade/search.py`, text extraction job | |
+| Works (L-W) | `backend/domain/works/**`, `100_works.sql`, `api/works.py`, `backend/sync/handlers/work_*.py` | people/organization/research files |
+| People (L-P) | `backend/domain/people/**`, `110_people.sql`, `api/persons.py`, `api/person_groups.py`, `api/work_roles.py`, `api/publishers.py`, `sync/handlers/person*.py`, `work_role` handler | works schema (references only) |
+| Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `api/tags.py`, `api/folders.py`, `api/playlists.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
+| Research (L-R) | `backend/domain/research/**`, `130_research.sql`, `derived` mention tables, `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py`, concept/position/argument/note handlers | |
+| Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `api/annotations.py` | works projection (calls it) |
+| Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, the Processing API routes, the Processing clause of the reference checks in `backend/domain/objects/lifecycle.py` (§11.5; L-A-1 is closed) | |
+| Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `api/search.py`, `pg_facade/text_index.py`, text extraction job | |
 | Jobs (L-J) | `backend/jobs/**`, `030_jobs.sql`, `prks worker` entry point | job handlers (owned by their lanes) |
 | Backup (L-B) | `backend/domain/maintenance/backup*`, `restore*`, `backup_runs` table | |
 | Deployment (L-D) | `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh`, `scripts/test-postgres`, README deployment section, health endpoints | |

@@ -1016,7 +1016,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
 
     def test_node_selftest(self):
         node = shutil.which("node")
-        self.assertIsNotNone(node, "node is required for offline runtime tests")
+        assert node is not None, "node is required for offline runtime tests"
         proc = subprocess.run(
             [node, _RUNNER],
             cwd=_PROJECT_DIR,
@@ -1121,8 +1121,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         (SET_FOLDER_FIELD for `private_notes`, #534). Everywhere else must
         also go through a wrapper — never a raw /api/folders mutation.
         """
-        for name in ("app.js", "components/folders.js", "components/processing-files.js",
-                     "components/works.js", "ui.js"):
+        for name in ("app.js", "components/folders.js", "components/works.js", "ui.js"):
             src = _read(os.path.join(_FRONTEND, "js", *name.split("/")))
             with self.subTest(module=name):
                 # A write is a /api/folders URL paired with a mutating method.
@@ -1152,7 +1151,7 @@ class FrontendFoldersOfflineTests(unittest.TestCase):
         body = runtime[at : runtime.index("\n        /**", at)]
         self.assertIn("result.member_work_ids", body)
         self.assertIn("invalidateEntity('work', members[i])", body)
-        backend = _read(os.path.join(_PROJECT_DIR, "backend", "folder_sync.py"))
+        backend = _read(os.path.join(_PROJECT_DIR, "backend", "domain", "organization", "folders.py"))
         self.assertIn('result["member_work_ids"]', backend)
 
     def test_folder_parent_id_must_be_present_not_merely_nullish(self):

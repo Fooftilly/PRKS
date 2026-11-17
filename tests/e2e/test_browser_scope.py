@@ -218,6 +218,7 @@ class BrowserScopeTests(unittest.TestCase):
     # --- tests ---------------------------------------------------------------
 
     def test_two_accounts_in_one_browser_never_see_each_others_queue(self):
+        assert self.server.library is not None
         owner_id = self.server.library.accounts[OWNER_LOGIN]
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
@@ -383,6 +384,7 @@ class BrowserScopeTests(unittest.TestCase):
         )
 
     def test_an_older_refusal_never_forgets_a_newer_accounts_scope(self):
+        assert self.server.library is not None
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
         stale = self.open_page()
@@ -435,6 +437,7 @@ class BrowserScopeTests(unittest.TestCase):
         )
 
     def test_a_superseded_first_answer_never_binds_the_older_account(self):
+        assert self.server.library is not None
         owner_id = self.server.library.accounts[OWNER_LOGIN]
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
@@ -522,6 +525,7 @@ class BrowserScopeTests(unittest.TestCase):
         )
 
     def test_another_account_signing_in_retires_the_open_page(self):
+        assert self.server.library is not None
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
         page = self.open_page()
@@ -562,6 +566,7 @@ class BrowserScopeTests(unittest.TestCase):
         self.wait_delivered(page)
 
     def test_two_accounts_in_one_browser_never_see_each_others_recovery_drafts(self):
+        assert self.server.library is not None
         owner_id = self.server.library.accounts[OWNER_LOGIN]
         self.sign_in(OWNER_LOGIN)
         page = self.open_page()
@@ -648,6 +653,52 @@ class BrowserScopeTests(unittest.TestCase):
         self.assert_recovery_retired(page)
         page.close()
         self.assert_owner_draft_kept()
+
+    def test_a_browser_without_a_session_signs_in_on_the_page(self):
+        """PG-C2 #641: the page offers sign-in; a wrong password is refused, the right one reloads signed in."""
+        page = self.context.new_page()
+        PageCollector(page, self.server.origin)
+        page.goto(self.server.origin + "/#/folders", wait_until="domcontentloaded")
+        dialog = page.locator("#prks-sign-in")
+        dialog.wait_for(state="visible")
+        self.assertEqual(dialog.get_attribute("role"), "dialog")
+        self.assertEqual(page.evaluate("() => document.activeElement && document.activeElement.id"), "prks-sign-in-login")
+        self.assertTrue(page.evaluate(
+            "() => Array.from(document.body.children)"
+            ".filter((el) => !el.id.startsWith('prks-sign-in')).every((el) => el.inert)"))
+        page.keyboard.press("Escape")
+        self.assertTrue(dialog.is_visible(), "Escape must not close the sign-in dialog")
+
+        page.fill("#prks-sign-in-login", OWNER_LOGIN)
+        page.fill("#prks-sign-in-password", "not the password")
+        held = []
+        page.route("**/api/login", lambda route: held.append(route))
+        page.keyboard.press("Enter")
+        button = page.locator("#prks-sign-in button[type=submit]")
+        page.wait_for_function(
+            "() => document.querySelector('#prks-sign-in button[type=submit]').getAttribute('aria-busy') === 'true'")
+        self.assertTrue(button.is_disabled())
+        self.assertEqual(button.inner_text().strip(), "Signing in…")
+        self.assertEqual(len(held), 1)
+        held[0].continue_()
+        page.unroute("**/api/login")
+        error = page.locator("#prks-sign-in-error")
+        error.wait_for(state="visible")
+        self.assertEqual(error.inner_text(), "The login or password is not right.")
+        self.assertEqual(page.input_value("#prks-sign-in-password"), "")
+        self.assertEqual(page.input_value("#prks-sign-in-login"), OWNER_LOGIN)
+        self.assertIsNone(button.get_attribute("aria-busy"))
+        self.assertTrue(button.is_enabled())
+        self.assertEqual(button.inner_text().strip(), "Sign in")
+
+        page.fill("#prks-sign-in-password", PASSWORD)
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            page.click("#prks-sign-in button[type=submit]")
+        page.wait_for_selector(".prks-folder-library")
+        self.assertEqual(page.locator("#prks-sign-in").count(), 0)
+        owner = page.evaluate("async () => { const s = await prksBrowserScope.resolve(); return s && s.userId; }")
+        self.assertTrue(owner)
+        self.assertFalse(page.evaluate("() => prksBrowserScope.needsSignIn()"))
 
     def test_without_a_session_recovery_stores_nothing(self):
         page = self.context.new_page()

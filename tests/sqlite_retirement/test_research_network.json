@@ -1,0 +1,117 @@
+{
+  "module": "tests/test_research_network.py",
+  "tests": {
+    "ResearchNetworkTests.test_note_save_creates_concept": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_a_note_creates_its_concept_once_whatever_the_spelling"
+      ]
+    },
+    "ResearchNetworkTests.test_same_concept_multiple_works_and_last_ref_keeps_record": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_the_last_reference_going_keeps_the_concept"
+      ]
+    },
+    "ResearchNetworkTests.test_rename_preserves_old_name_as_alias": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_renames_aliases_and_collisions",
+        "tests/pg/test_concepts.py::IdentityTests.test_a_rename_keeps_the_old_name_as_an_alias"
+      ]
+    },
+    "ResearchNetworkTests.test_capitalization_only_rename_updates_display_name": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_renames_aliases_and_collisions"
+      ]
+    },
+    "ResearchNetworkTests.test_rename_collision_unchanged": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_renames_aliases_and_collisions"
+      ]
+    },
+    "ResearchNetworkTests.test_alias_resolves": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_renames_aliases_and_collisions"
+      ]
+    },
+    "ResearchNetworkTests.test_multi_parent_and_cycle_rejected": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_parents_and_cycles",
+        "tests/pg/test_concepts.py::HierarchyTests.test_a_cycle_is_refused_at_any_depth"
+      ]
+    },
+    "ResearchNetworkTests.test_self_parent_rejected": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_parents_and_cycles"
+      ]
+    },
+    "ResearchNetworkTests.test_delete_in_use_rejected": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_a_referenced_concept_refuses_its_delete_whatever_the_index_says"
+      ]
+    },
+    "ResearchNetworkTests.test_delete_concept_blocked_by_encoded_note_with_stale_index": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::DeleteTests.test_encoded_reference_prevents_deleting_canonical_concept"
+      ]
+    },
+    "ResearchNetworkTests.test_delete_concept_blocked_when_index_stale_after_sync_failure": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_a_referenced_concept_refuses_its_delete_whatever_the_index_says"
+      ]
+    },
+    "ResearchNetworkTests.test_code_and_escape_do_not_create": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_code_escapes_private_notes_and_unknown_arguments_create_nothing"
+      ]
+    },
+    "ResearchNetworkTests.test_argument_sources_targets_responses_cycles": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_argument_sources_targets_responses_and_cycles"
+      ]
+    },
+    "ResearchNetworkTests.test_missing_verdict_rejected": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_argument_sources_targets_responses_and_cycles"
+      ]
+    },
+    "ResearchNetworkTests.test_delete_argument_blocked_by_note_and_target": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_a_noted_or_answered_argument_refuses_its_delete_whatever_the_index_says"
+      ]
+    },
+    "ResearchNetworkTests.test_delete_argument_blocked_when_index_stale_after_sync_failure": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_a_noted_or_answered_argument_refuses_its_delete_whatever_the_index_says"
+      ]
+    },
+    "ResearchNetworkTests.test_unknown_argument_ref_does_not_create": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_code_escapes_private_notes_and_unknown_arguments_create_nothing"
+      ]
+    },
+    "ResearchNetworkTests.test_private_notes_do_not_create_concepts": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_code_escapes_private_notes_and_unknown_arguments_create_nothing"
+      ]
+    },
+    "ResearchNetworkTests.test_logs_omit_concept_names": {
+      "replaced_by": [
+        "tests/pg/test_research_index.py::ResearchNetworkTests.test_logs_never_carry_a_concept_name"
+      ],
+      "note": "PostgreSQL logs no concept_created event; the test checks that no record carries the name."
+    },
+    "ResearchNetworkTests.test_delete_concept_blocks_ambiguous_candidate": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::IdentityTests.test_names_compare_by_identity_key",
+        "tests/pg/test_concepts.py::ConcurrencyTests.test_two_creates_of_one_name_make_one_concept"
+      ],
+      "note": "PostgreSQL holds two Concepts whose names share an identity key in no state at all: the prks.concept_keys namespace refuses the second (IdentityTests), so there is no ambiguous candidate for a note or a delete to meet."
+    },
+    "ResearchNetworkTests.test_ambiguous_dormant_duplicates": {
+      "replaced_by": [
+        "tests/pg/test_concepts.py::IdentityTests.test_names_compare_by_identity_key",
+        "tests/pg/test_concepts.py::ConcurrencyTests.test_two_creates_of_one_name_make_one_concept"
+      ],
+      "note": "PostgreSQL holds two Concepts whose names share an identity key in no state at all: the prks.concept_keys namespace refuses the second (IdentityTests), so there is no ambiguous candidate for a note or a delete to meet."
+    }
+  }
+}

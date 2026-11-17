@@ -2,7 +2,6 @@
 
 Users, Libraries, memberships, bootstrap, authentication, sessions and
 authorization, plus the database ↔ data-root pairing of
-:mod:`backend.domain.identity.root_pairing`. Nothing in the running application
-imports this package yet: SQLite stays the only backend until the cutover
-slices (§15.3).
+:mod:`backend.domain.identity.root_pairing`. Every web process starts it
+(:mod:`backend.domain.identity.web_start`).
 """

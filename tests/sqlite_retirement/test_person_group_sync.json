@@ -1,0 +1,238 @@
+{
+ "module": "tests/test_person_group_sync.py",
+ "tests": {
+  "PersonDeletionSyncTests.test_a_person_credited_on_a_file_is_protected": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person",
+    "tests/pg/test_people_facade.py::DeletionTests.test_a_person_with_roles_is_kept"
+   ]
+  },
+  "PersonDeletionSyncTests.test_a_person_with_no_links_is_removed": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person"
+   ]
+  },
+  "PersonDeletionSyncTests.test_deleting_someone_already_gone_is_convergence": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person"
+   ]
+  },
+  "PersonDeletionSyncTests.test_deletion_advances_the_revisions_of_the_memberships_it_removes": {
+   "replaced_by": [
+    "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_person_leaves_tombstones"
+   ]
+  },
+  "PersonDeletionSyncTests.test_destruction_addresses_an_identity_and_carries_no_base_revision": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person",
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger"
+   ]
+  },
+  "PersonDeletionSyncTests.test_the_ordinary_endpoint_shares_the_same_boundary": {
+   "replaced_by": [
+    "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_person_leaves_tombstones",
+    "tests/test_people_core_parity.py::PersonParityTests.test_delete_removes_memberships_and_refuses_the_unknown"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_cycle_is_refused_by_the_server_that_can_see_the_whole_tree": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions",
+    "tests/pg/test_people_facade.py::ConcurrencyTests.test_two_reparents_that_would_close_a_cycle"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_field_edit_advances_only_its_own_revision": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_group_is_created_under_the_id_the_client_minted": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person_group"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_long_conflict_still_fits_what_the_client_can_store": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_long_value_is_never_echoed_and_a_long_conflict_still_fits"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_membership_for_someone_who_does_not_exist_is_terminal": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_membership_in_a_group_that_is_gone_is_terminal": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_membership_that_predates_revisions_reads_as_zero": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_a_membership_row_without_a_revision_reads_as_revision_0"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_name_another_group_already_has_is_terminal": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person_group",
+    "tests/pg/test_people_sync.py::GroupRaceTests.test_a_create_that_loses_the_name_is_ledgered_name_taken"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_parent_that_does_not_exist_is_terminal": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person_group"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_patch_that_changes_nothing_advances_nothing": {
+   "replaced_by": [
+    "tests/test_people_core_parity.py::PersonGroupParityTests.test_fields_update_and_advance"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_removal_that_lost_a_race_with_an_add_is_a_conflict": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_rename_onto_another_groups_name_is_terminal": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table",
+    "tests/pg/test_people_sync.py::GroupRaceTests.test_a_rename_that_loses_the_name_is_ledgered_name_taken"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_replay_of_the_same_op_id_is_exact": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::LedgerTests.test_a_replay_answers_as_the_first_time_and_a_reuse_is_refused",
+    "tests/pg/test_people_sync.py::LedgerTests.test_each_operation_sent_concurrently_applies_once"
+   ]
+  },
+  "PersonGroupSyncTests.test_a_stale_base_with_a_different_value_is_a_conflict": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_adding_someone_already_in_the_group_is_convergence": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_an_edit_that_arrives_after_the_deletion_is_told_so": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table",
+    "tests/pg/test_people_sync.py::RecreationTests.test_a_recreated_group_refuses_every_base_from_before_its_delete"
+   ]
+  },
+  "PersonGroupSyncTests.test_an_empty_name_is_refused_on_every_path": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table",
+    "tests/test_people_core_parity.py::PersonGroupParityTests.test_names_are_unique_and_a_parent_cannot_share_the_name"
+   ]
+  },
+  "PersonGroupSyncTests.test_clearing_a_parent_stores_null_not_an_empty_string": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table"
+   ]
+  },
+  "PersonGroupSyncTests.test_creation_requires_a_collision_resistant_id": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person_group"
+   ]
+  },
+  "PersonGroupSyncTests.test_deleting_a_group_reparents_its_children_and_says_so": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person_group",
+    "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_group_leaves_tombstones_and_moves_its_children"
+   ]
+  },
+  "PersonGroupSyncTests.test_deleting_a_group_that_is_already_gone_is_convergence": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person_group"
+   ]
+  },
+  "PersonGroupSyncTests.test_deletion_addresses_an_identity_and_carries_no_base_revision": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_delete_person_group",
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger"
+   ]
+  },
+  "PersonGroupSyncTests.test_editing_requires_a_base_revision": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table"
+   ]
+  },
+  "PersonGroupSyncTests.test_membership_is_an_element_with_its_own_revision": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members"
+   ]
+  },
+  "PersonGroupSyncTests.test_only_editable_columns_are_reachable": {
+   "replaced_by": [
+    "tests/pg/test_people_sync.py::EnvelopeAndBoundTests.test_ids_fields_and_base_revisions_are_refused_before_the_ledger",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table"
+   ]
+  },
+  "PersonGroupSyncTests.test_recreating_the_same_id_acknowledges_without_overwriting": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_create_person_group",
+    "tests/pg/test_people_sync.py::GroupRaceTests.test_creates_of_one_id_converge"
+   ]
+  },
+  "PersonGroupSyncTests.test_replacing_a_membership_set_advances_only_what_changed": {
+   "replaced_by": [
+    "tests/test_people_core_parity.py::PersonParityTests.test_a_profile_and_its_groups_change_together"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_group_state_keeps_membership_tombstones": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_group_leaves_tombstones_and_moves_its_children"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_group_state_projection_reports_revisions_only": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_ordinary_delete_reparents_through_the_same_boundary": {
+   "replaced_by": [
+    "tests/pg/test_people_facade.py::DeletionTests.test_a_deleted_group_leaves_tombstones_and_moves_its_children",
+    "tests/test_people_core_parity.py::PersonGroupParityTests.test_delete_reparents_children_and_drops_members"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_ordinary_membership_endpoints_advance_the_same_revisions": {
+   "replaced_by": [
+    "tests/test_people_core_parity.py::PersonGroupParityTests.test_membership_from_both_ends",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_ordinary_patch_advances_the_same_revisions": {
+   "replaced_by": [
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions",
+    "tests/test_people_core_parity.py::PersonGroupParityTests.test_fields_update_and_advance"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_person_side_projection_names_the_same_scopes": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::PhantomScopeTests.test_a_no_op_membership_change_leaves_no_revision_row"
+   ]
+  },
+  "PersonGroupSyncTests.test_the_revision_survives_the_relationship": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_members",
+    "tests/pg/test_people_facade.py::RevisionDecisionTests.test_group_field_and_member_decisions"
+   ]
+  },
+  "PersonGroupSyncTests.test_two_devices_that_typed_the_same_name_have_not_collided": {
+   "replaced_by": [
+    "tests/test_people_sync_parity.py::PeopleSyncParityTests.test_person_group_field_decision_table"
+   ]
+  }
+ }
+}

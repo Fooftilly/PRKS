@@ -1,8 +1,7 @@
 """PostgreSQL error mapping: SQLSTATE plus constraint name to PRKS errors.
 
 ``docs/postgresql-architecture.md`` §5.4 is the contract. psycopg errors are
-mapped here once, so no caller matches driver exception text the way the
-SQLite code matches ``sqlite3.IntegrityError`` strings today.
+mapped here once, so no caller matches driver exception text.
 
 Every mapped error carries a stable ``code`` and the HTTP status the adapter
 answers with. Messages are fixed text: they never include the driver's

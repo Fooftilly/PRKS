@@ -87,18 +87,18 @@
       "runtime_files": [
         {
           "path": "/vendor/lucide/lucide.min.js",
-          "sha256": "ba9051c3e42e8354970769a9933fc84d0e40078180b972c6772f88f0d8bca95b"
+          "sha256": "d2e6483c0256fdb7bc4feb41b040717632641beacff7e79791ebcbb31e363344"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "1.66.0"
+      "version": "1.70.0"
     },
     {
       "name": "prks-editor-recovery",
       "runtime_files": [
         {
           "path": "/js/editor-recovery.js",
-          "sha256": "1321baee1d5ad80c3d6b56c4141037af32cc4b23bda24c6999750dfcd5e0b4da"
+          "sha256": "ef21080efadffa15711e2edd4264bb5a5cf9e9b83a0ae01754d4a2fe1f558045"
         }
       ],
       "source_category": "frontend-app:editor-recovery",
@@ -109,7 +109,7 @@
       "runtime_files": [
         {
           "path": "/js/owner-resource.js",
-          "sha256": "868d3d61f53bb8ee32ac510f1a2ad27a20039f47c26086c1846a6f7d0c111dc6"
+          "sha256": "feda62089b92f28a1afebb0c6c700862a3772b14d091ebc7cf0d9334bdec4094"
         }
       ],
       "source_category": "frontend-app:owner-resource",
@@ -139,7 +139,7 @@
       "runtime_files": [
         {
           "path": "/js/route-model.js",
-          "sha256": "e30d91e66981b83df668e343da3582104923ee01250741f292e3e3dabb3147ad"
+          "sha256": "f278f5c64ac0f595e2b19087ce9003756f26fe40fa2f5edcec6b28da0a7802eb"
         }
       ],
       "source_category": "frontend-app:route-model",
@@ -150,7 +150,7 @@
       "runtime_files": [
         {
           "path": "/js/search-query-codec.js",
-          "sha256": "bcc416c86b13e94f9e1affef46e6149dd90cca180390d045636ae9968f5d5001"
+          "sha256": "f6abdd31260e50d63bf1739f8becf6dfb3aeaf58751a1009369395d1265b853a"
         }
       ],
       "source_category": "frontend-app:search-query-codec",
@@ -161,7 +161,7 @@
       "runtime_files": [
         {
           "path": "/js/tab-leave.js",
-          "sha256": "5d0ca336c3daa69fb4dfb5ba9d6e460a932c038687dec9f6421e4456867bb62a"
+          "sha256": "e0e4a62284ef23cd4cf1536bc9006063a1b1a10aedafc4ca606e713bb9c09985"
         }
       ],
       "source_category": "frontend-app:tab-leave",
@@ -172,7 +172,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "4c243014eebb610ba014f7e064e579fe745f68969cf1e42e8952caaa36fa2749"
+          "sha256": "125694cefc151ac252124ce2b46292c6e8c0c1d6196951c1b57683afd2a33c1e"
         }
       ],
       "source_category": "npm:frontend-app",
@@ -183,7 +183,7 @@
       "runtime_files": [
         {
           "path": "/js/work-route-projection.js",
-          "sha256": "0169350c039649544ac986eafa7e04bd3e3e7dc3a9422b4e968856d789d0f5dd"
+          "sha256": "ca9d75c912fe2b308f2de11fd45329ac033c1c3380c69f495528f69b06f6cbe7"
         }
       ],
       "source_category": "frontend-app:work-route-projection",
@@ -194,7 +194,7 @@
       "runtime_files": [
         {
           "path": "/js/workspace-model.js",
-          "sha256": "8edd800e6eb694cf5a7ce3eb94c2396bf31c278615a2727c828080d1f39b1467"
+          "sha256": "ba20c8ea95e11011328a14f31ff804e4beab28080a4fe411d6f707cf16ebbe45"
         }
       ],
       "source_category": "frontend-app:workspace-model",

@@ -62,6 +62,7 @@ from tests.e2e.test_app import (
     _open_work_from_home,
     _pdf_selection_geometry,
     _viewer_annotation_count,
+    _wait_pdf_materialized,
     _wait_pdf_viewer,
 )
 
@@ -1201,6 +1202,7 @@ class OfflineFoundationTests(unittest.TestCase):
         server = AppServer(seed_fn=seed_library)
         self.addCleanup(server.stop)
         server.start()
+        assert _BROWSER is not None
         context = _BROWSER.new_context(
             viewport={"width": 1400, "height": 900},
             service_workers="allow",
@@ -1356,12 +1358,15 @@ class OfflineFoundationTests(unittest.TestCase):
         )
 
     def test_inplace_pdf_materialization_refreshes_whole_file_cache(self):
-        """In-place annotation materialization replaces the scoped PDF cache entry.
+        """Annotation materialization puts the accepted bytes in the scoped PDF cache.
 
         Opening a PDF primes the whole-file cache. A later exclusive POST /pdf
-        keeps the same /api/pdfs/ path (no COW). Range loads never rewrite that
-        entry, so the cache must take the bytes just accepted by the server.
-        Offline reopen then serves that generation, not the pre-edit file.
+        keeps the same /api/pdfs/ path on SQLite (no COW); on PostgreSQL the
+        bytes land under a fresh immutable key for the same document. Either
+        way the open viewer stays mounted, and the cache entry for the
+        canonical path holds the bytes just accepted by the server (range
+        loads never write it). Offline reopen then serves that generation,
+        not the pre-edit file.
         """
         server, page, context, collector = self._start()
         work_a = server.ids["work_a"]
@@ -1383,25 +1388,31 @@ class OfflineFoundationTests(unittest.TestCase):
         self.assertIsNotNone(before)
         self.assertGreater(before["length"], 0)
 
+        page.evaluate("() => { window.__prksViewerBeforeSave = (%s).viewer; }" % _FOCUSED_PDF)
+
         collector.reset_handshake()
         since = _sync_success_at(page)
         _commit_pdf_highlight(page)
         collector.wait_pdf_handshake(page, since_ms=since)
-        _wait_pdf_cache_replaced(page, pdf_path, before)
-        after = _pdf_cache_fingerprint(page, pdf_path)
+        _wait_pdf_materialized(page, work_a)
+        canonical = page.evaluate(
+            "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
+            % _FOCUSED_PDF
+        )
+        # A fresh immutable key for the same document, never the old one.
+        self.assertNotEqual(canonical, pdf_path)
+        self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
+        # The save kept the open viewer: no reload for an annotation-only save.
+        self.assertTrue(page.evaluate(
+            "() => (%s).viewer === window.__prksViewerBeforeSave" % _FOCUSED_PDF))
+        _wait_pdf_cache_replaced(page, canonical, before)
+        after = _pdf_cache_fingerprint(page, canonical)
         self.assertIsNotNone(after)
         self.assertNotEqual(
             (after["length"], after["hash"]),
             (before["length"], before["hash"]),
         )
-        # Exclusive file: materialization must not retarget the managed path.
-        self.assertEqual(
-            page.evaluate(
-                "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
-                % _FOCUSED_PDF
-            ),
-            pdf_path,
-        )
+        pdf_path = canonical
         # The PDF save drops the disposable Work snapshot. Re-read that JSON
         # while still online so an offline reload can mount the page. This
         # must not be a PDF GET: a whole-file network response would rewrite
@@ -1978,8 +1989,35 @@ class OfflineFoundationTests(unittest.TestCase):
             try:
                 page.wait_for_selector(".CodeMirror-hints .CodeMirror-hint", timeout=8000)
             except Exception as exc:
+                # The pdf-annotation case fails rarely (about 1 run in 100
+                # locally) and has not reproduced with logging on. Record the
+                # editor and hint state the dropdown depends on, so the next
+                # CI failure says which input was missing.
+                state = page.evaluate(
+                    """() => {
+                        const ctx = window.prksGetFocusedTabContext();
+                        const cm = ctx.getResource('workNotes').editor.codemirror;
+                        const cur = cm.getCursor();
+                        let hints = null;
+                        try {
+                            hints = window.prksGetPdfAnnotationHintList(ctx).length;
+                        } catch (e) {
+                            hints = String(e);
+                        }
+                        return {
+                            pdfHints: hints,
+                            lineBeforeCursor: cm.getLine(cur.line).slice(0, cur.ch),
+                            editorFocused: cm.hasFocus(),
+                            readOnly: cm.getOption('readOnly'),
+                            completionActive: !!(cm.state && cm.state.completionActive),
+                            connectivity: typeof prksOfflineRuntimeState === 'function'
+                                ? prksOfflineRuntimeState() : null,
+                        };
+                    }"""
+                )
                 raise AssertionError(
-                    "%s autocomplete dropdown never appeared after typing %r" % (label, trigger_text)
+                    "%s autocomplete dropdown never appeared after typing %r; state: %r"
+                    % (label, trigger_text, state)
                 ) from exc
             text_with_dropdown_open = notes_text()
 
@@ -5046,20 +5084,30 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
         server, page, _context, _collector = self._start()
         argument_a = server.ids["argument_a"]
 
+        # Each step drains the durable queue before asserting and re-caching.
+        # updateArgument() writes ONE operation per changed field, and every
+        # field ACK fences the domain again. Without the drain the name ACK
+        # satisfies the assertion, the next _cache_arguments() starts its
+        # index read, and the kind ACK then bumps the generation under that
+        # read: the read is (correctly) refused publication and the index
+        # page never re-reads, so the list is never cached.
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
         page.evaluate("() => window.createArgument({ name: 'Created Argument', kind: 'argument' })")
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
         # B may embed A as a target or a response, so the whole domain goes.
         page.evaluate("id => window.updateArgument(id, { name: 'Renamed Argument', kind: 'stance' })", argument_a)
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
         self._cache_arguments(page, server)
         before = _domain_generation(page, "arguments")
         page.evaluate("id => window.deleteArgument(id)", server.ids["argument_unvisited"])
+        _drain_durable(page)
         self._assert_arguments_invalidated(page, server, before)
 
     def test_failed_argument_mutations_retain_the_cache(self):
@@ -5409,7 +5457,11 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
 
     def _save_person_profile(self, page, person_id, field, value):
         """Drives the real profile editor: open, change one field, Save."""
-        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+        # Await the route render, as OfflinePeopleCoherenceTests does: on the
+        # second edit the page already shows this Person, so the hash check
+        # below passes at once and an Edit click during the same-Person
+        # refresh is lost when that render commits.
+        page.evaluate("async id => { await window.prksNavigate('#/people/' + id); }", person_id)
         page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Edit profile").click()
@@ -6467,7 +6519,10 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         self._assert_people_invalidated(page, server, before)
 
     def _save_person_profile(self, page, person_id, field, value):
-        page.evaluate("id => { void window.prksNavigate('#/people/' + id); }", person_id)
+        # Await the route render: when the page already shows this Person the
+        # hash check below passes at once, and a click on the panel while the
+        # same-Person refresh is still rendering is lost when it commits.
+        page.evaluate("async id => { await window.prksNavigate('#/people/' + id); }", person_id)
         page.wait_for_function("id => decodeURIComponent(location.hash).indexOf(id) !== -1", arg=person_id)
         _open_details_drawer_if_tiled(page)
         page.locator("#panel-content button", has_text="Edit profile").click()

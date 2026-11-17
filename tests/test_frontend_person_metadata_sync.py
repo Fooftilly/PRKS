@@ -71,7 +71,7 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         at = source.index('function isResult(')
         body = source[at: source.index('\n    }', at)]
         self.assertIn('data.value_omitted === true', body)
-        backend = (ROOT / 'backend' / 'person_metadata_sync.py').read_text()
+        backend = (ROOT / 'backend' / 'domain' / 'people' / 'persons.py').read_text()
         self.assertIn('value_omitted=True', backend)
         self.assertNotIn('value=desired', backend)
 

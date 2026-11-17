@@ -1,6 +1,6 @@
 name: PostgreSQL Compose acceptance
 
-# Non-required L-D-1 deployment acceptance (#630): the docker-compose.postgres.yml
+# Non-required L-D-1 deployment acceptance (#630): the docker-compose.yml
 # stack (db, migrate, web, worker) through first-run setup, restarts, an
 # upgrade-style migrate, a stale database copy, a crashed start-generation bump
 # and a recreated database volume. See scripts/ci/test_postgres_compose.sh.
@@ -8,7 +8,7 @@ on:
   pull_request:
     paths:
       - docker-compose.yml
-      - docker-compose.postgres.yml
+      - docker-entrypoint.sh
       - .dockerignore
       - Dockerfile
       - requirements.txt
@@ -28,7 +28,7 @@ on:
       - master
     paths:
       - docker-compose.yml
-      - docker-compose.postgres.yml
+      - docker-entrypoint.sh
       - .dockerignore
       - Dockerfile
       - requirements.txt

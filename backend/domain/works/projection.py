@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Mapping, Optional
 
-# The legacy key lists, kept equal to ``backend/db_manager.py``'s by a test.
+# The key lists of the Work JSON the clients read (SQLite's representation).
 WORK_SUMMARY_COLUMNS: tuple[str, ...] = (
     "id", "title", "status", "published_date", "abstract", "file_path", "source_kind",
     "source_url", "source_mime", "thumb_url", "provider", "provider_id", "urldate",
@@ -55,6 +55,13 @@ WORK_SUMMARY_COLUMNS: tuple[str, ...] = (
     "volume", "issue", "pages", "isbn", "doi", "doc_type", "last_opened_at", "created_at",
     "updated_at",
 )
+# Compact browse projection. Deliberately NOT the full work summary: the browse
+# routes (#/progress, #/types, #/types/:type, #/recent, Recently Added) render
+# shared Work cards plus a short per-route subtitle, and nothing there needs the
+# whole abstract, the bibliographic block (journal/volume/issue/pages/isbn/doi),
+# or the timestamps a card never shows. Carrying the full abstract measured at
+# ~59.5% of the /api/works payload while only #/progress reads it -- and only
+# its first 100 characters. See docs/agent-rules/offline-browse-protocol.md.
 WORK_BROWSE_COLUMNS: tuple[str, ...] = (
     "id", "title", "status", "doc_type", "file_path", "source_kind", "source_url",
     "thumb_url", "thumb_page", "author_text", "year", "published_date", "provider",
@@ -311,12 +318,22 @@ def work_summary(core: Mapping[str, Any], *, with_folder: bool = True) -> dict[s
     return _with_extras(out, core)
 
 
+def abstract_excerpt(abstract: Any) -> str:
+    """The first ``ABSTRACT_EXCERPT_LEN`` code points of the abstract.
+
+    Code points, not UTF-16 units: the client's ``prksAbstractExcerpt``
+    (``frontend/js/work-metadata-state.js``) cuts the same way, so a pending
+    Abstract shows the excerpt the server will send back.
+    """
+    return str(abstract or "")[:ABSTRACT_EXCERPT_LEN]
+
+
 def work_browse(core: Mapping[str, Any], *, excerpt: bool = True,
                 extra: tuple[str, ...] = ()) -> dict[str, Any]:
     """The compact browse row, with the abstract excerpt or the named extras."""
     out = _pick(core, WORK_BROWSE_COLUMNS)
     if excerpt:
-        out["abstract_excerpt"] = str(core["abstract"] or "")[:ABSTRACT_EXCERPT_LEN]
+        out["abstract_excerpt"] = abstract_excerpt(core["abstract"])
     for column in extra:
         out[column] = core[column]
     return _with_extras(out, core)

@@ -105,7 +105,9 @@ class LifecycleTests(EmbeddedWorkerTestCase):
         # The listening socket is already closed: a new connection is refused at
         # once instead of waiting in the backlog for the grace period.
         with self.assertRaises(ConnectionRefusedError):
-            socket.create_connection(address, timeout=WAIT).close()
+            host, port = address[0], address[1]
+            assert isinstance(host, str)
+            socket.create_connection((host, port), timeout=WAIT).close()
         go.set()
         thread.join(WAIT)
         self.assertFalse(thread.is_alive())
@@ -319,8 +321,11 @@ class SettingTests(EmbeddedWorkerTestCase):
         self.assertEqual(jobs.worker.status()["state"], "starting")
         self.assertFalse(any(t.name == "prks-embedded-worker" for t in threading.enumerate()))
 
-    def test_prks_app_has_no_jobs_without_auth(self) -> None:
-        self.assertIsNone(prks_app.start_jobs(None, {"PRKS_EMBEDDED_WORKER": "yes"}))
+    def test_prks_app_with_0_runs_no_embedded_worker(self) -> None:
+        # Every web process authenticates now (PG-C2 #641), so its jobs
+        # runtime always exists; 0 leaves the jobs to a worker process.
+        jobs = prks_app.start_jobs(_Auth(self.open_db()), {"PRKS_EMBEDDED_WORKER": "0"})
+        self.assertIsNone(jobs.worker)
 
 
 class _Auth:
@@ -397,6 +402,7 @@ class EndpointTests(HttpAuthTestCase):
         self.assertEqual(res.status, 503)
         self.assertEqual(res.body, {"error": "unavailable", "code": "unavailable"})
 
-    def test_the_sqlite_runtime_has_no_such_route(self) -> None:
+    def test_a_server_without_auth_refuses_the_route(self) -> None:
         self.serve(auth=None)
-        self.assertEqual(self.call("GET", "/api/diagnostics/jobs").status, 404)
+        # Admission fails closed without identity, before any route is found.
+        self.assertEqual(self.call("GET", "/api/diagnostics/jobs").status, 503)

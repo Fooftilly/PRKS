@@ -17,7 +17,7 @@ from unittest import mock
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import citation
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
 _ENTRY = ("@book{Lovelace1843,\n"
@@ -104,6 +104,15 @@ class MissingTests(BibtexTestCase):
     def test_an_id_holding_nul_never_reaches_the_database(self) -> None:
         with mock.patch.object(citation, "bibtex_inputs", side_effect=AssertionError("queried")):
             self.assertEqual(self.library.generate_bibtex(self.book() + "\x00"), "")
+
+
+class AuthorTextTests(BibtexTestCase):
+    def test_the_author_text_fallback_escapes_special_characters(self) -> None:
+        work_id = self.library.add_work("Escaped Credit", author_text="  Doe, A%na {X}; ; Testerson, B  ",
+                                        year="2026", doc_type="book")
+        bibtex = self.library.generate_bibtex(work_id)
+        self.assertIn("@book{Doe2026,", bibtex)
+        self.assertIn(r"author = {Doe, A\%na \{X\} and Testerson, B}", bibtex)
 
 
 class SnapshotTests(BibtexTestCase):

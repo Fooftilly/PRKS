@@ -48,7 +48,7 @@ The Graph is read-only. Editing relationships is done on their normal PRKS recor
 
 A Work→Concept or Work→Argument edge means that Work's research notes contain explicit semantic markup. It does not mean the Work is objectively about that Concept, and it is not the same as an Argument source Work.
 
-Graph node IDs are namespaced (`concept:C-…`, `position:P-…`, `person:P-…`) because raw PRKS IDs are not unique across record types. The graph is rebuilt on request from `prks_data.db` plus the derived research-reference index. There is no graph database and no schema migration for rendering.
+Graph node IDs are namespaced (`concept:C-…`, `position:P-…`, `person:P-…`) because raw PRKS IDs are not unique across record types. The graph is rebuilt on request from the Library database plus the derived research-reference rows. There is no graph database and no schema migration for rendering.
 
 Graph/offline behavior has dedicated caching and E2E coverage because graph state must remain scoped correctly when several pages are mounted. See [Offline and Sync](Offline-and-Sync.md) for cache variants.
 

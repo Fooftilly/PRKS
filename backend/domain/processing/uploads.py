@@ -18,7 +18,7 @@ from __future__ import annotations
 import posixpath
 import re
 from dataclasses import dataclass
-from typing import Any, BinaryIO, LiteralString
+from typing import Any, BinaryIO, LiteralString, Protocol
 
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
@@ -68,6 +68,16 @@ LIMIT %(limit)s
 """
 
 
+class RequestBody(Protocol):
+    """What :func:`store` reads an upload from: a stream with ``read(size)``.
+
+    The HTTP route passes a timed wrapper around the socket, not a file, so
+    nothing beyond ``read`` is assumed.
+    """
+
+    def read(self, size: int, /) -> bytes: ...
+
+
 class UploadRefused(Exception):
     """The body was refused: ``code`` is one of this module's refusals."""
 
@@ -115,7 +125,7 @@ def check_length(content_length: int, max_bytes: int) -> None:
         raise UploadRefused(TOO_LARGE)
 
 
-def store(storage: StorageBackend, filename: str, body: BinaryIO, content_length: int,
+def store(storage: StorageBackend, filename: str, body: RequestBody, content_length: int,
           max_bytes: int) -> StoredObject:
     """Stream exactly ``content_length`` bytes of ``body`` into a fresh key; what was written.
 
@@ -146,7 +156,7 @@ def store(storage: StorageBackend, filename: str, body: BinaryIO, content_length
     return StoredObject(info.key, info.size, info.sha256, info.version)
 
 
-def _read_exactly(body: BinaryIO, size: int) -> bytes:
+def _read_exactly(body: RequestBody, size: int) -> bytes:
     data = b""
     while len(data) < size:
         chunk = body.read(size - len(data))

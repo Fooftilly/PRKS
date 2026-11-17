@@ -1,0 +1,12 @@
+{
+  "module": "tests/test_research_graph_parity.py",
+  "partial": true,
+  "tests": {
+    "AdapterShapeTests.test_the_postgres_reads_keep_the_sqlite_index_signatures": {
+      "replaced_by": [
+        "tests/test_research_graph_parity.py::AdapterShapeTests.test_every_index_call_the_server_makes_is_mirrored"
+      ],
+      "note": "It compared each PostgresResearchIndex read with the signature of the SQLite PRKSResearchIndex, which PG-C2 deleted. The server is the only caller left, and the remaining test checks that every index call it makes exists on PostgresResearchIndex."
+    }
+  }
+}

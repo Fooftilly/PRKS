@@ -54,9 +54,12 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
             fd = os.open(self.baseFilename, flags, _OWNER_ONLY_MODE)
             try:
+                # TimedRotatingFileHandler always opens in "a" mode (it takes
+                # no mode argument), which matches O_APPEND above. The literal
+                # keeps the stream a TextIOWrapper, as FileHandler._open returns.
                 stream = os.fdopen(
                     fd,
-                    self.mode,
+                    "a",
                     encoding=self.encoding,
                     errors=getattr(self, "errors", None),
                 )
@@ -105,7 +108,8 @@ def setup_logging(config: StorageConfig) -> None:
     root.setLevel(level)
     root.addHandler(file_handler)
     root.addHandler(stderr_handler)
-    root._prks_logging_configured = True
+    # A marker on the root logger survives module reloads; Logger has no such attribute.
+    setattr(root, "_prks_logging_configured", True)
 
     _chmod_owner_only(log_file, report=True)
 

@@ -1,7 +1,7 @@
 """Work-Person roles on PostgreSQL: scope, revisions, tombstones and locks (L-P-1 #632, PR 3).
 
 What SQLite has no counterpart for, or answers differently by design
-(``backend/pg_facade/people.py``): Manifestation-scoped roles, Library
+(``backend/domain/people/__init__.py``): Manifestation-scoped roles, Library
 isolation, the role decision table run against the domain commands, the
 tombstones a Work or Person delete leaves for a recreated id, and the §8.3
 Person row locks. Behaviour SQLite shares is compared directly in
@@ -12,13 +12,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from backend.db_manager import MissingPersonError
+from backend.domain.people.errors import MissingPersonError
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons, roles
 from backend.domain.works import commands
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
+from tests.narrowing import require
 
 _MISSING_PERSON = "P-" + "0" * 32
 
@@ -29,7 +30,7 @@ class RoleTestCase(PeopleFacadeTestCase):
         self.ann = self.library.add_person("Ann", "Lee")
         self.bo = self.library.add_person("Bo", "Ng")
         self.work = self.library.add_work("Essay")
-        self.primary = self.library.get_work(self.work)["primary_manifestation_id"]
+        self.primary = require(self.library.get_work(self.work))["primary_manifestation_id"]
 
     def add_manifestation(self, work_id: str, manifestation_id: str) -> str:
         self.sql("INSERT INTO prks.manifestations (library_id, id, work_id) VALUES (%s, %s, %s)",
@@ -61,7 +62,7 @@ class ManifestationScopeTests(RoleTestCase):
         self.assertEqual([p["display_name"] for p in self.library.get_all_works()[0]["linked_people"]],
                          ["Ann Lee", "B. N."])
         # The Translator role on the other Version is not one of the primary's credits.
-        self.assertEqual([w["role_type"] for w in self.library.get_person(self.ann)["works"]], ["Author"])
+        self.assertEqual([w["role_type"] for w in require(self.library.get_person(self.ann))["works"]], ["Author"])
         self.assertTrue(self.library.has_work_role(self.ann, self.work, "Translator"))
         self.assertEqual(self.revisions("manifestation-person-role"), {
             roles.Role(self.work, self.bo, "Translator", self.primary).revision_scope()[1]: 1,
@@ -76,7 +77,7 @@ class ManifestationScopeTests(RoleTestCase):
         self.assertEqual(self.count("roles"), 2)
 
     def test_a_manifestation_of_another_work_is_refused(self) -> None:
-        elsewhere = self.library.get_work(self.library.add_work("Other"))["primary_manifestation_id"]
+        elsewhere = require(self.library.get_work(self.library.add_work("Other")))["primary_manifestation_id"]
         with self.assertRaises(roles.RoleTargetMissing) as caught:
             self.set_role(roles.Role(self.work, self.ann, "Translator", elsewhere), True)
         self.assertEqual(caught.exception.code, "MANIFESTATION_NOT_FOUND")
@@ -187,6 +188,22 @@ class RevisionTests(RoleTestCase):
         self.assertEqual([(r["id"], r["role_type"], r["order_index"])
                           for r in self.library.get_work_roles(self.work)],
                          [(self.ann, "Author", 0), (self.bo, "Author", 0), (self.bo, "Editor", 1)])
+
+
+class CatalogEtagTests(RoleTestCase):
+    def etag(self) -> str:
+        return self.library.etag_works_catalog(self.library.get_all_works())
+
+    def test_adding_and_removing_a_credit_change_the_catalog_etag(self) -> None:
+        before = self.etag()
+        self.library.add_role(self.ann, self.work, "Author")
+        linked = self.etag()
+        self.assertNotEqual(before, linked)
+        self.library.add_role(self.bo, self.work, "Editor")
+        both = self.etag()
+        self.assertNotEqual(linked, both)
+        self.assertTrue(self.library.delete_work_role(self.work, self.bo, "Editor", 1))
+        self.assertNotEqual(both, self.etag())
 
 
 class TombstoneTests(RoleTestCase):

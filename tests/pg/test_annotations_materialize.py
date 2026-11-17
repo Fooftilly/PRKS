@@ -32,10 +32,11 @@ from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObjec
 from backend.domain.works import commands
 from backend.entity_ids import generate
 from backend.pdf_materialization import STALE_CODE
-from backend.pg_facade import PostgresLibrary
-from backend.pg_facade import context as facade_context
+from tests.library_adapter import TestLibrary
+from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, AnnotationTestCase, annotation
+from tests.narrowing import require
 
 RENDERED = b"%PDF-1.4\n% rendered with the annotation set\n" + b"x" * 512
 
@@ -134,6 +135,7 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.read(after["storage_locator"]), RENDERED)
         self.assertEqual(done, {"work_id": work_id, "file_path": "/api/pdfs/" + after["storage_locator"],
                                 "content_sha256": digest, "byte_size": len(RENDERED),
+                                "export_sha256": digest, "export_byte_size": len(RENDERED),
                                 "materialized_pdf_annotation_revision": canonical,
                                 "canonical_annotation_set_revision": canonical, "stale": False})
         self.assertEqual(self.objects.verify(StorageKey(NAMESPACE_ASSET_OBJECTS, after["storage_locator"]), digest),
@@ -142,7 +144,7 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
         self.assertEqual((after["id"], after["source_locator"]), (before["id"], before["source_locator"]))
-        self.assertEqual(self.library.get_work(work_id)["file_path"], done["file_path"])
+        self.assertEqual(require(self.library.get_work(work_id))["file_path"], done["file_path"])
         status = self.library.get_work_pdf_materialization(work_id)
         self.assertEqual((status["stale"], status["code"]), (False, None))
         self.assertEqual(self.library.accept_work_pdf_materialization_claim(work_id, canonical), canonical)
@@ -177,6 +179,24 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.claims(), {old, written.source.key.name})
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 2})
         self.assertEqual(self.names(), {written.working.key.name})
+
+
+    def test_a_linearized_write_reports_the_uploaded_export_beside_the_stored_bytes(self) -> None:
+        work_id = self.add_pdf_work()
+        canonical = self.edited(work_id)
+        linearized = RENDERED + b"% linearized\n"
+        with mock.patch("backend.domain.objects.ingest._linearized",
+                        lambda storage, source, name, context: (self.put(linearized), "ok")):
+            done = self.materialize(work_id, canonical)
+        after = self.asset(work_id)
+        self.assertEqual((done["content_sha256"], done["byte_size"]),
+                         (hashlib.sha256(linearized).hexdigest(), len(linearized)))
+        self.assertEqual((after["content_sha256"], self.read(after["storage_locator"])),
+                         (done["content_sha256"], linearized))
+        # The export is what the viewer sent, so it can tell its own document
+        # from a replacement after the server rewrote the bytes.
+        self.assertEqual((done["export_sha256"], done["export_byte_size"]),
+                         (hashlib.sha256(RENDERED).hexdigest(), len(RENDERED)))
 
 
 class RenderingRaceTests(MaterializeTestCase):
@@ -443,6 +463,20 @@ class ClaimTests(MaterializeTestCase):
                 self.settle_all()
         self.assertEqual(self.asset(work_id)["materialized"], 0)
 
+    def test_no_non_integer_claim_or_revision_is_an_acknowledgement(self) -> None:
+        work_id = self.add_pdf_work()
+        canonical = self.edited(work_id)
+        self.materialize(work_id, canonical)
+        self.send(self.op("SET_PDF_ANNOTATION", work_id, annotation(color="#0F0F0F"), 0))
+        before = self.library.get_work_pdf_materialization(work_id)
+        for bad in (True, False, 1.0, 1.9, "1", [], {}):
+            with self.subTest(value=repr(bad)):
+                self.assert_refused(STALE_CODE, lambda bad=bad: self.library.mark_work_pdf_materialized_if_claim_current(
+                    work_id, bad))
+                self.assert_refused(STALE_CODE, lambda bad=bad: self.library.mark_work_pdf_materialized(
+                    work_id, at_revision=bad))
+                self.assertEqual(self.library.get_work_pdf_materialization(work_id), before)
+
     def test_no_acknowledgement_without_committed_bytes(self) -> None:
         work_id = self.add_pdf_work()
         canonical = self.edited(work_id)
@@ -533,12 +567,114 @@ class RestartTests(MaterializeTestCase):
         self.db.close()
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
-        library = PostgresLibrary(self.db, storage=self.storage)
+        library = TestLibrary(self.db, storage=self.storage)
         status = library.get_work_pdf_materialization(work_id)
         self.assertEqual((status["canonical_annotation_set_revision"], status["materialized_pdf_annotation_revision"],
                           status["stale"]), (canonical + 1, canonical, True))
-        self.assertEqual(library.get_work(work_id)["file_path"], done["file_path"])
+        self.assertEqual(require(library.get_work(work_id))["file_path"], done["file_path"])
         self.assertEqual(self.read(done["file_path"][len("/api/pdfs/"):]), RENDERED)
         self.assertEqual(self.claims(), {"p.pdf"})
         library._materialize_work_pdf(work_id, writing(RENDERED + b"later"), canonical + 1)
         self.assertEqual(library.mark_work_pdf_materialized_if_claim_current(work_id, canonical + 1), canonical + 1)
+
+
+def _link(annotation_id: str) -> dict[str, Any]:
+    return {"id": annotation_id, "type": 2, "pageIndex": 0, "uri": "https://example.test/doc",
+            "rect": {"origin": {"x": 10, "y": 10}, "size": {"width": 40, "height": 12}}}
+
+
+class AdoptionTests(MaterializeTestCase):
+    """Byte-only user markup adopted into the set (the retired ``tests/test_pdf_annotation_adopt.py``)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.work = self.add_pdf_work()
+
+    def ids(self) -> set[str]:
+        return {row["id"] for row in self.sql("SELECT id FROM prks.annotations WHERE work_id = %s", (self.work,))}
+
+    def current(self) -> dict[str, Any]:
+        """Commit bytes for the canonical set, so the bytes no longer lag it."""
+        canonical = self.asset(self.work)["canonical"]
+        if canonical:
+            self.materialize(self.work, canonical)
+        state = self.library.get_work_pdf_materialization(self.work)
+        self.assertFalse(state["stale"])
+        return state
+
+    def adopt(self, items: list[Any]) -> dict[str, Any]:
+        return self.library.adopt_byte_only_user_markup(self.work, items)
+
+    def assert_stale_refusal(self, items: list[Any]) -> None:
+        before = self.library.get_work_pdf_materialization(self.work)
+        with self.assertRaises(operations.WorkAnnotationError) as caught:
+            self.adopt(items)
+        self.assertEqual(caught.exception.code, STALE_CODE)
+        self.assertEqual(self.library.get_work_pdf_materialization(self.work), before)
+
+    def test_metadata_only_byte_only_both_and_a_link(self) -> None:
+        meta_only, both = annotation(id="ann-meta"), annotation(id="ann-both", color="#000001")
+        self.library.sync_work_annotations(self.work, [meta_only, both])
+        self.current()
+        result = self.adopt([both, annotation(id="ann-byte", color="#000002"), _link("ann-link"),
+                             {"not": "an annotation"}])
+        self.assertEqual((result["adopted"], result["adopted_count"]), (["ann-byte"], 1))
+        self.assertGreaterEqual(result["skipped_existing"], 1)
+        self.assertGreaterEqual(result["skipped_non_user"], 1)
+        self.assertEqual(self.ids(), {"ann-meta", "ann-both", "ann-byte"})
+
+    def test_stale_bytes_are_never_adopted_even_from_an_empty_viewer(self) -> None:
+        self.library.sync_work_annotations(self.work, [annotation(id="a")])
+        self.assert_stale_refusal([annotation(id="byte")])
+        self.assert_stale_refusal([])
+        self.assertNotIn("byte", self.ids())
+        # Deleted after the bytes were written: the stale bytes still hold it.
+        self.current()
+        self.send(self.op("DELETE_PDF_ANNOTATION", self.work, annotation(id="a"), 0))
+        self.assert_stale_refusal([annotation(id="a")])
+        self.assertEqual(self.ids(), set())
+
+    def test_a_known_absent_id_never_comes_back_from_current_bytes(self) -> None:
+        self.library.sync_work_annotations(self.work, [annotation(id="ann-a")])
+        self.library.sync_work_annotations(self.work, [])
+        before = self.current()
+        result = self.adopt([annotation(id="ann-a")])
+        self.assertEqual((result["adopted"], result["skipped_known_absent"]), ([], 1))
+        self.assertEqual((self.ids(), self.library.get_work_pdf_materialization(self.work)), (set(), before))
+
+    def test_adoption_advances_only_the_canonical_revision(self) -> None:
+        before = self.current()
+        self.assertEqual(self.adopt([annotation(id="byte"), _link("skip-me")])["adopted"], ["byte"])
+        after = self.library.get_work_pdf_materialization(self.work)
+        self.assertGreater(after["canonical_annotation_set_revision"], before["canonical_annotation_set_revision"])
+        self.assertEqual(after["materialized_pdf_annotation_revision"], before["materialized_pdf_annotation_revision"])
+        self.assertTrue(after["stale"])
+        self.assertEqual(self.ids(), {"byte"})
+
+    def test_an_empty_viewer_on_current_bytes_changes_nothing(self) -> None:
+        self.library.sync_work_annotations(self.work, [annotation(id="a")])
+        before = self.current()
+        self.assertEqual(self.adopt([])["adopted_count"], 0)
+        self.assertEqual(self.library.get_work_pdf_materialization(self.work), before)
+
+    def test_links_are_skipped_and_managed_user_types_adopted(self) -> None:
+        links = [
+            {"id": "link-type1", "type": 1, "pageIndex": 0, "rect": {"origin": {"x": 10, "y": 10}}},
+            {"id": "link-type2-flat", "type": 2, "pageIndex": 0, "rect": {"origin": {"x": 20, "y": 20}}},
+            {"id": "link-label", "type": 9, "pageIndex": 0, "contents": "Link",
+             "segmentRects": [{"origin": {"x": 1, "y": 1}, "size": {"width": 2, "height": 2}}]},
+            {"id": "link-dest", "type": 5, "pageIndex": 0, "dest": [0, {"name": "XYZ"}, 0, 0, 0]},
+        ]
+        users = [
+            {"id": "ink-1", "type": 15, "pageIndex": 0, "inkList": [[[0, 0], [10, 10]]],
+             "rect": {"origin": {"x": 0, "y": 0}, "size": {"width": 10, "height": 10}}},
+            {"id": "ft-1", "type": 3, "pageIndex": 0, "contents": "Free text",
+             "rect": {"origin": {"x": 1, "y": 1}, "size": {"width": 40, "height": 12}}},
+            {"id": "stamp-1", "type": 13, "pageIndex": 0, "subtype": "Stamp",
+             "rect": {"origin": {"x": 2, "y": 2}, "size": {"width": 40, "height": 40}}},
+            {"id": "note-1", "type": "note", "pageIndex": 0, "contents": "A sticky note"},
+        ]
+        result = self.adopt(links + users)
+        self.assertEqual((sorted(result["adopted"]), result["skipped_non_user"]),
+                         (sorted(item["id"] for item in users), len(links)))
+        self.assertEqual(self.ids(), {item["id"] for item in users})

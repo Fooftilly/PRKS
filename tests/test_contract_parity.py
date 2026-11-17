@@ -12,7 +12,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from backend.db_manager import PRKSDatabase, PRKS_BIBTEX_EXPORT_FIELD_IDS
+from backend.domain.works import work_commands
+from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.work_metadata_sync import WORK_STATUSES
 from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE_TYPES
 
@@ -578,7 +579,7 @@ class ContractParityTests(unittest.TestCase):
     def test_recent_projection_limit_matches_server_default(self):
         frontend_limit = js_recent_limit(read("frontend/js/work-open-state.js"))
 
-        param = inspect.signature(PRKSDatabase.get_recent_browse).parameters["limit"]
+        param = inspect.signature(work_commands.recent_browse).parameters["limit"]
         self.assertIsInstance(param.default, int)
         self.assertEqual(frontend_limit, param.default)
 
@@ -590,23 +591,24 @@ class ContractParityTests(unittest.TestCase):
         )
         self.assertNotIn("Mentioned", PEOPLE_ROLE_TYPES)
         self.assertIn("Mentioned", ROLE_TYPES)
-        # Identity pin: a future hard-coded set equal in content would still pass
-        # assertEqual; assertIs fails unless Processing reuses the named registry.
-        self.assertIs(
-            PRKSDatabase._PROCESSING_ROLE_TYPES,
-            PEOPLE_ROLE_TYPE_SET,
-        )
+        # Processing's staging validates against the named registry itself, not
+        # a hard-coded set equal in content (backend/domain/processing/items.py).
+        items = read("backend/domain/processing/items.py")
+        self.assertIn("from backend.work_role_sync import PEOPLE_ROLE_TYPE_SET", items)
+        self.assertIn("if role_type not in PEOPLE_ROLE_TYPE_SET:", items)
+        self.assertTrue(PEOPLE_ROLE_TYPE_SET >= set(PEOPLE_ROLE_TYPES))
 
         people = ts_const_string_array(read(_PEOPLE_ROLES), "PEOPLE_ROLES")
         self.assertEqual(people, PEOPLE_ROLE_TYPES)
 
-        processing = read("frontend/js/components/processing-files.js")
-        self.assertIn("window.PRKS_PEOPLE_ROLES", processing)
-        self.assertNotRegex(
-            processing,
-            r"const\s+PRKS_PROCESSING_ROLE_TYPES\s*=\s*\[",
-            "Processing must not keep a second hard-coded role array",
-        )
+        # The path-based inbox page that kept a copy of this subset is gone
+        # (PG-C2 #641); no frontend module may bring a second array back.
+        for path in ("frontend/js/app.js", "frontend/js/ui.js"):
+            self.assertNotRegex(
+                read(path),
+                r"const\s+PRKS_PROCESSING_ROLE_TYPES\s*=\s*\[",
+                "Processing must not keep a second hard-coded role array",
+            )
 
         upload_ui = read("frontend/js/ui.js")
         self.assertIn("window.PRKS_PEOPLE_ROLES", upload_ui)
@@ -747,7 +749,7 @@ class ContractParityTests(unittest.TestCase):
         )
         mq = match.group(1)
         px_match = re.fullmatch(r"\(max-width:\s*(\d+)px\)", mq)
-        self.assertIsNotNone(px_match, f"unexpected small-screen MQ: {mq!r}")
+        assert px_match is not None, f"unexpected small-screen MQ: {mq!r}"
         px = int(px_match.group(1))
         self.assertEqual(px, 900)
         self.assertIn("prksMatchesSmallScreenViewport", ui)

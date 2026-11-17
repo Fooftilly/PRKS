@@ -107,8 +107,8 @@ rule contributes features** (union; prefer over-test). Skip rules apply only
 when no take rule matches. Unmapped production files fall back to **smoke**
 (not the full suite) locally; CI fails closed to **full**. Unmapped Python
 under `tests/e2e/` (support modules such as `inventory.py`) is treated the
-same way. Shared core (`app.js`, `server.py`, `db_manager.py`, …) and other
-`ci_mode: "full"` rules (for example `backend/research_network.py`) force full
+same way. Shared core (`app.js`, `server.py`, `prks_app.py`, …) and other
+`ci_mode: "full"` rules (for example `backend/domain/research/**`) force full
 in CI. Docs/unit-only paths select nothing. Add new production areas by editing
 `AFFECTED_RULES` and `FEATURES` in `tests/e2e/policy.py`. Classify a new E2E
 module by adding its module/class prefix to the right feature's `selectors`.
@@ -123,9 +123,8 @@ commit and would drop the working tree), and the diff terminates revision
 parsing with `--`. An option-like, range or path-like base therefore fails
 closed instead of quietly answering a different question.
 
-Benchmark/profile runs never train history. `--profile` / `--no-seed-cache`
-**and** their environment equivalents (`PRKS_E2E_PROFILE`,
-`PRKS_E2E_SEED_CACHE=0`) suppress `.tests/e2e-timings.json` and last-failed
+Benchmark/profile runs never train history. `--profile` **and** its
+environment equivalent (`PRKS_E2E_PROFILE`) suppress `.tests/e2e-timings.json` and last-failed
 persistence; `policy.benchmark_modes()` is the single decision.
 
 Optional stress: `tests/e2e/stress_cache_offline.py` — never part of normal
@@ -162,18 +161,18 @@ of the run's migrated template, bootstraps one owner and pairs it with the
 empty storage root *before* the seed is copied in (bootstrap refuses a root
 that already holds objects), and `AppServer.stop()` drops the database.
 `server.library` names the instance, owner and Library ids for assertions.
-The embedded job worker stays off (`PRKS_EMBEDDED_WORKER=0`) while Library data
-still comes from the SQLite seed: its object sweep would delete the seeded
-PDFs, which PostgreSQL does not reference yet (PG-C1 #640).
-
-`PRKS_E2E_LIBRARY_BACKEND=postgres` is the PG-C1 leg: every server also
-serves its Library from that database (`PRKS_LIBRARY_BACKEND=postgres`) with
-its embedded worker on, and the seed runs through the PostgreSQL facade as
-the owner (`postgres_identity.seed_postgres_library`; seeds call only the
-method names `PRKSDatabase` and `PostgresLibrary` share, through
-`fixtures.open_library`). That leg skips the worker-local seed cache. CI runs
-it from a manual dispatch of the Full E2E Gate (`library_backend: postgres`);
-PR and master gates stay on the SQLite Library until #640 makes the leg green.
+Every server serves its Library from that database, PostgreSQL being the only
+backend (PG-C2 #641), with its embedded worker on, and the seed runs through
+the PostgreSQL facade as the owner (`postgres_identity.seed_postgres_library`,
+through `fixtures.open_library`); there is no seed snapshot to clone. The
+harness never passes `PRKS_LIBRARY_BACKEND` on: a server that finds it refuses
+to start. Its database carries the harness's ownership mark, which is the
+testing proof `--testing` requires before it writes (`backend/db/testing_guard.py`).
+`tests.e2e.test_postgres_library_flows` is a default module: restore through
+Settings, the Processing upload queue and the Research-ACK fence. The
+path-based inbox test (`test_processing_route_surface`) belonged to the SQLite
+Library; it is deleted and its replacements are listed in
+`tests/sqlite_retirement/`.
 
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel. There is no Playwright retry loop in this runner;
@@ -332,7 +331,7 @@ parallel with the matrix when required — never once per worker.
 
 Parallel execution relies on each E2E test keeping independent PRKS
 storage/database and browser-context state: a fresh `TemporaryDirectory`, a
-fresh SQLite seed copy and PostgreSQL database, a fresh port, and a fresh
+fresh PostgreSQL database, a fresh port, and a fresh
 browser context. Do not introduce
 fixed ports, shared writable temp files, shared test databases, a shared browser
 context, or cross-worker mutable globals.

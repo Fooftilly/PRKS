@@ -22,7 +22,6 @@ import pathlib
 import re
 import unittest
 
-from backend.db_migrations import LATEST_SCHEMA_VERSION
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AGENTS = ROOT / "AGENTS.md"
@@ -187,12 +186,12 @@ class AgentGuidanceTests(unittest.TestCase):
     def test_source_comments_point_to_offline_leaf_rules_not_router(self):
         api = (ROOT / "frontend" / "js" / "api.js").read_text(encoding="utf-8")
         app = (ROOT / "frontend" / "js" / "app.js").read_text(encoding="utf-8")
-        db_manager = (ROOT / "backend" / "db_manager.py").read_text(encoding="utf-8")
+        projection = (ROOT / "backend" / "domain" / "works" / "projection.py").read_text(encoding="utf-8")
 
         for path, text in (
             ("frontend/js/api.js", api),
             ("frontend/js/app.js", app),
-            ("backend/db_manager.py", db_manager),
+            ("backend/domain/works/projection.py", projection),
         ):
             with self.subTest(path=path):
                 self.assertNotIn(
@@ -235,7 +234,7 @@ class AgentGuidanceTests(unittest.TestCase):
             ),
             (
                 "backend browse projection",
-                db_manager,
+                projection,
                 "its first 100 characters. See "
                 "docs/agent-rules/offline-browse-protocol.md.",
             ),
@@ -377,25 +376,6 @@ class AgentGuidanceTests(unittest.TestCase):
             with self.subTest(family=family):
                 self.assertIn(family, self.status,
                               "the rollout status is the score and must list it")
-
-    def test_readme_current_schema_matches_latest(self):
-        """User-facing README current-version line tracks LATEST_SCHEMA_VERSION.
-
-        Historical notes such as "Schema v13 removed…" are deliberately left
-        alone; only the explicit current-version statement is compared.
-        """
-        readme = README.read_text()
-        match = re.search(
-            r"(?m)^Current schema version:\s*\*\*(\d+)\*\*\.\s*$",
-            readme,
-        )
-        self.assertIsNotNone(
-            match,
-            "README must state `Current schema version: **N**.` exactly once")
-        self.assertEqual(
-            int(match.group(1)),
-            LATEST_SCHEMA_VERSION,
-            "README current schema drifted from backend.db_migrations.LATEST_SCHEMA_VERSION")
 
 
 if __name__ == "__main__":

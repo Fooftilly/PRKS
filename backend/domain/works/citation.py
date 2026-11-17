@@ -1,7 +1,7 @@
 """What a Work's BibTeX entry is built from, on PostgreSQL (L-W-2 #631).
 
 ``generate_bibtex`` formats one entry from three inputs, and the formatter
-(``PRKSDatabase.format_bibtex``) is shared by both backends, so equal inputs
+(``backend.domain.works.bibtex_format.format_bibtex``) is shared by both backends, so equal inputs
 give byte-identical text. This module reads the inputs, in the caller's one
 ``library_query`` snapshot, by SQLite's rules (``work_projection.citation_target``
 and ``citation_record``, ``_roles_for_manifestation_on_conn``,

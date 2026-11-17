@@ -1,0 +1,37 @@
+{
+  "module": "tests/test_sqlite_connection_lifetime.py",
+  "tests": {
+    "SqliteConnectionLifetimeTests.test_main_db_scope_closes_on_success": {
+      "replaced_by": [
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_command_commits_and_returns_result",
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_connection_is_reusable_after_failure"
+      ]
+    },
+    "SqliteConnectionLifetimeTests.test_main_db_scope_rolls_back_and_closes_on_exception": {
+      "replaced_by": [
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_command_rolls_back_on_exception",
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_command_rolls_back_on_database_error"
+      ]
+    },
+    "SqliteConnectionLifetimeTests.test_production_has_no_transaction_only_connection_contexts": {
+      "obsolete": "It scanned production code for `with sqlite3.connect(...)` blocks, which commit but never close the connection. No production module opens a sqlite3 connection any more; PostgreSQL connections are borrowed from the pool and returned by backend.db's library_command/library_query scopes (tests/pg/test_db_transactions.py)."
+    },
+    "SqliteConnectionLifetimeTests.test_research_index_scope_closes_on_success_and_exception": {
+      "replaced_by": [
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_command_rolls_back_on_exception",
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_set_local_does_not_leak_into_next_borrower"
+      ],
+      "note": "The SQLite research index was a second database file with its own connection scope; on PostgreSQL the Research index is tables of the Library database, reached through the same pooled transaction helpers."
+    },
+    "SqliteConnectionLifetimeTests.test_tests_do_not_use_transaction_only_get_connection_or_raw_conn": {
+      "obsolete": "It scanned test code for transaction-only `with db.get_connection()` blocks on PRKSDatabase, which is deleted with SQLite; PostgreSQL tests use the harness and backend.db's scoped helpers, which always return the connection to the pool."
+    },
+    "SqliteConnectionLifetimeTests.test_text_index_scope_closes_on_success_and_exception": {
+      "replaced_by": [
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_command_rolls_back_on_exception",
+        "tests/pg/test_db_transactions.py::TransactionHelperTests.test_set_local_does_not_leak_into_next_borrower"
+      ],
+      "note": "The SQLite text index was a second database file with its own connection scope; on PostgreSQL the text index is tables of the Library database, reached through the same pooled transaction helpers."
+    }
+  }
+}

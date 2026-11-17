@@ -23,7 +23,7 @@ from backend.domain.maintenance import staged
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity.authorization import AccessRefused, Refusal
-from backend.pg_facade import PostgresLibrary
+from tests.library_adapter import TestLibrary
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import provision_actor
 from tests.pg.harness import PostgresHarness, get_harness
@@ -45,7 +45,7 @@ class MaintenanceApiTests(unittest.TestCase):
         self.addCleanup(self.db.close)
         self.root = tempfile.mkdtemp(prefix="prks-pg-maint-")
         self.addCleanup(shutil.rmtree, self.root, True)
-        self.library = PostgresLibrary(self.db, storage=StorageConfig.for_testing(self.root))
+        self.library = TestLibrary(self.db, storage=StorageConfig.for_testing(self.root))
         self.owner = provision_actor(self.db)
 
     def test_a_reader_may_not_stage_restore_or_download(self) -> None:
@@ -65,6 +65,7 @@ class MaintenanceApiTests(unittest.TestCase):
 
     def test_a_staged_token_is_bound_to_the_user_who_uploaded_it(self) -> None:
         token = "a" * 32
+        assert self.owner.context.user_id is not None
         path = staged.staged_path(self.root, token, self.owner.context.user_id)
         with open(path, "wb") as handle:
             handle.write(b"not read")
@@ -96,7 +97,7 @@ class MaintenanceApiTests(unittest.TestCase):
             objects={StorageKey(NAMESPACE_ASSET_OBJECTS, "a" * 64): None,
                      StorageKey(NAMESPACE_ASSET_OBJECTS, "b" * 64): None,
                      StorageKey(NAMESPACE_PORTRAITS, "c" * 64): None})
-        summary = staged.summarize(archive)
+        summary = staged.summarize(archive)  # pyright: ignore[reportArgumentType]  # a stand-in archive
         self.assertEqual((summary["works"], summary["pdf_files"], summary["persons"]), (2, 2, None))
 
     def test_progress_follows_a_long_backup_until_it_publishes(self) -> None:

@@ -45,7 +45,7 @@ class BackupJobTests(BackupTestCase):
         self.lane = backup_jobs.BackupMaintenance(self.objects, self.storage.root,
                                                   recover_every=timedelta(0))
 
-    def claim(self) -> JobRun:
+    def claim_backup_job(self) -> JobRun:
         self.sql("DELETE FROM prks.jobs WHERE kind <> %s", (backup_jobs.BACKUP_KIND,))
         job = queue.claim(self.db, "test", lease=timedelta(minutes=5))
         assert job is not None
@@ -57,7 +57,7 @@ class BackupJobTests(BackupTestCase):
         first = backup_jobs.request_backup(self.db, self.actor.context)
         self.assertIsNotNone(first)
         self.assertIsNone(backup_jobs.request_backup(self.db, self.actor.context))
-        run = self.claim()
+        run = self.claim_backup_job()
         self.lane.backup(run)
         (published,) = self.runs()
         self.assertEqual(published["state"], "published")
@@ -70,7 +70,7 @@ class BackupJobTests(BackupTestCase):
 
     def test_a_backup_requested_while_one_runs_is_not_queued_again(self) -> None:
         first = backup_jobs.request_backup(self.db, self.actor.context)
-        run = self.claim()
+        run = self.claim_backup_job()
         self.assertEqual(run.job.id, first)
         self.assertIsNone(backup_jobs.request_backup(self.db, self.actor.context))
         self.lane.backup(run)
@@ -107,7 +107,7 @@ class BackupJobTests(BackupTestCase):
             while b.is_alive() and not self.request_lock_waiters() and time.monotonic() < deadline:
                 time.sleep(0.01)
             if not b.is_alive():  # B got through while A was between its check and insert
-                self.claim()
+                self.claim_backup_job()
             resume.set()
             a.join(30)
             b.join(30)

@@ -15,6 +15,7 @@ from unittest import mock
 from typing import Any
 
 import psycopg
+import psycopg.rows
 
 from backend.domain.identity import bootstrap_tokens, root_pairing
 from backend.domain.identity.bootstrap_tokens import BootstrapToken

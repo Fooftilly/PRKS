@@ -1,4 +1,4 @@
-"""Static checks of ``docker-compose.postgres.yml`` (§12.3; L-D-1 #630).
+"""Static checks of ``docker-compose.yml`` (§12.3; L-D-1 #630).
 
 The running stack is exercised by ``scripts/ci/test_postgres_compose.sh``
 (the "PostgreSQL Compose acceptance" workflow); these pin the rules a
@@ -26,7 +26,7 @@ def _service(text: str, name: str) -> str:
 
 class PostgresComposeFileTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.text = _read("docker-compose.postgres.yml")
+        self.text = _read("docker-compose.yml")
 
     def test_the_four_services(self) -> None:
         for name in ("db", "migrate", "web", "worker"):

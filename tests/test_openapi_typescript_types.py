@@ -39,11 +39,6 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
                     "frontend-app/src/api/generated/saved-views.ts",
                 ),
                 (
-                    "processing-files",
-                    "docs/api/openapi-processing-files.json",
-                    "frontend-app/src/api/generated/processing-files.ts",
-                ),
-                (
                     "processing-items",
                     "docs/api/openapi-processing-items.json",
                     "frontend-app/src/api/generated/processing-items.ts",
@@ -70,7 +65,7 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
         markers = {
             "publishers": "export type PublisherInUse =",
             "saved-views": "export type SavedView =",
-            "processing-files": "export type ProcessingFile =",
+            "processing-items": "export type ProcessingItem =",
             "performance-diagnostics": "export type PerformanceSnapshot =",
             "positions": "export type PositionSummary =",
         }
@@ -111,21 +106,10 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
         self.assertNotIn("export interface SavedViewSearch", saved)
         self.assertIn("parseSavedView", saved)
         self.assertIn("prksApiRequest", saved)
-        processing = (_ROOT / "frontend-app" / "src" / "api" / "processing-files.ts").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("from './generated/processing-files'", processing)
-        self.assertIn(
-            "export type { ProcessingFile, ProcessingFileImported, ProcessingFileRole, ProcessingFileTag }",
-            processing,
-        )
-        self.assertNotIn("export interface ProcessingFile ", processing)
-        self.assertNotIn("export interface ProcessingFileRole", processing)
-        self.assertNotIn("export interface ProcessingFileTag", processing)
-        self.assertNotIn("export interface ProcessingFileImported", processing)
-        self.assertIn("export type ProcessingFileUpdate", processing)
-        self.assertIn("parseProcessingFile", processing)
-        self.assertIn("prksApiRequest", processing)
+        # The path-based inbox client and its generated module are gone (PG-C2 #641).
+        self.assertFalse((_ROOT / "frontend-app" / "src" / "api" / "processing-files.ts").exists())
+        self.assertFalse((_GENERATED / "processing-files.ts").exists())
+        self.assertFalse((_ROOT / "docs" / "api" / "openapi-processing-files.json").exists())
         performance = (
             _ROOT / "frontend-app" / "src" / "api" / "performance-diagnostics.ts"
         ).read_text(encoding="utf-8")
@@ -165,7 +149,6 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
             [
                 "frontend-app/src/api/generated/publishers.ts",
                 "frontend-app/src/api/generated/saved-views.ts",
-                "frontend-app/src/api/generated/processing-files.ts",
                 "frontend-app/src/api/generated/performance-diagnostics.ts",
                 "frontend-app/src/api/generated/positions.ts",
             ],

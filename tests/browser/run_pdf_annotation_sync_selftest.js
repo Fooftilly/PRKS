@@ -290,6 +290,92 @@ function applyAckUpdatesLiveRuntimeRevision() {
     }
 }
 
+// #1212: acknowledged state on a runtime only moves forward. An ACK older
+// than the snapshot the runtime holds is not patched in, and a snapshot
+// read before an ACK the runtime already applied is reported as stale.
+function acknowledgedStateOnlyMovesForward() {
+    const runtime = {
+        workId: 'W-1',
+        annotationCache: { items: [highlight('ann-1', 'newer')] },
+        annotationState: {
+            work_id: 'W-1',
+            annotations: [{ annotation_id: 'ann-1', revision: 2 }],
+            known_absent: {},
+        },
+    };
+    globalThis.prksNotePdfAnnotationSnapshotRevision(runtime, 5);
+    const prev = globalThis.prksForEachLiveTabContext;
+    globalThis.prksForEachLiveTabContext = function (fn) {
+        fn({ getResource: () => runtime });
+    };
+    try {
+        const ack = (gen, id, comment, rev) => ({
+            work_id: 'W-1', annotation_id: id, present: true,
+            annotation: highlight(id, comment), server_revision: rev,
+            changed: true, canonical_annotation_set_revision: gen,
+        });
+        // Older than the snapshot: ignored, the newer comment stays.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(4, 'ann-1', 'older', 1)).length, 0);
+        assert.equal(runtime.annotationCache.items[0].contents, 'newer');
+        assert.equal(runtime.annotationState.annotations[0].revision, 2);
+        // The set-revision guard on its own: an id the runtime holds nothing
+        // for, so only the snapshot's set revision refuses it.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(4, 'ann-stale', 'older', 0)).length, 0);
+        assert.ok(!runtime.annotationCache.items.some(a => a.id === 'ann-stale'));
+        // The snapshot's own revision is not older than itself.
+        assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime(runtime, 5), false);
+        // A newer ACK applies and makes a snapshot read before it stale.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(6, 'ann-2', 'added', 0)).length, 1);
+        assert.deepEqual(runtime.annotationCache.items.map(a => a.id), ['ann-1', 'ann-2']);
+        assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime(runtime, 5), true);
+        assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime(runtime, 6), false);
+        assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime(runtime, 7), false);
+        // No revision to compare: nothing is refused.
+        assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime(runtime, undefined), false);
+        assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime({}, 0), false);
+        // Same annotation, ACKs applied out of order: gen 7 then gen 8, then
+        // the delayed gen 7 must not put the older comment back.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(7, 'ann-2', 'first edit', 1)).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(8, 'ann-2', 'second edit', 2)).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(7, 'ann-2', 'first edit', 1)).length, 0);
+        const ann2 = () => runtime.annotationCache.items.find(a => a.id === 'ann-2');
+        assert.equal(ann2().contents, 'second edit');
+        assert.equal(runtime.annotationState.annotations
+            .find(r => r.annotation_id === 'ann-2').revision, 2);
+        // A delete tombstone is not undone by a delayed older present ACK.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes({
+            work_id: 'W-1', annotation_id: 'ann-2', present: false, server_revision: 3,
+            changed: true, canonical_annotation_set_revision: 9,
+        }).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(8, 'ann-2', 'second edit', 2)).length, 0);
+        assert.equal(ann2(), undefined);
+        assert.equal(runtime.annotationState.known_absent['ann-2'], 3);
+        // CREATE at revision 0, then a delayed convergent DELETE of the
+        // then-absent id (also revision 0): the created row stays.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(10, 'ann-4', 'created', 0)).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes({
+            work_id: 'W-1', annotation_id: 'ann-4', present: false, server_revision: 0,
+            changed: false, canonical_annotation_set_revision: 9,
+        }).length, 0);
+        assert.ok(runtime.annotationCache.items.some(a => a.id === 'ann-4'));
+        // An older set generation for a different annotation still applies.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(6, 'ann-3', 'other', 0)).length, 1);
+        assert.ok(runtime.annotationCache.items.some(a => a.id === 'ann-3'));
+    } finally {
+        if (prev) globalThis.prksForEachLiveTabContext = prev;
+        else delete globalThis.prksForEachLiveTabContext;
+    }
+}
+
 async function main() {
     codecParity();
     effectiveOverlay();
@@ -298,6 +384,7 @@ async function main() {
     handlerShapes();
     await conflictTerminalSettlesThroughStore();
     applyAckUpdatesLiveRuntimeRevision();
+    acknowledgedStateOnlyMovesForward();
     console.log(checks + ' checks passed');
 }
 

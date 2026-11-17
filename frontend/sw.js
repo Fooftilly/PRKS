@@ -25,7 +25,7 @@
     // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'cddff3420ba2';
+    const DEPENDENCY_REVISION = 'd7a06c5a4f53';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope and Library epoch,
@@ -145,6 +145,7 @@
         '/js/pdf-work-runtime.js',
         '/js/request-coordinator.js',
         '/js/browser-scope.js',
+        '/js/sign-in.js',
         '/vendor/idb/idb.min.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
@@ -202,7 +203,6 @@
         '/js/components/people-groups.js',
         '/js/components/tags.js',
         '/js/components/types.js',
-        '/js/components/processing-files.js',
         '/js/work-selection.js',
         '/js/search-query-codec.js',
         '/js/saved-views.js',

@@ -496,7 +496,7 @@
             }
           },
           "400": {
-            "description": "item_ids missing, empty, not strings, or more than 500 (VALIDATION_ERROR).",
+            "description": "item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR).",
             "content": {
               "application/json": {
                 "schema": {

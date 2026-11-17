@@ -17,12 +17,14 @@ from typing import Any, Callable, Optional
 from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
+from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import folders, links, tags
 from backend.domain.works import commands
 from backend.entity_ids import generate
 from backend.folder_sync import FolderRuleError, scope_key
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
+from tests.narrowing import require
 
 
 class FolderTestCase(OrganizationTestCase):
@@ -84,18 +86,20 @@ class IdentityTests(FolderTestCase):
         self.assertEqual(self.field_revisions(nested),
                          {"description": 0, "parent_id": 1, "private_notes": 0, "title": 1})
         self.library.update_folder_metadata(drafts, {"title": "  DRAFTS "})
-        self.assertEqual(self.library.get_folder(drafts)["title"], "DRAFTS")
+        self.assertEqual(require(self.library.get_folder(drafts))["title"], "DRAFTS")
 
     def test_what_postgresql_cannot_hold_or_the_schema_bounds_is_refused_before_any_write(self) -> None:
         folder_id = self.add("Folder")
+        call: Callable[..., Any]
+        args: tuple[Any, ...]
         for call, args in ((self.library.add_folder, ("a\x00b",)), (self.library.add_folder, ("x" * 201,)),
                            (self.library.add_folder, ("Ok", "d\x00")),
                            (self.library.update_folder_metadata, (folder_id, {"private_notes": "é" * 2001})),
                            (self.library.update_folder_metadata, (folder_id, {"description": "\x00"}))):
             with self.subTest(args=[str(arg)[:12] for arg in args]), self.assertRaises(ValueError):
                 call(*args)
-        self.assertEqual(self.library.get_folder(self.add("é" * 100))["title"], "é" * 100)  # 200 bytes
-        self.assertEqual(self.library.get_folder(self.add("   "))["title"], "Untitled Folder")
+        self.assertEqual(require(self.library.get_folder(self.add("é" * 100)))["title"], "é" * 100)  # 200 bytes
+        self.assertEqual(require(self.library.get_folder(self.add("   ")))["title"], "Untitled Folder")
         self.assertEqual(self.field_revisions(folder_id), dict.fromkeys(("description", "parent_id",
                                                                          "private_notes", "title"), 0))
 
@@ -118,8 +122,8 @@ class HierarchyTests(FolderTestCase):
         self.refused("Parent folder not found.", self.library.add_folder, "D", "", generate("F"))
         self.library.update_folder_metadata(c, {"parent_id": ""})
         self.library.update_folder_metadata(a, {"parent_id": c})
-        self.assertEqual(self.library.get_folder(c)["children"][0]["id"], a)
-        self.assertEqual(self.library.get_folder(b)["parent"], {"id": a, "title": "A"})
+        self.assertEqual(require(self.library.get_folder(c))["children"][0]["id"], a)
+        self.assertEqual(require(self.library.get_folder(b))["parent"], {"id": a, "title": "A"})
 
     def test_only_a_change_advances_a_field(self) -> None:
         folder_id = self.add("Folder", description="About")
@@ -132,7 +136,8 @@ class HierarchyTests(FolderTestCase):
         self.library.update_folder_metadata(folder_id, {"private_notes": "Mine", "ignored": "x"})
         self.library.update_folder_metadata(folder_id, {"private_notes": "Mine again"})
         self.assertEqual(self.field_revisions(folder_id)["private_notes"], 2)
-        self.assertEqual(self.library.get_folder(folder_id)["created_at"], before["created_at"])
+        assert before is not None
+        self.assertEqual(require(self.library.get_folder(folder_id))["created_at"], before["created_at"])
         self.refused("Folder not found.", self.library.update_folder_metadata, generate("F"), {"title": "X"})
 
 
@@ -169,8 +174,22 @@ class DeleteTests(FolderTestCase):
         # A Folder created again under the id starts from the tombstones.
         self.run_command(lambda scope: folders.insert(scope, folder_id, "Again"))
         self.assertEqual(self.field_revisions(folder_id)["description"], 1)
-        self.assertEqual(self.library.get_folder_tag_options(folder_id)["known_absent"], {kept: 2, removed: 3})
+        self.assertEqual(require(self.library.get_folder_tag_options(folder_id))["known_absent"], {kept: 2, removed: 3})
 
+
+    def test_a_delete_in_a_failed_command_leaves_the_folder(self) -> None:
+        folder_id = self.add("Drafts")
+
+        class Abort(Exception):
+            pass
+
+        def delete_then_fail(scope: LibraryScope) -> None:
+            self.assertEqual(folders.delete(scope, folder_id), (True, None))
+            raise Abort()
+
+        with self.assertRaises(Abort):
+            self.run_command(delete_then_fail)
+        self.assertEqual(require(self.library.get_folder(folder_id))["title"], "Drafts")
 
 class WorkFilingTests(FolderTestCase):
     def test_filing_moving_and_clearing_advance_the_work_folder(self) -> None:
@@ -182,6 +201,7 @@ class WorkFilingTests(FolderTestCase):
         self.assertEqual(self.work_folder(work_id), (a, 1))
         self.refused("This file is already in another folder.", self.library.add_work_to_folder, b, work_id)
         detail = self.library.get_work(work_id)
+        assert detail is not None
         self.assertEqual((detail["folder_id"], detail["folder_title"]), (a, "A"))
         self.assertEqual(self.library.get_all_works()[0]["folder_id"], a)
         self.assertEqual(self.library.get_recently_added_browse()[0]["folder_id"], a)
@@ -193,7 +213,7 @@ class WorkFilingTests(FolderTestCase):
         self.assertEqual(self.library.get_folder_work_ids(b), [work_id])
         self.library.move_work_to_folder(work_id, None)
         self.assertEqual(self.work_folder(work_id), ("", 3))
-        self.assertEqual(self.library.get_work(work_id)["folder_title"], None)
+        self.assertEqual(require(self.library.get_work(work_id))["folder_title"], None)
         self.assertEqual(self.filed(), [])
 
     def test_a_missing_work_or_folder_is_refused(self) -> None:
@@ -237,6 +257,17 @@ class WorkDeleteTests(FolderTestCase):
         self.assertEqual(self.library.get_all_folders()[0]["work_count"], 0)
         self.library.delete_empty_folder(folder_id)
 
+    def test_a_missing_folder_reads_as_missing_without_a_data_root(self) -> None:
+        from tests.library_adapter import TestLibrary
+
+        folder_id = self.add("A")
+        self.library.move_work_to_folder(self.library.add_work("Filed"), folder_id)
+        bare = TestLibrary(self.db)
+        self.assertIsNone(bare.get_folder("F-missing"))
+        # Finishing a Work summary needs the PDF directory.
+        with self.assertRaisesRegex(RuntimeError, "no data root"):
+            bare.get_folder(folder_id)
+
 
 class IsolationTests(FolderTestCase):
     def test_another_librarys_folders_are_invisible(self) -> None:
@@ -262,7 +293,7 @@ class IsolationTests(FolderTestCase):
     def test_a_reader_reads_folders_but_cannot_change_them(self) -> None:
         folder_id, work_id = self.add("A"), self.library.add_work("W")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.get_folder(folder_id)["title"], "A")
+            self.assertEqual(require(self.library.get_folder(folder_id))["title"], "A")
             for call in (lambda: self.library.add_folder("B"),
                          lambda: self.library.update_folder_metadata(folder_id, {"title": "B"}),
                          lambda: self.library.move_work_to_folder(work_id, folder_id),
@@ -441,7 +472,7 @@ class RaceTests(FolderTestCase):
         self.assertIs(holder, True)
         self.assertIsInstance(contender, FolderRuleError)
         self.assertEqual(str(contender), _TAKEN)
-        self.assertEqual((self.library.get_folder(other)["title"], self.field_revisions(other)["title"]),
+        self.assertEqual((require(self.library.get_folder(other))["title"], self.field_revisions(other)["title"]),
                          ("Other", 0))
 
     def test_two_crossed_moves_cannot_close_a_cycle(self) -> None:
@@ -451,7 +482,7 @@ class RaceTests(FolderTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, FolderRuleError)
         self.assertEqual(str(contender), "Cannot set parent to a subfolder (cycle).")
-        self.assertEqual(self.library.get_folder(b)["parent_id"], None)
+        self.assertEqual(require(self.library.get_folder(b))["parent_id"], None)
 
     def test_a_move_under_a_folder_being_deleted_is_refused(self) -> None:
         doomed, moving = self.add("Doomed"), self.add("Moving")

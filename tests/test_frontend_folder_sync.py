@@ -134,13 +134,13 @@ class FolderSyncFrontendTests(unittest.TestCase):
         conflict with it."""
         self.assertIn('parent_id', folder_sync.FIELDS)
         self.assertEqual(folder_sync.FIELD_SCOPE_TYPE, 'folder-field')
-        backend = (ROOT / 'backend' / 'folder_sync.py').read_text()
-        at = backend.index('def set_field_on_conn(')
+        backend = (ROOT / 'backend' / 'domain' / 'organization' / 'folders.py').read_text()
+        at = backend.index('\ndef set_field(')
         body = backend[at: backend.index('\ndef ', at + 5)]
-        self.assertIn('assert_parent_usable(conn, folder_id, desired)', body)
+        self.assertIn('_assert_parent_usable(scope, folder_id, desired)', body)
         # A title is unique WITHIN its parent, so a move can collide exactly as
         # a rename can -- both fields are judged together.
-        self.assertIn('assert_title_free(', body)
+        self.assertIn('_assert_title_free(', body)
 
     def test_a_works_folder_is_a_scalar_on_the_work(self):
         """A Work is in at most one folder, so filing, moving and clearing are
@@ -169,8 +169,8 @@ class FolderSyncFrontendTests(unittest.TestCase):
                       self.store[at: self.store.index('\n    }', at)])
 
     def test_the_empty_only_rule_stays_canonical(self):
-        backend = (ROOT / 'backend' / 'folder_sync.py').read_text()
-        at = backend.index('def delete_folder_on_conn(')
+        backend = (ROOT / 'backend' / 'domain' / 'organization' / 'folders.py').read_text()
+        at = backend.index('\ndef delete(')
         body = backend[at: backend.index('\ndef ', at + 5)]
         self.assertIn('"FOLDER_NOT_EMPTY"', body)
         self.assertIn('"FOLDER_HAS_SUBFOLDERS"', body)

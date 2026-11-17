@@ -206,7 +206,8 @@ class ObjectInfo:
     modified_at: Optional[float] = None
 
 
-Writer = Callable[[BinaryIO], None]
+# A writer's return value is ignored (``stream.write`` returns a count).
+Writer = Callable[[BinaryIO], object]
 
 
 @runtime_checkable
@@ -245,12 +246,11 @@ class LocalPathCapable(Protocol):
 def mint_name(namespace: str, hint: str) -> str:
     """A fresh key name for ``namespace`` (today's ``mint_managed_pdf_filename`` rules).
 
-    Only ``asset-objects`` names are minted here. On SQLite a portrait's name
-    is derived from the person ID and an image-URL hash; on PostgreSQL each
-    cached portrait gets a fresh name from ``backend.domain.objects.portraits``.
+    Only ``asset-objects`` names are minted here; each cached portrait gets a
+    fresh name from ``backend.domain.objects.portraits``.
     """
     if namespace == NAMESPACE_ASSET_OBJECTS:
-        from backend.db_manager import mint_managed_pdf_filename
+        from backend.managed_pdf_names import mint_managed_pdf_filename
 
         return validate_key_name(mint_managed_pdf_filename(hint))
     if namespace in NAMESPACES:

@@ -1,14 +1,11 @@
 """Work create and reads: the PostgreSQL facade returns SQLite's JSON (L-W-1 #628).
 
-Each test runs the same calls on the library object of its leg and on a
-reference ``PRKSDatabase`` built in the same test, then compares the two
-results after replacing what differs by construction: generated ids (each
-becomes a label naming its Work) and the current time (each timestamp
-becomes its format). On the SQLite leg the two sides are both SQLite; on the
-``postgres`` leg (``scripts/test-postgres --parity``) the left side is
-:class:`backend.pg_facade.PostgresLibrary`, so equality is parity with
-today's representation. A test that reaches a method the facade has not
-ported is skipped there, never counted.
+Each test runs the same calls on :class:`tests.library_adapter.TestLibrary`
+and on the recorded SQLite ``PRKSDatabase`` (``tests/parity_reference.py``),
+then compares the two results after replacing what differs by construction:
+generated ids (each becomes a label naming its Work) and the current time
+(each timestamp becomes its format), so equality is parity with SQLite's
+representation. Run with ``scripts/test-postgres --parity``.
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.db_manager import PRKSDatabase
+from backend import etags
 from tests.backend_parity import parametrize_backends
 from tests.works_parity_helpers import PDF_BYTES as _PDF_BYTES
 from tests.works_parity_helpers import VIDEO as _VIDEO
@@ -114,10 +111,11 @@ class WorksCoreParityTests(WorksParityTestCase):
                                  sorted(map(self.ref.normal, theirs), key=str))
                 if call == "get_recently_added_works":
                     continue  # SQLite gives this list no tie-break
-                for rows in (mine, theirs):
-                    expected = sorted(rows, key=lambda row: row["id"])
-                    expected.sort(key=lambda row: row["created_at"], reverse=True)
-                    self.assertEqual(rows, expected)
+                # The rule is this leg's: the recorded reference replays its
+                # rows under ids minted for this run, which keep no order.
+                expected = sorted(mine, key=lambda row: row["id"])
+                expected.sort(key=lambda row: row["created_at"], reverse=True)
+                self.assertEqual(mine, expected)
 
     def test_the_browse_catalog_is_ordered_by_title(self) -> None:
         self._catalog()
@@ -154,7 +152,7 @@ class WorksCoreParityTests(WorksParityTestCase):
         self._catalog()
         mine, theirs = self.both("get_all_works")
         self.assertEqual(self.leg.db.etag_works_catalog(mine),
-                         PRKSDatabase.etag_for_representation("works", mine))
+                         etags.etag_for_representation("works", mine))
         self.assertEqual(self.leg.db.etag_for_representation("works", mine),
                          self.leg.db.etag_works_catalog(mine))
         self.assertRegex(self.leg.db.etag_works_catalog(mine), r'^W/"prks-works-8-[0-9a-f]{32}"$')

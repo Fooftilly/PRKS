@@ -12,11 +12,6 @@
       "output": "frontend-app/src/api/generated/saved-views.ts"
     },
     {
-      "name": "processing-files",
-      "artifact": "docs/api/openapi-processing-files.json",
-      "output": "frontend-app/src/api/generated/processing-files.ts"
-    },
-    {
       "name": "processing-items",
       "artifact": "docs/api/openapi-processing-items.json",
       "output": "frontend-app/src/api/generated/processing-items.ts"

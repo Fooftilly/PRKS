@@ -13,9 +13,6 @@ table:
 - :mod:`backend.jobs.runner`: runs one claimed job with a heartbeat and
   records its outcome.
 - :mod:`backend.jobs.worker`: the worker loop and the ``prks worker`` process.
-- :mod:`backend.jobs.embedded`: the worker thread of a ``PRKS_AUTH`` web
-  process and its job diagnostics.
-
-Like the rest of the PostgreSQL code, nothing here is imported by the running
-SQLite application.
+- :mod:`backend.jobs.embedded`: the worker thread of a web process and its
+  job diagnostics.
 """

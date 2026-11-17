@@ -98,7 +98,7 @@ class FrontendPublishersPageTests(unittest.TestCase):
         card = vue[vue.index('class="project-card publishers-page__list-item"'):vue.index('class="publishers-page__list-main"')]
         self.assertNotIn("data-prks-route", card)
         policy = _read(_PROJECT_DIR, "tests", "e2e", "policy.py")
-        rule = policy[policy.index('"name": "publishers-vue"'):policy.index('"name": "processing-vue"')]
+        rule = policy[policy.index('"name": "publishers-vue"'):policy.index('"name": "processing-queue-vue"')]
         self.assertIn('"features": ("publishers",)', rule)
         self.assertIn("test_publishers_route_surface", rule)
         self.assertNotIn('"features": ("browse",)', rule)

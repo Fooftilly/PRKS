@@ -19,7 +19,7 @@ import type { PeopleIndexRouteInstance, PersonDetailRouteInstance } from '../fea
 import type { PersonGroupDetailRouteInstance, PersonGroupsIndexRouteInstance } from '../features/person-groups/route'
 import type { PlaylistDetailRouteInstance, PlaylistsIndexRouteInstance } from '../features/playlists/route'
 import type { PositionDetailRouteInstance, PositionsIndexRouteInstance } from '../features/positions/route'
-import type { ProcessingRouteInstance } from '../features/processing/route'
+import type { ProcessingRouteInstance } from '../features/processing-queue/route'
 import type { ProgressRouteInstance } from '../features/progress/route'
 import type { PublishersRouteInstance } from '../features/publishers/route'
 import type { RecentRouteInstance } from '../features/recent/route'

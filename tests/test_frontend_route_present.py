@@ -8,9 +8,9 @@ FRONTEND_JS = ROOT / "frontend" / "js"
 APP = FRONTEND_JS / "app.js"
 
 # Feature-specific pre-paint steps that remain as thin wrappers around the
-# shared presenter: the Research Graph disposes its Cytoscape instance, and
-# Processing publishes its people catalogue and releases the preview pane.
-_WRAPPERS = {"prksPresentVueResearchGraph", "prksPresentVueProcessing"}
+# shared presenter: the Research Graph disposes its Cytoscape instance. (The
+# path-based Processing inbox's wrapper left with it, PG-C2 #641.)
+_WRAPPERS = {"prksPresentVueResearchGraph"}
 
 
 class RouteSurfacePresentContracts(unittest.TestCase):

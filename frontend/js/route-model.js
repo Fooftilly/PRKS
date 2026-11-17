@@ -1,6 +1,6 @@
 var prksRouteModel = (function(exports) {
 	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-	//#region src/domain/people-roles.ts
+	// src/domain/people-roles.ts
 	/**
 	* The People/Processing bibliographic role subset. Intentionally excludes
 	* Mentioned, which stays a Work-role-only type. Mirrors backend
@@ -21,8 +21,7 @@ var prksRouteModel = (function(exports) {
 	function isPeopleRole(value) {
 		return PEOPLE_ROLES.indexOf(value) >= 0;
 	}
-	//#endregion
-	//#region src/domain/work-status.ts
+	// src/domain/work-status.ts
 	/**
 	* Work progress status vocabulary. Mirrors the DB check and backend
 	* work_metadata_sync.WORK_STATUSES; pinned by tests/test_contract_parity.py.
@@ -40,8 +39,7 @@ var prksRouteModel = (function(exports) {
 	function isWorkStatus(value) {
 		return WORK_STATUSES.indexOf(value) >= 0;
 	}
-	//#endregion
-	//#region src/routing/route-model.ts
+	// src/routing/route-model.ts
 	/**
 	* Typed PRKS route model: the hash parser, the route registry, and
 	* canonical hashes. This is the only hash parser. It is not a router:
@@ -552,7 +550,6 @@ var prksRouteModel = (function(exports) {
 	function isRecognizedRoute(route) {
 		return !!(route && route.name && route.name !== "unknown");
 	}
-	//#endregion
 	exports.HOME_HASH = HOME_HASH;
 	exports.PEOPLE_ROLES = PEOPLE_ROLES;
 	exports.ROUTE_META = ROUTE_META;

@@ -1,7 +1,6 @@
 """Backup and restore over HTTP on the PostgreSQL Library (§11.4; PG-C1 #640).
 
-The routes keep the SQLite runtime's contract, so the Settings page drives
-both, but every step is the PostgreSQL maintenance lane's:
+Every step is the PostgreSQL maintenance lane's:
 
 - ``POST /api/backups/progress`` queues ``backup.create`` for the actor's
   Library (:func:`backend.domain.maintenance.jobs.request_backup`, or follows
@@ -25,8 +24,7 @@ Every route requires ``ADMIN_LIBRARY`` in its own authorized snapshot first,
 so only an owner learns whether a backup or a staged upload exists.
 ``AccessRefused`` propagates to ``server.py``, which answers it as every
 PostgreSQL route does. Maintenance SQL and the staged files stay in
-``backend/domain/maintenance``; this module maps requests and answers. psycopg
-is imported only once a route runs, never by the SQLite runtime.
+``backend/domain/maintenance``; this module maps requests and answers.
 """
 
 from __future__ import annotations

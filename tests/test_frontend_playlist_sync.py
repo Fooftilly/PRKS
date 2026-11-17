@@ -5,6 +5,7 @@ import subprocess
 import unittest
 
 from backend import playlist_sync, sync_protocol
+from tests.narrowing import must_search
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -21,6 +22,11 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         self.store = (FRONTEND / 'local-store.js').read_text()
         self.state = (FRONTEND / 'playlist-state.js').read_text()
         self.backend = (ROOT / 'backend' / 'playlist_sync.py').read_text()
+        self.domain = (ROOT / 'backend' / 'domain' / 'organization' / 'playlists.py').read_text()
+
+    def domain_function(self, name):
+        at = self.domain.index('\ndef %s(' % name)
+        return self.domain[at: self.domain.index('\ndef ', at + 5)]
 
     def test_runtime_selftests(self):
         proc = subprocess.run(
@@ -79,9 +85,9 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         self.assertIn("if (desired === observed.playlist_id) { setResult(null); return; }", body)
         # And both directions advance the ORDER of the playlists involved, or a
         # reorder made before the move would still look current.
-        at = self.backend.index('def set_work_playlist_on_conn(')
-        server = self.backend[at: self.backend.index('\ndef ', at + 5)]
-        self.assertEqual(server.count('_advance(conn, ORDER_SCOPE_TYPE'), 2)
+        server = self.domain_function('_move')
+        self.assertEqual(server.count('revisions.advance(scope, ORDER_SCOPE_TYPE'), 2)
+        self.assertIn('_move(scope, work_id,', self.domain_function('set_work_playlist'))
         # Both wrapper names reach the one family.
         pl = (FRONTEND / 'components' / 'playlists.js').read_text()
         for fn in ('async function addWorkToPlaylist(',
@@ -107,7 +113,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         aggregate -- so what it can name is bounded by what an envelope
         carries."""
         at = self.store.index('const PLAYLIST_MAX_ITEMS =')
-        value = int(re.search(r'= (\d+);', self.store[at: at + 60]).group(1))
+        value = int(must_search(r'= (\d+);', self.store[at: at + 60]).group(1))
         self.assertEqual(value, playlist_sync.MAX_ITEMS)
 
     def test_a_video_title_keeps_using_the_work_metadata_family(self):
@@ -163,9 +169,9 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
     def test_deletion_advances_every_members_membership_revision(self):
         """A device holding "this video is in that playlist" has to be able to
         discover it was overtaken."""
-        at = self.backend.index('def delete_playlist_on_conn(')
-        body = self.backend[at: self.backend.index('\ndef ', at + 5)]
-        self.assertIn('_advance(conn, WORK_SCOPE_TYPE, work_id)', body)
+        body = self.domain_function('delete')
+        self.assertIn('*((WORK_SCOPE_TYPE, w) for w in members)', body)
+        self.assertIn('revisions.advance(scope, scope_type, scope_id)', body)
 
     def test_the_base_is_acknowledged_and_unknown_is_not_empty(self):
         at = self.state.index('async function acknowledgedPlaylistBase(')
@@ -191,8 +197,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         """A long playlist's ids would not fit the client's durable result
         bound, and the client re-reads the playlist to see what the server
         has."""
-        at = self.backend.index('def apply_order(')
-        body = self.backend[at: self.backend.index('\ndef ', at + 5)]
+        body = self.domain_function('apply_order_operation')
         self.assertIn('current_count=len(present)', body)
         self.assertNotIn('current_value=', body)
         at = self.state.index('const orderHandler = {')

@@ -8,8 +8,9 @@ refusal must reach the client with admission's status and code, not as a
 500. A mapped database error keeps its status: a transient one is 503 with
 ``Retry-After``. Anything else stays a logged 500 with a request id.
 
-The interfering change runs inside the facade method, after admission and
-before the method's own transaction, exactly where a concurrent restore or
+The interfering change runs inside the facade method (or, for a route
+family PG-C3 moved, the domain command the route calls), after admission
+and before the method's own transaction, exactly where a concurrent restore or
 membership change would land.
 """
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from typing import Any
+from unittest import mock
 
 from backend.api import session as session_api
 from backend.db.errors import (
@@ -26,31 +28,28 @@ from backend.db.errors import (
     UnmappedDatabaseError,
 )
 from backend.domain.identity.authorization import AccessRefused, Refusal
+from backend.domain.research import argument_commands, concept_commands, position_commands
 from tests.pg.test_http_research import ResearchHttpTestCase
 
 
 class RouteFailureTests(ResearchHttpTestCase):
-    def interfere(self, method: str, before: Callable[[], None]) -> None:
-        """Run ``before`` when the route calls the facade's ``method``, then the method itself."""
-        original = getattr(self.facade, method)
+    def interfere_command(self, module: Any, name: str, before: Callable[[], object]) -> None:
+        """Run ``before`` when the route calls the command ``module.name``, then the command."""
+        original = getattr(module, name)
 
         def wrapped(*args: Any, **kwargs: Any) -> Any:
             before()
             return original(*args, **kwargs)
 
-        setattr(self.facade, method, wrapped)
-
-    def raises(self, method: str, error: BaseException) -> None:
-        def fail() -> None:
-            raise error
-
-        self.interfere(method, fail)
+        patcher = mock.patch.object(module, name, wrapped)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def concept_names(self) -> list[str]:
         return [row["name"] for row in self.run_sql("SELECT name FROM prks.concepts ORDER BY name")]
 
     def test_a_restore_between_admission_and_the_route_is_library_epoch_changed(self) -> None:
-        self.interfere("create_concept", lambda: self.run_sql(
+        self.interfere_command(concept_commands, "create", lambda: self.run_sql(
             "UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.lib,)))
         res = self.send("POST", "/api/concepts", {"name": "Ethics"})
         self.assertEqual(res.status, 409, res.raw)
@@ -61,14 +60,14 @@ class RouteFailureTests(ResearchHttpTestCase):
 
     def test_a_demotion_between_admission_and_the_route_is_forbidden(self) -> None:
         ethics = self.ok(self.send("POST", "/api/concepts", {"name": "Ethics"}), 201)["id"]
-        self.interfere("update_concept", lambda: self.run_sql(
+        self.interfere_command(concept_commands, "update", lambda: self.run_sql(
             "UPDATE prks.library_memberships SET role = 'reader' WHERE library_id = %s", (self.lib,)))
         res = self.send("PATCH", f"/api/concepts/{ethics}", {"name": "Morals"})
         self.assertEqual((res.status, res.body["code"]), (403, "forbidden"), res.raw)
         self.assertEqual(self.concept_names(), ["Ethics"])
 
     def test_a_maintenance_flag_set_after_admission_is_maintenance(self) -> None:
-        self.interfere("create_position", lambda: self.run_sql(
+        self.interfere_command(position_commands, "create", lambda: self.run_sql(
             "UPDATE prks.libraries SET maintenance = 'restore', maintenance_run = %s WHERE id = %s",
             (uuid.uuid4(), self.lib)))
         res = self.send("POST", "/api/positions", {"name": "Thesis"})
@@ -76,21 +75,27 @@ class RouteFailureTests(ResearchHttpTestCase):
         self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.positions")[0]["n"], 0)
 
     def test_a_read_after_the_membership_is_removed_is_not_authenticated(self) -> None:
-        self.interfere("list_concepts", lambda: self.run_sql(
+        self.interfere_command(concept_commands, "catalog_with_mentions", lambda: self.run_sql(
             "DELETE FROM prks.library_memberships WHERE library_id = %s", (self.lib,)))
         res = self.get("/api/concepts")
         self.assertEqual((res.status, res.body["code"]), (401, "not_authenticated"), res.raw)
         self.assertNotIn(self.lib, res.text)
 
     def test_a_transient_database_error_is_503_with_retry_after(self) -> None:
-        self.raises("list_arguments", RetryTransactionError(sqlstate="40001"))
+        def fail() -> None:
+            raise RetryTransactionError(sqlstate="40001")
+
+        self.interfere_command(argument_commands, "catalog_with_mentions", fail)
         res = self.get("/api/arguments")
         self.assertEqual((res.status, res.body["code"]), (503, "RETRY"), res.raw)
         self.assertEqual(res.header("Retry-After"), ["1"])
         self.assertEqual(res.header("PRKS-Library-Epoch"), [str(self.library_epoch())])
 
     def test_an_unmapped_database_error_stays_a_logged_500(self) -> None:
-        self.raises("list_positions", UnmappedDatabaseError(sqlstate="XX000"))
+        def fail() -> None:
+            raise UnmappedDatabaseError(sqlstate="XX000")
+
+        self.interfere_command(position_commands, "catalog", fail)
         res = self.get("/api/positions")
         self.assertEqual(res.status, 500, res.raw)
         self.assertEqual(res.body["error"], "internal_error")

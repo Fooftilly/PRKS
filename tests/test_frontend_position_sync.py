@@ -21,6 +21,7 @@ class PositionSyncFrontendTests(unittest.TestCase):
         self.store = (FRONTEND / 'local-store.js').read_text()
         self.state = (FRONTEND / 'position-state.js').read_text()
         self.backend = (ROOT / 'backend' / 'position_sync.py').read_text()
+        self.domain = (ROOT / 'backend' / 'domain' / 'research' / 'positions.py').read_text()
 
     def test_runtime_selftests(self):
         proc = subprocess.run(
@@ -66,10 +67,9 @@ class PositionSyncFrontendTests(unittest.TestCase):
         at = self.backend.index('def scope_key(')
         self.assertIn('[position_id, field]', self.backend[at: at + 300])
         # And the ordinary endpoint advances them one at a time.
-        network = (ROOT / 'backend' / 'research_network.py').read_text()
-        at = network.index('def update_position(')
-        body = network[at: network.index('\ndef ', at + 5)]
-        self.assertEqual(body.count('position_sync.set_field_on_conn(conn, pid,'), 2)
+        at = self.domain.index('\ndef update(')
+        body = self.domain[at: self.domain.index('\ndef ', at + 5)]
+        self.assertEqual(body.count('set_field(scope, pid,'), 2)
 
     def test_a_position_has_no_placeholder_name(self):
         at = self.store.index('function createPosition(')
@@ -89,10 +89,12 @@ class PositionSyncFrontendTests(unittest.TestCase):
         body = self.state[at: self.state.index('\n    }', at)]
         self.assertIn('.filter(deletionAwaitsServer)', body)
         # And the server's refusal is the canonical one, unchanged.
-        at = self.backend.index('def delete_position_on_conn(')
-        server = self.backend[at: self.backend.index('\ndef ', at + 5)]
-        self.assertIn('argument_target_positions', server)
+        at = self.domain.index('\ndef delete(')
+        server = self.domain[at: self.domain.index('\ndef ', at + 5)]
+        self.assertIn('_TARGETED_SQL', server)
         self.assertIn('"POSITION_IN_USE"', server)
+        at = self.domain.index('_TARGETED_SQL: LiteralString = ')
+        self.assertIn('prks.argument_target_positions', self.domain[at: at + 200])
 
     def test_a_pending_rename_reaches_argument_targets_but_not_argument_ids(self):
         """An Argument may target another ARGUMENT, whose ids live in a

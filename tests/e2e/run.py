@@ -29,6 +29,7 @@ import time
 import unittest
 from io import StringIO
 from pathlib import Path
+from typing import cast
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -56,7 +57,6 @@ from tests.e2e.policy import (
     LAST_FAILED_PATH,
     MODULE_AFFINITY_ENV,
     PROFILE_ENV,
-    SEED_CACHE_ENV,
     ChangeDiscoveryError,
     benchmark_modes,
     ci_matrix_include,
@@ -129,7 +129,6 @@ DEFAULT_E2E_MODULES = (
     "tests.e2e.test_work_browsing",
     "tests.e2e.test_progress_route_surface",
     "tests.e2e.test_publishers_route_surface",
-    "tests.e2e.test_processing_route_surface",
     "tests.e2e.test_search_saved_views_route_surface",
     "tests.e2e.test_concepts_route_surface",
     "tests.e2e.test_positions_route_surface",
@@ -162,6 +161,9 @@ DEFAULT_E2E_MODULES = (
     "tests.e2e.test_person_edit_offline",
     "tests.e2e.test_modal_lifecycle",
     "tests.e2e.test_wait_for_async",
+    # PG-C1 flows: restore through Settings, the Processing upload queue, the
+    # Research-ACK fence.
+    "tests.e2e.test_postgres_library_flows",
 )
 
 # Release-transition checks manipulate two distribution versions at one origin.
@@ -581,17 +583,15 @@ def _persist_timings(observed, known_ids):
 def _apply_runtime_modes(args) -> tuple:
     """Export CLI benchmark flags, then decide the effective benchmark modes once.
 
-    ``--profile`` / ``--no-seed-cache`` configure the harness through
-    PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE, and those variables are equally
-    supported on their own. Exporting first and asking the environment after
+    ``--profile`` / ``--module-affinity-pilot`` configure the harness through
+    PRKS_E2E_PROFILE / PRKS_E2E_MODULE_AFFINITY_PILOT, and those variables are
+    equally supported on their own. Exporting first and asking the environment after
     keeps one canonical decision for both entry paths, so an env-only benchmark
     run cannot train ``.tests/e2e-timings.json`` (poisoning later shard
     balancing) or mutate last-failed state that ordinary runs rely on.
     """
     if args.profile:
         os.environ[PROFILE_ENV] = "1"
-    if args.no_seed_cache:
-        os.environ[SEED_CACHE_ENV] = "0"
     if args.module_affinity_pilot:
         os.environ[MODULE_AFFINITY_ENV] = "1"
     return benchmark_modes(os.environ)
@@ -1004,7 +1004,8 @@ def run_worker(
             failfast=fail_fast,
             resultclass=_result_factory,
         )
-        result = runner.run(_suite_for(test_ids))
+        # resultclass=_result_factory makes every run return a _TimingResult.
+        result = cast(_TimingResult, runner.run(_suite_for(test_ids)))
         report["duration"] = time.perf_counter() - started
         report["tests"] = result.testsRun
         report["failures"] = len(result.failures)
@@ -1810,7 +1811,8 @@ def run_serial(
     )
     started = time.perf_counter()
     try:
-        result = runner.run(_suite_for(test_ids))
+        # resultclass=_result_factory makes every run return a _TimingResult.
+        result = cast(_TimingResult, runner.run(_suite_for(test_ids)))
     except KeyboardInterrupt:
         stop_all_servers()
         raise
@@ -2022,19 +2024,10 @@ def build_parser():
         "--profile",
         action="store_true",
         help=(
-            "Measure per-test E2E infrastructure phases (seed build/clone, server startup, "
+            "Measure per-test E2E infrastructure phases (seed build, server startup, "
             "browser context, app readiness, async waits, request routing, shutdown). "
             "Does not update .tests/e2e-timings.json or last-failed history "
             "(same for PRKS_E2E_PROFILE=1 without this flag)."
-        ),
-    )
-    parser.add_argument(
-        "--no-seed-cache",
-        action="store_true",
-        help=(
-            "Disable worker-local immutable fixture seed snapshots for A/B benchmarking. "
-            "Does not update .tests/e2e-timings.json or last-failed history "
-            "(same for PRKS_E2E_SEED_CACHE=0 without this flag)."
         ),
     )
     # Internal: how the parent invokes one shard.
@@ -2166,7 +2159,7 @@ def main(argv=None) -> int:
     """
     saved_modes = {
         name: os.environ.get(name)
-        for name in (PROFILE_ENV, SEED_CACHE_ENV, MODULE_AFFINITY_ENV)
+        for name in (PROFILE_ENV, MODULE_AFFINITY_ENV)
     }
     try:
         return _main(argv)
@@ -2228,7 +2221,7 @@ def _main(argv=None) -> int:
         # interpret missing or malformed outputs as false: that previously
         # let the required check approve a skip when the matrix was missing.
         def _env_bool(name: str) -> bool | None:
-            return {"true": True, "false": False}.get(os.environ.get(name))
+            return {"true": True, "false": False}.get(os.environ.get(name, ""))
 
         plan_run = _env_bool("PLAN_RUN")
         plan_pointer = _env_bool("PLAN_POINTER")

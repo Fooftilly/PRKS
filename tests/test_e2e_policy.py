@@ -21,6 +21,7 @@ if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
 from tests.e2e import policy
+from tests.narrowing import require
 
 
 FAKE_IDS = [
@@ -60,13 +61,16 @@ class _RuntimeImports(ast.NodeVisitor):
     def _add(self, *names: str) -> None:
         (self.deferred if self._function_depth else self.imports).update(names)
 
-    def visit_FunctionDef(self, node):
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
         self._function_depth += 1
         self.generic_visit(node)
         self._function_depth -= 1
 
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_Lambda = visit_FunctionDef
+    def visit_AsyncFunctionDef(self, node):
+        self.visit_FunctionDef(node)
+
+    def visit_Lambda(self, node):
+        self.visit_FunctionDef(node)
 
     def visit_If(self, node):
         # Type-only imports do not activate a persistence backend.
@@ -163,12 +167,12 @@ def _trace_served_modules(root: Path, *, deferred: bool) -> tuple[set[str], list
     pending = ["prks_app", "backend.server"]
     visited = set()
     offenders = []
-    # These are the first staged PostgreSQL boundaries. Importing the facade
-    # from the served application is itself a cutover signal, even when the
-    # facade relies only on lazy/TYPE_CHECKING database references.
+    # These are the first staged PostgreSQL boundaries. Importing the Library
+    # handle from the served application is itself a cutover signal, even
+    # though it relies only on TYPE_CHECKING database references.
     pg_prefixes = (
         "backend.db",
-        "backend.pg_facade",
+        "backend.library",
         "backend.domain.identity",
         "backend.domain.text_identity",
     )
@@ -1094,7 +1098,7 @@ class AffectedMappingTests(unittest.TestCase):
     def test_postgres_exemption_does_not_hide_runtime_or_unknown_changes(self):
         pg_paths = ["backend/db/schema/snapshot.json", "backend/db/schema/040_sync.sql"]
         for runtime in (
-            "prks_app.py", "backend/server.py", "backend/db_manager.py",
+            "prks_app.py", "backend/server.py", "backend/library.py",
             "backend/db/__init__.py", "backend/db/database.py",
             "backend/db/new_unknown_module.py", "backend/api/session.py",
             "backend/domain/identity/web_start.py",
@@ -1146,9 +1150,8 @@ class AffectedMappingTests(unittest.TestCase):
             (root / "backend" / "domain" / "identity" / "root_pairing.py").write_text(
                 "from backend.db.database import Database\n", encoding="utf-8",
             )
-            (root / "backend" / "pg_facade").mkdir()
-            (root / "backend" / "pg_facade" / "__init__.py").write_text(
-                "# Facade can lazily receive database state; no static db import\n",
+            (root / "backend" / "library.py").write_text(
+                "# The handle can lazily receive database state; no static db import\n",
                 encoding="utf-8",
             )
             self.assertEqual(_runtime_postgres_imports(root), [])
@@ -1164,8 +1167,8 @@ class AffectedMappingTests(unittest.TestCase):
                 for entry in _runtime_postgres_imports(root, deferred=True)
             ))
             self.assertIn("backend.domain.identity.root_pairing", _served_modules(root))
-            active.write_text("from backend.pg_facade import PostgresLibrary\n", encoding="utf-8")
-            self.assertTrue(any("backend.pg_facade" in entry for entry in _runtime_postgres_imports(root)))
+            active.write_text("from backend.library import PostgresLibrary\n", encoding="utf-8")
+            self.assertTrue(any("backend.library" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("from backend.domain.identity import root_pairing\n", encoding="utf-8")
             self.assertTrue(any("backend.domain.identity" in entry for entry in _runtime_postgres_imports(root)))
             active.write_text("from backend.domain import text_identity\n", encoding="utf-8")
@@ -1236,17 +1239,22 @@ class AffectedMappingTests(unittest.TestCase):
     def test_research_network_core_is_ci_full(self):
         # Shared Concepts/Positions/Arguments domain — do not under-test as
         # concepts-only; CI fail-closed to full.
-        path = "backend/research_network.py"
-        classified = policy.classify_affected_path(path)
-        self.assertEqual(classified["rules"], ["research-network-core"])
-        self.assertTrue(classified["ci_full"])
-        for feat in ("concepts", "positions", "arguments", "graph", "notes"):
-            self.assertIn(feat, classified["features"])
-        plan = policy.plan_ci_e2e([path])
-        self.assertEqual(plan["mode"], "full")
-        self.assertEqual(plan["features"], [])
-        self.assertIn("research_network.py", plan["reason"])
-        self.assertIn("research-network-core", plan["reason"])
+        for path in (
+            "backend/domain/research/concepts.py",
+            "backend/api/arguments.py",
+            "backend/domain/research/index_commands.py",
+        ):
+            with self.subTest(path=path):
+                classified = policy.classify_affected_path(path)
+                self.assertEqual(classified["rules"], ["research-network-core"])
+                self.assertTrue(classified["ci_full"])
+                for feat in ("concepts", "positions", "arguments", "graph", "notes"):
+                    self.assertIn(feat, classified["features"])
+                plan = policy.plan_ci_e2e([path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertEqual(plan["features"], [])
+                self.assertIn(path.rsplit("/", 1)[-1], plan["reason"])
+                self.assertIn("research-network-core", plan["reason"])
 
     def test_ci_reason_path_token_strips_shell_metacharacters(self):
         nasty = 'frontend/js/evil"`$(id)`.js'
@@ -1272,7 +1280,7 @@ class AffectedMappingTests(unittest.TestCase):
             "scripts/ci/install_pinned_python.py",
             "requirements.txt",
             "requirements-dev.txt",
-            "backend/db_schema.sql",
+            "backend/server.py",
         ):
             with self.subTest(path=path):
                 plan = policy.plan_ci_e2e([path])
@@ -1477,7 +1485,7 @@ class AffectedMappingTests(unittest.TestCase):
         self.assertEqual(rule, "e2e-framework")
         self.assertFalse(skip)
         self.assertEqual(feats, ("smoke", "wait-async"))
-        self.assertEqual(policy._affected_rule(rule).get("ci_mode"), "full")
+        self.assertEqual(require(policy._affected_rule(rule)).get("ci_mode"), "full")
         self.assertEqual(policy.plan_ci_e2e([e2e_gate])["mode"], "full")
 
         test_gate = ".github/workflows/test-gate.yml"
@@ -1539,6 +1547,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
             path = Path(raw) / "e2e-last-failed.json"
             policy.save_last_failed(path, ["a.b.C.test_x"], meta={"tier": "feature"})
             data = policy.load_last_failed(path)
+            assert data is not None
             self.assertEqual(data["test_ids"], ["a.b.C.test_x"])
             self.assertEqual(data["meta"]["tier"], "feature")
 
@@ -1546,7 +1555,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "nested" / "e2e-last-failed.json"
             self.assertTrue(policy.save_last_failed(path, ["a.b.C.test_x"]))
-            self.assertEqual(policy.load_last_failed(path)["test_ids"], ["a.b.C.test_x"])
+            self.assertEqual(require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_x"])
             self.assertEqual(
                 sorted(q.name for q in path.parent.iterdir()),
                 ["e2e-last-failed.json"],
@@ -1563,7 +1572,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
                 self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(
-                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+                require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_keep"]
             )
             # The uncommitted temp file must not linger next to the real state.
             self.assertEqual(
@@ -1585,7 +1594,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
                 self.assertFalse(policy.save_last_failed(path, ["a.b.C.test_new"]))
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(
-                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_keep"]
+                require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_keep"]
             )
             self.assertEqual(
                 sorted(q.name for q in path.parent.iterdir()),
@@ -1622,7 +1631,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
             for name in seen:
                 self.assertEqual(Path(name).parent, path.parent)
             self.assertEqual(
-                policy.load_last_failed(path)["test_ids"], ["a.b.C.test_two"]
+                require(policy.load_last_failed(path))["test_ids"], ["a.b.C.test_two"]
             )
 
     def test_corrupt_or_missing_returns_none(self):
@@ -1720,6 +1729,7 @@ class LastFailedPersistenceTests(unittest.TestCase):
             }
             self.assertTrue(policy.save_failure_diagnostics(path, payload))
             loaded = policy.load_failure_diagnostics(path)
+            assert loaded is not None
             self.assertEqual(loaded["stuck_test_id"], "tests.e2e.fake.T.test_hung")
             self.assertEqual(loaded["last_stage"], "APP_READY")
             self.assertTrue(loaded["watchdog"])
@@ -2076,6 +2086,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
         tid = "tests.e2e.test_app.DummyTests.test_skipped"
         self.assertIsNone(runner._unexpected_skips_error([]))
         message = runner._unexpected_skips_error(self.skipped_result(tid).skipped)
+        assert message is not None
         self.assertIn(tid, message)
         self.assertIn("skipped 1 selected test", message)
         self.assertNotIn("private unsupported-browser detail", message)
@@ -2146,7 +2157,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
         subtest.test_case = parent
         subtest.id.return_value = parent.id() + " (private='confidential')"
         self.assertEqual(runner._skipped_test_ids([(subtest, "secret reason")]), [parent.id()])
-        self.assertNotIn("confidential", runner._unexpected_skips_error([(subtest, "secret reason")]))
+        self.assertNotIn("confidential", require(runner._unexpected_skips_error([(subtest, "secret reason")])))
 
     def test_skip_diagnostics_only_include_validated_parent_ids(self):
         from tests.e2e import run as runner
@@ -2188,6 +2199,7 @@ class UnexpectedE2ESkipGuardTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(observed, {tid: 0.1})
         self.assertEqual(failed, [tid])
+        assert saved is not None
         self.assertEqual(saved["kind"], "unexpected-skip")
         self.assertEqual(saved["failed_ids"], [tid])
         self.assertEqual(saved["stuck_test_id"], tid)
@@ -2220,12 +2232,15 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
         b = "tests.e2e.test_app.FooTests.test_second"
         c = "tests.e2e.test_app.FooTests.test_unselected"
         missing = runner._external_shard_completion_error([a, b], {a: 1.0})
+        assert missing is not None
         self.assertIn("missing=1", missing)
         self.assertIn(b, missing)
         extra = runner._external_shard_completion_error([a], {a: 1.0, c: 2.0})
+        assert extra is not None
         self.assertIn("unexpected=1", extra)
         self.assertIn(c, extra)
         duplicate = runner._external_shard_completion_error([a, a], {a: 1.0})
+        assert duplicate is not None
         self.assertIn("duplicate test IDs", duplicate)
 
     def test_duplicate_execution_count_fails_despite_matching_timing_keys(self):
@@ -2236,7 +2251,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
         observed = {a: 1.0, b: 2.0}
         self.assertIsNone(runner._external_shard_completion_error([a, b], observed))
         self.assertIn(
-            "selected=2 completed=3", runner._execution_count_error([a, b], 3)
+            "selected=2 completed=3", require(runner._execution_count_error([a, b], 3))
         )
         self.assertIsNone(runner._execution_count_error([a, b], 2))
 
@@ -2299,7 +2314,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
 
         a = "tests.e2e.test_app.FooTests.test_first"
         b = "tests.e2e.test_app.FooTests.test_second"
-        detail = runner._execution_count_error([a, b], 3)
+        detail = require(runner._execution_count_error([a, b], 3))
         self.assertEqual(
             runner._privacy_safe_detail(
                 {"kind": "execution-count-mismatch", "detail": detail},
@@ -2345,6 +2360,7 @@ class ExternalShardCompletionGuardTests(unittest.TestCase):
                 )
                 self.assertFalse(ok)
                 self.assertEqual(failed, [])
+                assert saved is not None
                 self.assertEqual(saved["kind"], expected_kind)
                 self.assertEqual(saved["failed_ids"], [])
                 self.assertEqual(saved["stuck_test_id"], "")
@@ -2383,20 +2399,26 @@ class BenchmarkModeTests(unittest.TestCase):
 
     def test_default_environment_is_representative(self):
         self.assertEqual(policy.benchmark_modes({}), ())
-        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "1"}), ())
+        self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
         self.assertEqual(policy.benchmark_modes({"PRKS_E2E_PROFILE": "0"}), ())
 
-    def test_profile_and_disabled_seed_cache_are_benchmark_modes(self):
+    def test_profile_and_route_fastpath_are_benchmark_modes(self):
         self.assertEqual(policy.benchmark_modes({"PRKS_E2E_PROFILE": "1"}), ("profile",))
         self.assertEqual(
-            policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": "off"}), ("no-seed-cache",)
+            policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "on"}), ("route-fastpath",)
         )
         self.assertEqual(
             policy.benchmark_modes(
-                {"PRKS_E2E_PROFILE": "yes", "PRKS_E2E_SEED_CACHE": "false"}
+                {"PRKS_E2E_PROFILE": "yes", "PRKS_E2E_ROUTE_FASTPATH": "true"}
             ),
-            ("profile", "no-seed-cache"),
+            ("profile", "route-fastpath"),
         )
+
+    def test_the_retired_seed_cache_switch_is_not_a_benchmark_mode(self):
+        """Each server builds its own PostgreSQL seed; no seed cache is left to turn off."""
+        for value in ("0", "off", "false", "1"):
+            self.assertEqual(policy.benchmark_modes({"PRKS_E2E_SEED_CACHE": value}), ())
+        self.assertFalse(hasattr(policy, "SEED_CACHE_ENV"))
 
     def test_fastpath_is_opt_in_and_never_trains_timing_history(self):
         self.assertEqual(policy.benchmark_modes({"PRKS_E2E_ROUTE_FASTPATH": "0"}), ())
@@ -2726,7 +2748,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 # Selected set was [1,2,3]; if merge used selection, 2 and 3
                 # would be dropped as "passed". They must remain unresolved.
                 data = policy.load_last_failed(last_path)
-                self.assertIsNotNone(data)
+                assert data is not None
                 self.assertEqual(
                     data["test_ids"],
                     [
@@ -3176,7 +3198,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         "PRKS_E2E_BENCHMARK_RESULT": str(destination),
                         "PRKS_E2E_PROFILE": "1",
                         "PRKS_E2E_ROUTE_FASTPATH": fastpath,
-                        "PRKS_E2E_SEED_CACHE": "1",
                     },
                 ):
                     runner._write_serial_benchmark_result(result, 4.5678)
@@ -3216,7 +3237,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {
                 "PRKS_E2E_BENCHMARK_RESULT": str(destination),
                 "PRKS_E2E_PROFILE": "0",
-                "PRKS_E2E_SEED_CACHE": "1",
                 "PRKS_E2E_ROUTE_FASTPATH": "0",
             }):
                 with self.assertRaisesRegex(ValueError, "requires E2E profiling"):
@@ -3470,7 +3490,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 load.assert_not_called()
 
     def test_env_only_benchmark_modes_do_not_persist_history(self):
-        """PRKS_E2E_PROFILE / PRKS_E2E_SEED_CACHE=0 are benchmark runs without a flag."""
+        """PRKS_E2E_PROFILE / PRKS_E2E_ROUTE_FASTPATH are benchmark runs without a flag."""
         from tests.e2e.sharding import load_timings, save_timings
 
         test_id = "tests.e2e.fake.BenchTests.test_x"
@@ -3493,7 +3513,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 last_path.write_bytes(prior_last_bytes)
                 with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                     os.environ.pop("PRKS_E2E_PROFILE", None)
-                    os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                     os.environ.pop("PRKS_E2E_ROUTE_FASTPATH", None)
                     os.environ.update(env)
                     return self._invoke_runner_history_case(
@@ -3506,8 +3525,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
 
             for env in (
                 {"PRKS_E2E_PROFILE": "1"},
-                {"PRKS_E2E_SEED_CACHE": "0"},
-                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_SEED_CACHE": "0"},
+                {"PRKS_E2E_PROFILE": "1", "PRKS_E2E_ROUTE_FASTPATH": "1"},
                 {"PRKS_E2E_ROUTE_FASTPATH": "1"},
             ):
                 code, print_slow = _run(env)
@@ -3524,8 +3542,8 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                     "env=%s must leave last-failed untouched" % env,
                 )
 
-            # An explicitly-default seed cache is a representative run: it persists.
-            code, _ = _run({"PRKS_E2E_SEED_CACHE": "1"})
+            # An explicitly-off route fast path is a representative run: it persists.
+            code, _ = _run({"PRKS_E2E_ROUTE_FASTPATH": "0"})
             self.assertEqual(code, 0)
             self.assertEqual(load_timings(timings_path)[test_id], 99.0)
 
@@ -3543,7 +3561,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
 
                 code, _ = self._invoke_runner_history_case(
                     repo, last_path, test_id, argv_extra=["--profile"]
@@ -3569,7 +3586,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             last_path = repo / ".tests" / "e2e-last-failed.json"
             out = io.StringIO()
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                 os.environ["PRKS_E2E_PROFILE"] = "1"
                 with redirect_stdout(out):
                     code, _ = self._invoke_runner_history_case(repo, last_path, test_id)
@@ -3596,7 +3612,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             out = io.StringIO()
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                 with contextlib.ExitStack() as stack:
                     enter = stack.enter_context
                     enter(mock.patch.object(runner, "REPO", repo))
@@ -3635,7 +3650,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             err = io.StringIO()
             with mock.patch.dict(os.environ, {"PRKS_E2E": "1"}, clear=False):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
                 with mock.patch.object(
                     runner, "save_last_failed", return_value=False
                 ) as save:
@@ -3653,16 +3667,14 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
             self.assertEqual(last_path.read_bytes(), prior_last_bytes)
 
     def test_benchmark_modes_do_not_persist_timing_or_last_failed_history(self):
-        """--profile / --no-seed-cache must not train LPT timings or last-failed."""
+        """--profile must not train LPT timings or last-failed."""
         from tests.e2e import run as runner
         from tests.e2e.sharding import load_timings, save_timings
 
         previous = os.environ.get("PRKS_E2E")
         profile_prev = os.environ.get("PRKS_E2E_PROFILE")
-        seed_prev = os.environ.get("PRKS_E2E_SEED_CACHE")
         os.environ["PRKS_E2E"] = "1"
         os.environ.pop("PRKS_E2E_PROFILE", None)
-        os.environ.pop("PRKS_E2E_SEED_CACHE", None)
         try:
             test_id = "tests.e2e.fake.BenchTests.test_x"
             prior_failed = ["tests.e2e.fake.Other.test_keep"]
@@ -3693,11 +3705,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         argv_extra=extra_flags,
                     )
 
-                for flags in (
-                    ["--profile"],
-                    ["--no-seed-cache"],
-                    ["--profile", "--no-seed-cache"],
-                ):
+                for flags in (["--profile"],):
                     timings_path.write_bytes(prior_timings_bytes)
                     last_path.write_bytes(prior_last_bytes)
                     code, print_slow = _invoke(flags)
@@ -3716,7 +3724,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                         % flags,
                     )
                     os.environ.pop("PRKS_E2E_PROFILE", None)
-                    os.environ.pop("PRKS_E2E_SEED_CACHE", None)
 
                 timings_path.write_bytes(prior_timings_bytes)
                 last_path.write_bytes(prior_last_bytes)
@@ -3728,7 +3735,7 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 self.assertNotEqual(timings_path.read_bytes(), prior_timings_bytes)
                 # Ordinary success still merges last-failed (unexecuted priors remain).
                 data = policy.load_last_failed(last_path)
-                self.assertIsNotNone(data)
+                assert data is not None
                 self.assertEqual(data["test_ids"], prior_failed)
         finally:
             if previous is None:
@@ -3739,10 +3746,6 @@ class RunnerSelectionIntegrationTests(unittest.TestCase):
                 os.environ.pop("PRKS_E2E_PROFILE", None)
             else:
                 os.environ["PRKS_E2E_PROFILE"] = profile_prev
-            if seed_prev is None:
-                os.environ.pop("PRKS_E2E_SEED_CACHE", None)
-            else:
-                os.environ["PRKS_E2E_SEED_CACHE"] = seed_prev
 
     def test_no_sigalrm_watchdog_in_runner(self):
         """Full-gate deadline must not depend on POSIX-only alarm APIs."""
@@ -3806,10 +3809,10 @@ class CrashLastFailedRetentionTests(unittest.TestCase):
                                                 )
                 self.assertEqual(code, 1)
                 data = policy.load_last_failed(last_path)
-                self.assertIsNotNone(data)
+                assert data is not None
                 self.assertEqual(data["test_ids"], [crash_id])
                 loaded = policy.load_failure_diagnostics(diag_path)
-                self.assertIsNotNone(loaded)
+                assert loaded is not None
                 self.assertIn(crash_id, loaded["failed_ids"])
                 self.assertNotEqual(loaded.get("kind"), "pointer-capture")
         finally:
@@ -3862,7 +3865,7 @@ class CrashLastFailedRetentionTests(unittest.TestCase):
                 retained = (data or {}).get("test_ids") or []
                 self.assertNotIn(finished_id, retained)
                 loaded = policy.load_failure_diagnostics(diag_path)
-                self.assertIsNotNone(loaded)
+                assert loaded is not None
                 self.assertNotIn(finished_id, loaded.get("failed_ids") or [])
         finally:
             if previous is None:
@@ -3964,7 +3967,7 @@ class PointerCaptureDiagnosticsTests(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         pointer.assert_not_called()
-        self.assertIsNotNone(loaded)
+        assert loaded is not None
         self.assertEqual(loaded["kind"], "worker-crash")
         self.assertEqual(loaded["failed_ids"], [test_id])
         self.assertEqual(loaded["last_stage"], "APP_READY")

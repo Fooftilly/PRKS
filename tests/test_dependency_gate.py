@@ -97,7 +97,7 @@ _TEST_GATE_PG_AGG_DOCS_BODY = (
 # The backend parity job (#625): the same pinned install and exactly
 # ``scripts/test-postgres --parity``. Both steps or neither.
 _TEST_GATE_PARITY_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies for parity"
-_TEST_GATE_PARITY_RUN_STEP = "Run SQLite and PostgreSQL backend parity legs"
+_TEST_GATE_PARITY_RUN_STEP = "Run the backend parity tests on PostgreSQL"
 # (install step, run step, the run step's exact argv)
 _TEST_GATE_PG_PAIRS = (
     (_TEST_GATE_PG_INSTALL_STEP, _TEST_GATE_PG_RUN_STEP, ("scripts/test-postgres",)),
@@ -118,6 +118,15 @@ _TEST_GATE_DOCS_RUNS = {
     ),
 }
 _TEST_GATE_PG_SCOPE_PLAN_STEP = "Classify docs-only scope for PostgreSQL jobs (fail closed)"
+# Same fail-closed classifier as the unit job, but the wider Markdown-only
+# scope: the PostgreSQL suites read no repository Markdown.
+_TEST_GATE_PG_SCOPE_PLAN_RUN = (
+    "|",
+    _TEST_GATE_DOCS_RUNS["Classify documentation-only PR (fail closed)"][1].replace(
+        '--base \"$PRKS_PR_BASE_SHA\")\"',
+        '--base \"$PRKS_PR_BASE_SHA\" --scope postgres)\"',
+    ),
+)
 _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
     {
         _TEST_GATE_APPROVED_INSTALL_STEP,
@@ -491,9 +500,7 @@ def assert_test_gate_single_run_step_allowed(
         if style != "|" or _test_gate_run_body_without_shell_comments(body) != expected:
             raise ValueError("unreviewed PostgreSQL helper shard aggregator command")
     if name == _TEST_GATE_PG_SCOPE_PLAN_STEP:
-        expected_style, expected_body = _TEST_GATE_DOCS_RUNS[
-            "Classify documentation-only PR (fail closed)"
-        ]
+        expected_style, expected_body = _TEST_GATE_PG_SCOPE_PLAN_RUN
         normalized = (
             _test_gate_run_body_without_shell_comments(body)
             if style == "|" else body.strip()
@@ -539,6 +546,7 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
         raise ValueError("incomplete required docs-only CI step set")
     for name, style, body in run_steps:
+        assert name is not None
         assert_test_gate_single_run_step_allowed(
             name, style, body, docs_plan=bool(pg_plan_present)
         )
@@ -1313,20 +1321,35 @@ class RepoGateLiveTests(unittest.TestCase):
         self.assertIn("psycopg(-binary|-pool)?==", static_install)
         self.assertIn("argon2-cffi==", static_install)
         self.assertIn("Pillow==", static_install)
-        self.assertEqual(static_install.count("requirements.txt"), 4)
+        self.assertIn("PyMuPDF==", static_install)
+        self.assertIn("pydantic==", static_install)
+        self.assertEqual(static_install.count("requirements.txt"), 6)
         # Every validated pin group must actually reach pip.
         pip_line = next(
             line for line in static_install.splitlines()
             if "python -m pip install" in line
         )
-        for group in ("pg_pins", "argon_pins", "pillow_pins"):
+        for group in (
+            "pg_pins", "argon_pins", "pillow_pins", "pymupdf_pins", "pydantic_pins", "script_pins",
+        ):
             self.assertIn(f'"${{{group}[@]}}"', pip_line)
-        self.assertNotIn("requirements-dev.txt", static_install)
+        # scripts/ (#1269) and tests/ (#1273) are in the typed slice: only
+        # their tooling imports (Playwright, requests, markdown-it-py,
+        # openapi-core, Hypothesis) come from the development pins.
+        dev_lines = [line.strip() for line in static_install.splitlines()
+                     if "requirements-dev.txt" in line and not line.strip().startswith("echo")]
+        self.assertEqual(dev_lines, [
+            "mapfile -t script_pins < <(grep -E "
+            "'^(playwright|requests|markdown-it-py|openapi-core|hypothesis)==[^[:space:]]+$' "
+            "requirements-dev.txt)"
+        ])
+        for name in ("playwright", "requests", "markdown-it-py", "openapi-core", "hypothesis"):
+            self.assertIn(name, dev)
         expected_unit = dict(runtime, **{
             name: dev[name]
             for name in ("openapi-core", "hypothesis", "markdown-it-py", "mdurl", "requests")
         })
-        expected_pg = dict(runtime)
+        expected_pg = dict(runtime, **{"openapi-core": dev["openapi-core"]})
 
         workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
             encoding="utf-8"
@@ -1516,7 +1539,7 @@ class RepoGateLiveTests(unittest.TestCase):
             "          python -m pip install --isolated --disable-pip-version-check "
             '"--only-binary=:all:"\n'
             '          "psycopg==3.3.6"\n'
-            "      - name: Run SQLite and PostgreSQL backend parity legs\n"
+            "      - name: Run the backend parity tests on PostgreSQL\n"
             f"        run: {run}\n"
         )
 
@@ -1541,7 +1564,7 @@ class RepoGateLiveTests(unittest.TestCase):
 
     def test_test_gate_parity_steps_come_as_one_pair(self):
         lone_run = (
-            "      - name: Run SQLite and PostgreSQL backend parity legs\n"
+            "      - name: Run the backend parity tests on PostgreSQL\n"
             "        run: scripts/test-postgres --parity\n"
         )
         with self.assertRaisesRegex(ValueError, r"PostgreSQL job needs exactly one"):
@@ -1776,7 +1799,7 @@ class RepoGateLiveTests(unittest.TestCase):
             self.assertNotIn(marker, html)
 
 
-def _vue_gate_fixture(tmp: Path) -> Path:
+def _vue_gate_fixture(tmp: str | Path) -> Path:
     root = Path(tmp)
     for rel in (
         "frontend-app/package.json",

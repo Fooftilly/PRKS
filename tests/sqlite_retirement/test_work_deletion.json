@@ -1,0 +1,118 @@
+{
+  "module": "tests/test_work_deletion.py",
+  "tests": {
+    "TestWorkDeletion.test_db_abort_preserves_work_pdf_thumb_and_index": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_failed_delete_keeps_the_work_its_thumbnails_its_file_and_its_text"
+      ]
+    },
+    "TestWorkDeletion.test_pdf_cleanup_failure_after_commit": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates",
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles",
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_delete_removes_the_work_its_thumbnails_and_claims_its_file"
+      ]
+    },
+    "TestWorkDeletion.test_thumbnail_cleanup_failure_continues": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_thumbnail_that_cannot_be_removed_is_logged_and_the_delete_still_succeeds"
+      ]
+    },
+    "TestWorkDeletion.test_text_index_cleanup_failure_continues": {
+      "obsolete": "The SQLite text index was a separate file removed after the Work commit, so its failure had to be reported on its own. On PostgreSQL the Work's text rows are deleted in the delete's own transaction (tests/pg/test_search_text.py::CommandTests.test_a_deleted_work_leaves_no_text), so there is no separate step left to fail."
+    },
+    "TestWorkDeletion.test_missing_artifacts_still_succeed": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_work_without_artifacts_or_a_missing_work_deletes_cleanly",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_bytes_already_gone_settle_as_removed"
+      ]
+    },
+    "TestWorkDeletion.test_missing_work_clears_stale_derived_state": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_work_without_artifacts_or_a_missing_work_deletes_cleanly"
+      ],
+      "note": "On PostgreSQL a missing Work leaves no text row to clear (the rows go with the Work); its stray thumbnails are not removed by the request."
+    },
+    "TestWorkDeletion.test_missing_work_index_cleanup_failure_is_recorded": {
+      "obsolete": "Reports a SQLite text-index file failure while deleting a Work that does not exist. On PostgreSQL there is no separate index to clean for a missing Work (tests/pg/test_search_text.py::CommandTests.test_a_deleted_work_leaves_no_text)."
+    },
+    "TestWorkDeletion.test_tag_used_only_by_deleted_work_survives_in_the_catalog": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::LinkTests.test_a_work_delete_takes_its_links_and_tombstones_their_scopes",
+        "tests/pg/test_tags.py::TagIdentityTests.test_deleting_a_work_keeps_its_tags"
+      ]
+    },
+    "TestWorkDeletion.test_tag_shared_with_another_work_is_kept": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_deleting_a_work_keeps_its_tags"
+      ]
+    },
+    "TestWorkDeletion.test_tag_used_by_folder_is_kept": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::TagIdentityTests.test_deleting_a_work_keeps_its_tags",
+        "tests/pg/test_tags.py::TagIdentityTests.test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag"
+      ]
+    },
+    "TestWorkDeletion.test_work_deletion_never_writes_to_the_tags_table": {
+      "replaced_by": [
+        "tests/pg/test_tags.py::LinkTests.test_a_work_delete_takes_its_links_and_tombstones_their_scopes",
+        "tests/pg/test_tags.py::TagIdentityTests.test_deleting_a_work_keeps_its_tags"
+      ]
+    },
+    "TestWorkDeletion.test_import_rollback_removes_work_and_destination_when_db_delete_succeeds": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::ImportTests.test_a_failed_import_changes_nothing"
+      ],
+      "note": "The legacy path-based Processing inbox is retired; a PostgreSQL import is one transaction with no destination file to remove."
+    },
+    "TestWorkDeletion.test_import_rollback_keeps_destination_when_db_delete_fails": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::ImportTests.test_a_failed_import_changes_nothing",
+        "tests/pg/test_processing_queue.py::ImportTests.test_a_database_error_fails_only_its_item"
+      ]
+    },
+    "TestWorkDeletion.test_duplicate_canonical_pdf_kept_until_last_work": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_works_mutations.py::DeleteTests.test_a_shared_file_stays_referenced_only_within_the_library",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_two_deletes_dropping_a_shared_keys_last_names_leave_a_claim"
+      ]
+    },
+    "TestWorkDeletion.test_surviving_nested_legacy_alias_keeps_pdf": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so nested, traversal, encoded, whitespace and malformed spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "TestWorkDeletion.test_surviving_traversal_legacy_alias_keeps_pdf": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so nested, traversal, encoded, whitespace and malformed spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "TestWorkDeletion.test_surviving_encoded_alias_keeps_pdf": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so nested, traversal, encoded, whitespace and malformed spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "TestWorkDeletion.test_malformed_deleted_row_cannot_claim_owned_pdf": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused"
+      ]
+    },
+    "TestWorkDeletion.test_malformed_alias_alone_does_not_delete_unrelated_stem": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused",
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_an_invalid_claim_rotates_behind_valid_ones"
+      ]
+    },
+    "TestWorkDeletion.test_nul_file_path_row_deletes_without_pdf_failure": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused"
+      ],
+      "note": "PostgreSQL text columns cannot hold NUL, so no stored file_path can contain one."
+    },
+    "TestWorkDeletion.test_unique_canonical_path_still_cleans_pdf_index_and_thumbs": {
+      "replaced_by": [
+        "tests/pg/test_http_work_delete.py::WorkDeleteHttpTests.test_a_delete_removes_the_work_its_thumbnails_and_claims_its_file",
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_work_delete_claims_its_file_and_settle_removes_it",
+        "tests/pg/test_search_text.py::CommandTests.test_a_deleted_work_leaves_no_text"
+      ]
+    },
+    "TestWorkDeletion.test_surviving_whitespace_alias_keeps_pdf": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so nested, traversal, encoded, whitespace and malformed spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    }
+  }
+}

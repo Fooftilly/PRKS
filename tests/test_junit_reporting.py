@@ -97,6 +97,7 @@ class JUnitReportingTests(unittest.TestCase):
             self.assertEqual(suite.attrib["tests"], "1")
             self.assertEqual(suite.attrib["skipped"], "1")
             node = suite.find("testcase")
+            assert node is not None
             self.assertEqual(node.attrib["name"], "test_skipped_subtest")
             self.assertNotIn("PRIVATE", path.read_text(encoding="utf-8"))
 

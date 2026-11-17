@@ -2,7 +2,7 @@
 
 Pydantic lives here only. Domain/application functions receive plain Python
 values; these models must not own sync conflict semantics, entity lifecycle,
-canonical mutations, SQLite transactions, or research-domain rules.
+canonical mutations, database transactions, or research-domain rules.
 """
 
 from backend.api_contract.errors import ApiErrorEnvelope, research_error_envelope

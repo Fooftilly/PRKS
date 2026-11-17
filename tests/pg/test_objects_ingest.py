@@ -32,7 +32,7 @@ from backend.domain.objects.ingest import IngestedPdf
 from backend.domain.objects.lifecycle import ObjectMissing, Settled
 from backend.domain.works import commands
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
 from tests.pg.test_objects_lifecycle import ObjectsTestCase
 
@@ -265,6 +265,7 @@ class FacadeTests(IngestTestCase):
         work_id = self.library._add_work_with_pdf("Paper One.pdf", writer(RAW), title="Uploaded",
                                                   year="2024")
         work = self.library.get_work(work_id)
+        assert work is not None
         self.assertEqual((work["title"], work["year"]), ("Uploaded", "2024"))
         asset = self.asset(work_id)
         self.assertEqual(work["file_path"], "/api/pdfs/" + asset["storage_locator"])

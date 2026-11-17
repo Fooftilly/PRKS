@@ -8,7 +8,6 @@ import time
 _IMPORT_STARTED = time.perf_counter()
 
 from backend.log_config import setup_logging
-from backend.backup_restore import recover_incomplete_restore
 from backend.server import (
     DEFAULT_HOST,
     PORT,
@@ -76,7 +75,11 @@ def build_parser():
     parser.add_argument(
         "--testing",
         action="store_true",
-        help="Use data_testing/prks_data_testing.db and data_testing/pdfs (separate from data/).",
+        help=(
+            "A disposable testing instance: the data_testing/ root and a testing PostgreSQL "
+            "database (PRKS_DATABASE_URL, default: the scripts/dev-postgres server), "
+            "signed in as its owner on loopback."
+        ),
     )
     parser.add_argument(
         "--port",
@@ -130,52 +133,61 @@ def open_storage(config, *, paired=False):
 
 
 def prepare_identity(args, config, environ=None):
-    """``(database, settings)`` for ``PRKS_AUTH``, or ``None`` for the SQLite runtime.
+    """``(database, settings)`` of this web process.
 
     Checks the authentication settings, opens the pool and applies or
     verifies the schema (``PRKS_MIGRATE_ON_START``), all before the storage
     root is touched; :func:`start_identity` then runs the start check once
-    the root is open. Any refusal exits with status 2.
+    the root is open. A ``--testing`` process defaults ``PRKS_AUTH`` to
+    ``loopback-owner`` and the database to the ``scripts/dev-postgres``
+    server (:data:`backend.db.config.TESTING_DEFAULT_DATABASE_URL`), and any
+    process on a testing root first proves its database is a testing one
+    (:func:`refuse_untested_database`). Any refusal exits with status 2.
     """
     env = os.environ if environ is None else environ
-    if not (env.get("PRKS_AUTH") or "").strip():
-        return None
-    # Imported only when used, so the SQLite runtime never loads psycopg.
-    try:
-        import argon2  # noqa: F401 - checked here for a clear refusal
-        import psycopg  # noqa: F401
-    except ImportError:
-        print(
-            "PRKS cannot start authentication: PRKS_AUTH needs the PostgreSQL packages "
-            "(psycopg, psycopg-pool and argon2-cffi in requirements.txt).",
-            file=sys.stderr,
-        )
-        raise SystemExit(2) from None
-    from backend.db.config import load_database_config
+    from backend.db.config import load_database_config, with_testing_default
     from backend.db.database import Database
     from backend.db.errors import DatabaseConfigError
     from backend.domain.identity.login_limiter import LimiterConfigError
     from backend.domain.identity.sessions import SessionConfigError
     from backend.domain.identity.web_start import WebAuthConfigError, settings_from_env
 
-    testing = config.mode == "testing"
+    testing = config.mode == "testing" and bool(args.testing)
+    if testing:
+        env = with_testing_default(env)
     try:
         settings = settings_from_env(
-            env, testing=testing and bool(args.testing), host=args.host,
-            parse_origin=parse_request_origin,
+            env, testing=testing, host=args.host, parse_origin=parse_request_origin,
         )
     except (WebAuthConfigError, LimiterConfigError, SessionConfigError) as exc:
         print(f"PRKS cannot start authentication: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
-    if settings is None:
-        return None
     try:
-        db = Database(load_database_config(env, role="web"))
+        db_config = load_database_config(env, role="web")
     except DatabaseConfigError as exc:
-        print(f"PRKS cannot start authentication: {exc.message}", file=sys.stderr)
+        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
-    migrate_on_start(db, env)
+    if config.mode == "testing":
+        # A testing root never meets a real Library: prove the database is a
+        # testing one before the schema step or a bootstrap writes to it.
+        refuse_untested_database(db_config.conninfo)
+    db = Database(db_config)
+    migrate_on_start(db, env, testing=testing)
     return db, settings
+
+
+def refuse_untested_database(conninfo):
+    """Exit with status 2 unless ``conninfo`` is a testing database (``backend.db.testing_guard``).
+
+    Every process on a testing root runs it before it writes to its database.
+    """
+    from backend.db.testing_guard import TestingDatabaseRefused, prove_testing_database
+
+    try:
+        prove_testing_database(conninfo)
+    except TestingDatabaseRefused as exc:
+        print(f"PRKS refuses to start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 class SetupWait:
@@ -256,53 +268,28 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
     return auth
 
 
-def select_library(identity, environ=None):
-    """The database of a PostgreSQL Library (``PRKS_LIBRARY_BACKEND=postgres``), or ``None``.
-
-    ``identity`` comes from :func:`prepare_identity`; the PostgreSQL Library
-    needs it, since every route acts for the admitted request's context
-    (``backend.library_backend``). Any refusal exits with status 2.
-    """
-    from backend.library_backend import ENV, POSTGRES, LibraryBackendError, postgres_selected
-
-    env = os.environ if environ is None else environ
-    try:
-        selected = postgres_selected(env)
-    except LibraryBackendError as exc:
-        if identity is not None:
-            identity[0].close()
-        print(f"PRKS cannot start: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
-    if not selected:
-        return None
-    if identity is None:
-        print(f"PRKS cannot start: {ENV}={POSTGRES} needs PRKS_AUTH.", file=sys.stderr)
-        raise SystemExit(2)
-    return identity[0]
-
-
 def refuse_sqlite_catalogue(library_database, bound_root):
-    """Refuse a PostgreSQL Library on a root that still holds a SQLite catalogue (exit 2).
+    """Refuse a data root that still holds a pre-0.8 SQLite catalogue (exit 2).
 
     Its PDFs and portraits are files the PostgreSQL catalogue does not name,
-    the rule object maintenance follows (``backend.domain.objects.jobs``).
+    so object maintenance would treat them as orphans
+    (``backend.domain.objects.jobs``). Pre-1.0 PRKS does not import such a
+    Library: use a new data root.
     """
-    if library_database is None:
-        return
     from backend.domain.objects.jobs import root_refusal
 
     if root_refusal(bound_root.root_real) is not None:
         library_database.close()
         bound_root.release()
         print(
-            "PRKS refuses to start: this data root still holds a SQLite catalogue, "
-            "and its Library is not in PostgreSQL.",
+            "PRKS refuses to start: this data root holds a pre-0.8 SQLite Library, which "
+            "this version does not read. Move it aside and start on a new data root.",
             file=sys.stderr,
         )
         raise SystemExit(2)
 
 
-def migrate_on_start(db, environ):
+def migrate_on_start(db, environ, *, testing=False):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
     With ``0`` the schema is still verified: a web process never starts on a
@@ -328,31 +315,29 @@ def migrate_on_start(db, environ):
             migrate(db.config.conninfo)
     except MigrationError as exc:
         db.close()
-        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
+        message = exc.message
+        if testing and exc.reason == "database_unavailable":
+            message += " For --testing, start the local database with scripts/dev-postgres."
+        print(f"PRKS cannot start: {message}", file=sys.stderr)
         raise SystemExit(2) from None
 
 
 def readiness_for(auth, root):
-    """``GET /readyz`` of a ``PRKS_AUTH`` web process (``backend.readiness``); None for the SQLite runtime."""
-    if auth is None:
-        return None
+    """``GET /readyz`` of the web process (``backend.readiness``)."""
     from backend.readiness import PostgresReadiness
 
     return PostgresReadiness(auth.db, instance_id=auth.instance_id, root=os.path.realpath(root))
 
 
 def start_jobs(auth, environ=None):
-    """The web process's jobs runtime (``backend.jobs.embedded``), or ``None`` for the SQLite runtime.
+    """The web process's jobs runtime (``backend.jobs.embedded``).
 
-    Only with ``PRKS_AUTH`` (``auth`` from :func:`start_identity`, whose start
-    check already ran): unless ``PRKS_EMBEDDED_WORKER`` is ``0`` it prepares
-    one embedded worker, which ``run_server`` starts with the server and
-    stops on shutdown. Any refusal exits with status 2.
+    ``auth`` comes from :func:`start_identity`, whose start check already
+    ran: unless ``PRKS_EMBEDDED_WORKER`` is ``0`` it prepares one embedded
+    worker, which ``run_server`` starts with the server and stops on
+    shutdown (``None`` then). Any refusal exits with status 2.
     """
-    if auth is None:
-        return None
     env = os.environ if environ is None else environ
-    # Imported only when used, so the SQLite runtime never loads psycopg.
     from backend.db.errors import DatabaseConfigError, DatabaseError
     from backend.jobs.embedded import EmbeddedWorkerConfigError, web_jobs
 
@@ -382,10 +367,20 @@ def run_role(role, argv):
         return admin.main(argv)
     args = build_role_parser(role).parse_args(argv)
     if args.testing:
-        os.environ["PRKS_TESTING"] = "1"
+        enter_testing_mode()
     config = select_config(args)
     root = os.path.realpath(config.root)
     testing = config.mode == "testing"
+    if testing:
+        from backend.db.config import load_database_config
+        from backend.db.errors import DatabaseConfigError
+
+        try:
+            conninfo = load_database_config(os.environ, role="web").conninfo
+        except DatabaseConfigError:
+            conninfo = None  # the role reports the configuration error itself
+        if conninfo is not None:
+            refuse_untested_database(conninfo)
     from backend import process_roles
 
     if role == "migrate":
@@ -394,6 +389,35 @@ def run_role(role, argv):
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     return process_roles.run_worker(root=root, testing=testing)
+
+
+def enter_testing_mode(environ=None):
+    """``--testing``: ``PRKS_TESTING=1`` and, unless one is named, the ``scripts/dev-postgres`` database.
+
+    Every role and the embedded worker's jobs read this one environment, so
+    the database is defaulted once, here, before anything opens it.
+    """
+    from backend.db.config import with_testing_default
+
+    env = os.environ if environ is None else environ
+    env["PRKS_TESTING"] = "1"
+    env.update(with_testing_default(env))
+
+
+def refuse_stale_library_backend(environ=None):
+    """Exit with status 2 while the retired ``PRKS_LIBRARY_BACKEND`` is set (``backend.library_backend``).
+
+    Every role runs it first: the variable chooses nothing now that
+    PostgreSQL is the only backend, and a process that ignored it would hide
+    configuration written for an earlier release.
+    """
+    from backend.library_backend import LibraryBackendError, refuse_stale_selection
+
+    try:
+        refuse_stale_selection(os.environ if environ is None else environ)
+    except LibraryBackendError as exc:
+        print(f"PRKS cannot start: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 def select_config(args):
@@ -410,11 +434,12 @@ if __name__ == "__main__":
 
     record_imports(_IMPORT_STARTED)
     role, role_argv = split_role(sys.argv[1:])
+    refuse_stale_library_backend()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))
     args = build_parser().parse_args(role_argv)
     if args.testing:
-        os.environ["PRKS_TESTING"] = "1"
+        enter_testing_mode()
 
     # Fail before storage/DB/migrations/server when the Python env is wrong.
     with startup_phase("startup_dependency_gate"):
@@ -429,33 +454,25 @@ if __name__ == "__main__":
             print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
             raise SystemExit(2) from None
     # Authentication settings, the pool and the schema, before the root is
-    # touched (PostgreSQL only).
+    # touched.
     with startup_phase("startup_identity_config"):
         identity = prepare_identity(args, config)
-        library_database = select_library(identity)
-    # Held until this process exits: root.lock, exclusive for the SQLite
-    # runtime, shared (with the content lock) for a web paired with PostgreSQL.
+        library_database = identity[0]
+    # Held until this process exits: root.lock shared, beside worker and
+    # migrate (L-D-1 #630).
     with startup_phase("startup_storage_open"):
-        bound_root = open_storage(config, paired=identity is not None)
+        bound_root = open_storage(config, paired=True)
         refuse_sqlite_catalogue(library_database, bound_root)
-    auth = None
-    if identity is not None:
-        # The start check and bump under that shared lease; a first run waits
-        # here, serving nothing, until setup is ready.
-        with startup_phase("startup_identity"), SetupWait().watching() as wait:
-            auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
-        if library_database is not None:
-            auth.library_content = "postgres"
+    # The start check and bump under that shared lease; a first run waits
+    # here, serving nothing, until setup is ready (a --testing run on a fresh
+    # database bootstraps its owner instead).
+    with startup_phase("startup_identity"), SetupWait().watching() as wait:
+        auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
     with startup_phase("startup_jobs"):
         jobs = start_jobs(auth)
     # Every later open stays beneath the root that was validated and leased,
     # even if a root symlink is retargeted while the process runs.
     config = bound_root.anchor(config)
-    if library_database is None:
-        # The SQLite store's own restore journal; the PostgreSQL Library's
-        # restore recovers through its jobs (backend.domain.maintenance).
-        with startup_phase("startup_restore"):
-            recover_incomplete_restore(config)
     with startup_phase("startup_bind"):
         config = bind_storage(config, library_database=library_database)
     with startup_phase("startup_logging"):

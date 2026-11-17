@@ -21,12 +21,13 @@ from backend.domain.identity.request_context import EPOCH_MAX
 from backend.domain.identity.web_start import AuthMode
 from backend.server import parse_request_origin
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
+from tests.narrowing import require
 
 
 class AdmissionTestCase(HttpAuthTestCase):
     def tags(self) -> int:
-        """How many tags the SQLite store holds (it is shared by the class's tests)."""
-        return len(self.server_module.db.get_all_tags())
+        """How many tags the test's Library holds."""
+        return self.run_sql("SELECT count(*) AS n FROM prks.tags WHERE library_id = %s", (self.lib,))[0]["n"]
 
     def assert_refused(self, res: Response, status: int, code: str) -> None:
         self.assertEqual(res.status, status, res.raw)
@@ -414,7 +415,7 @@ class ProxyTests(AdmissionTestCase):
 class LoopbackOwnerTests(AdmissionTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.auth = self.serve(self.settings(AuthMode.LOOPBACK_OWNER))
+        self.auth = require(self.serve(self.settings(AuthMode.LOOPBACK_OWNER)))
 
     def test_requests_act_as_the_owner_with_the_epoch_fence(self) -> None:
         res = self.call("GET", "/api/session")
@@ -455,6 +456,28 @@ class LoopbackOwnerTests(AdmissionTestCase):
         ))
         self.assertIsInstance(mapped, session_api.Admitted)
 
+    def test_only_a_profile_image_read_acts_on_the_epoch_it_read(self) -> None:
+        # The portrait fill is a Library command; an <img> sends no epoch, so
+        # admission gives that one read the epoch it just read, and no other.
+        self.run_sql("UPDATE prks.libraries SET epoch = 3")
+
+        def admitted(path: str, method: str = "GET"):
+            outcome = session_api.handle(self.auth, session_api.HttpRequest(
+                method=method, path=path, headers=Message(), peer="127.0.0.1",
+                request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+                read_json=lambda: {},
+            ))
+            assert isinstance(outcome, session_api.Admitted), outcome
+            return outcome
+
+        image = admitted("/api/persons/P-1/profile-image")
+        self.assertEqual((image.epoch, image.context.epoch), (3, 3))
+        for path in ("/api/persons/P-1", "/api/tags", "/api/persons/P-1/profile-image/x",
+                     "/api/persons//profile-image"):
+            with self.subTest(path=path):
+                self.assertIsNone(admitted(path).context.epoch)
+        self.assertIsNone(admitted("/api/persons/P-1/profile-image", method="HEAD").context.epoch)
+
     def test_only_a_ledgered_route_leaves_the_epoch_fence_to_itself(self) -> None:
         self.run_sql("UPDATE prks.libraries SET epoch = 2")
         headers = Message()
@@ -478,20 +501,3 @@ class LoopbackOwnerTests(AdmissionTestCase):
                 refused = admit(path, flag)
                 assert isinstance(refused, session_api.Reply)
                 self.assertEqual((refused.status, refused.body["code"]), (409, "LIBRARY_EPOCH_CHANGED"))
-
-
-class SqliteRuntimeTests(AdmissionTestCase):
-    """Without PRKS_AUTH the application behaves exactly as before."""
-
-    def test_no_authentication_and_the_old_origin_rule(self) -> None:
-        self.serve(auth=None)
-        before = self.tags()
-        res = self.call("POST", "/api/tags", body={"name": "plain"}, origin=None)
-        self.assertEqual(res.status, 200, res.raw)
-        self.assertEqual(res.header("PRKS-Library-Epoch"), [])
-        self.assertEqual(self.tags(), before + 1)
-        self.assertEqual(self.call("GET", "/api/tags").status, 200)
-        refused = self.call("POST", "/api/tags", body={"name": "x"}, origin="http://evil.example")
-        self.assertEqual(refused.status, 403)
-        self.assertNotEqual(self.call("POST", "/api/login", body={}).status, 200)
-        self.assertEqual(self.run_sql("SELECT count(*) AS n FROM prks.login_attempts"), [{"n": 0}])

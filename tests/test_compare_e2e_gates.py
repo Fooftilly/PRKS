@@ -137,7 +137,7 @@ class CompareFullE2EGatesTests(unittest.TestCase):
             with self.assertRaises(InvalidBenchmark):
                 summarize(run(mode), broken, mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
             with self.assertRaisesRegex(InvalidBenchmark, "malformed"):
-                summarize(run(mode), jobs(mode) + [None], mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)
+                summarize(run(mode), jobs(mode) + [None], mode, source_plan=("full", "true", "6", "true") if mode == "source" else None)  # pyright: ignore[reportArgumentType]
 
     def test_test_step_is_mandatory_and_within_own_job(self):
         for mode in ("source", "packaged"):

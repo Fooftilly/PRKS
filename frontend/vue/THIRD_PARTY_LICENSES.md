@@ -44,7 +44,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `magic-string` | `0.30.21` | `MIT` |
 | `nanoid` | `3.3.20` | `MIT` |
 | `picocolors` | `1.1.1` | `ISC` |
-| `postcss` | `8.5.30` | `MIT` |
+| `postcss` | `8.5.32` | `MIT` |
 | `raf-schd` | `4.0.3` | `MIT` |
 | `remove-accents` | `0.5.0` | `MIT` |
 | `source-map-js` | `1.2.2` | `BSD-3-Clause` |

@@ -25,7 +25,6 @@ FAILURE_DIAGNOSTICS_PATH = Path(".tests") / "e2e-failure-diagnostics.json"
 # Runner/harness env switches. The harness reads them to configure a run; the
 # runner reads the same names to decide whether a run may train history.
 PROFILE_ENV = "PRKS_E2E_PROFILE"
-SEED_CACHE_ENV = "PRKS_E2E_SEED_CACHE"
 # Opt-in experiment: identical catch-all interception with a cheaper local URL fast path.
 ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 # Manual soft module-affinity sharding pilot; never train normal history.
@@ -46,17 +45,14 @@ def env_flag_enabled(name: str, default: bool = False, environ=None) -> bool:
 def benchmark_modes(environ=None) -> tuple:
     """Active non-representative modes for the *effective* configuration.
 
-    ``--profile`` adds instrumentation overhead and ``--no-seed-cache`` measures
-    a slower non-default configuration; both are also reachable through
-    ``PRKS_E2E_PROFILE`` / ``PRKS_E2E_SEED_CACHE`` without the matching flag.
+    ``--profile`` adds instrumentation overhead; it is also reachable through
+    ``PRKS_E2E_PROFILE`` without the flag.
     The runner exports its flags into the environment before asking, so this is
     the single decision covering CLI- and environment-driven benchmark runs.
     """
     modes = []
     if env_flag_enabled(PROFILE_ENV, environ=environ):
         modes.append("profile")
-    if not env_flag_enabled(SEED_CACHE_ENV, default=True, environ=environ):
-        modes.append("no-seed-cache")
     if env_flag_enabled(ROUTE_FASTPATH_ENV, environ=environ):
         modes.append("route-fastpath")
     if env_flag_enabled(MODULE_AFFINITY_ENV, environ=environ):
@@ -268,7 +264,9 @@ FEATURES = {
         ),
         "selectors": (
             "tests.e2e.test_app.PdfPersistenceTests",
+            "tests.e2e.test_app.PdfAnnotationStaleSnapshotTests",
             "tests.e2e.test_app.PdfAnnotationCommentEditTests",
+            "tests.e2e.test_app.PdfAnnotationAckDuringLocalWriteTests",
             "tests.e2e.test_offline.OfflineFoundationTests",
         ),
     },
@@ -335,8 +333,12 @@ FEATURES = {
         "selectors": ("tests.e2e.test_publishers_route_surface",),
     },
     "processing": {
-        "description": "Processing Files inbox Vue route surface",
-        "selectors": ("tests.e2e.test_processing_route_surface",),
+        "description": "Processing queue route, mounted in its tab root",
+        "selectors": ("tests.e2e.test_app.TabContextHostRootTests",),
+    },
+    "postgres-library": {
+        "description": "PG-C1 flows on the PostgreSQL Library: restore recovery, Processing queue, Research-ACK fence (PostgreSQL leg only)",
+        "selectors": ("tests.e2e.test_postgres_library_flows",),
     },
     "offline": {
         "description": "Offline foundation + broad offline coherence (Work cache)",
@@ -406,9 +408,6 @@ AFFECTED_RULES = (
             "frontend/index.html",
             "frontend/sw.js",
             "backend/server.py",
-            "backend/db_manager.py",
-            "backend/db_migrations.py",
-            "backend/db_schema.sql",
             "prks_app.py",
         ),
         "features": ("smoke", "shell", "tabs", "offline", "sync", "modals"),
@@ -458,14 +457,21 @@ AFFECTED_RULES = (
         ),
         "features": ("graph",),
     },
-    # Shared Concepts/Positions/Arguments domain module — CI always full so
+    # Shared Concepts/Positions/Arguments domain (PostgreSQL since PG-C2 #641;
+    # the SQLite research_network.py is deleted) — CI always full so
     # Position/Argument suites cannot be dropped by a concepts-only mapping.
     {
         "name": "research-network-core",
-        "paths": ("backend/research_network.py",),
+        "paths": (
+            "backend/domain/research/**",
+            "backend/api/arguments.py",
+            "backend/api/concepts.py",
+            "backend/api/positions.py",
+            "backend/api/research_notes.py",
+        ),
         "features": ("concepts", "positions", "arguments", "graph", "notes"),
         "ci_mode": "full",
-        "note": "research_network.py owns Concepts/Positions/Arguments (CI: full)",
+        "note": "domain/research owns Concepts/Positions/Arguments (CI: full)",
     },
     {
         "name": "concepts",
@@ -474,7 +480,6 @@ AFFECTED_RULES = (
             "frontend/js/concept-state.js",
             "backend/concept_sync.py",
             "backend/research_markup.py",
-            "backend/research_index.py",
         ),
         "features": ("concepts", "graph", "notes"),
     },
@@ -541,6 +546,8 @@ AFFECTED_RULES = (
             "backend/pdf_materialization.py",
             "backend/pdf_annotation_adopt.py",
             "backend/services/work_pdf_replace.py",
+            "backend/api/annotations.py",
+            "backend/domain/annotations/**",
         ),
         "features": ("pdf-annotations",),
         "note": "PDF annotation durable family + materialization + viewer bridge",
@@ -713,16 +720,16 @@ AFFECTED_RULES = (
         "note": "Vue Publishers page (#302 R3) → publishers, because test_publishers_route_surface opens #/publishers. Shared route-surface stays unmapped (CI full).",
     },
     {
-        "name": "processing-vue",
-        "paths": ("frontend-app/src/features/processing/**",),
+        "name": "processing-queue-vue",
+        "paths": ("frontend-app/src/features/processing-queue/**",),
         "exclude_paths": (
             "frontend-app/**/*.stories.ts",
             "frontend-app/**/*.stories.tsx",
             "frontend-app/**/*.stories.vue",
             "frontend-app/**/*.stories.js",
         ),
-        "features": ("processing",),
-        "note": "Vue Processing Files inbox (#302 R3) → processing, because test_processing_route_surface opens #/processing-files. Shared route-surface stays unmapped (CI full).",
+        "features": ("postgres-library", "processing"),
+        "note": "Vue Processing queue (PG-C1 #640; the only Processing page since PG-C2 #641) → postgres-library, because test_postgres_library_flows drives #/processing-files, and processing, because TabContextHostRootTests opens #/processing-files in its tab root.",
     },
     {
         "name": "concepts-vue",

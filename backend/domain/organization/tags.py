@@ -27,12 +27,13 @@ from collections import defaultdict
 from typing import Any, LiteralString, Optional
 
 from backend import tag_sync as rules
+from backend import tag_color
 from backend.tag_color import normalized_tag_color
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import lifecycle, links
 from backend.domain.works import revisions
 
-DEFAULT_COLOR = rules.DEFAULT_COLOR
+DEFAULT_COLOR = tag_color.DEFAULT_COLOR
 
 _OWNER_SQL: LiteralString = """
 SELECT k.tag_id, k.alias_id, t.name, t.color

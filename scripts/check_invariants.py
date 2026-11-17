@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence, TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,6 +47,17 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/library_backend.py",
     "backend/log_safety.py",
     "backend/person_image.py",
+    "backend/derived_caches.py",
+    "backend/managed_pdf_names.py",
+    "backend/domain/works/rules.py",
+    "backend/domain/saved_views/rules.py",
+    "backend/domain/settings/rules.py",
+    "backend/domain/people/errors.py",
+    "backend/domain/works/bibtex_format.py",
+    "backend/domain/people/rules.py",
+    "backend/etags.py",
+    "backend/domain/research/rules.py",
+    "backend/pdf_text.py",
     "backend/db/config.py",
     "backend/db/errors.py",
     "backend/db/database.py",
@@ -68,8 +79,6 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/identity/root_pairing.py",
     "backend/domain/identity/admin.py",
     "backend/api/session.py",
-    "backend/work_identity.py",
-    "backend/work_projection.py",
     "backend/work_metadata_sync.py",
     "backend/work_role_sync.py",
     "backend/domain/works/__init__.py",
@@ -86,33 +95,49 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/works/lifecycle.py",
     "backend/domain/works/merge.py",
     "backend/domain/works/wiki_links.py",
+    "backend/domain/works/work_commands.py",
     "backend/domain/people/__init__.py",
     "backend/domain/people/persons.py",
     "backend/domain/people/groups.py",
+    "backend/domain/people/group_commands.py",
+    "backend/domain/people/person_commands.py",
+    "backend/domain/people/role_commands.py",
     "backend/domain/people/publishers.py",
+    "backend/domain/people/publisher_commands.py",
     "backend/domain/people/queries.py",
     "backend/domain/people/roles.py",
     "backend/domain/organization/__init__.py",
     "backend/domain/organization/folders.py",
+    "backend/domain/organization/folder_commands.py",
     "backend/domain/organization/lifecycle.py",
     "backend/domain/organization/links.py",
     "backend/domain/organization/playlists.py",
+    "backend/domain/organization/playlist_commands.py",
     "backend/domain/organization/tags.py",
+    "backend/domain/organization/tag_commands.py",
     "backend/domain/research/__init__.py",
     "backend/domain/research/arguments.py",
     "backend/domain/research/concepts.py",
+    "backend/domain/research/concept_commands.py",
+    "backend/domain/research/position_commands.py",
+    "backend/domain/research/argument_commands.py",
+    "backend/domain/research/note_commands.py",
     "backend/domain/research/graph.py",
+    "backend/domain/research/index_commands.py",
+    "backend/library.py",
     "backend/domain/research/positions.py",
     "backend/domain/research/reindex.py",
     "backend/domain/search/__init__.py",
     "backend/domain/search/refresh.py",
     "backend/domain/search/queries.py",
     "backend/domain/search/text.py",
+    "backend/domain/search/search_commands.py",
     "backend/domain/search/rebuild.py",
     "backend/domain/annotations/__init__.py",
     "backend/domain/annotations/materialize.py",
     "backend/domain/annotations/operations.py",
     "backend/domain/annotations/store.py",
+    "backend/domain/annotations/annotation_commands.py",
     "backend/domain/objects/__init__.py",
     "backend/domain/objects/ingest.py",
     "backend/domain/objects/jobs.py",
@@ -135,9 +160,11 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/domain/maintenance/staging.py",
     "backend/domain/maintenance/tables.py",
     "backend/domain/saved_views/__init__.py",
+    "backend/domain/saved_views/commands.py",
     "backend/domain/saved_views/views.py",
     "backend/domain/settings/__init__.py",
     "backend/domain/settings/app_settings.py",
+    "backend/domain/settings/commands.py",
     "backend/jobs/queue.py",
     "backend/jobs/handlers.py",
     "backend/jobs/runner.py",
@@ -167,9 +194,167 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/sync/handlers/work_open.py",
     "backend/sync/handlers/work_role.py",
     "backend/sync/handlers/work_source.py",
+    "backend/api",
+    "backend/domain/__init__.py",
+    "backend/domain/identity/__init__.py",
+    "backend/domain/maintenance/upload.py",
+    "backend/domain/people/constraints.py",
+    "backend/domain/research/constraints.py",
+    "backend/domain/saved_views/constraints.py",
+    "backend/db/testing_guard.py",
+    "backend/jobs/__init__.py",
+    "backend/services/__init__.py",
+    "backend/services/work_pdf_replace.py",
+    "backend/api_contract",
+    "backend/argument_sync.py",
+    "backend/concept_sync.py",
+    "backend/dependency_gate.py",
+    "backend/folder_sync.py",
+    "backend/folder_tag_sync.py",
+    "backend/log_config.py",
+    "backend/pdf_annotation_adopt.py",
+    "backend/pdf_annotation_sync.py",
+    "backend/pdf_annotations.py",
+    "backend/pdf_materialization.py",
+    "backend/performance.py",
+    "backend/person_group_sync.py",
+    "backend/person_metadata_sync.py",
+    "backend/person_sync.py",
+    "backend/playlist_sync.py",
+    "backend/position_sync.py",
+    "backend/research_graph.py",
+    "backend/startup_profile.py",
+    "backend/sync_protocol.py",
+    "backend/tag_color.py",
+    "backend/tag_sync.py",
+    "backend/work_lifecycle_sync.py",
+    "backend/work_note_sync.py",
+    "backend/work_open_sync.py",
+    "backend/work_source_sync.py",
+    "backend/work_tag_sync.py",
+    "backend/server.py",
+    "prks_app.py",
+    "scripts",
+    "tests",
 )
 PYRIGHT_TYPED_SLICE_INCLUDE = PYRIGHT_TYPED_SLICE_SCOPES
-PYRIGHT_TYPED_SLICE_MODES = frozenset({"basic", "standard", "strict"})
+# Files and directories already clean under Pyright strict mode, held there by
+# the typed-slice config's "strict" list so they cannot regress. The config may
+# list more paths (add new ones here too), never fewer.
+PYRIGHT_TYPED_SLICE_STRICT = (
+    "backend/api/__init__.py",
+    "backend/api/person_groups.py",
+    "backend/api/positions.py",
+    "backend/api/publishers.py",
+    "backend/api/research_notes.py",
+    "backend/api/search.py",
+    "backend/api/settings.py",
+    "backend/api/tags.py",
+    "backend/api_contract/__init__.py",
+    "backend/api_contract/errors.py",
+    "backend/api_contract/jobs.py",
+    "backend/api_contract/performance.py",
+    "backend/api_contract/positions.py",
+    "backend/api_contract/processing_items.py",
+    "backend/api_contract/publishers.py",
+    "backend/api_contract/saved_views.py",
+    "backend/db/__init__.py",
+    "backend/db/config.py",
+    "backend/db/migrate.py",
+    "backend/db/testing_guard.py",
+    "backend/derived_cache_publish.py",
+    "backend/domain/__init__.py",
+    "backend/domain/annotations/__init__.py",
+    "backend/domain/annotations/materialize.py",
+    "backend/domain/identity/__init__.py",
+    "backend/domain/identity/admin.py",
+    "backend/domain/identity/authorization.py",
+    "backend/domain/identity/errors.py",
+    "backend/domain/identity/login.py",
+    "backend/domain/identity/login_limiter.py",
+    "backend/domain/identity/login_names.py",
+    "backend/domain/identity/request_context.py",
+    "backend/domain/identity/sessions.py",
+    "backend/domain/identity/web_start.py",
+    "backend/domain/maintenance/__init__.py",
+    "backend/domain/maintenance/backup.py",
+    "backend/domain/maintenance/format.py",
+    "backend/domain/maintenance/staged.py",
+    "backend/domain/maintenance/tables.py",
+    "backend/domain/maintenance/upload.py",
+    "backend/domain/objects/__init__.py",
+    "backend/domain/objects/jobs.py",
+    "backend/domain/objects/portraits.py",
+    "backend/domain/objects/replace.py",
+    "backend/domain/organization/__init__.py",
+    "backend/domain/organization/lifecycle.py",
+    "backend/domain/organization/tag_commands.py",
+    "backend/domain/people/__init__.py",
+    "backend/domain/people/constraints.py",
+    "backend/domain/people/errors.py",
+    "backend/domain/people/group_commands.py",
+    "backend/domain/people/publisher_commands.py",
+    "backend/domain/processing/__init__.py",
+    "backend/domain/processing/commands.py",
+    "backend/domain/processing/imports.py",
+    "backend/domain/processing/uploads.py",
+    "backend/domain/research/__init__.py",
+    "backend/domain/research/argument_commands.py",
+    "backend/domain/research/concept_commands.py",
+    "backend/domain/research/constraints.py",
+    "backend/domain/research/index_commands.py",
+    "backend/domain/research/position_commands.py",
+    "backend/domain/saved_views/__init__.py",
+    "backend/domain/saved_views/commands.py",
+    "backend/domain/saved_views/constraints.py",
+    "backend/domain/search/__init__.py",
+    "backend/domain/search/queries.py",
+    "backend/domain/search/refresh.py",
+    "backend/domain/settings/__init__.py",
+    "backend/domain/settings/commands.py",
+    "backend/domain/text_identity.py",
+    "backend/domain/works/__init__.py",
+    "backend/domain/works/citation.py",
+    "backend/domain/works/integrity.py",
+    "backend/domain/works/lifecycle.py",
+    "backend/domain/works/merge.py",
+    "backend/domain/works/projection.py",
+    "backend/domain/works/queries.py",
+    "backend/domain/works/revisions.py",
+    "backend/domain/works/wiki_links.py",
+    "backend/etags.py",
+    "backend/fs_durability.py",
+    "backend/jobs/__init__.py",
+    "backend/jobs/diagnostics.py",
+    "backend/jobs/embedded.py",
+    "backend/jobs/handlers.py",
+    "backend/jobs/prune.py",
+    "backend/jobs/runner.py",
+    "backend/library.py",
+    "backend/library_backend.py",
+    "backend/pdf_byte_mentions.py",
+    "backend/process_roles.py",
+    "backend/readiness.py",
+    "backend/research_markup.py",
+    "backend/services/__init__.py",
+    "backend/services/work_pdf_replace.py",
+    "backend/startup_profile.py",
+    "backend/storage/__init__.py",
+    "backend/storage/config.py",
+    "backend/storage/distribution.py",
+    "backend/storage/errors.py",
+    "backend/storage/file_lock.py",
+    "backend/storage/paths.py",
+    "backend/storage/preflight.py",
+    "backend/storage/resolver.py",
+    "backend/sync/__init__.py",
+    "backend/sync/families.py",
+    "backend/sync/handlers/__init__.py",
+    "backend/tag_color.py",
+)
+# "basic" is no longer accepted: the slice was raised to "standard" in #69
+# slice 6, and a lower mode would silently drop the checks that added.
+PYRIGHT_TYPED_SLICE_MODES = frozenset({"standard", "strict"})
 # Only __pycache__ exclusions are permitted on the typed slice; anything else
 # that covers a protected scope could silently suppress it.
 PYRIGHT_TYPED_SLICE_ALLOWED_EXCLUDES = frozenset(
@@ -353,7 +538,7 @@ _CAPABILITY_HELPER_HOMES = {
     "allocate_exclusive_managed_filename": "backend/services/work_pdf_replace.py",
     "store_new_managed_pdf_bytes": "backend/services/work_pdf_replace.py",
     "store_new_managed_pdf_from_path": "backend/services/work_pdf_replace.py",
-    "mint_managed_pdf_filename": "backend/db_manager.py",
+    "mint_managed_pdf_filename": "backend/managed_pdf_names.py",
 }
 
 # INV-STORAGE-002: a raw removal of a managed-PDF path is survivor-aware
@@ -451,6 +636,9 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
     # every Asset under the per-object lock (§7.4, §11.2), so the SQLite
     # basename lock has nothing to protect there.
     ("backend/server.py", "_create_postgres_work"): "PostgreSQL create",
+    # The PostgreSQL Work PATCH drops file_path before the write, and the
+    # Library refuses one (NotPortedError): nothing existing is adopted.
+    ("backend/server.py", "_update_postgres_work_metadata"): "PostgreSQL PATCH, no file_path",
 }
 # Dict methods that may (re)write a guarded fields dict's file_path entry.
 _DICT_MUTATORS = frozenset({"__ior__", "__setitem__", "setdefault", "update"})
@@ -1134,7 +1322,7 @@ def _names_of_bindings(bindings: Iterable[_Binding]) -> set[str]:
     return names
 
 
-def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> bool:
+def _is_partial_call(node: ast.expr, scopes: list[_Scope]) -> TypeGuard[ast.Call]:
     return isinstance(node, ast.Call) and "functools.partial" in _qualified_names(
         node.func, scopes
     )
@@ -1431,7 +1619,8 @@ def _static_sql_text(node: ast.expr) -> str | None:
         return node.value
     if isinstance(node, ast.JoinedStr):
         return "".join(
-            part.value if isinstance(part, ast.Constant) else "?" for part in node.values
+            part.value if isinstance(part, ast.Constant) and isinstance(part.value, str) else "?"
+            for part in node.values
         )
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left, right = _static_sql_text(node.left), _static_sql_text(node.right)
@@ -2504,6 +2693,12 @@ class _InvariantVisitor(ast.NodeVisitor):
         )
 
     def visit_Try(self, node: ast.Try) -> None:
+        self._visit_try_statement(node)
+
+    def visit_TryStar(self, node: ast.TryStar) -> None:
+        self._visit_try_statement(node)
+
+    def _visit_try_statement(self, node: ast.Try | ast.TryStar) -> None:
         before = _copy_state(self.scopes[-1].current)
         mark = len(self._dirty_log)
         body_end = self._run_branch(before, node.body)
@@ -2523,8 +2718,6 @@ class _InvariantVisitor(ast.NodeVisitor):
         self.scopes[-1].current = _join(flows)
         for stmt in node.finalbody:
             self.visit(stmt)
-
-    visit_TryStar = visit_Try
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.type is not None:
@@ -3350,7 +3543,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                 f"{what} orchestrates an external process from the HTTP adapter. "
                 "backend/server.py must not run qpdf or any other subprocess: PDF "
                 "linearization belongs in backend.pdf_linearize (call "
-                "maybe_linearize_pdf_in_place / is_pdf_linearized); other external "
+                "linearize_pdf_to / is_pdf_linearized); other external "
                 "tools belong in a focused backend module"
             ),
         )
@@ -3456,14 +3649,16 @@ def check_source(source: str, relpath: str) -> list[Finding]:
     class_registry: dict[int, _ClassInfo] = {}
     function_registry: dict[int, _FuncInfo] = {}
     previous: object = None
+    findings: list[Finding] = []
     for _ in range(_MAX_ANALYSIS_PASSES):
         visitor = _InvariantVisitor(relpath, class_registry, function_registry)
         visitor.visit(tree)
+        findings = visitor.findings
         snapshot = _registry_snapshot(class_registry, function_registry)
         if snapshot == previous:
             break
         previous = snapshot
-    return visitor.findings
+    return findings
 
 
 _MAX_ANALYSIS_PASSES = 10
@@ -3729,6 +3924,73 @@ def _reject_ignore_exclude_covering(
     return findings
 
 
+def _check_typed_slice_strict(cfg: dict, root: Path) -> list[Finding]:
+    """Keep every PYRIGHT_TYPED_SLICE_STRICT path in the config's strict list."""
+    strict = cfg.get("strict", [])
+    if not isinstance(strict, list) or not all(isinstance(item, str) for item in strict):
+        return [
+            Finding(
+                "INV-PYRIGHT-004",
+                PYRIGHT_TYPED_SLICE_CONFIG,
+                1,
+                "typed-slice strict must be a list of paths",
+            )
+        ]
+    listed = {_normalize_pyright_path(item) for item in strict}
+    findings: list[Finding] = []
+    missing = [path for path in PYRIGHT_TYPED_SLICE_STRICT if path not in listed]
+    if missing:
+        findings.append(
+            Finding(
+                "INV-PYRIGHT-004",
+                PYRIGHT_TYPED_SLICE_CONFIG,
+                1,
+                (
+                    f"typed-slice strict list is missing {missing!r}; files that "
+                    "pass strict mode must stay strict (fix the new errors instead)"
+                ),
+            )
+        )
+    for path in sorted(listed):
+        # A missing typed-slice scope is already reported as INV-PYRIGHT-002.
+        if path in PYRIGHT_TYPED_SLICE_SCOPES:
+            continue
+        if not (root / path).exists():
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-004",
+                    PYRIGHT_TYPED_SLICE_CONFIG,
+                    1,
+                    (
+                        f"typed-slice strict path {path!r} does not exist; Pyright "
+                        "would skip it silently. Update the strict list with the "
+                        "move or rename"
+                    ),
+                )
+            )
+        elif not _under_typed_slice_scope(path):
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-004",
+                    PYRIGHT_TYPED_SLICE_CONFIG,
+                    1,
+                    (
+                        f"typed-slice strict path {path!r} is outside every typed-slice "
+                        "include scope; Pyright applies strict only to included files, "
+                        "so add it to PYRIGHT_TYPED_SLICE_SCOPES first"
+                    ),
+                )
+            )
+    return findings
+
+
+def _under_typed_slice_scope(path: str) -> bool:
+    return any(
+        path == scope or path.startswith(scope.rstrip("/") + "/")
+        for scope in PYRIGHT_TYPED_SLICE_SCOPES
+    )
+
+
 def _reject_typed_slice_suppression(cfg: dict) -> list[Finding]:
     """Reject ignore/exclude entries that would silence any typed-slice scope."""
     return _reject_ignore_exclude_covering(
@@ -3928,7 +4190,7 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
                 (
                     "typed-slice typeCheckingMode must be one of "
                     f"{sorted(PYRIGHT_TYPED_SLICE_MODES)} "
-                    f"(found {mode!r}); off would silently disable real type analysis"
+                    f"(found {mode!r}); off or basic would silently weaken type analysis"
                 ),
             )
         )
@@ -3976,6 +4238,7 @@ def check_pyright_configs(root: Path = REPO_ROOT) -> list[Finding]:
                 )
             )
 
+    findings.extend(_check_typed_slice_strict(typed, root))
     findings.extend(_reject_typed_slice_suppression(typed))
 
     workflow_path = root / STATIC_ANALYSIS_WORKFLOW

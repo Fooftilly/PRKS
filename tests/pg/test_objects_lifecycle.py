@@ -3,7 +3,8 @@
 Object creation and adoption, cleanup claims recorded by the transaction
 that stops naming a key, the three-valued reference check (Assets of any
 Library, live restore runs), settle under the per-object lock and the
-Library's objects lock, the orphan sweep's grace period, and the §13.3
+Library's objects lock, the orphan sweep's grace period, a ``DELETE_WORK``
+replayed by ``op_id`` (no second claim, no deletion of an adopted key), and the §13.3
 interleavings: a write paused after storing its key while a sweep's claim
 on that key is settled fails cleanly at adoption, and a settle that meets
 an adoption in flight keeps the object.
@@ -23,17 +24,19 @@ import psycopg
 
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command
-from backend.domain.objects import lifecycle
+from backend.domain.objects import jobs, lifecycle
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.works import commands
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
+from tests import acting_context as facade_context
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
     LocalFilesystemStorage,
     StorageKey,
 )
+from backend.sync import protocol
+from backend.sync.families import Environment
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
 DAY = 24 * 60 * 60
@@ -439,6 +442,91 @@ class IsolationTests(ObjectsTestCase):
         self.assertEqual(self.claims(), {})
 
 
+class SyncDeleteReplayTests(ObjectsTestCase):
+    """``DELETE_WORK`` through the sync protocol, replayed with its ``op_id``.
+
+    The first ACK records the cleanup claim in the delete's own transaction
+    and carries the path for the first post-commit cleanup only. The exact
+    replay is answered from the ledger: no path, no command, so it can
+    neither record a second claim nor revive one the catalogue retired.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.env = Environment(pdfs_dir=self.storage.pdfs_dir)
+        device = self.actor.context.device_id
+        assert device is not None
+        self.op = {
+            "op_id": str(uuid.uuid4()), "device_id": str(device), "operation": "DELETE_WORK",
+            "entity_type": "work", "payload": {}, "base_revision": None,
+            "occurred_at": "2026-09-11T10:00:00Z", "created_at": "2026-09-11T10:00:00Z", "depends_on": [],
+        }
+
+    def delete(self, work_id: str) -> dict[str, Any]:
+        status, result = protocol.process_operation(self.db, self.actor.context,
+                                                    {**self.op, "entity_id": work_id}, self.env)
+        self.assertEqual((status, result["code"], result["work_id"]), (200, "ACKNOWLEDGED", work_id))
+        return result
+
+    def claim_rows(self) -> list[dict[str, Any]]:
+        return self.sql("SELECT namespace, name, library_id, hold, last_attempt_at "
+                        "FROM prks.object_cleanup_claims ORDER BY namespace, name")
+
+    def cleanup_jobs(self) -> int:
+        return int(self.sql("SELECT count(*) AS n FROM prks.jobs WHERE kind = %s",
+                            (jobs.CLEANUP_KIND,))[0]["n"])
+
+    def test_a_replay_after_a_failed_cleanup_records_no_second_claim(self) -> None:
+        obj = self.put()
+        work_id = self.work_with(obj)
+        first = self.delete(work_id)
+        self.assertEqual((first["changed"], first["file_path"]), (True, f"/api/pdfs/{obj.key.name}"))
+        self.assertEqual([row["name"] for row in self.claim_rows()], [obj.key.name])
+        enqueued = self.cleanup_jobs()
+
+        self.objects.fail_delete = True
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.FAILED: 1})
+        self.assertTrue(self.stored(obj.key.name))
+        (failed,) = self.claim_rows()
+        self.assertIsNotNone(failed["last_attempt_at"])
+
+        replay = self.delete(work_id)
+        self.assertEqual(replay, {"code": "ACKNOWLEDGED", "work_id": work_id, "changed": True})
+        self.assertEqual(self.claim_rows(), [failed], "the replay touches no claim, not even its stamp")
+        self.assertEqual(self.cleanup_jobs(), enqueued, "the replay runs no command")
+        self.assertEqual(len(self.sql("SELECT 1 FROM prks.sync_operations")), 1)
+
+        # The durable claim owns the bytes, not the envelope: recovery converges.
+        self.objects.fail_delete = False
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 1})
+        self.assertFalse(self.stored(obj.key.name))
+        self.assertEqual(self.claim_rows(), [])
+        self.assertEqual(self.delete(work_id), replay)
+        self.assertEqual(self.claim_rows(), [])
+
+    def test_a_replay_after_another_work_adopts_the_object_deletes_nothing(self) -> None:
+        obj = self.put()
+        first_work = self.work_with(obj)
+        self.delete(first_work)
+        self.assertEqual([row["name"] for row in self.claim_rows()], [obj.key.name])
+
+        second_work = self.create(obj)  # a new live reference adopts the claimed key
+        adopted = self.claim_rows()
+        self.assertEqual([row["name"] for row in adopted], [obj.key.name], "adoption leaves the claim")
+        replay = self.delete(first_work)
+        self.assertEqual(replay, {"code": "ACKNOWLEDGED", "work_id": first_work, "changed": True})
+        self.assertEqual(self.claim_rows(), adopted, "the replay records no new claim")
+
+        # The claim is retired against the live reference, never acted on.
+        self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REFERENCED: 1})
+        self.assertTrue(self.stored(obj.key.name))
+        self.assertEqual(self.claim_rows(), [])
+        self.assertEqual(self.asset_of(second_work)["storage_locator"], obj.key.name)
+        self.assertEqual(self.delete(first_work), replay)
+        self.assertEqual(self.claim_rows(), [])
+        self.assertTrue(self.stored(obj.key.name))
+
+
 class RetryTests(ObjectsTestCase):
     def test_a_failed_removal_keeps_the_claim_and_rotates(self) -> None:
         first, second = self.put(), self.put()
@@ -454,6 +542,19 @@ class RetryTests(ObjectsTestCase):
         self.assertEqual(set(self.claims()), attempted)
         self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 1})
         self.assertEqual(self.claims(), {})
+
+    def test_a_failed_removal_logs_its_error_type_and_never_the_path_or_name(self) -> None:
+        obj = self.put()
+        self.claim(obj.key, self.actor.library_id)
+        secret = f"/home/private-user/PRIVATE_BOOK_X9Q7/{obj.key.name}"
+        with (mock.patch.object(self.objects, "delete", side_effect=OSError(13, "Permission denied", secret)),
+              self.assertLogs("prks.objects", "WARNING") as logs):
+            self.assertIs(self.settle(obj.key), Settled.FAILED)
+        text = "\n".join(logs.output)
+        self.assertIn("object_cleanup_failed", text)
+        self.assertIn("error=PermissionError", text)  # OSError(13, ...) is a PermissionError
+        for private in ("private-user", "PRIVATE_BOOK_X9Q7", "Permission denied", obj.key.name):
+            self.assertNotIn(private, text)
 
     def test_bytes_already_gone_settle_as_removed(self) -> None:
         obj = self.put()

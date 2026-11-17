@@ -3,7 +3,7 @@
 Each call, and each Tag semantic operation, runs on this leg's library and
 on a reference SQLite library holding the same Works, Folders and Tags, and
 the results must be equal after generated ids and timestamps become labels.
-Inputs avoid the documented differences (``backend/pg_facade/organization.py``):
+Inputs avoid the documented differences (``backend/domain/organization/__init__.py``):
 names differ beyond ASCII case, lists of several generated ids are compared
 as sets, and no create reuses a deleted or merged id. Folders are seeded as
 rows on PostgreSQL: the Folder commands are a later slice.
@@ -24,7 +24,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from tests.backend_parity import POSTGRES, SQLITE, parametrize_backends
+from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
 
 _ID = re.compile(r"\b(T|L|F|W|PL|MF|AS)-[0-9A-F]{32}\b")
@@ -189,13 +189,11 @@ class SyncParityTestCase(TagParityTestCase):
         self.devices = {id(self.leg): self._leg_device(), id(self.ref): str(uuid.uuid4())}
 
     def _leg_device(self) -> str:
-        if self.parity_backend == POSTGRES:
-            from backend.pg_facade.context import current_context
+        from tests.acting_context import current_context
 
-            device = current_context().device_id
-            assert device is not None
-            return str(device)
-        return str(uuid.uuid4())
+        device = current_context().device_id
+        assert device is not None
+        return str(device)
 
     def new_tag_id(self, label: str) -> str:
         tag_id = "T-" + uuid.uuid4().hex.upper()
@@ -215,22 +213,14 @@ class SyncParityTestCase(TagParityTestCase):
                 else "folder" if operation in _FOLDER_OPERATIONS else "work")
 
     def send(self, side: TagSide, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        if side is self.ref or self.parity_backend == SQLITE:
-            from backend import sync_protocol
-
-            return sync_protocol.process_operation(side.db, data)
-        from backend.pg_facade import NotPortedError
-        from backend.pg_facade.context import current_context
+        if side is self.ref:
+            return side.db.process_operation(data)
+        from tests.acting_context import current_context
         from backend.sync import protocol
         from backend.sync.families import Environment
 
-        try:
-            return protocol.process_operation(side.db.parity_library.database, current_context(), data,
-                                              Environment(pdfs_dir=os.path.join(self.tmp, "leg-pdfs")))
-        except NotPortedError as exc:
-            self.parity_log.unported.add(exc.method)
-            self.parity_log.refusals += 1
-            raise
+        return protocol.process_operation(side.db.database, current_context(), data,
+                                          Environment(pdfs_dir=os.path.join(self.tmp, "leg-pdfs")))
 
     def send_both(self, operation: str, ids: Any, payload: Any, base: Optional[int] = None,
                   op_id: Optional[str] = None) -> tuple[int, dict[str, Any]]:

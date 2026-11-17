@@ -46,6 +46,7 @@ from backend.db.errors import (
     is_retryable,
     map_database_error,
 )
+from backend.performance import clock_ns, record_db_call
 
 T = TypeVar("T")
 
@@ -123,6 +124,18 @@ class Transaction:
     def _check_open(self) -> None:
         if self._closed:
             raise TransactionClosed("this transaction has ended")
+
+
+def _record_transaction(duration_ns: int, *, write: bool) -> None:
+    """Count one transaction as one ``db`` call of the current request's diagnostics.
+
+    It records only a duration and whether the transaction could write, never
+    SQL or parameters, and a failure to record never fails the transaction.
+    """
+    try:
+        record_db_call(duration_ns, write=write)
+    except Exception:  # noqa: BLE001 - diagnostics must not break a transaction
+        pass
 
 
 def _begin_statement(isolation: Isolation, read_only: bool) -> sql.Composed:
@@ -206,13 +219,19 @@ class Database:
         borrow_timeout: float | None = None,
     ) -> T:
         with self._borrow(borrow_timeout) as conn:
-            with conn.transaction():
-                conn.execute(_begin_statement(isolation, read_only))
-                tx = Transaction(conn, isolation=isolation, read_only=read_only, attempt=attempt)
-                try:
-                    return fn(tx)
-                finally:
-                    tx.close()
+            # Counted only once a connection is held: a borrow that times out
+            # ran no SQL and records no ``db`` call.
+            started = clock_ns()
+            try:
+                with conn.transaction():
+                    conn.execute(_begin_statement(isolation, read_only))
+                    tx = Transaction(conn, isolation=isolation, read_only=read_only, attempt=attempt)
+                    try:
+                        return fn(tx)
+                    finally:
+                        tx.close()
+            finally:
+                _record_transaction(clock_ns() - started, write=not read_only)
 
     def command(
         self,

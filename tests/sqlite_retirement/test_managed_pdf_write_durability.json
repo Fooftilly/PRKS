@@ -1,0 +1,78 @@
+{
+  "module": "tests/test_managed_pdf_write_durability.py",
+  "tests": {
+    "TestAtomicReplaceContentDurability.test_the_temp_is_synced_through_the_shared_primitive_before_it_is_published": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestAtomicReplaceContentDurability.test_linearization_is_not_what_makes_the_replacement_durable": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/pg/test_objects_ingest.py::StoreTests.test_a_linearized_ingest_keeps_the_source_under_its_own_key"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync. Linearization writes a separate working file before the object is stored."
+    },
+    "TestAtomicReplaceContentDurability.test_a_refused_content_sync_never_replaces_the_canonical_pdf": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_failed_content_sync_publishes_nothing"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestAtomicReplaceContentDurability.test_a_failed_directory_sync_is_reported_and_not_raised": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_directory_sync_failure_is_reported_not_fatal"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestNewManagedStoreContentDurability.test_the_created_file_is_synced_before_the_store_reports_success": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestNewManagedStoreContentDurability.test_a_refused_content_sync_reports_no_stored_pdf": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_failed_content_sync_publishes_nothing"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestNewManagedStoreContentDurability.test_a_failed_directory_sync_still_stores_the_upload": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_directory_sync_failure_is_reported_not_fatal"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestTheStrongestBarrierReachesManagedPdfWrites.test_a_managed_replacement_flushes_its_contents_with_the_full_barrier": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/test_pdf_linearize_durability.py::TestTheStrongestBarrierIsUsed.test_the_full_barrier_is_preferred_where_the_platform_has_one"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestTheStrongestBarrierReachesManagedPdfWrites.test_a_new_managed_store_flushes_its_contents_with_the_full_barrier": {
+      "replaced_by": [
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/test_pdf_linearize_durability.py::TestTheStrongestBarrierIsUsed.test_the_full_barrier_is_preferred_where_the_platform_has_one"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestNoManagedPdfWriteFallsBackToABareFsync.test_the_managed_write_module_syncs_only_through_fs_durability": {
+      "obsolete": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync. backend/services/work_pdf_replace.py now holds only the stale-materialization response body and writes nothing."
+    },
+    "TestTheStrongestBarrierReachesManagedPdfWrites.test_without_a_full_barrier_the_plain_fsync_still_runs": {
+      "replaced_by": [
+        "tests/test_pdf_linearize_durability.py::TestTheStrongestBarrierIsUsed.test_a_filesystem_without_the_full_barrier_falls_back_to_fsync",
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync."
+    },
+    "TestNoManagedPdfWriteFallsBackToABareFsync.test_the_module_does_not_reimplement_the_platform_logic": {
+      "replaced_by": [
+        "tests/test_pdf_linearize_durability.py::TestTheStrongestBarrierIsUsed.test_the_full_barrier_is_preferred_where_the_platform_has_one"
+      ],
+      "note": "backend/services/work_pdf_replace.py wrote canonical managed-PDF bytes into the SQLite data root in place: a replacement through a synced sibling temporary and os.replace(), a new upload through an exclusive create. PG-C2 deleted those writers with the SQLite PDF replace and upload paths. On PostgreSQL a managed PDF is an immutable object the local storage backend publishes under the same content-then-name barrier, failing closed when the content sync is refused and reporting a failed directory sync. backend/services/work_pdf_replace.py now holds only the stale-materialization response body and writes nothing."
+    }
+  }
+}

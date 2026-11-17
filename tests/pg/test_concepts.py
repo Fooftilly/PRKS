@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import unicodedata
 from typing import Any
+from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
-from backend.domain.identity.library_scope import library_query
+from backend.domain.identity.library_scope import LibraryScope, library_query
 from backend.domain.research import concepts
 from backend.domain.works import notes
 from backend.entity_ids import generate
-from backend.pg_facade import context as facade_context
-from backend.research_network import ResearchError
+from tests import acting_context as facade_context
+from backend.domain.research.rules import ResearchError
 from tests.pg.test_tags import OrganizationTestCase
+from tests.narrowing import require
 
 
 class ConceptTestCase(OrganizationTestCase):
@@ -64,7 +66,7 @@ class ConceptTestCase(OrganizationTestCase):
 class IdentityTests(ConceptTestCase):
     def test_names_compare_by_identity_key(self) -> None:
         logos = self.concept("  Λόγος  ")
-        self.assertEqual(self.library.get_concept(logos)["name"], "Λόγος")
+        self.assertEqual(require(self.library.get_concept(logos))["name"], "Λόγος")
         for name in ("ΛΌΓΟΣ", "λόγος"):
             with self.subTest(name=name):
                 self.refused("concept_exists", self.library.create_concept, name)
@@ -84,13 +86,13 @@ class IdentityTests(ConceptTestCase):
     def test_names_and_aliases_share_one_namespace(self) -> None:
         ethics, logic = self.concept("Ethics"), self.concept("Logic")
         self.library.replace_concept_aliases(ethics, ["Morals", "MORALS", "ethics", " Moral  philosophy "])
-        self.assertEqual(self.library.get_concept(ethics)["aliases"], ["Moral philosophy", "Morals"])
+        self.assertEqual(require(self.library.get_concept(ethics))["aliases"], ["Moral philosophy", "Morals"])
         self.refused("alias_conflict", self.library.replace_concept_aliases, logic, ["morals"])
         self.refused("alias_conflict", self.library.replace_concept_aliases, ethics, ["LOGIC"])
         self.refused("concept_exists", self.library.create_concept, "MORAL PHILOSOPHY")
         self.refused("concept_exists", self.library.update_concept, logic, name="morals")
         self.assertEqual(self.resolve("moral philosophy"), ethics)
-        self.assertEqual(self.library.get_concept(logic)["aliases"], [])
+        self.assertEqual(require(self.library.get_concept(logic))["aliases"], [])
         self.assert_integrity()
 
     def test_a_rename_keeps_the_old_name_as_an_alias(self) -> None:
@@ -105,7 +107,7 @@ class IdentityTests(ConceptTestCase):
         # Dropped deliberately: the request places the old key itself.
         state = self.state(ethics)
         self.library.replace_concept_aliases(ethics, [])
-        self.assertEqual(self.library.get_concept(ethics)["aliases"], [])
+        self.assertEqual(require(self.library.get_concept(ethics))["aliases"], [])
         self.assertEqual(self.state(ethics)["identity_revision"], state["identity_revision"] + 1)
         self.assert_integrity()
 
@@ -138,7 +140,7 @@ class IdentityTests(ConceptTestCase):
         self.assertIsNone(self.library.get_concept("C-\x00"))
         self.assertIsNone(self.library.get_concept_sync_state("C-\x00"))
         self.refused("parent_not_found", self.library.replace_concept_parents, ethics, ["C-\x00"])
-        self.assertEqual(self.library.get_concept(self.concept("é" * 160))["name"], "é" * 160)
+        self.assertEqual(require(self.library.get_concept(self.concept("é" * 160)))["name"], "é" * 160)
         self.assertEqual(self.count("concepts"), 2)
         self.assert_integrity()
 
@@ -153,8 +155,8 @@ class HierarchyTests(ConceptTestCase):
         self.refused("parent_not_found", self.library.replace_concept_parents, a, [generate("C")])
         # Several parents, a diamond: no cycle.
         self.library.replace_concept_parents(c, [b, a, f" {a} "])
-        self.assertEqual([p["id"] for p in self.library.get_concept(c)["parents"]], [a, b])
-        self.assertEqual([child["id"] for child in self.library.get_concept(a)["children"]], [b, c])
+        self.assertEqual([p["id"] for p in require(self.library.get_concept(c))["parents"]], [a, b])
+        self.assertEqual([child["id"] for child in require(self.library.get_concept(a))["children"]], [b, c])
         self.assertEqual(self.library.list_concepts()[0]["subconcept_count"], 2)
 
     def test_both_ends_of_an_edge_advance(self) -> None:
@@ -208,8 +210,8 @@ class DeleteTests(ConceptTestCase):
         self.assertEqual(self.revisions("concept-identity"), {middle: 2})
         self.assertEqual(self.revisions("concept-field"), {f'["{middle}","description"]': 1})
         # Its child is not reparented.
-        self.assertEqual(self.library.get_concept(child)["parents"], [])
-        self.assertEqual(self.library.get_concept(parent)["children"], [])
+        self.assertEqual(require(self.library.get_concept(child))["parents"], [])
+        self.assertEqual(require(self.library.get_concept(parent))["children"], [])
         self.assertEqual(self.count("concept_parents"), 0)
         self.assert_integrity()
 
@@ -261,7 +263,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(holder["name"], "Shared")
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "concept_exists")
-        self.assertEqual(self.library.get_concept(second)["name"], "Second")
+        self.assertEqual(require(self.library.get_concept(second))["name"], "Second")
         self.assert_integrity()
 
     def test_identity_writes_of_one_library_queue_on_its_key_lock(self) -> None:
@@ -281,7 +283,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "concept_exists")
-        self.assertEqual(self.library.get_concept(b)["name"], "Beta")
+        self.assertEqual(require(self.library.get_concept(b))["name"], "Beta")
         self.assert_integrity()
 
     def test_an_alias_racing_a_create_of_the_same_name(self) -> None:
@@ -326,7 +328,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(len(holder["parents"]), 1)
         self.assertIsNone(contender)
         # The delete waited, then removed the edge and advanced the child.
-        self.assertEqual(self.library.get_concept(child)["parents"], [])
+        self.assertEqual(require(self.library.get_concept(child))["parents"], [])
         self.assertEqual(self.revisions("concept-parents")[child], 2)
 
     def test_a_delete_racing_a_rename(self) -> None:
@@ -347,7 +349,7 @@ class ConcurrencyTests(ConceptTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "concept_in_use")
-        self.assertEqual(self.library.get_concept(ethics)["name"], "Ethics")
+        self.assertEqual(require(self.library.get_concept(ethics))["name"], "Ethics")
 
     def test_a_research_note_racing_a_delete_of_a_concept_it_names(self) -> None:
         ethics = self.concept("Ethics")
@@ -361,3 +363,74 @@ class ConcurrencyTests(ConceptTestCase):
         # resolves (and creates) the names it holds.
         self.assertEqual(contender, (True, 1))
         self.assertIsNone(self.library.get_concept(ethics))
+
+
+class CatalogTests(ConceptTestCase):
+    """The Concept catalog's child counts, parents and aliases (the retired ``tests/test_concept_catalog_counts.py``)."""
+
+    EDGES = {"beta": ["Alpha"], "Gamma": ["Alpha", "zeta"], "delta": ["beta", "Gamma", "Alpha"],
+             "Epsilon": ["delta"], "eta": ["delta", "zeta"], "Theta": ["Epsilon"], "iota": ["Theta", "eta", "beta"]}
+
+    def counts(self) -> dict[str, int]:
+        return {item["name"]: item["subconcept_count"] for item in self.library.list_concepts()}
+
+    def graph(self) -> dict[str, str]:
+        ids = {name: self.concept(name)
+               for name in ("zeta", "Alpha", "beta", "Gamma", "delta", "Epsilon", "eta", "Theta", "iota")}
+        for child, parents in self.EDGES.items():
+            self.library.replace_concept_parents(ids[child], [ids[p] for p in parents])
+        self.library.replace_concept_aliases(ids["Gamma"], ["gamma-2", "Gamma One"])
+        self.library.replace_concept_aliases(ids["iota"], ["jot"])
+        return ids
+
+    def catalog_statements(self) -> list[str]:
+        seen: list[str] = []
+        real = LibraryScope.execute
+
+        def record(scope: LibraryScope, query: Any, params: Any = None) -> Any:
+            seen.append(str(query))
+            return real(scope, query, params)
+
+        with mock.patch.object(LibraryScope, "execute", autospec=True, side_effect=record):
+            self.library.list_concepts()
+        return [query for query in seen if "concept" in query]
+
+    def test_child_counts_are_direct_children_once_per_parent(self) -> None:
+        self.assertEqual(self.library.list_concepts(), [])
+        lonely = self.concept("Lonely")
+        (item,) = self.library.list_concepts()
+        self.assertEqual((item["subconcept_count"], item["parents"], item["aliases"]), (0, [], []))
+        self.assertIs(type(item["subconcept_count"]), int)
+        for name in ("A", "B"):
+            self.library.replace_concept_parents(self.concept(name), [lonely])
+        left, right = self.concept("Left"), self.concept("Right")
+        mid = self.concept("Mid")
+        self.library.replace_concept_parents(mid, [left, right])
+        self.library.replace_concept_parents(self.concept("Leaf"), [mid])
+        self.assertEqual(self.counts(), {"A": 0, "B": 0, "Leaf": 0, "Left": 1, "Lonely": 2, "Mid": 1, "Right": 1})
+
+    def test_order_parents_aliases_and_counts_over_a_graph(self) -> None:
+        ids = self.graph()
+        items = self.library.list_concepts()
+        self.assertEqual([item["name"] for item in items],
+                         ["Alpha", "beta", "delta", "Epsilon", "eta", "Gamma", "iota", "Theta", "zeta"])
+        by_name = {item["name"]: item for item in items}
+        for child, parents in self.EDGES.items():
+            self.assertEqual(by_name[child]["parents"],
+                             [{"id": ids[p], "name": p} for p in sorted(parents, key=str.lower)], child)
+        self.assertEqual(self.counts(), {"Alpha": 3, "beta": 2, "delta": 2, "Epsilon": 1, "eta": 1, "Gamma": 1,
+                                         "iota": 0, "Theta": 1, "zeta": 2})
+        self.assertEqual((by_name["Gamma"]["aliases"], by_name["iota"]["aliases"]), (["Gamma One", "gamma-2"], ["jot"]))
+        for item in items:
+            self.assertIs(type(item["subconcept_count"]), int)
+            self.assertEqual(require(self.library.get_concept(item["id"]))["name"], item["name"])
+
+    def test_the_catalog_is_three_uncorrelated_statements_whatever_its_size(self) -> None:
+        self.concept("Solo")
+        small = self.catalog_statements()
+        self.graph()
+        large = self.catalog_statements()
+        self.assertEqual(small, large)
+        self.assertEqual(len(large), 3)
+        for query in large:
+            self.assertNotIn("(SELECT", query.upper())

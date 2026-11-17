@@ -115,7 +115,7 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
                 with self.subTest(kind=kind, case=label):
                     self.assertFalse(valid_browser_asset(raw, mime, kind, digest))
         self.assertFalse(valid_browser_asset(bundle, "text/javascript", "unknown", hashlib.sha256(bundle).hexdigest()))
-        self.assertFalse(valid_browser_asset(bundle.decode(), "text/javascript", "bundle", hashlib.sha256(bundle).hexdigest()))
+        self.assertFalse(valid_browser_asset(bundle.decode(), "text/javascript", "bundle", hashlib.sha256(bundle).hexdigest()))  # pyright: ignore[reportArgumentType]
 
     def test_browser_asset_cli_rejects_fallback_and_truncation_even_with_http_200(self):
         bundle = b";\n/* bundled source: /js/icons.js */\n" + b"window.prksReady = true;\n" * 20
@@ -276,6 +276,16 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
             "--user 1000:1000",
             "--tmpfs /data:rw,size=128m,uid=1000,gid=1000",
             "--env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1",
+            # PostgreSQL is the only backend (PG-C2 #641): a private database,
+            # an operator's first-run setup and a signed-in catalogue read.
+            '--env PRKS_DATABASE_URL="postgresql://prks:${db_secret}@db:5432/prks"',
+            "--tmpfs /var/lib/postgresql:rw,size=256m",
+            'docker network rm "$network"',
+            '"${admin[@]}" issue-token --root /data',
+            '"${admin[@]}" complete --root /data --login owner --password-file /tmp/owner-password',
+            "http://127.0.0.1:18080/readyz",
+            "http://127.0.0.1:18080/api/login",
+            '--cookie "$jar"',
             "http://127.0.0.1:18080/api/works",
             "--write-out '%{http_code}' --output \"$response\"",
             '&& [[ "$status" == "200" ]]; then',

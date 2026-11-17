@@ -21,6 +21,11 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.store = (FRONTEND / 'local-store.js').read_text()
         self.state = (FRONTEND / 'concept-state.js').read_text()
         self.backend = (ROOT / 'backend' / 'concept_sync.py').read_text()
+        self.domain = (ROOT / 'backend' / 'domain' / 'research' / 'concepts.py').read_text()
+
+    def domain_function(self, name):
+        at = self.domain.index('\ndef %s(' % name)
+        return self.domain[at: self.domain.index('\ndef ', at + 5)]
 
     def test_runtime_selftests(self):
         proc = subprocess.run(
@@ -116,8 +121,7 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertIn('payload: { name: desiredName, aliases: desiredAliases }', body)
         self.assertIn("r.operation === 'SET_CONCEPT_IDENTITY'", body)
         # And the server keeps the old name when the identity moves.
-        at = self.backend.index('def set_identity_on_conn(')
-        server = self.backend[at: self.backend.index('\ndef ', at + 5)]
+        server = self.domain_function('set_identity')
         self.assertIn('wanted.append((old_name, old_key))', server)
         # Both API wrappers reach the one family.
         api = (FRONTEND / 'api.js').read_text()
@@ -128,10 +132,9 @@ class ConceptSyncFrontendTests(unittest.TestCase):
     def test_identity_is_not_converged_by_an_equal_name(self):
         """Two devices that gave one Concept different alias sets made two
         claims about what it IS; the names agreeing says nothing."""
-        at = self.backend.index('def apply_identity(')
-        body = self.backend[at: self.backend.index('\ndef ', at + 5)]
-        self.assertIn('if base < revision:', body)
-        self.assertNotIn('and current', body.split('if base < revision:')[1].split('\n')[0])
+        body = self.domain_function('apply_identity_operation')
+        self.assertIn('    if base_revision < revision:\n', body)
+        self.assertNotIn('and', body.split('if base_revision < revision')[1].split('\n')[0])
 
     def test_parents_are_one_aggregate_converged_on_the_set(self):
         """A SET: two devices that chose the same parents made the same
@@ -141,17 +144,16 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn('const sameSet = list =>', body)
         self.assertIn('if (sameSet(observed.parent_ids)) { setResult(null); return; }', body)
-        at = self.backend.index('def apply_parents(')
-        server = self.backend[at: self.backend.index('\ndef ', at + 5)]
+        server = self.domain_function('apply_parents_operation')
         self.assertIn('set(desired) != set(present)', server)
 
     def test_a_hierarchy_edge_advances_both_ends(self):
         """A parent renders its children from the same table, so a device
         holding that page has to be able to discover it was overtaken."""
-        at = self.backend.index('def set_parents_on_conn(')
-        body = self.backend[at: self.backend.index('\ndef ', at + 5)]
-        self.assertIn('for pid in set(before) ^ set(after):', body)
-        self.assertIn('_advance(conn, PARENTS_SCOPE_TYPE, pid)', body)
+        body = self.domain_function('set_parents')
+        self.assertIn('moved = present ^ set(wanted)', body)
+        self.assertIn('(PARENTS_SCOPE_TYPE, other) for other in moved | {concept_id}', body)
+        self.assertIn('revisions.advance(scope, scope_type, scope_id)', body)
 
     def test_a_parent_created_here_is_waited_for(self):
         at = self.store.index('function setConceptParents(')
@@ -171,9 +173,8 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         self.assertIn("row.operation === 'SET_CONCEPT_PARENTS'", naming)
 
     def test_the_in_use_protection_stays_canonical(self):
-        at = self.backend.index('def delete_concept_on_conn(')
-        body = self.backend[at: self.backend.index('\ndef ', at + 5)]
-        self.assertIn('_canonical_notes_reference_concept', body)
+        body = self.domain_function('delete')
+        self.assertIn('_referenced_by_notes(scope, concept_id)', body)
         self.assertIn('"CONCEPT_IN_USE"', body)
 
     def test_the_base_is_acknowledged_and_unknown_is_not_empty(self):

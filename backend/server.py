@@ -1,6 +1,4 @@
-from backend import work_note_sync, work_role_sync, work_source_sync
-from backend.startup_profile import phase as startup_phase
-from backend.sync_protocol import process_operation
+from backend import work_note_sync, work_source_sync
 import http.server
 import socketserver
 import json
@@ -14,56 +12,42 @@ import re
 import uuid
 import logging
 import ipaddress
-import threading
 from contextlib import nullcontext
-from dataclasses import replace
+from typing import TYPE_CHECKING, Any, TypeVar
 from email.message import Message
 from urllib.parse import urlparse, parse_qs, quote, unquote
 from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend.db_manager import (
-    PRKSDatabase,
-    BulkWorkError,
-    MissingPersonError,
-    effective_source_kind,
-    managed_pdf_filename,
-    prks_delete_pdf_thumbnails_for_work_id,
-    safe_pdf_path_under_dir,
-    prks_thumb_cache_safe_wid,
+from backend.derived_caches import (
     prks_thumb_cache_stem,
-    prune_orphan_pdf_thumbnails,
-    prks_person_image_cache_path,
-    prks_person_image_legacy_bin_path,
-    prks_delete_person_image_cache,
 )
+from backend.domain.people.errors import MissingPersonError
+from backend.domain.works.rules import effective_source_kind
+from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
-from backend.services import work_pdf_replace
-from backend.text_index import (
-    PRKSTextIndex,
-    get_text_index,
-    reconcile_at_startup,
-    replace_text_index,
-    reset_text_index,
-)
-from backend.research_index import (
-    PRKSResearchIndex,
-    get_research_index,
-    reconcile_research_index_at_startup,
-    replace_research_index,
-    reset_research_index,
-)
-from backend.research_network import ResearchError
+from backend.api import arguments as arguments_api
+from backend.api import concepts as concepts_api
+from backend.api import folders as folders_api
+from backend.api import annotations as annotations_api
+from backend.api import person_groups as person_groups_api
+from backend.api import persons as persons_api
+from backend.api import playlists as playlists_api
+from backend.api import positions as positions_api
+from backend.api import search as search_api
+from backend.api import publishers as publishers_api
+from backend.api import settings as settings_api
+from backend.api import tags as tags_api
+from backend.api import work_roles as work_roles_api
+from backend.api import works as works_api
 from backend.api_contract.boundary import dump_response, parse_request
-from backend.api_contract.errors import research_error_envelope
 from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import (
     job_diagnostics_openapi_document,
     performance_diagnostics_openapi_document,
     positions_openapi_document,
-    processing_files_openapi_document,
     processing_items_openapi_document,
     publishers_openapi_document,
     saved_views_openapi_document,
@@ -73,27 +57,8 @@ from backend.api_contract.performance import (
     PerformanceDiagnosticsResetRequest,
     PerformanceSnapshot,
 )
-from backend.api_contract.positions import (
-    PositionCreateRequest,
-    PositionDeleted,
-    PositionDetail,
-    PositionSummary,
-    PositionSyncState,
-    PositionUpdateRequest,
-    parse_position_request,
-)
-from backend.api_contract.processing_files import ProcessingFile
-from backend.api_contract.publishers import (
-    PublisherAliasRequest,
-    PublisherCreateRequest,
-    PublisherDeleted,
-    PublisherInUse,
-)
-from backend.pdf_annotations import WorkAnnotationError
 from backend.research_graph import GraphTooLargeError
-from backend.pdf_linearize import maybe_linearize_pdf_in_place, is_pdf_linearized
 from backend.derived_cache_publish import publish_derived_cache_bytes
-from backend.storage import paths
 from backend.storage.config import StorageConfig
 from backend.storage.root_binding import assert_config_matches_bound_root
 from backend.log_safety import (
@@ -119,32 +84,17 @@ from backend.performance import (
     set_status,
     snapshot as performance_snapshot,
 )
-from backend.work_deletion import delete_work as delete_library_work
-from backend.work_deletion import retry_pending_pdf_cleanup_at_startup
-from backend.backup_restore import (
-    BackupError,
+from backend.domain.maintenance.upload import (
     RestoreError,
     backup_max_upload_bytes,
-    cleanup_expired_backup_jobs,
-    cleanup_stale_staging,
-    discard_temp_path,
-    new_staging_upload_path,
-    require_restore_upload_space,
-    run_backup_with_progress,
-    stage_restore,
     stream_upload_to_file,
-    take_ready_backup,
-    apply_restore,
 )
-from backend.person_image import (
-    PersonImageUrlError,
-    decode_and_transcode,
-    fetch_and_prepare,
-    identify_cached_portrait_subtype,
-    normalize_person_image_url,
-    read_legacy_portrait_bytes,
-)
+from backend.person_image import identify_cached_portrait_subtype
 from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
+
+if TYPE_CHECKING:
+    from backend.domain.identity.request_context import RequestContext
+    from backend.library import PostgresLibrary
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -171,10 +121,28 @@ os.makedirs(frontend_dir, exist_ok=True)
 _bound_storage: StorageConfig | None = None
 pdfs_dir: str | None = None
 thumbs_dir: str | None = None
-processing_dir: str | None = None
-db: PRKSDatabase | None = None
-text_index: PRKSTextIndex | None = None
-research_index: PRKSResearchIndex | None = None
+db: "PostgresLibrary | None" = None
+
+_Bound = TypeVar("_Bound")
+
+
+def _require_bound(value: "_Bound | None", name: str) -> "_Bound":
+    """A module global that ``bind_storage()`` sets before anything is served.
+
+    Reaching one unbound is a startup bug, so it fails loudly here instead of
+    as a ``TypeError`` or ``AttributeError`` deeper in a request.
+    """
+    if value is None:
+        raise RuntimeError(f"{name} is not bound; call bind_storage() before serving requests")
+    return value
+
+
+def _acting_context(handler: Any) -> "RequestContext":
+    """The admitted request's context; admission sets it before any route runs."""
+    context = handler._prks_request_context
+    if context is None:
+        raise RuntimeError("route reached without an admitted request context")
+    return context
 
 
 def normalize_listen_host(host: str) -> str:
@@ -392,122 +360,40 @@ def _validate_listen_port(port: int) -> None:
         )
 
 
-def bind_storage(config: StorageConfig, *, library_database=None) -> StorageConfig:
-    """Bind ``config``'s root and the Library store the routes use.
+def bind_storage(config: StorageConfig, *, library_database) -> StorageConfig:
+    """Bind ``config``'s root and the PostgreSQL Library the routes use.
 
-    ``library_database`` (a ``backend.db.database.Database``) binds the
-    PostgreSQL Library instead of the SQLite store under the root
-    (``PRKS_LIBRARY_BACKEND=postgres``, ``backend.library_backend``): the
-    facade and its research and text index adapters, and no SQLite file or
-    legacy processing inbox is opened or created.
+    ``library_database`` (a ``backend.db.database.Database``) is the
+    Library's database: the routes use its facade and its research and text
+    index adapters (PG-C2 #641: PostgreSQL is the only Library store).
     """
     # Publishing a binding for a root this process does not hold the
     # single-process lease on would defeat that lease (storage-architecture
     # §12). Only enforced once the process entry opened a root.
     assert_config_matches_bound_root(config.root)
-    if library_database is not None:
-        return _publish_binding(config, *_postgres_library(config, library_database))
-    processing_local = config.processing_dir
-    try:
-        os.makedirs(processing_local, exist_ok=True)
-    except OSError:
-        if not config.processing_fallback_allowed:
-            raise
-        # Fallback is only allowed for the development-default root, so derive
-        # it from the bound root: anchored, it stays beneath the leased target.
-        processing_local = paths.processing_prod_fallback(config.root)
-        os.makedirs(processing_local, exist_ok=True)
-    if processing_local != config.processing_dir:
-        config = replace(
-            config,
-            processing_dir=processing_local,
-            processing_fallback_allowed=False,
-        )
-
-    os.makedirs(config.pdfs_dir, exist_ok=True)
-    os.makedirs(config.thumbs_dir, exist_ok=True)
-
-    db_local = PRKSDatabase(storage=config, schema_path="backend/db_schema.sql")
-    candidate = PRKSTextIndex(storage=config)
-    research_candidate = PRKSResearchIndex(storage=config)
-    return _publish_binding(config, db_local, candidate, research_candidate)
+    return _publish_binding(config, _postgres_library(config, library_database))
 
 
 def _postgres_library(config: StorageConfig, database):
-    """The PostgreSQL facade and its index adapters for ``database`` (PG-C1 #640)."""
-    # Imported only here, so the SQLite runtime never loads psycopg.
-    from backend.pg_facade import PostgresLibrary
-    from backend.pg_facade.research_index import PostgresResearchIndex
-    from backend.pg_facade.text_index import PostgresTextIndex
+    """The Library handle for ``database`` and the root (PG-C1 #640)."""
+    from backend.library import PostgresLibrary
 
     os.makedirs(config.thumbs_dir, exist_ok=True)
-    return (
-        PostgresLibrary(database, storage=config),
-        PostgresTextIndex(database),
-        PostgresResearchIndex(database),
-    )
+    return PostgresLibrary(database, storage=config)
 
 
-def serves_postgres_library() -> bool:
-    """Whether the bound Library is the PostgreSQL facade (``PRKS_LIBRARY_BACKEND=postgres``)."""
-    from backend.pg_facade import PostgresLibrary
-
-    return isinstance(db, PostgresLibrary)
-
-
-def _publish_binding(config: StorageConfig, db_local, candidate, research_candidate) -> StorageConfig:
-    global _bound_storage, pdfs_dir, thumbs_dir, processing_dir, db, text_index, research_index
-    previous_published = (
-        _bound_storage,
-        pdfs_dir,
-        thumbs_dir,
-        processing_dir,
-        db,
-        text_index,
-        research_index,
-    )
-    try:
-        previous_index = get_text_index()
-    except RuntimeError:
-        previous_index = None
-    try:
-        previous_research = get_research_index()
-    except RuntimeError:
-        previous_research = None
-    try:
-        replace_text_index(candidate)
-        replace_research_index(research_candidate)
-        _bound_storage = config
-        pdfs_dir = config.pdfs_dir
-        thumbs_dir = config.thumbs_dir
-        processing_dir = config.processing_dir
-        db = db_local
-        text_index = candidate
-        research_index = research_candidate
-    except Exception:
-        if previous_index is not None:
-            replace_text_index(previous_index)
-        else:
-            reset_text_index()
-        if previous_research is not None:
-            replace_research_index(previous_research)
-        else:
-            reset_research_index()
-        (
-            _bound_storage,
-            pdfs_dir,
-            thumbs_dir,
-            processing_dir,
-            db,
-            text_index,
-            research_index,
-        ) = previous_published
-        raise
+def _publish_binding(config: StorageConfig, db_local) -> StorageConfig:
+    """Publish a built binding whole: the Library handle was built before this runs."""
+    global _bound_storage, pdfs_dir, thumbs_dir, db
+    _bound_storage = config
+    pdfs_dir = config.pdfs_dir
+    thumbs_dir = config.thumbs_dir
+    db = db_local
     return config
 
 
 def _safe_pdf_path_in_pdfs_dir(url_last_segment: str) -> str | None:
-    return safe_pdf_path_under_dir(pdfs_dir, url_last_segment)
+    return safe_pdf_path_under_dir(_require_bound(pdfs_dir, "pdfs_dir"), url_last_segment)
 
 
 _PDF_ROUTE_PREFIX = '/api/pdfs/'
@@ -526,7 +412,7 @@ def _safe_pdf_path_for_route(path: str) -> str | None:
     return _safe_pdf_path_in_pdfs_dir(path[len(_PDF_ROUTE_PREFIX):])
 
 
-def _served_pdf_path(path: str) -> str | None:
+def _served_pdf_path(handler, path: str) -> str | None:
     """The managed PDF a ``/api/pdfs/<filename>`` request may read, or ``None``.
 
     On the PostgreSQL Library the file must also be one of the acting
@@ -535,70 +421,12 @@ def _served_pdf_path(path: str) -> str | None:
     pdf_path = _safe_pdf_path_for_route(path)
     if pdf_path is None or not os.path.exists(pdf_path):
         return None
-    if serves_postgres_library() and not db._holds_managed_pdf(os.path.basename(pdf_path)):
+    if not works_api.holds_managed_pdf(handler, db, os.path.basename(pdf_path)):
         return None
     return pdf_path
 
 
 _BACKUP_ROUTE_PREFIX = '/api/backups/'
-
-
-def _stored_work_file_path(work_id: str) -> str:
-    """The Work's stored ``file_path`` (``""`` when none or no such Work).
-
-    On PostgreSQL that is its primary Asset's: there is no ``works.file_path``
-    column, and changing it is not ported (``update_work_metadata`` refuses).
-    """
-    if serves_postgres_library():
-        fields = db.get_primary_thumbnail_fields(work_id)
-        return str((fields or {}).get("file_path") or "")
-    rows = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
-    return (rows[0].get("file_path") or "") if rows else ""
-
-
-def _create_postgres_work(file_path: str, upload: tuple[str, bytes] | None, fields: dict) -> str:
-    """Create a Work on the PostgreSQL Library, from an upload or an existing managed PDF.
-
-    No adoption lock: the facade checks an existing file for an actor who
-    may edit and adopts it in the create's transaction, and the settle that
-    removes bytes re-checks every Asset under the per-object lock (§7.4,
-    §11.2). An upload is stored by the facade under fresh keys.
-    """
-    if upload is None:
-        return db.add_work(file_path=file_path, **fields)
-    name, data = upload
-
-    def write(out) -> None:
-        out.write(data)
-
-    return db._add_work_with_pdf(name, write, **fields)
-
-
-def _delete_work(work_id: str, *, keep_managed_pdf: bool = False) -> None:
-    """Delete a Work and its derived state on the bound Library.
-
-    On PostgreSQL the delete records its files' cleanup claims in its own
-    transaction and the orphan sweep removes the bytes (§11.2); the text and
-    Research indexes are the database's. Only the Work's thumbnails, derived
-    files under the root, are removed here. On SQLite
-    ``work_deletion.delete_work`` does the whole cleanup.
-    """
-    if not serves_postgres_library():
-        delete_library_work(db, text_index, work_id, keep_managed_pdf=keep_managed_pdf)
-        return
-    deleted = db.delete_work_record(work_id, claim_pdf=not keep_managed_pdf)
-    if deleted is None or not thumbs_dir:
-        return
-    # Log the id the database returned, never the request's own value.
-    logged_id = safe_log_id(deleted.work_id)
-    try:
-        failed = prks_delete_pdf_thumbnails_for_work_id(deleted.work_id, thumbs_dir)
-        if failed:
-            LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s failed_count=%s",
-                           logged_id, len(failed))
-    except Exception as e:
-        LOGGER.warning("work_delete_thumbnails_cleanup_failed work_id=%s error_type=%s",
-                       logged_id, safe_error_type(e))
 
 
 def _prks_pixmap_to_pil(pix):
@@ -657,35 +485,8 @@ def _prks_pixmap_to_card_webp_bytes(pix) -> bytes | None:
     return _prks_pil_to_card_webp_bytes(img)
 
 
-def _prks_pil_to_jpeg_bytes(img, quality: int = 82) -> bytes | None:
-    """JPEG fallback when WebP encode is unavailable."""
-    from io import BytesIO
-
-    try:
-        from PIL import Image
-    except Exception:
-        return None
-    try:
-        if img.mode == "RGBA":
-            bg = Image.new("RGB", img.size, (255, 255, 255))
-            bg.paste(img, mask=img.split()[3])
-            img = bg
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
-        buf = BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True)
-        out = buf.getvalue()
-        return out if out else None
-    except Exception:
-        return None
 
 
-def _prks_write_person_image_cache(cache_path: str, body: bytes) -> None:
-    publish_derived_cache_bytes(
-        os.path.dirname(cache_path),
-        os.path.basename(cache_path),
-        body,
-    )
 
 
 def _prks_pixmap_to_jpeg_bytes(pix, quality: int = 82) -> bytes | None:
@@ -777,23 +578,6 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
     return pix.tobytes("png"), "png"
 
 
-_PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
-_PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
-_SAVE_TOKEN_LOCK = threading.Lock()
-_PDF_MATERIALIZATION_LOCKS_GUARD = threading.Lock()
-_PDF_MATERIALIZATION_LOCKS = {}
-
-
-def _pdf_materialization_lock_for(work_id: str) -> threading.Lock:
-    """Per-Work lock so validate → replace → mark cannot race another ACK."""
-    with _PDF_MATERIALIZATION_LOCKS_GUARD:
-        lock = _PDF_MATERIALIZATION_LOCKS.get(work_id)
-        if lock is None:
-            lock = threading.Lock()
-            _PDF_MATERIALIZATION_LOCKS[work_id] = lock
-        return lock
-
-
 # Work creation and source synchronization share ONE parser, in the source
 # domain module. A second one here would eventually disagree with it, and the
 # disagreement would surface as a Work whose stored URL and stored provider_id
@@ -881,11 +665,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # error raised in the route keeps its own status (§5.4, §9.4).
             from backend.api import session as session_api
             from backend.domain.identity.authorization import AccessRefused
-            from backend.pg_facade.registry import NotPortedError
+            from backend.library import NotPortedError
 
             if isinstance(exc, NotPortedError):
-                # A documented gap of the PostgreSQL Library, never a fault:
-                # nothing falls back to SQLite (PG-C1 #640).
+                # A documented gap of the PostgreSQL Library, never a fault
+                # and never a fallback (PG-C1 #640): 501.
                 self._send_not_ported(str(exc))
                 return
 
@@ -932,7 +716,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         )
         if mode is None:
             return nullcontext()
-        if mode == MODE_BACKUP and serves_postgres_library():
+        if mode == MODE_BACKUP:
             # The worker writes a PostgreSQL backup from one snapshot; nothing
             # here needs writes held off while the browser follows it.
             return nullcontext()
@@ -940,19 +724,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if gate is None:
             return nullcontext()
         return gate.scope(mode)
-
-    def _acting_for_request(self):
-        """Bind the admitted RequestContext for the route (PostgreSQL facade calls act for it).
-
-        Nothing is bound without ``PRKS_AUTH``: the SQLite runtime has no
-        actor, and ``PRKSDatabase`` takes none.
-        """
-        ctx = getattr(self, "_prks_request_context", None)
-        if ctx is None:
-            return nullcontext()
-        from backend.pg_facade.context import acting_as
-
-        return acting_as(ctx)
 
     def _validate_request_host(self) -> bool:
         hosts = self.headers.get_all("Host") or []
@@ -995,19 +766,20 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """Authentication admission for an ``/api/`` request (L-ID-1 #626).
 
         True to dispatch the route; False when the request has been answered.
-        Without ``PRKS_AUTH`` (the SQLite runtime) only the existing Origin
-        check applies, to mutations. With it, ``backend.api.session`` answers
-        the identity routes and admits every other route only for a live
-        session with the route's capability and, for a Library mutation, the
-        Library's current epoch.
+        ``backend.api.session`` answers the identity routes and admits every
+        other route only for a live session with the route's capability and,
+        for a Library mutation, the Library's current epoch. A server started
+        without identity (``prks_auth`` unset; ``prks_app`` always starts it)
+        fails closed: every ``/api/`` request is answered 503, never served
+        without an actor (PG-C2 #641).
         """
         self._prks_library_epoch = None
         self._prks_request_context = None
         method = (getattr(self, "command", "") or "").upper()
         auth = getattr(self.server, "prks_auth", None)
         if auth is None:
-            return method in ("GET", "HEAD") or self._validate_mutation_origin()
-        # Only an authenticated (PostgreSQL) process imports the identity code.
+            self._reject_request(503, "identity_not_started", "identity_not_started")
+            return False
         from backend.api import session as session_api
 
         def read_json():
@@ -1026,7 +798,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 request_host=self._prks_request_host,
                 parse_origin=parse_request_origin,
                 read_json=read_json,
-                route_fences_epoch=serves_postgres_library(),
+                route_fences_epoch=True,
             ),
         )
         if isinstance(outcome, session_api.Admitted):
@@ -1219,8 +991,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         This never invokes API session admission or returns configuration.
         ``/readyz`` answers 200 only when the server carries a readiness
         check (``backend.readiness``: pool, schema, setup, paired root and
-        reconciled start generation) and it passes; the SQLite runtime has
-        none, so it stays not ready.
+        reconciled start generation) and it passes; a server started without
+        one stays not ready.
         """
         if path == '/healthz':
             ready = True
@@ -1251,7 +1023,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_get(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
@@ -1279,7 +1051,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_head(parsed_path)
         else:
             requested = unquote(parsed_path.path or '/')
@@ -1306,7 +1078,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             self._prks_unread_body = upload
             if not self._prks_admit(parsed_path):
                 return
-            if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
+            if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX):
                 # A JSON body is read before the Library gate, as every other
                 # POST does: a client that stalls mid-body must not hold the
                 # restore's exclusive gate. ``stage`` streams its own body.
@@ -1315,17 +1087,14 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     backup_body = self._read_json_body()
                     if backup_body is _JSON_BODY_REJECTED:
                         return
-                with self._library_access(parsed_path), self._acting_for_request():
+                with self._library_access(parsed_path):
                     try:
                         self._handle_postgres_backup_post(parsed_path.path, backup_body)
                     except Exception as exc:
                         self._send_internal_error(exc)
                 return
-            if parsed_path.path == '/api/backups/stage':
-                self._handle_backup_stage(parsed_path)
-                return
             if upload:
-                with self._library_access(parsed_path), self._acting_for_request():
+                with self._library_access(parsed_path):
                     try:
                         processing_api.handle_upload(self, db)
                     except Exception as exc:
@@ -1334,7 +1103,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_post(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1349,7 +1118,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_patch(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1363,297 +1132,30 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
             if data is _JSON_BODY_ABSENT:
                 data = {}
-            if path.startswith('/api/processing-files/') and len(path.split('/')) == 4:
-                pf_id = path.split('/')[-1]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    row = db.update_processing_file(pf_id, data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                # Domain already committed; do not dump_response here (see
-                # docs/api-contract-boundary.md).
-                self.send_json(200, row)
-            elif path.startswith('/api/works/') and path.endswith('/roles'):
-                parts = path.split('/')
-                if len(parts) != 5 or parts[4] != 'roles':
-                    self.send_error(404, "API endpoint not found")
-                    return
-                w_id = parts[3]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                person_id = (data.get('person_id') or '').strip()
-                role_type = (data.get('role_type') or '').strip()
-                oi_raw = data.get('order_index', 0)
-                try:
-                    order_index = int(oi_raw) if oi_raw is not None and str(oi_raw).strip() != '' else 0
-                except (TypeError, ValueError):
-                    self.send_json(400, {'error': 'order_index must be an integer'})
-                    return
-                if not person_id or not role_type:
-                    self.send_json(400, {'error': 'person_id and role_type are required'})
-                    return
-                credit_name = data.get('credit_name', '')
-                if credit_name is not None and not isinstance(credit_name, str):
-                    self.send_json(400, {'error': 'credit_name must be a string'})
-                    return
-                try:
-                    updated = db.update_role_credit_name(
-                        w_id, person_id, role_type, order_index, credit_name or ''
-                    )
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                if updated:
-                    self.send_json(200, {'status': 'updated'})
-                else:
-                    self.send_json(404, {'error': 'role link not found'})
-            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
-                w_id = path.split('/')[-1]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                body = dict(data)
-                if (
-                    serves_postgres_library()
-                    and "file_path" in body
-                    and str(body.get("file_path") or "") != str(_stored_work_file_path(w_id) or "")
-                ):
-                    # Adopting another file is not ported. Refuse before any
-                    # part of the PATCH (a folder move, notes) commits, so a
-                    # 501 never hides an applied change.
-                    self._send_not_ported("Changing a Work's file_path is not ported to PostgreSQL yet.")
-                    return
-                if 'folder_id' in body:
-                    raw_folder = body.pop('folder_id')
-                    try:
-                        db.move_work_to_folder(w_id, raw_folder)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                if body:
-                    patched_file_path = "file_path" in body
-                    # Adoption lock + existence check only when the stored
-                    # path would actually change. Echoing the same file_path
-                    # on a title/status PATCH must not 409 missing_pdf when
-                    # the bytes are already gone (CodeRabbit Minor on #172).
-                    # When the echo matches the observed row, DROP file_path
-                    # from the body so this request cannot rewrite it after a
-                    # concurrent retarget/cleanup (owner P2 TOCTOU on #172).
-                    file_path_changing = False
-                    if patched_file_path:
-                        stored_fp = _stored_work_file_path(w_id)
-                        incoming_fp = body.get("file_path")
-                        if str(incoming_fp or "") == str(stored_fp or ""):
-                            body.pop("file_path", None)
-                            file_path_changing = False
-                        else:
-                            file_path_changing = True
-                    notes_present = "text_content" in body
-                    notes_text = body.pop("text_content", None)
-                    if notes_present:
-                        try:
-                            db.save_work_notes(w_id, notes_text)
-                        except ResearchError as e:
-                            self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                            return
-                        try:
-                            research_index.sync_work(w_id, notes_text, db)
-                        except Exception as e:
-                            LOGGER.warning(
-                                "research_index_sync_failed work_id=%s error_type=%s",
-                                safe_log_id(w_id),
-                                safe_error_type(e),
-                            )
-                    if body:
-                        # PATCH can assign `file_path` (it is in
-                        # `update_work_metadata`'s allowed set), so a real
-                        # path change is an ownership-claiming path: hold the
-                        # cleanup lock and prove the contained file still
-                        # exists before commit. An unchanged echo was popped
-                        # above and never reaches this rewrite.
-                        # Released-PDF claims (old strong basenames) are
-                        # recorded inside update_work_metadata's transaction;
-                        # filesystem cleanup runs after the adoption lock
-                        # releases so it can take the old basename's lock.
-                        claimed_old = ()
-                        try:
-                            with (
-                                work_pdf_replace.managed_pdf_adoption_guard(
-                                    pdfs_dir, body.get("file_path")
-                                )
-                                if file_path_changing
-                                else nullcontext()
-                            ) as adopted_name:
-                                # Guard yields the cleanup/serving basename;
-                                # persist only the exact ownership spelling.
-                                if adopted_name:
-                                    body["file_path"] = f"/api/pdfs/{adopted_name}"
-                                claimed_old = (
-                                    db.update_work_metadata(w_id, body) or ()
-                                )
-                        except work_pdf_replace.ManagedPdfStoreError as e:
-                            self.send_json(e.http_status, {'error': e.message})
-                            return
-                        except ValueError as e:
-                            # A refused length is the caller's mistake, not a
-                            # server fault: say so rather than 500.
-                            self.send_json(400, {'error': str(e)})
-                            return
-                        if file_path_changing:
-                            # Strong basenames are claimed above; weak aliases
-                            # mint nothing but may unblock a deferred stem
-                            # claim. Always run the post-retarget cleanup pass
-                            # (empty claimed_old still wakes pending retry).
-                            from backend.work_deletion import (
-                                cleanup_released_managed_pdfs,
-                            )
-                            try:
-                                cleanup_released_managed_pdfs(db, claimed_old)
-                            except Exception as e:
-                                # Metadata-only: never log work ids / paths /
-                                # exception text (CodeQL log-injection + privacy).
-                                LOGGER.warning(
-                                    "work_patch_pdf_cleanup_failed error_type=%s",
-                                    safe_error_type(e),
-                                )
-                    if file_path_changing:
-                        try:
-                            text_index.sync_work(w_id, _stored_work_file_path(w_id))
-                        except Exception as e:
-                            LOGGER.warning(
-                                "work_patch_text_index_failed work_id=%s error_type=%s",
-                                safe_log_id(w_id),
-                                safe_error_type(e),
-                            )
-                self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
-                pl_id = path.split('/')[-1]
-                db.update_playlist(pl_id, data)
-                self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
-                group_ids = data.pop('group_ids', None)
-                image_url_changed = 'image_url' in data
-                if image_url_changed:
-                    try:
-                        data['image_url'] = normalize_person_image_url(data.get('image_url'))
-                    except PersonImageUrlError:
-                        self.send_json(400, {'error': 'Invalid image_url'})
-                        return
-                if group_ids is not None and not isinstance(group_ids, list):
-                    self.send_json(400, {'error': 'group_ids must be a JSON array'})
-                    return
-                # Metadata and memberships commit or roll back together, so an
-                # unknown group id cannot leave the profile half-updated. A
-                # failed request must not have changed canonical state -- that
-                # is what makes "failed mutation keeps its cache" sound.
-                try:
-                    db.update_person_profile(p_id, data, group_ids)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                if image_url_changed:
-                    # Disposable portrait cache, cleared only after the canonical
-                    # profile change committed; a failure here never fails the PATCH.
-                    try:
-                        prks_delete_person_image_cache(p_id, _bound_storage.people_dir)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "person_image_cache_cleanup_failed person_id=%s error_type=%s",
-                            safe_log_id(p_id),
-                            safe_error_type(e),
-                        )
-                self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
-                g_id = path.split('/')[-1]
-                try:
-                    db.update_person_group(g_id, data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'updated'})
-            elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
-                f_id = path.split('/')[-1]
-                # A rename stales every member Work's cached detail (it embeds
-                # folder_title), so collect the members BEFORE the write and
-                # report them -- membership cannot change in this request.
-                renames = isinstance(data, dict) and 'title' in data
-                member_ids = db.get_folder_work_ids(f_id) if renames else []
-                try:
-                    db.update_folder_metadata(f_id, data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'updated', 'member_work_ids': member_ids})
-            elif path == '/api/settings':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    db.patch_app_settings(data)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, db.get_app_settings_response())
+            if work_roles_api.handle_patch(self, db, path, data):
+                return
+            elif works_api.handle_patch(self, db, path, data):
+                return
+            elif playlists_api.handle_patch(self, db, path, data):
+                return
+            elif persons_api.handle_patch(self, db, path, data):
+                return
+            elif person_groups_api.handle_patch(self, db, path, data):
+                return
+            elif folders_api.handle_patch(self, db, path, data):
+                return
+            elif settings_api.handle_patch(self, db, path, data):
+                return
             elif saved_views_api.handle_patch(self, db, path, data):
                 return
             elif processing_api.handle_patch(self, db, path, data):
                 return
-            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
-                cid = unquote(path.split('/')[-1])
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.update_concept(
-                        cid,
-                        name=data.get('name') if 'name' in data else None,
-                        description=data.get('description') if 'description' in data else None,
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
-            elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
-                pid = unquote(path.split('/')[-1])
-                req, err = parse_position_request(PositionUpdateRequest, data)
-                if err is not None:
-                    self.send_json(400, err)
-                    return
-                try:
-                    item = db.update_position(
-                        pid,
-                        **req.domain_field_kwargs(),
-                    )
-                except ResearchError as e:
-                    self.send_json(
-                        e.http_status,
-                        research_error_envelope(message=str(e), code=e.code),
-                    )
-                    return
-                # Domain already committed; do not dump_response here (see
-                # docs/api-contract-boundary.md — post-commit response validation).
-                self.send_json(200, item)
-            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
-                aid = unquote(path.split('/')[-1])
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.update_argument(
-                        aid,
-                        name=data.get('name') if 'name' in data else None,
-                        kind=data.get('kind') if 'kind' in data else None,
-                        main_text=data.get('main_text') if 'main_text' in data else None,
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
+            elif concepts_api.handle_patch(self, db, path, data):
+                return
+            elif positions_api.handle_patch(self, db, path, data):
+                return
+            elif arguments_api.handle_patch(self, db, path, data):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -1669,7 +1171,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_put(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1683,67 +1185,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     return
             if data is _JSON_BODY_ABSENT:
                 data = {}
-            parts = path.split('/')
-            if (
-                path.startswith('/api/concepts/')
-                and len(parts) == 5
-                and parts[4] == 'parents'
-            ):
-                cid = unquote(parts[3])
-                parent_ids = data.get('parent_ids') if isinstance(data, dict) else None
-                if parent_ids is None and isinstance(data, list):
-                    parent_ids = data
-                try:
-                    item = db.replace_concept_parents(cid, parent_ids)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
-            elif (
-                path.startswith('/api/concepts/')
-                and len(parts) == 5
-                and parts[4] == 'aliases'
-            ):
-                cid = unquote(parts[3])
-                aliases = data.get('aliases') if isinstance(data, dict) else None
-                if aliases is None and isinstance(data, list):
-                    aliases = data
-                try:
-                    item = db.replace_concept_aliases(cid, aliases)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
-            elif (
-                path.startswith('/api/arguments/')
-                and len(parts) == 5
-                and parts[4] == 'sources'
-            ):
-                aid = unquote(parts[3])
-                sources = data.get('sources') if isinstance(data, dict) else None
-                if sources is None and isinstance(data, list):
-                    sources = data
-                try:
-                    item = db.replace_argument_sources(aid, sources)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
-            elif (
-                path.startswith('/api/arguments/')
-                and len(parts) == 5
-                and parts[4] == 'targets'
-            ):
-                aid = unquote(parts[3])
-                targets = data.get('targets') if isinstance(data, dict) else None
-                if targets is None and isinstance(data, list):
-                    targets = data
-                try:
-                    item = db.replace_argument_targets(aid, targets)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, item)
+            if concepts_api.handle_put(self, db, path, data):
+                return
+            elif arguments_api.handle_put(self, db, path, data):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -1756,7 +1201,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path), self._acting_for_request():
+            with self._library_access(parsed_path):
                 self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
@@ -1765,190 +1210,32 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         query_params = parse_qs(parsed_path.query)
         try:
-            if path.startswith('/api/works/') and path.endswith('/roles'):
-                # DELETE /api/works/{work_id}/roles?person_id=&role_type=&order_index=
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'roles':
-                    w_id = parts[3]
-                    person_id = (query_params.get('person_id') or [''])[0].strip()
-                    role_type = (query_params.get('role_type') or [''])[0].strip()
-                    oi_raw = (query_params.get('order_index') or ['0'])[0].strip()
-                    try:
-                        order_index = int(oi_raw) if oi_raw != '' else 0
-                    except ValueError:
-                        self.send_json(400, {'error': 'order_index must be an integer'})
-                        return
-                    if not person_id or not role_type:
-                        self.send_json(400, {'error': 'person_id and role_type are required'})
-                        return
-                    if db.delete_work_role(w_id, person_id, role_type, order_index):
-                        self.send_json(200, {'status': 'removed'})
-                    else:
-                        self.send_json(404, {'error': 'role link not found'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
-                w_id = path.split('/')[-1]
-                _delete_work(w_id)
-                self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
-                pl_id = path.split('/')[-1]
-                db.delete_playlist(pl_id)
-                self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/playlists/') and '/items/' in path:
-                # /api/playlists/{id}/items/{work_id}
-                parts = path.split('/')
-                if len(parts) == 6 and parts[4] == 'items':
-                    pl_id, w_id = parts[3], parts[5]
-                    db.remove_work_from_playlist(pl_id, w_id)
-                    self.send_json(200, {'status': 'removed'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
-                f_id = path.split('/')[-1]
-                try:
-                    db.delete_empty_folder(f_id)
-                except ValueError as e:
-                    self.send_json(409, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/works/') and '/tags/' in path:
-                # /api/works/{id}/tags/{tag_id}
-                parts = path.split('/')
-                if len(parts) < 6:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                db.remove_tag_from_work(parts[3], parts[5])
-                self.send_json(200, {'status': 'removed'})
-            elif path.startswith('/api/folders/') and '/tags/' in path:
-                # /api/folders/{id}/tags/{tag_id}
-                parts = path.split('/')
-                if len(parts) < 6:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                db.remove_tag_from_folder(parts[3], parts[5])
-                self.send_json(200, {'status': 'removed'})
-            elif path.startswith('/api/tags/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    tag_id = parts[3]
-                    alias = (query_params.get('alias') or [''])[0]
-                    alias = unquote(alias)
-                    if not alias.strip():
-                        self.send_json(400, {'error': 'missing alias'})
-                        return
-                    if db.delete_tag_alias(tag_id, alias):
-                        self.send_json(200, {'status': 'deleted'})
-                    else:
-                        self.send_json(404, {'error': 'alias not found'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/publishers/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    publisher_id = parts[3]
-                    alias = (query_params.get('alias') or [''])[0]
-                    alias = unquote(alias)
-                    if not alias.strip():
-                        self.send_json(400, {'error': 'missing alias'})
-                        return
-                    if db.delete_publisher_alias(publisher_id, alias):
-                        self.send_json(200, dump_response(PublisherDeleted, {'status': 'deleted'}))
-                    else:
-                        self.send_json(404, {'error': 'alias not found'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/publishers/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
-                db.delete_publisher(p_id)
-                self.send_json(200, dump_response(PublisherDeleted, {'status': 'deleted'}))
-            elif path.startswith('/api/tags/') and len(path.split('/')) == 4:
-                t_id = path.split('/')[-1]
-                try:
-                    result = db.delete_tag(t_id)
-                    self.send_json(200, result)
-                except ValueError as e:
-                    msg = str(e)
-                    if 'not found' in msg.lower():
-                        self.send_json(404, {'error': msg})
-                    else:
-                        self.send_json(400, {'error': msg})
-            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = path.split('/')[-1]
-                try:
-                    db.delete_person_if_unlinked(p_id)
-                except ValueError as e:
-                    msg = str(e)
-                    if 'not found' in msg.lower():
-                        self.send_json(404, {'error': msg})
-                    elif 'linked works' in msg.lower():
-                        self.send_json(409, {'error': msg})
-                    else:
-                        self.send_json(400, {'error': msg})
-                    return
-                self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/person-groups/'):
-                parts = path.split('/')
-                # /api/person-groups/{group_id}/members/{person_id}
-                if len(parts) == 6 and parts[4] == 'members':
-                    db.remove_person_from_group(parts[5], parts[3])
-                    self.send_json(200, {'status': 'removed'})
-                elif len(parts) == 4:
-                    try:
-                        db.delete_person_group(parts[3])
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'deleted'})
-                else:
-                    self.send_error(404, "API endpoint not found")
+            if work_roles_api.handle_delete(self, db, path, query_params):
+                return
+            elif works_api.handle_delete(self, db, path):
+                return
+            elif playlists_api.handle_delete(self, db, path):
+                return
+            elif folders_api.handle_delete(self, db, path):
+                return
+            elif tags_api.handle_delete(self, db, path, query_params):
+                return
+            elif publishers_api.handle_delete(self, db, path, query_params):
+                return
+            elif persons_api.handle_delete(self, db, path):
+                return
+            elif person_groups_api.handle_delete(self, db, path):
+                return
             elif saved_views_api.handle_delete(self, db, path):
                 return
             elif processing_api.handle_delete(self, db, path):
                 return
-            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
-                cid = unquote(path.split('/')[-1])
-                try:
-                    db.delete_concept(cid)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                try:
-                    research_index.remove_concept_mentions(cid)
-                except Exception as e:
-                    LOGGER.warning(
-                        "research_index_cleanup_failed concept_id=%s error_type=%s",
-                        safe_log_id(cid),
-                        safe_error_type(e),
-                    )
-                self.send_json(200, {'status': 'deleted'})
-            elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
-                pid = unquote(path.split('/')[-1])
-                try:
-                    db.delete_position(pid)
-                except ResearchError as e:
-                    self.send_json(
-                        e.http_status,
-                        research_error_envelope(message=str(e), code=e.code),
-                    )
-                    return
-                self.send_json(200, dump_response(PositionDeleted, {'status': 'deleted'}))
-            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
-                aid = unquote(path.split('/')[-1])
-                try:
-                    db.delete_argument(aid)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                try:
-                    research_index.remove_argument_mentions(aid)
-                except Exception as e:
-                    LOGGER.warning(
-                        "research_index_cleanup_failed argument_id=%s error_type=%s",
-                        safe_log_id(aid),
-                        safe_error_type(e),
-                    )
-                self.send_json(200, {'status': 'deleted'})
+            elif concepts_api.handle_delete(self, db, path):
+                return
+            elif positions_api.handle_delete(self, db, path):
+                return
+            elif arguments_api.handle_delete(self, db, path):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
@@ -2060,24 +1347,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed_path.path
         try:
             if path.startswith('/api/pdfs/'):
-                pdf_path = _served_pdf_path(path)
+                pdf_path = _served_pdf_path(self, path)
                 if pdf_path:
                     self._send_pdf_bytes(pdf_path, head_only=True)
                 else:
                     self.send_error(404, "PDF not found")
             elif processing_api.handle_head(self, db, path):
                 return
-            elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'pdf':
-                    pf_id = parts[3]
-                    pdf_path = db.get_processing_file_pdf_path(pf_id)
-                    if pdf_path and os.path.exists(pdf_path):
-                        self._send_pdf_bytes(pdf_path, head_only=True)
-                    else:
-                        self.send_error(404, "PDF not found")
-                else:
-                    self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(405, "Method Not Allowed")
         except Exception as exc:
@@ -2128,81 +1404,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_person_profile_image(self, person_id: str) -> None:
-        row = db.get_person(person_id)
-        if not row:
-            self.send_error(404, "Person not found")
-            return
-        url = (row.get("image_url") or "").strip()
-        if not url:
-            self.send_error(404, "Profile image not available")
-            return
-
-        cache_path = prks_person_image_cache_path(
-            person_id, url, _bound_storage.people_dir
-        )
-        legacy_bin = prks_person_image_legacy_bin_path(
-            person_id, _bound_storage.people_dir
-        )
-
-        def read_cache_file(path: str) -> bytes:
-            try:
-                with open(path, "rb") as fp:
-                    return fp.read()
-            except OSError:
-                return b""
-
-        def drop_file(path: str) -> None:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-        body = read_cache_file(cache_path)
-        if body:
-            subtype = identify_cached_portrait_subtype(body)
-            if subtype:
-                self._send_person_profile_image_bytes(body, subtype)
-                return
-            drop_file(cache_path)
-
-        if os.path.isfile(legacy_bin):
-            legacy_body = read_legacy_portrait_bytes(legacy_bin)
-            encoded = (
-                decode_and_transcode(legacy_body, None) if legacy_body else None
-            )
-            if encoded is not None:
-                out, subtype = encoded
-                try:
-                    _prks_write_person_image_cache(cache_path, out)
-                    drop_file(legacy_bin)
-                except OSError:
-                    pass
-                self._send_person_profile_image_bytes(out, subtype, max_age=3600)
-                return
-            drop_file(legacy_bin)
-
-        prepared = fetch_and_prepare(url)
-        if prepared is None:
-            LOGGER.info(
-                "portrait_fetch_failed request_id=%s",
-                safe_log_id(self._prks_request_id),
-            )
-            self.send_error(404, "Profile image not available")
-            return
-        try:
-            _prks_write_person_image_cache(cache_path, prepared.body)
-        except OSError:
-            pass
-        self._send_person_profile_image_bytes(
-            prepared.body, prepared.subtype, max_age=3600
-        )
-
     def _handle_job_diagnostics(self):
         """Owner-only job diagnostics (§12.4); the route exists only with ``PRKS_AUTH``.
 
-        ``backend.api.session`` admitted the request for ADMIN_LIBRARY. The
-        SQLite runtime has no jobs, so it answers like any unknown route.
+        ``backend.api.session`` admitted the request for ADMIN_LIBRARY. A
+        server started without jobs answers like any unknown route.
         """
         jobs = getattr(self.server, "prks_jobs", None)
         if jobs is None:
@@ -2223,41 +1429,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, dump_response(PerformanceSnapshot, performance_snapshot()))
             elif path == '/api/diagnostics/jobs':
                 self._handle_job_diagnostics()
-            elif path == '/api/works':
-                # `?projection=browse` is an explicit, additive contract: the
-                # compact catalog the browse routes cache. The default response
-                # keeps its existing semantics for every other caller.
-                if (query.get('projection') or [''])[0] == 'browse':
-                    data = db.get_works_browse_catalog()
-                    etag = db.etag_for_representation('works-browse', data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-                else:
-                    # Build once. file_size_bytes is read from the managed PDF,
-                    # so the ETag has to come from these rows, not from a
-                    # works.updated_at probe evaluated before them.
-                    data = db.get_all_works()
-                    etag = db.etag_works_catalog(data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/playlists':
-                data = db.get_all_playlists()
-                etag = db.etag_playlists_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/playlists/') and len(path.split('/')) == 4:
-                pl_id = path.split('/')[-1]
-                data = db.get_playlist(pl_id)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Playlist not found")
+            elif works_api.handle_catalog(self, db, path, query):
+                return
+            elif playlists_api.handle_get(self, db, path):
+                return
             elif path.startswith('/api/works/') and path.endswith('/thumbnail'):
                 # /api/works/{id}/thumbnail?page=N
                 parts = path.split('/')
@@ -2269,7 +1444,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     page_q = query.get('page', [''])[0]
                 except Exception:
                     page_q = ''
-                thumb = db.get_primary_thumbnail_fields(w_id)
+                thumb = works_api.thumbnail_fields(self, db, w_id)
                 if not thumb:
                     self.send_error(404, "Work not found")
                     return
@@ -2308,7 +1483,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 cache_base = prks_thumb_cache_stem(
                     w_id, page, thumb.get("primary_asset_id")
                 )
-                path_webp = os.path.join(thumbs_dir, cache_base + ".webp")
+                thumbs_root = _require_bound(thumbs_dir, "thumbs_dir")
+                path_webp = os.path.join(thumbs_root, cache_base + ".webp")
 
                 cache_path: str | None = None
                 serve_mime = "image/webp"
@@ -2381,7 +1557,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                             serve_mime = f"image/{thumb_sub}"
                             # v2 cache: WebP only (lossy default); fallbacks use matching ext.
                             ext = "webp" if thumb_sub == "webp" else thumb_sub
-                            cache_path = os.path.join(thumbs_dir, f"{cache_base}.{ext}")
+                            cache_path = os.path.join(thumbs_root, f"{cache_base}.{ext}")
                         finally:
                             try:
                                 doc.close()
@@ -2393,11 +1569,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         tmp_name = f"{cache_base}.{ext}.tmp"
                         try:
                             publish_derived_cache_bytes(
-                                thumbs_dir, f"{cache_base}.{ext}", generated_bytes
+                                thumbs_root, f"{cache_base}.{ext}", generated_bytes
                             )
                         except Exception:
                             try:
-                                tmp_path = os.path.join(thumbs_dir, tmp_name)
+                                tmp_path = os.path.join(thumbs_root, tmp_name)
                                 if os.path.exists(tmp_path):
                                     os.remove(tmp_path)
                             except Exception:
@@ -2425,204 +1601,27 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     if cache_path and os.path.exists(cache_path):
                         with open(cache_path, "rb") as f:
                             self.wfile.write(f.read())
-                    else:
+                    elif generated_bytes:
+                        # Checked above: no usable cache file means bytes were generated.
                         self.wfile.write(generated_bytes)
                 except Exception as exc:
                     self._send_internal_error(exc)
-            elif path.startswith('/api/works/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
-                data = db.get_work_metadata_state(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-metadata-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/source-state') and len(path.split('/')) == 5:
-                # A REVISION ONLY. The Work record already carries every
-                # canonical source value, so duplicating a URL here would
-                # double what this endpoint sends and what IndexedDB stores
-                # for values the client already holds.
-                data = db.get_work_source_state(path.split("/")[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                elif data == work_source_sync.INVALID_SOURCE_STATE:
-                    # The product reads this row as a video, but its identity
-                    # cannot be stated. Said plainly rather than answered with
-                    # a revision the mutation would then refuse to act on.
-                    self.send_json(409, {
-                        "error": "This file's video source cannot be read. Its link is not a "
-                                 "supported video URL.",
-                        "code": work_source_sync.INVALID_SOURCE_STATE})
-                else:
-                    etag = db.etag_for_representation("work-source-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/notes-state') and len(path.split('/')) == 5:
-                data = db.get_work_notes_state(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-notes-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/people-state') and len(path.split('/')) == 5:
-                # Relationship REVISIONS, including tombstones. The Work detail
-                # already carries the linked people themselves; duplicating
-                # Person objects here would double what every read costs for
-                # values the client already holds. A scope with a revision and
-                # no live relationship is what tells an offline device its own
-                # pending removal is current rather than stale.
-                data = db.get_work_roles_state(path.split("/")[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-people-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
-                data = db.get_work_tag_options(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    self.send_json(200, data, etag=db.etag_for_representation("work-tag-options", data))
-            elif path.startswith('/api/folders/') and path.endswith('/tag-options') and len(path.split('/')) == 5:
-                data = db.get_folder_tag_options(path.split('/')[3])
-                if data is None:
-                    self.send_json(404, {"error": "Folder not found"})
-                else:
-                    self.send_json(200, data, etag=db.etag_for_representation("folder-tag-options", data))
-            elif path.startswith('/api/works/') and len(path.split('/')) == 4:
-                w_id = path.split('/')[-1]
-                data = db.get_work(w_id)
-                if data:
-                    try:
-                        data['research_refs'] = research_index.work_research_refs(w_id, db)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "research_index_refs_failed work_id=%s error_type=%s",
-                            safe_log_id(w_id),
-                            safe_error_type(e),
-                        )
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Work not found")
-            elif path.startswith('/api/works/') and path.endswith('/annotations-state') and len(path.split('/')) == 5:
-                w_id = path.split('/')[3]
-                data = db.get_work_annotations_state(w_id)
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-annotations-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/annotations-snapshot') and len(path.split('/')) == 5:
-                # One DB transaction: items + revisions + materialization gens.
-                w_id = path.split('/')[3]
-                data = db.get_work_annotations_snapshot(w_id)
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-annotations-snapshot", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/pdf-materialization') and len(path.split('/')) == 5:
-                w_id = path.split('/')[3]
-                data = db.get_work_pdf_materialization(w_id)
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    self.send_json(200, data)
-            elif path.startswith('/api/works/') and path.endswith('/annotations'):
-                w_id = path.split('/')[3]
-                data = {"work_id": w_id, "annotations_json": db.get_work_annotations(w_id)}
-                self.send_json(200, data)
-            elif path.startswith('/api/works/') and path.endswith('/save-confirm'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'save-confirm':
-                    w_id = parts[3]
-                    token = (query.get('token', [''])[0] or '').strip()
-                    if not token:
-                        self.send_json(400, {'error': 'token is required'})
-                        return
-                    with _SAVE_TOKEN_LOCK:
-                        pdf_saved = _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == token
-                        ann_saved = _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK.get(w_id) == token
-                    self.send_json(
-                        200,
-                        {
-                            'work_id': w_id,
-                            'token': token,
-                            'pdf_saved': pdf_saved,
-                            'annotations_saved': ann_saved,
-                            'saved': bool(pdf_saved and ann_saved),
-                        },
-                    )
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path == '/api/folders':
-                # The catalog IS the revision source (see etag_folders_catalog),
-                # so build it once and derive the ETag from it.
-                data = db.get_all_folders()
-                etag = db.etag_folders_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/folders/') and len(path.split('/')) == 4:
-                f_id = path.split('/')[-1]
-                data = db.get_folder(f_id)
-                if data: self.send_json(200, data)
-                else: self.send_error(404, "Folder not found")
-            elif path.startswith('/api/works/') and path.endswith('/related_folders'):
-                w_id = path.split('/')[3]
-                data = db.get_related_folders_for_work(w_id)
-                self.send_json(200, data)
-            elif path == '/api/persons':
-                data = db.get_all_persons()
-                etag = db.etag_persons_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/person-groups':
-                data = db.get_all_person_groups()
-                etag = db.etag_person_groups_catalog(data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/person-groups/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY. The catalogue already carries every group's
-                # name, parent and description and the detail carries its
-                # members, so echoing values here would make a second copy.
-                data = db.get_person_group_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Group not found"})
-                else:
-                    etag = db.etag_for_representation("person-group-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/person-groups/') and len(path.split('/')) == 4:
-                g_id = path.split('/')[-1]
-                data = db.get_person_group(g_id)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Group not found")
+            elif works_api.handle_state(self, db, path):
+                return
+            elif work_roles_api.handle_get(self, db, path):
+                return
+            elif tags_api.handle_get(self, db, path, query):
+                return
+            elif works_api.handle_detail(self, db, path):
+                return
+            elif annotations_api.handle_get(self, db, path, query):
+                return
+            elif folders_api.handle_get(self, db, path):
+                return
+            elif persons_api.handle_get(self, db, path):
+                return
+            elif person_groups_api.handle_get(self, db, path):
+                return
             elif saved_views_api.handle_get(self, db, path):
                 return
             elif processing_api.handle_get(self, db, path, parsed_path.query):
@@ -2630,8 +1629,12 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             elif path == '/api/research-graph':
                 raw_people = (query.get('people') or [''])[0].strip().lower()
                 include_people = raw_people in ('1', 'true', 'yes', 'on')
+                from backend.domain.research import index_commands
+
                 try:
-                    snapshot = research_index.build_graph(db, include_people=include_people)
+                    snapshot = index_commands.graph(_require_bound(db, "db").database,
+                                                    _acting_context(self),
+                                                    include_people=include_people)
                 except GraphTooLargeError as e:
                     body = {
                         'error': str(e),
@@ -2642,21 +1645,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json(e.http_status, body)
                     return
                 self.send_json(200, snapshot.to_dict())
-            elif path == '/api/concepts':
-                items = db.list_concepts()
-                counts = research_index.concept_mention_counts()
-                for item in items:
-                    item['mention_count'] = int(counts.get(item['id'], 0))
-                self.send_json(200, items)
-            elif path.startswith('/api/concepts/') and len(path.split('/')) == 4:
-                cid = unquote(path.split('/')[-1])
-                item = db.get_concept(cid)
-                if not item:
-                    self.send_json(404, {'error': 'Concept not found.'})
-                    return
-                item['mention_count'] = research_index.mention_count_for_concept(cid)
-                item['mentions'] = research_index.concept_backlinks(cid, db)
-                self.send_json(200, item)
+            elif concepts_api.handle_get(self, db, path):
+                return
             elif path == '/api/openapi.json' or path == '/api/openapi/positions.json':
                 # Vertical-slice OpenAPI for Positions (#180 / #45). Additive;
                 # not yet the full PRKS surface.
@@ -2669,312 +1659,56 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(200, publishers_openapi_document())
             elif path == '/api/openapi/saved-views.json':
                 self.send_json(200, saved_views_openapi_document())
-            elif path == '/api/openapi/processing-files.json':
-                self.send_json(200, processing_files_openapi_document())
             elif path == '/api/openapi/processing-items.json':
                 self.send_json(200, processing_items_openapi_document())
-            elif path == '/api/positions':
-                rows = db.list_positions()
-                self.send_json(200, dump_response(PositionSummary, rows))
-            elif path.startswith('/api/positions/') and len(path.split('/')) == 4:
-                pid = unquote(path.split('/')[-1])
-                item = db.get_position(pid)
-                if item:
-                    self.send_json(200, dump_response(PositionDetail, item))
-                else:
-                    self.send_json(
-                        404,
-                        research_error_envelope(message='Position not found.'),
-                    )
-            elif path == '/api/argument-verdicts':
-                self.send_json(200, db.list_verdicts())
-            elif path == '/api/arguments':
-                kind = (query.get('kind') or [''])[0].strip() or None
-                try:
-                    items = db.list_arguments(kind=kind)
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                counts = research_index.argument_mention_counts()
-                for item in items:
-                    item['mention_count'] = int(counts.get(item['id'], 0))
-                self.send_json(200, items)
-            elif path.startswith('/api/arguments/') and len(path.split('/')) == 4:
-                aid = unquote(path.split('/')[-1])
-                item = db.get_argument(aid)
-                if not item:
-                    self.send_json(404, {'error': 'Argument not found.'})
-                    return
-                item['mention_count'] = research_index.mention_count_for_argument(aid)
-                item['mentions'] = research_index.argument_backlinks(aid, db)
-                item['verdicts'] = db.list_verdicts()
-                self.send_json(200, item)
-            elif path.startswith('/api/persons/') and path.endswith('/metadata-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY. The Person detail already carries every
-                # profile value and none of them has a length bound, so
-                # echoing them here would make a second copy of the whole
-                # biography in what this sends and what IndexedDB stores.
-                data = db.get_person_metadata_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Person not found"})
-                else:
-                    etag = db.etag_for_representation("person-metadata-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/folders/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY. The folder catalogue already carries every
-                # title, parent and description.
-                data = db.get_folder_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Folder not found"})
-                else:
-                    etag = db.etag_for_representation("folder-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/folder-state') and len(path.split('/')) == 5:
-                data = db.get_work_folder_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-folder-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/positions/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY: the Position detail already carries both
-                # values, and a second copy would be a second thing to keep
-                # true.
-                data = db.get_position_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(
-                        404,
-                        research_error_envelope(message="Position not found"),
-                    )
-                else:
-                    body = dump_response(PositionSyncState, data)
-                    etag = db.etag_for_representation("position-state", body)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, body, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/arguments/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY, aggregates included: the Argument detail
-                # already carries its sources and its targets, and a second
-                # copy would be a second thing to keep true.
-                data = db.get_argument_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Argument not found"})
-                else:
-                    etag = db.etag_for_representation("argument-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/concepts/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # Revisions, plus the two AGGREGATE values. A field revision is
-                # a number, but an identity and a hierarchy are sets: a client
-                # measuring an edit against them needs what it last
-                # acknowledged, and the Concept detail carries `parents` as
-                # objects rather than ids.
-                data = db.get_concept_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Concept not found"})
-                else:
-                    etag = db.etag_for_representation("concept-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/playlists/') and path.endswith('/sync-state') and len(path.split('/')) == 5:
-                # REVISIONS ONLY: the three field revisions and the ORDER
-                # revision. The playlist detail already carries its items in
-                # order, so echoing them here would make a second cached copy.
-                data = db.get_playlist_sync_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Playlist not found"})
-                else:
-                    etag = db.etag_for_representation("playlist-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/works/') and path.endswith('/playlist-state') and len(path.split('/')) == 5:
-                data = db.get_work_playlist_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Work not found"})
-                else:
-                    etag = db.etag_for_representation("work-playlist-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/persons/') and path.endswith('/group-state') and len(path.split('/')) == 5:
-                # Membership revisions for one Person, including tombstones:
-                # a pair this device once removed has a revision, and adding it
-                # back is a mutation of that scope rather than a first write.
-                data = db.get_person_groups_state(unquote(path.split('/')[3]))
-                if data is None:
-                    self.send_json(404, {"error": "Person not found"})
-                else:
-                    etag = db.etag_for_representation("person-group-state", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path.startswith('/api/persons/') and path.endswith('/profile-image'):
-                parts = path.split('/')
-                if len(parts) != 5:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                p_id = unquote(parts[3])
-                self._send_person_profile_image(p_id)
-            elif path.startswith('/api/persons/') and len(path.split('/')) == 4:
-                p_id = unquote(path.split('/')[-1])
-                data = db.get_person(p_id)
-                if data:
-                    self.send_json(200, data)
-                else:
-                    self.send_error(404, "Person not found")
-            elif path == '/api/recent':
-                # Representation-derived ETag: the old probe keyed on
-                # COUNT + MAX(last_opened_at), which cannot see a re-open of a
-                # Work that was already the most recent, nor a display field
-                # changing on a row already in the result.
-                data = db.get_recent_browse()
-                etag = db.etag_for_representation('recent', data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/recently-added':
-                data = db.get_recently_added_browse()
-                etag = db.etag_for_representation('recently-added', data)
-                if self._prks_if_none_match(etag):
-                    self._send_json_not_modified(etag)
-                    return
-                self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/search':
-                q = query.get('q', [''])[0]
-                tag = query.get('tag', [''])[0]
-                author = query.get('author', [''])[0]
-                publisher = query.get('publisher', [''])[0]
-                any_mode = query.get('any', [''])[0] in ('1', 'true', 'yes')
-                if tag:
-                    data = db.get_works_by_tag_name(tag)
-                    if author and author.strip():
-                        allow = set(db.work_ids_matching_author(author.strip()))
-                        data = [w for w in data if w.get('id') in allow]
-                    if publisher and publisher.strip():
-                        allow_pub = set(db.work_ids_matching_publisher(publisher.strip()))
-                        data = [w for w in data if w.get('id') in allow_pub]
-                else:
-                    if any_mode:
-                        term = (q or author or publisher or '').strip()
-                        data = db.search_works_any(term)
-                    else:
-                        data = db.search_works(
-                            q,
-                            author.strip() if author else '',
-                            publisher.strip() if publisher else '',
-                        )
-                    if any_mode and q and str(q).strip():
-                        text_ids = text_index.search_work_ids(q)
-                        if text_ids:
-                            existing = {str(w.get('id')) for w in data if w.get('id')}
-                            author_allow = None
-                            publisher_allow = None
-                            if author and author.strip():
-                                author_allow = set(db.work_ids_matching_author(author.strip()))
-                            if publisher and publisher.strip():
-                                publisher_allow = set(db.work_ids_matching_publisher(publisher.strip()))
-
-                            def passes_filters(wid: str) -> bool:
-                                if author_allow is not None and wid not in author_allow:
-                                    return False
-                                if publisher_allow is not None and wid not in publisher_allow:
-                                    return False
-                                return True
-
-                            extra_ids = [wid for wid in text_ids if wid not in existing and passes_filters(wid)]
-                            if extra_ids:
-                                data.extend(db.get_work_summaries_by_ids_ordered(extra_ids))
-                self.send_json(200, data)
-            elif path == '/api/tags':
-                used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
-                if used_only:
-                    data = db.get_tags_in_use()
-                    self.send_json(200, data)
-                else:
-                    data = db.get_all_tags()
-                    etag = db.etag_for_representation("tags", data)
-                    if self._prks_if_none_match(etag):
-                        self._send_json_not_modified(etag)
-                        return
-                    self.send_json(200, data, etag=etag, precondition_checked=True)
-            elif path == '/api/publishers':
-                used_only = query.get('used', [''])[0] in ('1', 'true', 'yes')
-                if used_only:
-                    data = db.get_publishers_in_use()
-                    self.send_json(200, dump_response(PublisherInUse, data))
-                else:
-                    self.send_json(200, [])
+            elif positions_api.handle_get(self, db, path):
+                return
+            elif arguments_api.handle_get(self, db, path, query):
+                return
+            elif persons_api.handle_metadata_state(self, db, path):
+                return
+            elif folders_api.handle_work_state(self, db, path):
+                return
+            elif positions_api.handle_sync_state(self, db, path):
+                return
+            elif arguments_api.handle_sync_state(self, db, path):
+                return
+            elif concepts_api.handle_sync_state(self, db, path):
+                return
+            elif playlists_api.handle_work_state(self, db, path):
+                return
+            elif person_groups_api.handle_person_state(self, db, path):
+                return
+            elif persons_api.handle_detail(self, db, path):
+                return
+            elif works_api.handle_browse(self, db, path):
+                return
+            elif search_api.handle_get(self, db, path, query):
+                return
+            elif publishers_api.handle_get(self, db, path, query):
+                return
             elif path.startswith('/api/pdfs/'):
-                pdf_path = _served_pdf_path(path)
+                pdf_path = _served_pdf_path(self, path)
                 if pdf_path:
                     self._send_pdf_bytes(pdf_path)
                 else:
                     self.send_error(404, "PDF not found")
-            elif path.startswith('/api/bibtex/'):
-                work_id = path.split('/')[-1]
-                bibtex = db.generate_bibtex(work_id)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/plain')
-                self.end_headers()
-                self.wfile.write(bibtex.encode())
-            elif path == '/api/settings':
-                self.send_json(200, db.get_app_settings_response())
-            elif path == '/api/backups/download' and serves_postgres_library():
-                self._handle_postgres_backup_download((query.get('token') or [''])[0])
-            elif path.startswith(_BACKUP_ROUTE_PREFIX) and serves_postgres_library():
-                self.send_error(404, "API endpoint not found")
+            elif works_api.handle_bibtex(self, db, path):
+                return
+            elif settings_api.handle_get(self, db, path):
+                return
             elif path == '/api/backups/download':
-                token = (query.get('token') or [''])[0]
-                self._handle_backup_download(token=token)
-            elif path == '/api/processing-files':
-                rescan_raw = (query.get('rescan') or [''])[0]
-                rescan = str(rescan_raw).strip().lower() in ('1', 'true', 'yes')
-                if rescan:
-                    data = db.scan_processing_files()
-                else:
-                    data = db.get_processing_files(include_imported=False)
-                self.send_json(200, dump_response(ProcessingFile, data))
-            elif path.startswith('/api/processing-files/') and path.endswith('/pdf'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'pdf':
-                    pf_id = parts[3]
-                    pdf_path = db.get_processing_file_pdf_path(pf_id)
-                    if pdf_path and os.path.exists(pdf_path):
-                        self._send_pdf_bytes(pdf_path)
-                    else:
-                        self.send_error(404, "PDF not found")
-                else:
-                    self.send_error(404, "API endpoint not found")
+                self._handle_postgres_backup_download((query.get('token') or [''])[0])
+            elif path.startswith(_BACKUP_ROUTE_PREFIX):
+                self.send_error(404, "API endpoint not found")
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def handle_api_post(self, parsed_path, data=_JSON_BODY_REJECTED):
+    def handle_api_post(self, parsed_path, data: Any = _JSON_BODY_REJECTED):
         path = parsed_path.path
         try:
-            if path == '/api/backups/stage':
-                self._handle_backup_stage(parsed_path)
-                return
             if data is _JSON_BODY_REJECTED:
                 data = self._read_json_body()
                 if data is _JSON_BODY_REJECTED:
@@ -2982,55 +1716,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             json_body_absent = data is _JSON_BODY_ABSENT
             if json_body_absent:
                 data = {}
-            if path == '/api/sync/operations' and serves_postgres_library():
-                self._handle_postgres_sync_operation(data)
-                return
             if path == '/api/sync/operations':
-                status, result = process_operation(db, data)
-                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
-                        data.get("operation") == work_note_sync.RESEARCH_OPERATION):
-                    # Canonical note + ledger committed before this derived
-                    # best-effort projection. Re-read current text so replaying
-                    # an old op can never restore an old index snapshot.
-                    try:
-                        current = db.get_work(data.get("entity_id"))
-                        if current:
-                            research_index.sync_work(
-                                data.get("entity_id"), current.get("text_content") or "", db)
-                            # Compact preview/link map for the live Work entity.
-                            # Body stays omitted; refs are derived and bounded.
-                            result["research_refs"] = research_index.work_research_refs(
-                                data.get("entity_id"), db)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "research_index_sync_failed work_id=%s error_type=%s",
-                            safe_log_id(data.get("entity_id")), safe_error_type(e))
-                if (status == 200 and result.get("code") == "ACKNOWLEDGED" and
-                        data.get("operation") == "DELETE_WORK"):
-                    if result.get("changed"):
-                        from backend.work_deletion import cleanup_after_work_delete
-                        # file_path is present only on the first ACK (ephemeral
-                        # apply return). Replay ledgers omit it. When supplied,
-                        # cleanup re-checks current Work references — never
-                        # trusts a deletion-time managed_pdf_still_referenced.
-                        cleanup_after_work_delete(
-                            db, text_index, data.get("entity_id"),
-                            file_path=result.get("file_path") or "",
-                            existed=True,
-                        )
-                    # Paths are not durable client state; strip before the wire.
-                    result = {
-                        "code": result["code"],
-                        "work_id": result["work_id"],
-                        "changed": result["changed"],
-                    }
-                self.send_json(status, result)
-                return
-            if path == '/api/backups/progress':
-                self._handle_backup_progress()
-                return
-            if path == '/api/backups/restore':
-                self._handle_backup_restore(data)
+                self._handle_postgres_sync_operation(data)
                 return
 
             if path == '/api/diagnostics/performance/reset':
@@ -3067,119 +1754,23 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     )
                 )
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
-            elif path == '/api/works/bulk':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    result = db.bulk_update_works(data)
-                except BulkWorkError as e:
-                    self.send_json(int(e.http_status), {'error': str(e)})
-                    return
-                LOGGER.info(
-                    "bulk_work_update action=%s work_count=%s target_count=%s request_id=%s",
-                    safe_log_label(result.get("action")),
-                    int(result.get("requested") or 0),
-                    int(result.get("target_count") or 0),
-                    safe_log_id(self._prks_request_id),
-                )
-                self.send_json(
-                    200,
-                    {
-                        "status": result.get("status"),
-                        "action": result.get("action"),
-                        "requested": result.get("requested"),
-                        "updated": result.get("updated"),
-                    },
-                )
+            elif works_api.handle_bulk(self, db, path, data):
+                return
             elif path == '/api/works/reindex-pdf-text':
-                force = bool(data.get("force", False)) if isinstance(data, dict) else False
-                summary = text_index.reconcile_all(db, force=force)
+                # ``force`` is accepted and asks for nothing more: a text
+                # rebuild re-extracts only what has no current row.
+                from backend.domain.search import search_commands
+
+                summary = search_commands.queue_text_rebuild(
+                    _require_bound(db, "db").database, _acting_context(self))
                 self.send_json(200, {"status": "ok", **summary})
             elif path == '/api/works/linearize-existing-pdfs':
-                unlinearized_only = bool(data.get("unlinearized_only", True))
-                rows = db.execute_query("SELECT id, file_path FROM works WHERE file_path LIKE '/api/pdfs/%'")
-                unique_paths = {}
-                for row in rows:
-                    filename = managed_pdf_filename(str(row.get("file_path") or ""))
-                    if not filename:
-                        continue
-                    abs_path = _safe_pdf_path_in_pdfs_dir(filename)
-                    if not abs_path:
-                        continue
-                    unique_paths[abs_path] = True
-
-                processed = 0
-                changed = 0
-                already_linearized = 0
-                skipped = 0
-                failed = 0
-                for abs_path in sorted(unique_paths.keys()):
-                    processed += 1
-                    if not os.path.exists(abs_path):
-                        skipped += 1
-                        continue
-                    if unlinearized_only and is_pdf_linearized(abs_path):
-                        already_linearized += 1
-                        continue
-                    did_change, reason = maybe_linearize_pdf_in_place(abs_path, context="settings-bulk")
-                    LOGGER.info(
-                        "pdf_linearize_result context=settings-bulk changed=%s reason=%s",
-                        "true" if did_change else "false",
-                        safe_log_label(reason),
-                    )
-                    if did_change:
-                        changed += 1
-                    elif reason in ("disabled", "missing-qpdf", "missing-file"):
-                        skipped += 1
-                    elif reason == "ok":
-                        changed += 1
-                    else:
-                        failed += 1
-                self.send_json(
-                    200,
-                    {
-                        "status": "ok",
-                        "processed": processed,
-                        "changed": changed,
-                        "already_linearized": already_linearized,
-                        "skipped": skipped,
-                        "failed": failed,
-                        "unlinearized_only": unlinearized_only,
-                    },
-                )
-            elif path.startswith('/api/processing-files/') and path.endswith('/import'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'import':
-                    pf_id = parts[3]
-                    try:
-                        out = db.import_processing_file(pf_id)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    try:
-                        work_id = str(out.get("work_id") or "").strip()
-                        if work_id:
-                            row = db.execute_query("SELECT file_path FROM works WHERE id = ?", (work_id,))
-                            fp = (row[0].get("file_path") or "").strip() if row else ""
-                            text_index.sync_work(work_id, fp)
-                    except Exception as e:
-                        LOGGER.warning(
-                            "processing_import_text_index_failed processing_file_id=%s error_type=%s",
-                            safe_log_id(pf_id),
-                            safe_error_type(e),
-                        )
-                    # Domain already committed; do not dump_response here (see
-                    # docs/api-contract-boundary.md).
-                    self.send_json(200, out)
-                else:
-                    self.send_error(404, "API endpoint not found")
+                # Managed PDFs on PostgreSQL are immutable stored objects;
+                # rewriting them in place is not ported.
+                self._send_not_ported("Linearizing existing PDFs is not ported to PostgreSQL yet.")
+                return
             elif path == '/api/works':
                 file_path = data.get('file_path', '')
-                # Set only when this request uploads bytes, so the rejection
-                # path below can tell "we just minted this" from "the caller
-                # pointed at an existing managed PDF".
-                stored_name = None
                 source_kind = (data.get('source_kind') or '').strip().lower()
                 source_url = (data.get('source_url') or '').strip()
 
@@ -3199,7 +1790,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 requested_folder = (
                     str(requested_folder).strip() if requested_folder is not None else ""
                 )
-                if requested_folder and not db.folder_exists(requested_folder):
+                if requested_folder and not folders_api.exists(self, db, requested_folder):
                     self.send_json(404, {
                         'error': 'The selected folder no longer exists.',
                         'code': 'FOLDER_NOT_FOUND',
@@ -3211,7 +1802,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # after the Work was committed.
                 # Only roles creation would insert count: one it skips (no
                 # role type, unknown type) must not block the Work.
-                if db.missing_initial_role_person_ids(data.get('roles')):
+                if work_roles_api.missing_initial_person_ids(self, db, data.get('roles')):
                     self.send_json(409, {
                         'error': 'A person on this file has not finished saving yet.',
                         'code': 'PERSON_NOT_FOUND',
@@ -3226,22 +1817,9 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     except (binascii.Error, ValueError):
                         self.send_json(400, {'error': 'Invalid file_b64 payload'})
                         return
-                    if serves_postgres_library():
-                        # The facade stores the bytes as objects and adopts
-                        # them in its create (objects.ingest, §10, §11.2).
-                        postgres_upload = (str(data['file_name']), decoded_pdf)
-                    else:
-                        # Minting, containment, exclusive create and
-                        # linearization belong to the managed-PDF service;
-                        # this adapter only maps the outcome onto a response.
-                        try:
-                            stored_name = work_pdf_replace.store_new_managed_pdf_bytes(
-                                pdfs_dir, data['file_name'], decoded_pdf
-                            )
-                        except work_pdf_replace.ManagedPdfStoreError as exc:
-                            self.send_json(exc.http_status, {'error': exc.message})
-                            return
-                        file_path = f"/api/pdfs/{stored_name}"
+                    # The create command stores the bytes as objects and adopts
+                    # them in its create (objects.ingest, §10, §11.2).
+                    postgres_upload = (str(data['file_name']), decoded_pdf)
 
                 provider = (data.get('provider') or '').strip().lower()
                 provider_id = (data.get('provider_id') or '').strip()
@@ -3258,7 +1836,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # the explicitly labelled ones meant two Works with identical
                 # canonical identity got different titles, authors and
                 # thumbnails purely because one request said so twice.
-                # An upload the facade has not stored yet is still a file.
+                # An upload the create has not stored yet is still a file.
                 classified_file = file_path or ("upload" if postgres_upload else "")
                 if effective_source_kind(source_kind, source_url, classified_file) == 'video':
                     if not provider:
@@ -3319,81 +1897,32 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     thumb_page=data.get('thumb_page'),
                     private_notes=data.get('private_notes', ''),
                 )
-                if serves_postgres_library():
-                    # No adoption lock or discard here: the facade checks an
-                    # adopted file under the actor's edit right, and bytes a
-                    # refused create stored are the orphan sweep's (§11.2).
-                    try:
-                        w_id = _create_postgres_work(file_path, postgres_upload, work_fields)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                else:
-                    # A caller may point a new Work at an EXISTING managed PDF
-                    # instead of uploading one, so the commit that claims
-                    # ownership is held under the same per-basename lock
-                    # cleanup takes, and re-checks that the bytes still exist
-                    # under that lock. An upload needs no guard: it minted its
-                    # own unique name.
-                    try:
-                        with (
-                            work_pdf_replace.managed_pdf_adoption_guard(
-                                pdfs_dir, file_path
-                            )
-                            if not stored_name
-                            else nullcontext()
-                        ) as adopted_name:
-                            # Non-canonical but resolving spellings (outer
-                            # whitespace, …) share cleanup's lock identity;
-                            # store only the exact /api/pdfs/<name> form.
-                            if adopted_name:
-                                file_path = f"/api/pdfs/{adopted_name}"
-                            w_id = db.add_work(file_path=file_path, **work_fields)
-                    except work_pdf_replace.ManagedPdfStoreError as e:
-                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                        self.send_json(e.http_status, {'error': e.message})
-                        return
-                    except ValueError as e:
-                        # The upload is stored before the row exists, so a
-                        # refused create would otherwise leave a PDF nothing
-                        # references.
-                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    except Exception:
-                        # A refusal is not the only exit from this window:
-                        # add_work reaches SQLite, so a locked database or a
-                        # failed commit leaves the same orphan. The service
-                        # keeps the file unless it can prove no Work
-                        # references it.
-                        work_pdf_replace.discard_unowned_managed_pdf(pdfs_dir, stored_name, db=db)
-                        raise
+                # No adoption lock or discard here: the create checks an
+                # adopted file under the actor's edit right, and bytes a
+                # refused create stored are the orphan sweep's (§11.2).
                 try:
-                    text_index.sync_work(w_id, file_path)
-                except Exception as e:
-                    LOGGER.warning(
-                        "work_create_text_index_failed work_id=%s error_type=%s",
-                        safe_log_id(w_id),
-                        safe_error_type(e),
-                    )
+                    w_id = works_api.create(self, db, file_path, postgres_upload, work_fields)
+                except ValueError as e:
+                    self.send_json(400, {'error': str(e)})
+                    return
                 # Undo this create: a PDF this request uploaded goes with it;
                 # existing bytes it only adopted were never its to remove.
                 def undo_create():
-                    _delete_work(w_id, keep_managed_pdf=not (stored_name or postgres_upload))
+                    works_api.delete(self, db, w_id, keep_managed_pdf=not postgres_upload)
 
                 folder_id = data.get("folder_id")
                 raw_folder = str(folder_id).strip() if folder_id is not None else ""
                 if raw_folder:
                     try:
-                        db.add_work_to_folder(raw_folder, w_id)
+                        folders_api.file_work(self, db, raw_folder, w_id)
                     except ValueError as e:
                         undo_create()
                         self.send_json(409, {'error': str(e)})
                         return
                 else:
                     try:
-                        unc_id = db.ensure_default_uncategorized_folder_id()
-                        db.add_work_to_folder(unc_id, w_id)
+                        unc_id = folders_api.ensure_uncategorized(self, db)
+                        folders_api.file_work(self, db, unc_id, w_id)
                     except ValueError as e:
                         undo_create()
                         self.send_json(409, {'error': str(e)})
@@ -3403,7 +1932,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 # transaction, which also re-checks every Person under the write
                 # lock, so a refusal leaves no role and no alias change behind.
                 try:
-                    db.insert_initial_roles(w_id, data.get('roles', []))
+                    work_roles_api.insert_initial(self, db, w_id, data.get('roles', []))
                 except MissingPersonError:
                     # Deleted after the up-front check: same outcome as that
                     # check, through the existing compensation.
@@ -3419,7 +1948,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                 playlist_id = (data.get('playlist_id') or '').strip()
                 if playlist_id:
                     try:
-                        db.add_work_to_playlist(playlist_id, w_id, None)
+                        playlists_api.add_item(self, db, playlist_id, w_id)
                     except Exception as exc:
                         # best-effort: do not fail work creation if playlist link fails
                         LOGGER.warning(
@@ -3431,504 +1960,39 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                         )
 
                 self.send_json(200, {'id': w_id})
-            elif path == '/api/playlists':
-                pl_id = db.add_playlist(
-                    title=data.get('title', '') or '',
-                    description=data.get('description', '') or '',
-                    original_url=data.get('original_url', '') or '',
-                )
-                self.send_json(200, {'id': pl_id})
-            elif path.startswith('/api/playlists/') and path.endswith('/items'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'items':
-                    pl_id = parts[3]
-                    w_id = (data.get('work_id') or '').strip()
-                    if not w_id:
-                        self.send_json(400, {'error': 'work_id is required'})
-                        return
-                    try:
-                        pos_raw = data.get('position', None)
-                        pos = int(pos_raw) if pos_raw is not None and str(pos_raw).strip() != '' else None
-                    except Exception:
-                        pos = None
-                    try:
-                        db.add_work_to_playlist(pl_id, w_id, pos)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/playlists/') and path.endswith('/reorder'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'reorder':
-                    pl_id = parts[3]
-                    work_ids = data.get('work_ids', [])
-                    if not isinstance(work_ids, list):
-                        self.send_json(400, {'error': 'work_ids must be a JSON array'})
-                        return
-                    try:
-                        db.reorder_playlist(pl_id, [str(x) for x in work_ids])
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'reordered'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path == '/api/folders':
-                try:
-                    f_id = db.add_folder(
-                        title=data.get('title', 'Untitled Folder'),
-                        description=data.get('description', ''),
-                        parent_id=data.get('parent_id'),
-                    )
-                except ValueError as e:
-                    self.send_json(409, {'error': str(e)})
-                else:
-                    self.send_json(200, {'id': f_id})
-            elif path == '/api/person-groups':
-                pid = data.get('parent_id')
-                if pid == '':
-                    pid = None
-                pnamed = None if pid else data.get('parent_name')
-                try:
-                    g_id = db.add_person_group_with_parent_options(
-                        name=data.get('name', ''),
-                        parent_id=pid,
-                        parent_name=pnamed,
-                        description=data.get('description', '') or '',
-                    )
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                else:
-                    self.send_json(200, {'id': g_id})
+            elif playlists_api.handle_post(self, db, path, data):
+                return
+            elif folders_api.handle_post(self, db, path, data):
+                return
+            elif person_groups_api.handle_post(self, db, path, data):
+                return
             elif saved_views_api.handle_post(self, db, path, data):
                 return
             elif processing_api.handle_post(self, db, path, data):
                 return
-            elif path == '/api/concepts':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.create_concept(
-                        data.get('name'), data.get('description', '') or ''
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(201, item)
-            elif path == '/api/positions':
-                req, err = parse_position_request(PositionCreateRequest, data)
-                if err is not None:
-                    self.send_json(400, err)
-                    return
-                try:
-                    item = db.create_position(
-                        req.name, req.description
-                    )
-                except ResearchError as e:
-                    self.send_json(
-                        e.http_status,
-                        research_error_envelope(message=str(e), code=e.code),
-                    )
-                    return
-                # Domain already committed; do not dump_response here (see
-                # docs/api-contract-boundary.md — post-commit response validation).
-                self.send_json(201, item)
-            elif path == '/api/arguments':
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                try:
-                    item = db.create_argument(
-                        name=data.get('name'),
-                        kind=data.get('kind'),
-                        main_text=data.get('main_text', '') or '',
-                        sources=data.get('sources'),
-                        targets=data.get('targets'),
-                    )
-                except ResearchError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(201, item)
-            elif path.startswith('/api/person-groups/') and path.endswith('/members'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'members':
-                    g_id = parts[3]
-                    try:
-                        db.add_person_to_group(data.get('person_id', ''), g_id)
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                    else:
-                        self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path == '/api/persons':
-                try:
-                    image_url = normalize_person_image_url(data.get('image_url', '') or '')
-                except PersonImageUrlError:
-                    self.send_json(400, {'error': 'Invalid image_url'})
-                    return
-                p_id = db.add_person(
-                    first_name=data.get('first_name', ''),
-                    last_name=data.get('last_name', ''),
-                    aliases=data.get('aliases', ''),
-                    about=data.get('about', ''),
-                    image_url=image_url,
-                    link_wikipedia=data.get('link_wikipedia', '') or '',
-                    link_stanford_encyclopedia=data.get('link_stanford_encyclopedia', '') or '',
-                    link_iep=data.get('link_iep', '') or '',
-                    links_other=data.get('links_other', '') or '',
-                    birth_date=data.get('birth_date', '') or '',
-                    death_date=data.get('death_date', '') or '',
-                )
-                self.send_json(200, {'id': p_id})
-            elif path == '/api/tags/merge':
-                sid = (data.get('source_tag_id') or '').strip()
-                tid = (data.get('target_tag_id') or '').strip()
-                try:
-                    out = db.merge_tags_into(sid, tid)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'merged', **out})
-            elif path.startswith('/api/tags/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    tag_id = parts[3]
-                    try:
-                        db.add_tag_alias(tag_id, (data.get('alias') or '').strip())
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path == '/api/tags':
-                try:
-                    out = db.add_tag(data.get('name'), data.get('color', '#6d6cf7'))
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, out)
-            elif path == '/api/publishers':
-                request, err = parse_request(PublisherCreateRequest, data)
-                if err is not None or request is None:
-                    self.send_json(400, err)
-                    return
-                try:
-                    # Domain already committed on return; send its dict as is
-                    # (docs/api-contract-boundary.md).
-                    out = db.add_publisher(request.name)
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, out)
-            elif path.startswith('/api/publishers/') and path.endswith('/aliases'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'aliases':
-                    publisher_id = parts[3]
-                    request, err = parse_request(PublisherAliasRequest, data)
-                    if err is not None or request is None:
-                        self.send_json(400, err)
-                        return
-                    try:
-                        db.add_publisher_alias(publisher_id, request.alias.strip())
-                    except ValueError as e:
-                        self.send_json(400, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/works/') and path.endswith('/opened'):
-                # Explicit "the user opened this Work" event, with server-now
-                # as this caller's event time. GET /api/works/:id is a pure
-                # read. PRKS's own UI takes the durable MARK_WORK_OPENED path
-                # instead, so that an open made from cache while the server is
-                # unreachable is recorded identically; this endpoint remains
-                # for other canonical callers and shares the same max-register
-                # helper, so the column can never acquire two meanings.
-                parts = path.split('/')
-                if len(parts) != 5:
-                    self.send_error(404, "API endpoint not found")
-                    return
-                try:
-                    marked = db.mark_work_opened(parts[3])
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                if not marked:
-                    self.send_error(404, "Work not found")
-                    return
-                self.send_json(200, {'status': 'opened'})
-            elif path.startswith('/api/works/') and path.endswith('/tags'):
-                w_id = path.split('/')[3]
-                db.add_tag_to_work(w_id, data.get('tag_id'))
-                self.send_json(200, {'status': 'added'})
-            elif path.startswith('/api/folders/') and path.endswith('/works'):
-                parts = path.split('/')
-                if len(parts) == 5 and parts[4] == 'works':
-                    f_id = parts[3]
-                    w_id = (data.get('work_id') or '').strip()
-                    if not w_id:
-                        self.send_json(400, {'error': 'work_id is required'})
-                        return
-                    if not db.folder_exists(f_id):
-                        self.send_json(404, {'error': 'Folder not found'})
-                        return
-                    if db.get_primary_thumbnail_fields(w_id) is None:
-                        self.send_json(404, {'error': 'Work not found'})
-                        return
-                    try:
-                        db.add_work_to_folder(f_id, w_id)
-                    except ValueError as e:
-                        self.send_json(409, {'error': str(e)})
-                        return
-                    self.send_json(200, {'status': 'added'})
-                else:
-                    self.send_error(404, "API endpoint not found")
-            elif path.startswith('/api/folders/') and path.endswith('/tags'):
-                f_id = path.split('/')[3]
-                db.add_tag_to_folder(f_id, data.get('tag_id'))
-                self.send_json(200, {'status': 'added'})
-            elif path == '/api/roles':
-                p_id = (data.get('person_id') or '').strip()
-                w_id = (data.get('work_id') or '').strip()
-                r_type = (data.get('role_type') or '').strip()
-                if not p_id or not w_id or not r_type:
-                    self.send_json(400, {'error': 'person_id, work_id, and role_type are required'})
-                    return
-                credit_name = data.get('credit_name', '')
-                if credit_name is not None and not isinstance(credit_name, str):
-                    self.send_json(400, {'error': 'credit_name must be a string'})
-                    return
-                try:
-                    oi = db.next_role_order_index(w_id)
-                    db.add_role(
-                        p_id,
-                        w_id,
-                        r_type,
-                        order_index=oi,
-                        credit_name=credit_name or '',
-                    )
-                except ValueError as e:
-                    self.send_json(400, {'error': str(e)})
-                    return
-                self.send_json(200, {'status': 'success'})
-            elif path.startswith('/api/works/') and path.endswith('/annotations/adopt'):
-                parts = path.split('/')
-                if len(parts) != 6 or parts[4] != 'annotations' or parts[5] != 'adopt':
-                    self.send_error(404, "API endpoint not found")
-                    return
-                w_id = parts[3]
-                if not isinstance(data, dict):
-                    self.send_json(400, {'error': 'JSON object body required'})
-                    return
-                viewer_annotations = data.get('viewer_annotations')
-                if not isinstance(viewer_annotations, list):
-                    self.send_json(
-                        400,
-                        {
-                            'error': 'viewer_annotations must be a JSON list',
-                            'code': 'malformed_annotation_payload',
-                        },
-                    )
-                    return
-                try:
-                    result = db.adopt_byte_only_user_markup(w_id, viewer_annotations)
-                except WorkAnnotationError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                self.send_json(200, result)
-            elif path.startswith('/api/works/') and path.endswith('/pdf'):
-                w_id = path.split('/')[3]
-                file_b64 = data.get('file_b64', '')
-                save_token = str(data.get('save_token', '') or '').strip()
-                claimed_set_rev = data.get('materialized_annotation_set_revision', None)
-                if file_b64:
-                    try:
-                        pdf_bytes = base64.b64decode(file_b64, validate=True)
-                    except (binascii.Error, ValueError):
-                        self.send_json(400, {'error': 'Invalid file_b64 payload'})
-                        return
-
-                    if serves_postgres_library():
-                        status, body = self._replace_postgres_work_pdf(w_id, pdf_bytes, claimed_set_rev)
-                        if status == 200 and save_token:
-                            with _SAVE_TOKEN_LOCK:
-                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                        self.send_json(status, body)
-                        return
-
-                    # Existence before lock: unknown IDs must not grow
-                    # _PDF_MATERIALIZATION_LOCKS. Re-check under the Work lock
-                    # inside replace_managed_work_pdf for deletion races.
-                    pre = db.execute_query(
-                        "SELECT 1 AS ok FROM works WHERE id=?", (w_id,)
-                    )
-                    if not pre:
-                        self.send_json(404, {'error': 'Work not found'})
-                        return
-
-                    mat_lock = _pdf_materialization_lock_for(w_id)
-                    with mat_lock:
-                        outcome = work_pdf_replace.replace_managed_work_pdf(
-                            db,
-                            work_id=w_id,
-                            pdf_bytes=pdf_bytes,
-                            pdfs_dir=pdfs_dir,
-                            text_index=text_index,
-                            claimed_set_rev=claimed_set_rev,
-                        )
-                        # save_token is HTTP bookkeeping only — record after a
-                        # successful byte write, never for empty/failed replaces.
-                        if outcome.get('wrote_pdf') and save_token:
-                            with _SAVE_TOKEN_LOCK:
-                                _PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                        self.send_json(outcome['status'], outcome['body'])
-                else:
-                    self.send_error(400, "No file_b64 provided")
-            elif path.startswith('/api/works/') and path.endswith('/annotations'):
-                # Compat full-list replace. Product writes use durable
-                # CREATE/SET/DELETE_PDF_ANNOTATION; this remains for online-legacy
-                # when the durable store is unavailable (Slice G retirement).
-                w_id = path.split('/')[3]
-                if not isinstance(data, dict) or 'annotations_json' not in data:
-                    self.send_json(
-                        400,
-                        {
-                            'error': 'annotations_json is required',
-                            'code': 'malformed_annotation_payload',
-                        },
-                    )
-                    return
-                annotations_json = data.get('annotations_json')
-                save_token = str(data.get('save_token', '') or '').strip()
-                # Legacy handshake is annotations-first: this endpoint only
-                # replaces metadata and returns the exact replace generation.
-                # Never mark PDF materialization here — save_token is solely
-                # for save-confirm bookkeeping, not proof of bytes. Marking
-                # belongs to POST /pdf with materialized_annotation_set_revision
-                # (same claim path as durable), under the PDF materialization lock.
-                # Client must send its acknowledged tip so a stale viewer cannot
-                # overwrite newer annotations or delete siblings omitted locally.
-                if 'canonical_annotation_set_revision' not in data:
-                    self.send_json(
-                        400,
-                        {
-                            'error': 'canonical_annotation_set_revision is required',
-                            'code': 'malformed_annotation_payload',
-                        },
-                    )
-                    return
-                base_set_rev = data.get('canonical_annotation_set_revision')
-                try:
-                    replace_gen = db.save_work_annotations(
-                        w_id,
-                        annotations_json,
-                        base_set_revision=base_set_rev,
-                    )
-                except WorkAnnotationError as e:
-                    self.send_json(e.http_status, {'error': str(e), 'code': e.code})
-                    return
-                if save_token:
-                    with _SAVE_TOKEN_LOCK:
-                        _PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
-                body = {
-                    'status': 'saved',
-                    'path': 'legacy-full-list',
-                    'canonical_annotation_set_revision': replace_gen,
-                }
-                self.send_json(200, body)
+            elif concepts_api.handle_post(self, db, path, data):
+                return
+            elif positions_api.handle_post(self, db, path, data):
+                return
+            elif arguments_api.handle_post(self, db, path, data):
+                return
+            elif persons_api.handle_post(self, db, path, data):
+                return
+            elif tags_api.handle_post(self, db, path, data):
+                return
+            elif publishers_api.handle_post(self, db, path, data):
+                return
+            elif works_api.handle_opened(self, db, path):
+                return
+            elif work_roles_api.handle_post(self, db, path, data):
+                return
+            elif annotations_api.handle_post(self, db, path, data):
+                return
             else:
                 self.send_error(404, "API endpoint not found")
         except Exception as exc:
             self._send_internal_error(exc)
 
-    def _handle_backup_progress(self) -> None:
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-
-        def write_line(payload: dict) -> None:
-            body = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
-            self.wfile.write(body)
-            self.wfile.flush()
-
-        try:
-            run_backup_with_progress(_bound_storage, write_line)
-        except Exception as exc:
-            LOGGER.error(
-                "backup_progress_failed reason=internal error_type=%s request_id=%s",
-                safe_error_type(exc),
-                safe_log_id(self._prks_request_id),
-            )
-            try:
-                write_line(
-                    {
-                        "phase": "failed",
-                        "percent": 0,
-                        "error": "Backup could not be created.",
-                        "reason": "internal",
-                    }
-                )
-            except Exception:
-                return
-
-    def _handle_backup_download(self, token: str = "") -> None:
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
-        archive_path = None
-        try:
-            token = (token or "").strip()
-            if not token:
-                self.send_json(
-                    400,
-                    {
-                        "error": "Backup is not available.",
-                        "reason": "unknown_token",
-                        "request_id": self._prks_request_id,
-                    },
-                )
-                return
-            archive_path, filename, _warnings = take_ready_backup(token)
-            file_size = os.path.getsize(archive_path)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header(
-                "Content-Disposition",
-                f'attachment; filename="{filename}"',
-            )
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(file_size))
-            self.end_headers()
-            with open(archive_path, "rb") as handle:
-                while True:
-                    chunk = handle.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-        except BackupError as exc:
-            self.send_json(
-                exc.http_status,
-                {
-                    "error": exc.message,
-                    "reason": exc.reason,
-                    "request_id": self._prks_request_id,
-                },
-            )
-        finally:
-            if archive_path:
-                try:
-                    os.remove(archive_path)
-                except OSError:
-                    pass
 
     def _validate_backup_stage_headers(self) -> int | None:
         types = self.headers.get_all("Content-Type") or []
@@ -3953,38 +2017,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return None
         return content_length
 
-    def _replace_postgres_work_pdf(self, work_id: str, pdf_bytes: bytes,
-                                   claimed_set_rev: object) -> tuple[int, dict]:
-        """``POST /api/works/{id}/pdf`` on the PostgreSQL Library: SQLite's statuses and bodies.
-
-        The facade checks the Work (and a materialization claim) for an actor
-        who may edit, stores the bytes under fresh keys and adopts them in one
-        command under the Work and Asset locks, so no process lock is taken
-        here. With ``materialized_annotation_set_revision`` the bytes are the
-        viewer's rendered annotations and mark the Work materialized.
-        """
-        from backend.pdf_materialization import STALE_CODE
-
-        def write(out) -> None:
-            out.write(pdf_bytes)
-
-        try:
-            if claimed_set_rev is None:
-                result = db._replace_work_pdf(work_id, write)
-            else:
-                result = db._materialize_work_pdf(work_id, write, claimed_set_rev)
-        except LookupError:
-            # The facade refuses a missing Work and a Work without managed
-            # PDF bytes alike; answer each as SQLite does.
-            if db.get_work(work_id) is None:
-                return 404, {"error": "Work not found"}
-            return 404, {"error": "Work has no managed PDF"}
-        except ValueError as e:
-            if str(e) == STALE_CODE:
-                return 409, work_pdf_replace.stale_materialization_body(db, work_id)
-            return 400, {"error": "Invalid materialization revision"}
-        return 200, {**result, "status": "success"}
-
     def _handle_postgres_sync_operation(self, data) -> None:
         """``POST /api/sync/operations`` on the PostgreSQL Library (§8.4, §11.4).
 
@@ -4000,7 +2032,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         from backend.sync.protocol import process_operation as process_postgres_operation
 
         status, result = process_postgres_operation(
-            db.database, self._prks_request_context, data, Environment(pdfs_dir=pdfs_dir))
+            _require_bound(db, "db").database, _acting_context(self), data,
+            Environment(pdfs_dir=_require_bound(pdfs_dir, "pdfs_dir")))
         acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
         operation = data.get("operation") if isinstance(data, dict) else None
         if acknowledged and operation == work_note_sync.RESEARCH_OPERATION:
@@ -4008,7 +2041,10 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             # leaves the refs out (the client reads them later) and never turns
             # a saved note into an error.
             try:
-                result["research_refs"] = research_index.work_research_refs(data.get("entity_id"), db)
+                from backend.domain.research import index_commands
+
+                result["research_refs"] = index_commands.research_refs(
+                    _require_bound(db, "db").database, _acting_context(self), data.get("entity_id"))
             except Exception as e:
                 LOGGER.warning(
                     "research_refs_read_failed request_id=%s error_type=%s",
@@ -4023,9 +2059,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
         ``stage`` is dispatched before its body is read and streams the
         archive itself; every earlier answer closes the connection. The other
-        routes' JSON ``data`` was read before the Library gate was taken. The SQLite
-        backup service is never reached here, so a restore can only ever
-        replace the PostgreSQL Library (``backend.api.maintenance``).
+        routes' JSON ``data`` was read before the Library gate was taken. A
+        restore replaces the PostgreSQL Library (``backend.api.maintenance``).
         """
         from backend.api import maintenance as maintenance_api
 
@@ -4135,81 +2170,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """501 ``not_ported``: a route the PostgreSQL Library does not serve yet."""
         self.send_json(501, {"error": message, "code": "not_ported", "request_id": self._prks_request_id})
 
-    def _handle_backup_stage(self, parsed_path=None) -> None:
-        content_length = self._validate_backup_stage_headers()
-        if content_length is None:
-            return
-        if parsed_path is None:
-            parsed_path = urlparse(self.path)
-        max_bytes = backup_max_upload_bytes()
-        with self._library_access(parsed_path):
-            if _bound_storage is None:
-                self._send_internal_error()
-                return
-            upload_path = None
-            try:
-                require_restore_upload_space(_bound_storage, content_length)
-                upload_path = new_staging_upload_path(_bound_storage)
-                stream_upload_to_file(
-                    self.rfile,
-                    upload_path,
-                    expected_length=content_length,
-                    max_bytes=max_bytes,
-                )
-                staged = stage_restore(_bound_storage, upload_path)
-                self.send_json(
-                    200,
-                    {
-                        "token": staged.token,
-                        "verified": True,
-                        "summary": staged.summary,
-                        "warnings": staged.warnings,
-                    },
-                )
-            except RestoreError as exc:
-                self.send_json(
-                    exc.http_status,
-                    {
-                        "error": exc.message,
-                        "reason": exc.reason,
-                        "request_id": self._prks_request_id,
-                    },
-                )
-            except Exception as exc:
-                self._send_internal_error(exc)
-            finally:
-                if upload_path:
-                    discard_temp_path(upload_path)
 
-    def _handle_backup_restore(self, data) -> None:
-        if _bound_storage is None:
-            self._send_internal_error()
-            return
-        if not isinstance(data, dict):
-            self.send_json(400, {"error": "JSON object body required"})
-            return
-        token = data.get("token")
-        confirm = data.get("confirm")
-        if not isinstance(token, str) or not token.strip():
-            self.send_json(400, {"error": "token is required"})
-            return
-        try:
-            out = apply_restore(
-                _bound_storage,
-                token.strip(),
-                confirm if isinstance(confirm, str) else "",
-                rebind=bind_storage,
-            )
-            self.send_json(200, out)
-        except RestoreError as exc:
-            self.send_json(
-                exc.http_status,
-                {
-                    "error": exc.message,
-                    "reason": exc.reason,
-                    "request_id": self._prks_request_id,
-                },
-            )
 
     def send_json(self, status, context, etag=None, precondition_checked=False):
         if etag and status == 200 and not precondition_checked and self._prks_if_none_match(etag):
@@ -4252,39 +2213,16 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
     daemon_threads = True
     block_on_close = False
     allow_reuse_address = True
+    # Set by run_server() and test servers before serving; the handler reads
+    # them through ``self.server``.
+    prks_bind_host: str
+    prks_trusted_hosts: frozenset[str]
+    prks_access_gate: "LibraryAccessGate"
+    prks_auth: Any
+    prks_jobs: Any
+    prks_readiness: Any
 
 
-def _sqlite_startup_maintenance():
-    """The SQLite store's start-up reconcilers; the PostgreSQL Library has its own jobs."""
-    with startup_phase("startup_thumbnail_cleanup"):
-        try:
-            n = prune_orphan_pdf_thumbnails(db)
-            if n:
-                LOGGER.info("thumbnail_prune_complete pruned=%s", n)
-        except Exception as e:
-            LOGGER.warning("thumbnail_prune_skipped error_type=%s", safe_error_type(e))
-    # Bounded, and ordered with the other reconcilers: a managed PDF whose
-    # removal failed (or was interrupted) before this process started is the
-    # one post-delete side effect no rebuild can find on its own, because the
-    # Work row that named it is gone.
-    with startup_phase("startup_pdf_cleanup"):
-        retry_pending_pdf_cleanup_at_startup(db)
-    with startup_phase("startup_text_reconcile"):
-        try:
-            reconcile_at_startup(db, text_index)
-        except Exception as e:
-            LOGGER.warning("text_index_reconcile_failed error_type=%s", safe_error_type(e))
-    with startup_phase("startup_research_reconcile"):
-        try:
-            reconcile_research_index_at_startup(db, research_index)
-        except Exception as e:
-            LOGGER.warning("research_index_reconcile_failed error_type=%s", safe_error_type(e))
-    with startup_phase("startup_staging_cleanup"):
-        try:
-            cleanup_stale_staging(_bound_storage)
-            cleanup_expired_backup_jobs(_bound_storage)
-        except Exception as e:
-            LOGGER.warning("restore_staging_cleanup_skipped error_type=%s", safe_error_type(e))
 
 
 def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
@@ -4295,17 +2233,15 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
-    if not serves_postgres_library():
-        _sqlite_startup_maintenance()
     with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
         httpd.prks_access_gate = LibraryAccessGate()
         # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
-        # keeps the SQLite runtime's behavior.
+        # only for test servers (prks_app always starts identity).
         httpd.prks_auth = auth
         # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
-        # embedded worker and the job diagnostics. None for the SQLite runtime.
+        # embedded worker and the job diagnostics. None only for test servers.
         httpd.prks_jobs = jobs
         # GET /readyz (backend.readiness.PostgresReadiness); None keeps it 503.
         httpd.prks_readiness = readiness

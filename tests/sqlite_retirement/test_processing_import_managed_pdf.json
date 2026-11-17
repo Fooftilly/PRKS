@@ -1,0 +1,129 @@
+{
+  "module": "tests/test_processing_import_managed_pdf.py",
+  "tests": {
+    "ProcessingImportManagedPdfTests.test_import_goes_through_store_new_managed_pdf_from_path": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::UploadTests.test_an_upload_is_a_ready_item_with_an_empty_draft_and_the_bytes_as_sent",
+        "tests/pg/test_processing_queue.py::ImportTests.test_an_import_creates_the_work_from_the_draft_and_moves_the_key_to_its_asset"
+      ],
+      "note": "The path-based Processing Inbox import is gone (Processing redesign, #636): a browser upload is stored once as an immutable object and the import adopts that key in one PostgreSQL transaction, so no file is copied or removed during import."
+    },
+    "ProcessingImportManagedPdfTests.test_path_store_copies_in_bounded_chunks_not_one_read": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::UploadTests.test_no_byte_past_the_declared_length_is_read",
+        "tests/storage_backend_contract.py::StorageBackendContract.test_put_new_stores_bytes_and_hashes_the_stream"
+      ],
+      "note": "The path-based Processing Inbox import is gone (Processing redesign, #636): a browser upload is stored once as an immutable object and the import adopts that key in one PostgreSQL transaction, so no file is copied or removed during import. The upload body is streamed into put_new."
+    },
+    "ProcessingImportManagedPdfTests.test_import_with_linearize_disabled_applies_durability_helpers": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::StoreTests.test_with_linearization_off_the_source_is_the_working_file",
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication",
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_failed_content_sync_publishes_nothing"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_import_survives_qpdf_failure_and_keeps_durable_bytes": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::StoreTests.test_failed_processing_keeps_the_upload_and_writes_nothing_else",
+        "tests/pg/test_objects_ingest.py::StoreTests.test_a_linearized_copy_that_cannot_be_stored_falls_back_to_the_source"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_preseeded_basename_collision_refuses_without_overwrite": {
+      "replaced_by": [
+        "tests/storage_backend_contract.py::StorageBackendContract.test_put_new_is_exclusive_and_never_overwrites",
+        "tests/storage_backend_contract.py::StorageBackendContract.test_concurrent_put_new_has_exactly_one_winner",
+        "tests/pg/test_objects_ingest.py::StoreTests.test_two_ingests_of_one_file_are_two_objects"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_successful_linearize_rewrites_after_durable_publish": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::StoreTests.test_a_linearized_ingest_keeps_the_source_under_its_own_key",
+        "tests/test_storage_backend_local.py::TestLocalSpecifics.test_content_barrier_precedes_publication"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_source_lifecycle_preserved_on_add_work_failure": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::ImportTests.test_a_failed_import_changes_nothing",
+        "tests/pg/test_processing_queue.py::ImportTests.test_a_database_error_fails_only_its_item"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_a_survivor_keeps_bytes_and_settles_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_a_settle_meeting_an_adoption_in_flight_keeps_the_object",
+        "tests/pg/test_objects_ingest.py::FailureTests.test_an_adoption_before_settlement_keeps_both_keys"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_a_survivor_race_with_barriers_no_sleeps": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_a_settle_meeting_an_adoption_in_flight_keeps_the_object",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_an_adoption_meeting_a_settle_in_flight_fails_cleanly",
+        "tests/pg/test_processing_queue.py::ImportRaceTests.test_a_settle_waiting_on_an_import_finds_the_asset"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_a_noncanonical_spelling_race_fails_without_work": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "ProcessingImportManagedPdfTests.test_adoption_guard_refuses_encoded_slash_alias": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "ProcessingImportManagedPdfTests.test_adoption_guard_refuses_url_delimiter_spellings": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "ProcessingImportManagedPdfTests.test_adoption_guard_refuses_nested_segment_alias": {
+      "obsolete": "SQLite managed PDFs are named by free-form file_path strings, so legacy delimiter, query and alias spellings of one basename had to protect or release each other. PostgreSQL Assets name canonical object keys, a name no key could have is refused (tests/pg/test_objects_lifecycle.py::ClaimTests.test_names_no_key_could_have_are_refused), and a key is kept while any Asset names it (tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept)."
+    },
+    "ProcessingImportManagedPdfTests.test_adoption_guard_holds_lock_for_canonical_and_whitespace": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_an_adoption_meeting_a_settle_in_flight_fails_cleanly",
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_a_settle_meeting_an_adoption_in_flight_keeps_the_object"
+      ],
+      "note": "PostgreSQL serializes adoption and settlement on the key's catalogue rows; the whitespace spelling is one of the free-form names it has no counterpart for."
+    },
+    "ProcessingImportManagedPdfTests.test_adoption_guard_refuses_when_file_already_gone": {
+      "replaced_by": [
+        "tests/pg/test_objects_ingest.py::FailureTests.test_bytes_replaced_or_removed_before_adoption_are_refused",
+        "tests/pg/test_objects_lifecycle.py::AdoptionTests.test_a_key_the_sweep_settled_fails_adoption_and_commits_nothing"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_a_survivor_committed_before_cleanup_keeps_bytes": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_key_another_asset_names_is_kept",
+        "tests/pg/test_objects_lifecycle.py::SyncDeleteReplayTests.test_a_replay_after_another_work_adopts_the_object_deletes_nothing"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_b_no_survivor_removes_bytes_and_settles_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::ClaimTests.test_a_work_delete_claims_its_file_and_settle_removes_it",
+        "tests/pg/test_objects_ingest.py::FailureTests.test_a_rolled_back_create_leaves_the_bytes_to_the_sweep"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_c_oserror_cleanup_leaves_retryable_claim": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_a_failed_removal_keeps_the_claim_and_rotates"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_case_d_ref_query_failure_fails_closed": {
+      "obsolete": "The SQLite retry read the live catalogue from a second connection that could fail on its own. On PostgreSQL a settle checks the references and deletes the claim in one transaction under the job lease, so a database failure fails the job and leaves the claim (tests/pg/test_objects_jobs.py::CleanupPassTests.test_a_failed_delete_keeps_a_claim_that_a_later_pass_settles)."
+    },
+    "ProcessingImportManagedPdfTests.test_case_e_already_missing_is_idempotent": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::RetryTests.test_bytes_already_gone_settle_as_removed",
+        "tests/storage_backend_contract.py::StorageBackendContract.test_delete_is_idempotent"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_replay_import_is_idempotent_after_success": {
+      "replaced_by": [
+        "tests/pg/test_processing_queue.py::ImportTests.test_a_replay_answers_the_same_work_and_a_deleted_work_is_reported",
+        "tests/pg/test_processing_queue.py::ImportRaceTests.test_two_imports_of_one_item_create_one_work"
+      ]
+    },
+    "ProcessingImportManagedPdfTests.test_discard_unowned_holds_shared_lock": {
+      "replaced_by": [
+        "tests/pg/test_objects_lifecycle.py::InterleavingTests.test_an_adoption_meeting_a_settle_in_flight_fails_cleanly",
+        "tests/pg/test_processing_queue.py::UploadRaceTests.test_an_insert_first_keeps_the_bytes_from_a_waiting_settle"
+      ],
+      "note": "An unowned key is released through a cleanup claim that settles under the catalogue row locks, not a file lock."
+    }
+  }
+}

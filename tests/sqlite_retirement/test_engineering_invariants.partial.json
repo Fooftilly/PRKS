@@ -1,0 +1,20 @@
+{
+  "module": "tests/test_engineering_invariants.py",
+  "partial": true,
+  "tests": {
+    "ManagedPdfRemovalTests.test_approved_survivor_aware_cleanup_passes": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_held_referenced_and_staged_keys_are_never_deleted",
+        "tests/pg/test_objects_ingest.py::InterleavingTests.test_a_settle_meeting_an_ingest_in_flight_keeps_both_keys"
+      ],
+      "note": "It ran INV-STORAGE-002 over the real backend/work_deletion.py, whose survivor-aware _remove_managed_pdf and retry_pending_pdf_cleanup were the SQLite capabilities to unlink a managed PDF. PG-C2 deleted that module. On PostgreSQL a managed file is an immutable object removed only by the cleanup settle, which re-checks every reference under the per-object lock; the replacements assert that. The rule itself stays covered by the synthetic-source tests of this class."
+    },
+    "ManagedPdfRemovalTests.test_capability_is_function_level_not_file_level": {
+      "replaced_by": [
+        "tests/pg/test_objects_jobs.py::CleanupPassTests.test_held_referenced_and_staged_keys_are_never_deleted",
+        "tests/pg/test_objects_ingest.py::InterleavingTests.test_a_settle_meeting_an_ingest_in_flight_keeps_both_keys"
+      ],
+      "note": "It ran INV-STORAGE-002 over the real backend/work_deletion.py, whose survivor-aware _remove_managed_pdf and retry_pending_pdf_cleanup were the SQLite capabilities to unlink a managed PDF. PG-C2 deleted that module. On PostgreSQL a managed file is an immutable object removed only by the cleanup settle, which re-checks every reference under the per-object lock; the replacements assert that. The rule itself stays covered by the synthetic-source tests of this class."
+    }
+  }
+}
