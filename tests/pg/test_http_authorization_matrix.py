@@ -12,7 +12,8 @@ domain commands directly, so this matrix sends one real request per family
 - a signed-out browser (its session cookie was revoked).
 
 Each row states what the request needs (read, edit, or Library
-administration). A caller with the right gets anything but 401/403; a reader
+administration). A caller with the right gets a success (or the row's
+documented route-level refusal, which comes after admission); a reader
 asking to edit or an editor asking to administer gets 403 ``forbidden``; the
 others get 401 ``not_authenticated``. A refusal never names the Library or
 the seeded entities, and a refused request leaves every Library table as it
@@ -22,6 +23,7 @@ when a ``backend/api`` module has no row, so a new family joins the matrix.
 
 from __future__ import annotations
 
+import io
 import itertools
 import os
 import uuid
@@ -34,6 +36,7 @@ from backend.domain.maintenance import tables
 from tests import acting_context as facade_context
 from tests.library_adapter import TestLibrary
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
+from tests.pg.test_http_processing import ProcessingHttpTestCase
 from tests.pg.test_search_text import pdf_bytes
 
 _API_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backend", "api")
@@ -71,6 +74,7 @@ ROWS: tuple[Row, ...] = (
     Row("folders", EDIT, "POST", "/api/folders", {"title": "Matrix folder {unique}"}),
     Row("playlists", EDIT, "POST", "/api/playlists", {"title": "Matrix playlist {unique}"}),
     Row("persons", READ, "GET", "/api/persons"),
+    Row("persons", READ, "GET", "/api/persons/{person}/profile-image"),  # streams the cached portrait
     Row("persons", EDIT, "POST", "/api/persons", {"first_name": "Grace", "last_name": "Hopper {unique}"}),
     Row("person_groups", EDIT, "POST", "/api/person-groups", {"name": "Matrix group {unique}"}),
     Row("concepts", EDIT, "POST", "/api/concepts", {"name": "Matrix concept {unique}"}),
@@ -81,6 +85,7 @@ ROWS: tuple[Row, ...] = (
     Row("publishers", READ, "GET", "/api/publishers"),
     Row("publishers", EDIT, "POST", "/api/publishers", {"name": "Matrix press {unique}"}),
     Row("processing", READ, "GET", "/api/processing-items"),
+    Row("processing", READ, "GET", "/api/processing-items/{item}/pdf"),  # streams the uploaded object
     Row("processing", EDIT, "POST", "/api/processing-items/import", {"item_ids": ["PI-MATRIX"]}),
     Row("search", READ, "GET", "/api/search?q=matrix"),
     Row("settings", READ, "GET", "/api/settings"),
@@ -110,8 +115,11 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         self.serve()
         owner_cookie = self.session_cookie()
         self.seed(storage, owner_cookie)
-        # A role row's type differs per call, so a second permitted caller is not refused as a duplicate.
+        # A role row's type differs per request, so a second permitted caller is not refused as a duplicate.
         self.roles = itertools.cycle(("Author", "Editor", "Translator", "Reviewer"))
+
+    # The Processing upload as a browser sends it, to seed one ready item.
+    raw_upload = ProcessingHttpTestCase.raw_upload
 
     # -- the Library and its callers ------------------------------------------------------
 
@@ -124,13 +132,26 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         name = f"matrix-{uuid.uuid4().hex[:8]}.pdf"
         with open(os.path.join(storage.pdfs_dir, name), "wb") as handle:
             handle.write(pdf_bytes("Matrix Work"))
+        from PIL import Image
+
+        from backend.person_image import PortraitImage
+
+        portrait = io.BytesIO()
+        Image.new("RGB", (4, 4), (200, 30, 30)).save(portrait, format="JPEG")
         with self.acting(cookie):
             self.ids = {
                 "work": self.facade.add_work("Matrix Work", file_path=f"/api/pdfs/{name}"),
                 "pdf": name,
                 "tag": self.facade.add_tag("Seeded tag")["id"],
-                "person": self.facade.add_person("Ada", "Lovelace"),
+                "person": self.facade.add_person("Ada", "Lovelace", image_url="https://portrait.invalid/ada.jpg"),
             }
+            cached = self.facade._cache_person_portrait(
+                self.ids["person"], lambda _url: PortraitImage(portrait.getvalue(), "jpeg"))
+            assert cached is not None, "the portrait was not cached"
+        self.cookies = cookie
+        uploaded = self.raw_upload(pdf_bytes("Matrix upload"), filename="matrix-upload.pdf")
+        self.assertEqual(uploaded.status, 201, uploaded.raw[:300])
+        self.ids["item"] = uploaded.body["item"]["id"]
 
     def callers(self) -> dict[str, Optional[dict[str, str]]]:
         """Cookie per caller kind; signed in now, so revocations happen after sign-in."""
@@ -169,9 +190,11 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         return out
 
     def send(self, row: Row, cookie: Optional[dict[str, str]]) -> Response:
+        role = next(self.roles)  # one role per request, so each caller asks for a different one
+
         def fill(value: Any) -> Any:
             if isinstance(value, str):
-                return value.format(**self.ids, unique=uuid.uuid4().hex[:8], role=next(self.roles))
+                return value.format(**self.ids, unique=uuid.uuid4().hex[:8], role=role)
             if isinstance(value, dict):
                 return {key: fill(item) for key, item in value.items()}
             if isinstance(value, list):
@@ -203,10 +226,8 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
                             # The route's own JSON answer, not the server's "endpoint not found" page.
                             self.assertTrue({"error", "code"} & set(res.body), res.raw[:300])
                             continue
-                        if caller == "owner":  # the route is real and the row's request is valid
-                            self.assertLess(res.status, 300, res.raw[:300])
-                        self.assertNotIn(res.status, (401, 403, 404, 405), res.raw[:300])
-                        self.assertLess(res.status, 500, res.raw[:300])
+                        # The route is real and the row's request is valid for every caller with the right.
+                        self.assertLess(res.status, 300, res.raw[:300])
                         continue
                     self.assertEqual(res.status, expected[0], res.raw[:300])
                     self.assertEqual(res.body.get("error"), expected[1], res.raw[:300])
