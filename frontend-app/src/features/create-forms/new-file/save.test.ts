@@ -7,6 +7,7 @@ import {
   ENRICHMENT_NOT_ADDED,
   NOTHING_SAVED,
   PERSON_NOT_ADDED,
+  PERSON_NOT_PICKED,
   SERVER_FAILED,
   UNCONFIRMED_SAVE,
   saveNewFile,
@@ -27,6 +28,7 @@ function draft(overrides: Partial<NewFileDraft> = {}): NewFileDraft {
     year: '',
     folderId: '',
     folderCommitted: true,
+    personSearch: '',
     videoUrl: '',
     videoChannel: '',
     videoPublished: '',
@@ -125,13 +127,21 @@ function recorder(overrides: Partial<NewFileSaveDeps> = {}, input: NewFileDraft 
 describe('validateDraft', () => {
   const rules = { isValidYoutubeUrl: (url: string) => url.includes('watch?v='), parseDate: () => '' }
 
-  it('needs a PDF, a picked Folder and readable dates, in reading order', () => {
-    const errors = validateDraft(draft({ pdf: null, folderCommitted: false, pdfPublished: '2020' }), rules)
+  it('needs a PDF, a picked Folder, a picked person and readable dates, in reading order', () => {
+    const errors = validateDraft(
+      draft({ pdf: null, folderCommitted: false, personSearch: 'Typed Name', pdfPublished: '2020' }),
+      rules,
+    )
     expect(errors).toEqual([
       ['file', CHOOSE_PDF],
       ['folder', FOLDER_NOT_PICKED],
+      ['people', PERSON_NOT_PICKED],
       ['date', BAD_DATE],
     ])
+  })
+
+  it('treats a blank People search as nothing typed', () => {
+    expect(validateDraft(draft({ personSearch: '   ' }), rules)).toEqual([])
   })
 
   it('needs a YouTube URL for a video and ignores the PDF fields', () => {

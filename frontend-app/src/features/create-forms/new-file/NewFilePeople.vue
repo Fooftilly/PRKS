@@ -26,6 +26,8 @@ interface PersonOption {
 }
 
 const rows = ref<PersonOption[]>([])
+/** Create's "never picked" error, else the add/quick-create message. */
+const peopleMessage = computed(() => state.errors.people || state.peopleError.value)
 const createLabel = ref('')
 
 function persons(): PersonRow[] {
@@ -97,6 +99,7 @@ function addPicked(): boolean {
     { person_id: personId, person_name: credit || profile, profile_name: profile, role_type: roleType, credit_name: credit },
   ])
   state.peopleError.value = ''
+  state.errors.people = ''
   setFieldValue('upload-person-id', '')
   setFieldValue('upload-person-search', '')
   refreshPicker(null)
@@ -159,6 +162,7 @@ function onFocus(): void {
 function onInput(): void {
   setFieldValue('upload-person-id', '')
   state.peopleError.value = ''
+  state.errors.people = ''
   render()
 }
 
@@ -270,7 +274,16 @@ function reset(): void {
   combobox.hideNow()
 }
 
-defineExpose({ reset, close: combobox.close })
+/** Escape's inner layer: the open "Name on file" panel, then the result list. */
+function close(): boolean {
+  if (state.creditIdx.value >= 0) {
+    closeCredit()
+    return true
+  }
+  return combobox.close()
+}
+
+defineExpose({ reset, close })
 </script>
 
 <template>
@@ -287,6 +300,7 @@ defineExpose({ reset, close: combobox.close })
           autocomplete="off"
           aria-describedby="upload-people-help upload-people-error"
           :readonly="state.personLocked.value"
+          :aria-invalid="peopleMessage ? 'true' : undefined"
           :aria-busy="state.personLocked.value ? 'true' : undefined"
           @focus="onFocus"
           @input="onInput"
@@ -319,10 +333,10 @@ defineExpose({ reset, close: combobox.close })
     <p
       id="upload-people-error"
       class="folder-field-error"
-      :class="{ hidden: !state.peopleError.value }"
+      :class="{ hidden: !peopleMessage }"
       data-prks-field-error="upload-people"
       role="alert"
-    >{{ state.peopleError.value }}</p>
+    >{{ peopleMessage }}</p>
     <ul
       id="upload-roles-list"
       class="prks-upload-people-list"

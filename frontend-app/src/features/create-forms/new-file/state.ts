@@ -17,6 +17,7 @@ export const FIELD_CONTROL_IDS: Record<NewFileField, string> = {
   file: 'upload-drop-zone',
   videoUrl: 'work-video-url',
   folder: 'work-folder-search',
+  people: 'upload-person-search',
   date: 'work-date',
   videoDate: 'work-video-published-date',
 }
@@ -44,6 +45,7 @@ export function createNewFileState() {
     file: '',
     videoUrl: '',
     folder: '',
+    people: '',
     date: '',
     videoDate: '',
   })

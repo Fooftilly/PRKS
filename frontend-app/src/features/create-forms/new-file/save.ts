@@ -4,13 +4,14 @@ import { FOLDER_GONE, FOLDER_NOT_PICKED } from './folder'
 export type SourceKind = 'pdf' | 'video'
 
 /** Fields with an inline error under them. */
-export type NewFileField = 'file' | 'videoUrl' | 'folder' | 'date' | 'videoDate'
+export type NewFileField = 'file' | 'videoUrl' | 'folder' | 'people' | 'date' | 'videoDate'
 
 export const CHOOSE_PDF = 'Choose a PDF file.'
 export const BAD_PDF_READ = 'Could not read this PDF. Choose the file again.'
 export const BAD_YOUTUBE_URL = 'Enter a valid YouTube URL.'
 export const BAD_DATE = 'Use dd/mm/yyyy.'
 export const NOTHING_SAVED = 'Nothing was saved.'
+export const PERSON_NOT_PICKED = 'Pick this person from the list or quick-create them, or clear the field.'
 export const PERSON_NOT_ADDED =
   'That person could not be added, so the file was not created. Try adding them again, then create.'
 export const ENRICHMENT_NOT_ADDED =
@@ -33,6 +34,8 @@ export interface NewFileDraft {
   year: string
   folderId: string
   folderCommitted: boolean
+  /** People search text that was never picked or quick-created. */
+  personSearch: string
   videoUrl: string
   videoChannel: string
   videoPublished: string
@@ -105,6 +108,8 @@ export function validateDraft(
     errors.push(['videoUrl', BAD_YOUTUBE_URL])
   }
   if (!draft.folderCommitted) errors.push(['folder', FOLDER_NOT_PICKED])
+  // Like the Folder field: a typed person is a choice not yet made.
+  if (draft.personSearch.trim()) errors.push(['people', PERSON_NOT_PICKED])
   const videoPublished = draft.videoPublished.trim()
   if (draft.kind === 'video' && videoPublished && !deps.parseDate(videoPublished)) {
     errors.push(['videoDate', BAD_DATE])

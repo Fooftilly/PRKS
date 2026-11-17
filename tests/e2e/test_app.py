@@ -13362,6 +13362,16 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#upload-person-search").fill("E2E Auth")
         page.locator("#person-results .result-item--person-pick", has_text=PERSON_DISPLAY).click()
         page.locator("#upload-roles-list .prks-upload-person-row").first.wait_for()
+        # The open "Name on file" panel is the next layer: Escape closes it
+        # and returns focus to its row's button, not the dialog.
+        page.locator('[data-upload-role-credit="0"]').click()
+        page.locator("#upload-role-credit-panel").wait_for(state="visible")
+        page.keyboard.press("Escape")
+        page.locator("#upload-role-credit-panel").wait_for(state="hidden")
+        self.assertTrue(page.locator("#work-modal").is_visible())
+        page.wait_for_function(
+            "() => document.activeElement && document.activeElement.getAttribute('data-upload-role-credit') === '0'"
+        )
         self._open_disclosure(page, "work-upload-more-details")
         page.fill("#work-abstract", "Discard me")
         page.locator("#work-modal-cancel").click()
@@ -13657,6 +13667,34 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         work = self._work_detail(page, self._created_work_id(page))
         names = [(r.get("first_name"), r.get("last_name"), r["role_type"]) for r in work["roles"]]
         self.assertEqual(names, [("Zed", "Quickmade", "Author")])
+
+    def test_a_typed_person_never_picked_blocks_create(self):
+        """Like the Folder field, typed People text is a choice not yet made:
+        Create refuses it inline instead of silently dropping the person."""
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        page.fill("#work-title", "E2E Unpicked Person")
+        page.fill("#upload-person-search", "Never Picked")
+        page.locator("#work-title").click()
+        posts = []
+        page.on("request", lambda r: posts.append(r.url) if r.method == "POST" and "/api/works" in r.url else None)
+        page.locator("#save-work-btn").click()
+        page.locator("#upload-people-error", has_text="Pick this person").wait_for()
+        self.assertEqual(page.locator("#upload-person-search").get_attribute("aria-invalid"), "true")
+        page.wait_for_function(
+            "() => document.activeElement && document.activeElement.id === 'upload-person-search'"
+        )
+        self.assertTrue(page.locator("#work-modal").is_visible())
+        self.assertEqual(posts, [])
+        # Clearing the field retracts the error and Create goes through.
+        page.fill("#upload-person-search", "")
+        page.locator("#upload-people-error").wait_for(state="hidden")
+        page.locator("#save-work-btn").click()
+        work = self._work_detail(page, self._created_work_id(page))
+        self.assertEqual(work["title"], "E2E Unpicked Person")
+        self.assertEqual(work["roles"], [])
 
     def test_quick_create_from_a_discarded_form_never_blocks_the_next(self):
         """Codex review on #151: a quick-create left over from a closed form

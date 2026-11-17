@@ -170,6 +170,7 @@ function readDraft(): NewFileDraft {
     year: fieldValue('work-year'),
     folderId: fieldValue('work-folder-id'),
     folderCommitted: folder.value?.isCommitted() ?? false,
+    personSearch: fieldValue('upload-person-search'),
     videoUrl: fieldValue('work-video-url'),
     videoChannel: fieldValue('work-video-channel'),
     videoPublished: fieldValue('work-video-published-date'),
