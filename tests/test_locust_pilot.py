@@ -108,6 +108,12 @@ class LocustPilotSafeguards(unittest.TestCase):
         self.assertEqual(compare(run, baseline),
                          {"same_prks_version": False, "routes": {ROUTES[0]: {"p95": 2.0, "rps": 0.5}}})
         self.assertTrue(compare(run, {**baseline, "prks_version": "y"})["same_prks_version"])
+        unknown = {**run, "prks_version": "unknown"}
+        self.assertFalse(compare(unknown, {**baseline, "prks_version": "unknown"})["same_prks_version"])
+        for bad in ("nan", "inf"):
+            broken = {**baseline, "routes": {ROUTES[0]: {**numbers(), "p95_ms": bad, "rps": 4.0}}}
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, "finite"):
+                compare(run, broken)
         with self.assertRaisesRegex(ValueError, "same pilot and tier"):
             compare(run, {**baseline, "tier": "medium"})
 

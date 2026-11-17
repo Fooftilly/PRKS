@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import resource
 import shutil
@@ -152,11 +153,15 @@ def compare(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]
         if not then:
             continue
         then_p95, then_rps = float(then["p95_ms"]), float(then["rps"])
+        if not (math.isfinite(then_p95) and math.isfinite(then_rps)):
+            raise ValueError("baseline route metrics must be finite numbers")
         ratios[route] = {
             "p95": round(now["p95_ms"] / then_p95, 2) if then_p95 else None,
             "rps": round(now["rps"] / then_rps, 2) if then_rps else None,
         }
-    return {"same_prks_version": baseline.get("prks_version") == current.get("prks_version"), "routes": ratios}
+    version = current.get("prks_version")
+    same = version not in (None, "unknown") and baseline.get("prks_version") == version
+    return {"same_prks_version": same, "routes": ratios}
 
 
 def database_activity(database: str) -> dict[str, int]:
