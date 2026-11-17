@@ -1841,9 +1841,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
             : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
         if (snapOk) {
-            applyAnnotationSnapshotToRuntime(snapBody, 'DB');
-            if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+            // A snapshot this runtime refuses as stale (#1212) is neither the
+            // page's base nor a base to publish for a later reopen: retry.
+            if (applyAnnotationSnapshotToRuntime(snapBody, 'DB')) {
+                if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
+                    await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+                }
+            } else if (!runtime.annotationBaseReady) {
+                runtime._annotationBaseHydrationNeedsRetry = true;
             }
         } else if (snapRes && !snapRes.ok) {
             // Transient non-OK must not strand online_awaiting_base forever.
@@ -1877,6 +1882,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
             : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
         if (!snapOk) return false;
+        // Never apply a snapshot read before state this runtime already
+        // holds (an ACK applied while it was in flight): see
+        // prksPdfAnnotationSnapshotPredatesRuntime (#1212).
+        if (typeof window.prksPdfAnnotationSnapshotPredatesRuntime === 'function' &&
+            window.prksPdfAnnotationSnapshotPredatesRuntime(
+                runtime, snapBody.canonical_annotation_set_revision)) {
+            return false;
+        }
         const saved = snapBody.items;
         runtime.annotationCache = {
             allItems: saved,
@@ -1894,6 +1907,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             };
         runtime.annotationBaseReady = true;
         runtime._annotationBaseHydrationNeedsRetry = false;
+        if (typeof window.prksNotePdfAnnotationSnapshotRevision === 'function') {
+            window.prksNotePdfAnnotationSnapshotRevision(
+                runtime, snapBody.canonical_annotation_set_revision);
+        }
         if (Number.isSafeInteger(snapBody.canonical_annotation_set_revision)) {
             runtime.acknowledgedAnnotationSetRevision =
                 snapBody.canonical_annotation_set_revision;
@@ -3129,6 +3146,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         let acceptedSnapshot = false;
         let projectionReady = false;
         let shouldMaterialize = false;
+        let staleSnapshot = false;
         try {
             const catchUpLock = liveAnnotationViewer();
             if (catchUpLock && typeof catchUpLock.setMutationEnabled === 'function') {
@@ -3149,7 +3167,15 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 return;
             }
             if (!stillLive()) return;
+            if (snapBody && typeof window.prksPdfAnnotationSnapshotPredatesRuntime === 'function' &&
+                window.prksPdfAnnotationSnapshotPredatesRuntime(
+                    runtime, snapBody.canonical_annotation_set_revision)) {
+                // Read before an ACK this page already applied: read again.
+                staleSnapshot = true;
+                return;
+            }
             if (!applyAnnotationSnapshotToRuntime(snapBody, 'DB')) return;
+            runtime._annotationStaleSnapshotRetries = 0;
             // Snapshot/revision state is now accepted. Pending hydration and
             // viewer projection are fail-closed from here: do not unlock user
             // mutation until effective ack+pending is successfully visible.
@@ -3249,6 +3275,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             }
             // Always end the catch-up gate here — never hand it to materialization.
             prksEndAnnotationMaterializationGate(runtime);
+            // Here, not after the try: the stale branch returns from it.
+            if (staleSnapshot && stillLive()) scheduleStaleSnapshotCatchUp();
         }
         // Independent materialization gate: only after catch-up gate is gone.
         // Handoff block (if shouldMaterialize) keeps mutation disabled until
@@ -3256,6 +3284,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (shouldMaterialize && stillLive()) {
             void requestFlush('materialize');
         }
+    }
+
+    // The server already committed the ACK the stale snapshot predates, so a
+    // fresh read catches up; the bound only stops a misbehaving server.
+    function scheduleStaleSnapshotCatchUp() {
+        const attempt = Number(runtime._annotationStaleSnapshotRetries) || 0;
+        if (attempt >= 5) return;
+        runtime._annotationStaleSnapshotRetries = attempt + 1;
+        setTimeout(function () {
+            if (stillLive()) void maybeCatchUpMaterialization();
+        }, 50 * (attempt + 1));
     }
 
     function scheduleCatchUpProjectionRetry() {
