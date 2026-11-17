@@ -1,4 +1,4 @@
-import type { FolderDraft } from './folder-effects'
+import type { FolderDraft, PendingAttach } from './folder-effects'
 
 export interface FolderSaveDeps {
   modal: () => HTMLElement | null
@@ -10,7 +10,14 @@ export interface FolderSaveDeps {
   guardRefusal: (error: unknown) => boolean
   revalidate: () => void
   owner: () => unknown
-  afterCreate: (newId: string, owner: unknown, stillOpening: () => boolean) => Promise<void>
+  /** The Work folder picker that opened this dialog, read when Save is pressed. */
+  pendingAttach: () => PendingAttach | null
+  afterCreate: (
+    newId: string,
+    owner: unknown,
+    stillOpening: () => boolean,
+    pending: PendingAttach | null,
+  ) => Promise<void>
 }
 
 /**
@@ -34,6 +41,7 @@ export function createFolderSaveGate() {
     inFlight = saveToken
     deps.setBusy(true)
     const owner = deps.owner()
+    const pending = deps.pendingAttach()
     try {
       const draft = deps.readDraft()
       const parentId = draft.parentId.trim() ? draft.parentId.trim() : null
@@ -57,7 +65,7 @@ export function createFolderSaveGate() {
         }
       }
       if (!isCurrentOpening()) return
-      await deps.afterCreate(newFolderId, owner, isCurrentOpening)
+      await deps.afterCreate(newFolderId, owner, isCurrentOpening, pending)
     } finally {
       if (inFlight === saveToken) {
         inFlight = null

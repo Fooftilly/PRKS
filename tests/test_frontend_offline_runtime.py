@@ -381,7 +381,9 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             src = _read(path)
             with self.subTest(module=os.path.basename(path)):
                 self.assertIn("prksCreatePersonDurably(", src)
-                self.assertNotIn("'/api/persons', {", src.replace(" ", ""),
+                # Whitespace-free needle against whitespace-free source, so
+                # `'/api/persons', {` and `'/api/persons',{` both count.
+                self.assertNotIn("'/api/persons',{", src.replace(" ", ""),
                                  "Person creation must not POST directly")
         runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
         self.assertIn("reconcileCreatedPerson", runtime)

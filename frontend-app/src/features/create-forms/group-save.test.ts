@@ -102,10 +102,45 @@ describe('group save gate', () => {
     await Promise.resolve()
     await Promise.resolve()
     shell.classList.add('hidden')
-    busy = false
+    expect(busy).toBe(true)
     pending.resolve({ entity_id: 'G-1' })
     await save
     expect(finishes).toBe(0)
-    expect(busy).toBe(false)
+    // A dismissed opening keeps its busy flag; only the next opening's reset
+    // clears it, so the gate itself must not.
+    expect(busy).toBe(true)
+  })
+
+  it('creates neither the typed parent nor the group once the dialog is dismissed during the parent lookup', async () => {
+    const gate = createGroupSaveGate()
+    const lookup = deferred<string | undefined>()
+    const shell = modal('1')
+    const fence: { owns: () => boolean } = { owns: () => true }
+    let creates = 0
+    const save = gate.save({
+      modal: () => shell,
+      isBusy: () => false,
+      setBusy: () => {},
+      readDraft: () => ({ name: 'Child', parentId: '', parentQuery: 'New parent', description: '' }),
+      resolveParent: (_id, _query, stillOwns) => {
+        fence.owns = stillOwns
+        return lookup.promise
+      },
+      createGroup: async () => {
+        creates += 1
+        return { entity_id: 'G-1' }
+      },
+      alert: async () => {},
+      failureMessage: () => 'fail',
+      afterCreate: async () => {},
+    })
+    await Promise.resolve()
+    expect(fence.owns()).toBe(true)
+    // Dismiss keeps the generation: the resolver's fence must still see it.
+    shell.classList.add('hidden')
+    expect(fence.owns()).toBe(false)
+    lookup.resolve('G-PARENT')
+    await save
+    expect(creates).toBe(0)
   })
 })

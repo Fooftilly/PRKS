@@ -63,6 +63,11 @@ const api: PrksCreateFormsApi = {
     else if (modalId === 'group-modal') groupRef.value?.focusInitial()
     else if (modalId === 'playlist-modal') playlistRef.value?.focusInitial()
   },
+  dismissInnerLayer(modalId) {
+    if (modalId === 'folder-modal') return folderRef.value?.closeParentList() ?? false
+    if (modalId === 'group-modal') return groupRef.value?.closeParentList() ?? false
+    return false
+  },
   resetClosed() {
     // Person and Playlist already start blank on every opening.
     if (modalRoot('folder-modal')?.classList.contains('hidden')) folderRef.value?.resetFields()

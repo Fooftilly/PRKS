@@ -4,7 +4,7 @@ export interface FolderDraft {
   parentId: string
 }
 
-interface PendingAttach {
+export interface PendingAttach {
   workId?: string
   tabId?: string
   generation?: number
@@ -51,15 +51,16 @@ export async function finishFolderCreate(
   newFolderId: string,
   ownerCtx: unknown,
   stillOpening: () => boolean,
+  pending: PendingAttach | null = null,
 ): Promise<void> {
   const w = effectsWindow()
   const owner = (ownerCtx || null) as TabCtx | null
-  const pending = w.__prksPendingWorkFolderAttach
   if (pending && pending.workId && typeof w.patchWorkFolder === 'function') {
     const attachWid = String(pending.workId)
     const opener = pending.tabId && w.prksGetTabContext ? w.prksGetTabContext(String(pending.tabId)) : null
     const still = () => typeof w.prksCapturedWorkPanelStill === 'function' && w.prksCapturedWorkPanelStill(pending)
-    w.__prksPendingWorkFolderAttach = null
+    // Clear only this Save's attach; a newer opener may have set its own.
+    if (w.__prksPendingWorkFolderAttach === pending) w.__prksPendingWorkFolderAttach = null
     w.closeModals?.()
     if (!still()) return
     let attachCoherenceToken: unknown = null
@@ -76,7 +77,13 @@ export async function finishFolderCreate(
     }
     if (!still()) return
     if (typeof w.fetchWorkDetails === 'function') {
-      const work = await w.fetchWorkDetails(attachWid)
+      let work: unknown
+      try {
+        work = await w.fetchWorkDetails(attachWid)
+      } catch {
+        // The folder is attached; the panel refreshes on its next read.
+        return
+      }
       if (work && w.prksOfflineCacheEntityIfCurrent && attachCoherenceToken != null) {
         void w.prksOfflineCacheEntityIfCurrent('work', attachWid, work, attachCoherenceToken)
       }
@@ -90,6 +97,11 @@ export async function finishFolderCreate(
   if (!stillOpening()) return
   w.closeModals?.()
   if (typeof w.prksNavigate !== 'function') return
+  // The tab that saved may have closed while the create resolved. Navigation
+  // would then fall back to whichever tab has focus, so drop it instead.
+  if (owner && owner.tabId && typeof w.prksGetTabContext === 'function' && !w.prksGetTabContext(owner.tabId)) {
+    return
+  }
   const ownerRoute = owner && (owner.lastResolvedRoute || owner.route)
   const tabOption = owner && owner.tabId ? { tabId: owner.tabId } : {}
   // Saved from the Folder Library root: the library already lists the new folder.

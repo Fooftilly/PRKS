@@ -84,6 +84,30 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertNotIn("POST /api/", submit)
         self.assertNotIn("POST /api/", playlist_save)
 
+    def test_classic_modal_lifecycle_calls_the_create_form_hooks(self):
+        """#603/#589, #373 and #467: the shell hands each moment to the Vue forms."""
+        ui = UI.read_text(encoding="utf-8")
+        open_modal = ui[ui.index("function openModal(id) {") : ui.index("// —— In-app help hints")]
+        # Focus moves into the first field once the dialog is shown.
+        self.assertLess(
+            open_modal.index("modalEl.classList.remove('hidden');"),
+            open_modal.index("window.prksCreateForms.focusInitial(id);"),
+        )
+        self.assertIn("window.prksCreateForms.owns(id)", open_modal)
+        close = ui[ui.index("function closeModals() {") :]
+        close = close[: close.index("\n}\n")]
+        self.assertLess(
+            close.index("document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));"),
+            close.index("window.prksCreateForms.resetClosed();"),
+        )
+        inner = ui[ui.index("function prksDismissModalInnerEscapeLayer() {") :]
+        inner = inner[: inner.index("\n}\n")]
+        self.assertIn("window.prksCreateForms.dismissInnerLayer(modal.id)", inner)
+        self.assertLess(
+            inner.index("dismissInnerLayer(modal.id)"),
+            inner.index("const openPanel"),
+        )
+
     def test_classic_shell_delegates_dirty_and_does_not_bind_the_buttons(self):
         ui = UI.read_text(encoding="utf-8")
         app = APP.read_text(encoding="utf-8")

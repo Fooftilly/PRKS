@@ -22,6 +22,11 @@ export interface PrksCreateFormsApi {
   focusInitial: (modalId: string) => void
   /** Clears the Folder and Group drafts once `closeModals` has hidden them. */
   resetClosed: () => void
+  /**
+   * Escape's inner layer for an owned dialog: closes an open parent list and
+   * returns true, so the dialog itself stays open. False when none was open.
+   */
+  dismissInnerLayer: (modalId: string) => boolean
 }
 
 export const CREATE_FORM_MODAL_IDS = [

@@ -1,6 +1,6 @@
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import CreateFormsHost from './CreateFormsHost.vue'
 
 interface StubWindow {
@@ -15,6 +15,9 @@ interface StubWindow {
   prksCreatePersonGroupDurably?: (body: { name: string; parent_id: string }) => Promise<{ entity_id?: string }>
   prksTakePersonGroupCreateNavigation?: () => { mode: string }
   createPlaylist?: (title: string, description: string) => Promise<string | null>
+  parsePersonBirthDeathField?: (text: string) => string | null
+  prksCreatePersonDurably?: (payload: { first_name: string; last_name: string }) => Promise<{ entity_id?: string }>
+  prksTakePersonIndexCreateTabId?: () => string
   prksTakePlaylistIndexCreateTabId?: () => string
 }
 
@@ -30,6 +33,9 @@ const STUB_KEYS: Array<keyof StubWindow> = [
   'prksCreatePersonGroupDurably',
   'prksTakePersonGroupCreateNavigation',
   'createPlaylist',
+  'parsePersonBirthDeathField',
+  'prksCreatePersonDurably',
+  'prksTakePersonIndexCreateTabId',
   'prksTakePlaylistIndexCreateTabId',
 ]
 
@@ -43,6 +49,8 @@ function installShells(): void {
     '<div id="person-modal" class="modal hidden"><div id="person-modal-vue" class="modal-body"></div></div>',
     '<div id="group-modal" class="modal hidden"><div id="group-modal-vue" class="modal-body"></div></div>',
     '<div id="playlist-modal" class="modal hidden"><div id="playlist-modal-vue" class="modal-body"></div></div>',
+    '<div id="work-modal" class="modal hidden"><div id="work-modal-vue" class="modal-body modal-body--scroll"></div>' +
+      '<div class="modal-footer"><button id="save-work-btn" type="button">Create File</button></div></div>',
   ].join('')
 }
 
@@ -287,5 +295,82 @@ describe('create form keyboard completion', () => {
     await flush()
     expect(resolved.at(-1)).toEqual(['', 'Brand New'])
     expect(bodies.at(-1)?.parent_id).toBe('G-NEW-PARENT')
+  })
+
+  it('creates a person on Enter in either name field and on Ctrl+Enter, and still requires a last name', async () => {
+    install()
+    const w = stubs()
+    const alerts: string[] = []
+    w.prksAlertMessage = async (message) => {
+      alerts.push(String(message))
+    }
+    w.parsePersonBirthDeathField = (text) => text.trim()
+    const created: string[] = []
+    w.prksCreatePersonDurably = async (payload) => {
+      created.push(`${payload.first_name} ${payload.last_name}`)
+      return { entity_id: `P-${created.length}` }
+    }
+    w.prksTakePersonIndexCreateTabId = () => ''
+    w.closeModals = hideAll
+    w.prksNavigate = () => {}
+
+    show('person-modal')
+    input('person-fname').value = 'Ada'
+    key(input('person-fname'), 'Enter')
+    await flush()
+    expect(created).toEqual([])
+    expect(alerts.at(-1)).toContain('Last name is required.')
+
+    input('person-lname').value = 'Lovelace'
+    key(input('person-lname'), 'Enter')
+    await flush()
+    expect(created).toEqual(['Ada Lovelace'])
+
+    show('person-modal')
+    input('person-fname').value = 'Grace'
+    input('person-lname').value = 'Hopper'
+    key(document.getElementById('person-about') as HTMLElement, 'Enter', { metaKey: true })
+    await flush()
+    expect(created).toEqual(['Ada Lovelace', 'Grace Hopper'])
+  })
+
+  it('lets Escape close an open parent list before the dialog (#467)', async () => {
+    install()
+    const w = stubs()
+    w.fetchFolders = async () => [{ id: 'F-A', title: 'Alpha', parent_id: null }]
+    await window.prksCreateForms?.refreshFolderValidation()
+    show('folder-modal')
+    expect(window.prksCreateForms?.dismissInnerLayer('folder-modal')).toBe(false)
+    type(input('folder-parent-search'), 'Alp')
+    await flush()
+    const results = document.getElementById('folder-parent-results') as HTMLElement
+    expect(results.classList.contains('is-open')).toBe(true)
+    expect(window.prksCreateForms?.dismissInnerLayer('folder-modal')).toBe(true)
+    await flush()
+    expect(results.classList.contains('is-open')).toBe(false)
+    // Nothing left to close: the next Escape belongs to the dialog.
+    expect(window.prksCreateForms?.dismissInnerLayer('folder-modal')).toBe(false)
+  })
+
+  it('keeps the parent list open when focus returns to the picker before the blur collapse', async () => {
+    vi.useFakeTimers()
+    try {
+      install()
+      const w = stubs()
+      w.fetchFolders = async () => [{ id: 'F-A', title: 'Alpha', parent_id: null }]
+      await window.prksCreateForms?.refreshFolderValidation()
+      show('folder-modal')
+      const search = input('folder-parent-search')
+      type(search, 'Alp')
+      await nextTick()
+      search.dispatchEvent(new FocusEvent('blur'))
+      search.dispatchEvent(new FocusEvent('focus'))
+      vi.advanceTimersByTime(500)
+      await nextTick()
+      const results = document.getElementById('folder-parent-results') as HTMLElement
+      expect(results.classList.contains('is-open')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
