@@ -142,6 +142,15 @@ def _storable(value: Any) -> bool:
     return True
 
 
+def _reversed_keys(value: Any) -> Any:
+    """``value`` with every object's keys in reverse order, nested ones included."""
+    if isinstance(value, dict):
+        return {key: _reversed_keys(value[key]) for key in reversed(list(value))}
+    if isinstance(value, list):
+        return [_reversed_keys(item) for item in value]
+    return value
+
+
 def _envelope(operation: str, entity_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {"op_id": OP_ID, "device_id": DEVICE_ID, "operation": operation,
             "entity_type": "tag", "entity_id": entity_id, "payload": payload,
@@ -165,7 +174,7 @@ class SyncEnvelopePropertyTests(unittest.TestCase):
         self.assertIsInstance(again, dict)
         assert isinstance(again, dict)
         self.assertEqual(rules.request_hash(again), rules.request_hash(op))
-        reordered = dict(reversed(list(op.items())))
+        reordered = _reversed_keys(op)
         self.assertEqual(rules.request_hash(reordered), rules.request_hash(op))
 
     def test_every_operation_has_a_handler_and_a_seed_that_still_validates(self) -> None:

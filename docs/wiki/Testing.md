@@ -53,8 +53,8 @@ Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRK
 - `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
 
 ```bash
-python -m unittest tests.test_sync_envelope_properties -v
-PRKS_HYPOTHESIS_PROFILE=nightly python -m unittest tests.test_sync_envelope_properties -v
+./.venv/bin/python -m unittest tests.test_sync_envelope_properties -v
+PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties -v
 ```
 
 When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
