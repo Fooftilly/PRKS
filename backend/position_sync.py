@@ -71,7 +71,7 @@ def validate_field(op):
     if set(payload) != {"field", "value"}:
         raise ValueError("INVALID_ENVELOPE")
     field, value = payload["field"], payload["value"]
-    if field not in FIELD_SET or not isinstance(value, str):
+    if not isinstance(field, str) or field not in FIELD_SET or not isinstance(value, str):
         raise ValueError("INVALID_ENVELOPE")
     try:
         canonical_wire(field, value)

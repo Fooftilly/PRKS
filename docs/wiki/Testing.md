@@ -41,15 +41,23 @@ python run_tests.py --ux-tour
 
 ## Property-based sync tests (#854)
 
-The Python unit suite includes a bounded [Hypothesis](https://hypothesis.readthedocs.io/) pilot for Work–Tag relationship revisions and the semantic-operation ledger. Hypothesis is **test-only** and does not ship with the PRKS server.
+The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in PG-C2. Its PostgreSQL form is `tests/pg/test_tags_properties.py` and `tests/pg/test_works_metadata_properties.py`: the PostgreSQL job installs the runtime pins plus `openapi-core`, but not Hypothesis, so those sequences are enumerated exhaustively or replayed from named seeds rather than drawn by Hypothesis.
 
-Run just the pilot (after installing `requirements.txt` and `requirements-dev.txt`):
+## Sync envelope fuzzing
+
+`tests/test_sync_envelope_properties.py` fuzzes everything `POST /api/sync/operations` decides before it touches the ledger (`backend.sync.protocol.validate_operation`), with no database. It feeds arbitrary JSON, a deterministic sweep of awkward JSON shapes into every value of every seed, and Hypothesis mutations of real envelopes. The seeds in `tests/fixtures/sync_envelope_seeds.json` were recorded from the `tests/pg` sync suites, one per operation and payload shape; a test fails if any seed stops validating or an operation has none. For every input the answer must be a 400 with a known code (`INVALID_ENVELOPE`, `INVALID_BASE_REVISION`) or an operation PostgreSQL can store (no NUL, lone surrogate, NaN or infinity), and normalizing must be idempotent.
+
+Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
+
+- `pr` (default, the Unit / API / contract gate): `derandomize=True`, so every run draws the same inputs and a red pull request is caused by that pull request. About 2 seconds.
+- `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
 
 ```bash
-./.venv/bin/python -m unittest tests.test_hypothesis_sync -v
+./.venv/bin/python -m unittest tests.test_sync_envelope_properties -v
+PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties -v
 ```
 
-Ordinary CI uses a small fixed maximum number of generated examples and state-machine steps; it is not a replacement for deterministic regression tests. A failure reports a minimized counterexample. Preserve it as an explicit `@example(...)` or a named deterministic regression test for reliable future replay; use a `@reproduce_failure(...)` blob when printed, or record a `@seed(...)` when reproducing a generated run. A plain rerun is not guaranteed to regenerate the same counterexample. Hypothesis' local example database (when enabled) is an accelerator, not a CI prerequisite. The tests deliberately set `database=None` to keep results independent of a developer's cached examples. Avoid hiding flaky failures behind relaxed deadlines or retry loops. Test databases and records are disposable, with no connection to a real research library.
+When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
 
 ## PostgreSQL error-mapping property checks (#391)
 

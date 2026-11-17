@@ -144,7 +144,7 @@ def validate(op):
     person_id, role_type = payload["person_id"], payload["role_type"]
     if not isinstance(person_id, str) or not person_id.strip():
         raise ValueError("INVALID_ENVELOPE")
-    if role_type not in ROLE_TYPE_SET:
+    if not isinstance(role_type, str) or role_type not in ROLE_TYPE_SET:
         raise ValueError("INVALID_ENVELOPE")
     if op["operation"] in CARRIES_CREDIT:
         credit = payload["credit_name"]
