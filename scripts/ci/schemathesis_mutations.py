@@ -205,6 +205,7 @@ if __name__ == "__main__":
     options = parser.parse_args()
     try:
         raise SystemExit(scan(debug_local=options.debug_local))
-    except (ValueError, RuntimeError, AssertionError, subprocess.TimeoutExpired) as exc:
+    except (OSError, http.client.HTTPException, ValueError, RuntimeError, AssertionError,
+            subprocess.TimeoutExpired) as exc:
         print(f"[schemathesis] Mutation scan could not complete: {type(exc).__name__}")
         raise SystemExit(1) from None

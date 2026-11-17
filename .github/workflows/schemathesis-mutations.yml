@@ -28,6 +28,7 @@ on:
       - "docs/api/openapi-positions.json"
       - "docs/api/openapi-saved-views.json"
       - "docs/api/openapi-publishers.json"
+      - "requirements.txt"
       - "requirements-dev.txt"
       - "scripts/ci/install_pinned_python.py"
 

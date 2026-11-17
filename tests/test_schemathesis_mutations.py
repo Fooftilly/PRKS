@@ -43,8 +43,8 @@ class SchemathesisMutationScanSafeguards(unittest.TestCase):
         self.assertEqual(args[args.index("--max-examples") + 1], str(scan.MAX_EXAMPLES))
         self.assertEqual(args[args.index("--workers") + 1], "1")
         self.assertEqual(args[args.index("--generation-allow-x00") + 1], "false")
-        self.assertIn("--max-failures", args)
-        self.assertIn("--rate-limit", args)
+        self.assertEqual(args[args.index("--max-failures") + 1], "1")
+        self.assertEqual(args[args.index("--rate-limit") + 1], "50/s")
         self.assertEqual(args[args.index("--max-redirects") + 1], "0")
         headers = [args[i + 1] for i, arg in enumerate(args) if arg == "--header"]
         self.assertEqual(headers, [f"Origin: {origin}", f"{scan.EPOCH_HEADER}: 7"])
