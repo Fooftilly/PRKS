@@ -162,11 +162,12 @@ def compare(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]
 def database_activity(database: str) -> dict[str, int]:
     """The cumulative ``pg_stat_database`` counters of the pilot's own database."""
     import psycopg
+    from psycopg import sql
 
-    columns = ", ".join(DB_COUNTERS)
+    query = sql.SQL("SELECT {} FROM pg_stat_database WHERE datname = %s").format(
+        sql.SQL(", ").join(sql.Identifier(name) for name in DB_COUNTERS))
     with psycopg.connect(os.environ["PRKS_TEST_DATABASE_URL"], connect_timeout=10) as conn:
-        row = conn.execute(f"SELECT {columns} FROM pg_stat_database WHERE datname = %s",  # noqa: S608
-                           (database,)).fetchone()
+        row = conn.execute(query, (database,)).fetchone()
     return dict(zip(DB_COUNTERS, (int(value or 0) for value in row))) if row else dict.fromkeys(DB_COUNTERS, 0)
 
 
