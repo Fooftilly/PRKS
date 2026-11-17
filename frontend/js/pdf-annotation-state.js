@@ -501,11 +501,27 @@
             const row = rows[i];
             if (row && String(row.annotation_id) === annotationId &&
                 Number.isSafeInteger(row.revision)) {
-                return row.revision;
+                return { revision: row.revision, present: true };
             }
         }
         const absent = state.known_absent && state.known_absent[annotationId];
-        return Number.isSafeInteger(absent) ? absent : null;
+        return Number.isSafeInteger(absent) ? { revision: absent, present: false } : null;
+    }
+
+    /**
+     * Whether an ACK is older than what the runtime holds for its annotation.
+     * A lower revision is older. At the same revision an absent ACK is older
+     * than a present row: a delete always bumps the revision, so the only
+     * absent-then-present pair at one revision is a convergent delete of a
+     * never-created id (revision 0) followed by its CREATE (also 0).
+     */
+    function ackPredatesRuntimeAnnotation(runtime, data) {
+        if (!Number.isSafeInteger(data.server_revision)) return false;
+        const held = runtimeAnnotationRevision(runtime, String(data.annotation_id));
+        if (!held) return false;
+        if (data.server_revision !== held.revision) return data.server_revision < held.revision;
+        const present = data.present !== false && !!data.annotation;
+        return held.present && !present;
     }
 
     function patchRuntimeAcknowledged(runtime, data) {
@@ -518,11 +534,7 @@
         // ACK callbacks can finish out of order, so an older ACK for this
         // annotation can arrive after a newer one: it must not put the older
         // body (or presence) back. ACKs for other annotations are independent.
-        const held = runtimeAnnotationRevision(runtime, String(data.annotation_id));
-        if (held !== null && Number.isSafeInteger(data.server_revision) &&
-            data.server_revision < held) {
-            return false;
-        }
+        if (ackPredatesRuntimeAnnotation(runtime, data)) return false;
         if (Number.isSafeInteger(data.canonical_annotation_set_revision)) {
             const seen = runtime._annotationAckSetRevision;
             if (!Number.isSafeInteger(seen) || data.canonical_annotation_set_revision > seen) {

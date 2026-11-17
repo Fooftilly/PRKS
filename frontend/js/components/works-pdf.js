@@ -1841,9 +1841,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             ? window.prksIsPdfAnnotationsSnapshotShape(snapBody)
             : !!(snapBody && Array.isArray(snapBody.items) && Array.isArray(snapBody.annotations));
         if (snapOk) {
-            applyAnnotationSnapshotToRuntime(snapBody, 'DB');
-            if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
-                await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+            // A snapshot this runtime refuses as stale (#1212) is neither the
+            // page's base nor a base to publish for a later reopen: retry.
+            if (applyAnnotationSnapshotToRuntime(snapBody, 'DB')) {
+                if (typeof window.prksPublishAcknowledgedPdfAnnotations === 'function') {
+                    await window.prksPublishAcknowledgedPdfAnnotations(String(workId), snapBody);
+                }
+            } else if (!runtime.annotationBaseReady) {
+                runtime._annotationBaseHydrationNeedsRetry = true;
             }
         } else if (snapRes && !snapRes.ok) {
             // Transient non-OK must not strand online_awaiting_base forever.
