@@ -46,8 +46,10 @@ class FolderLibraryVueContracts(unittest.TestCase):
         app = (FRONTEND / "app.js").read_text()
         # create-folder success on #/folders must not call renderDashboard.
         create_region = app[app.index("ownerRoute.name === 'folders'"):]
-        create_block = create_region[: create_region.index("if (typeof prksNavigate === 'function') prksNavigate('#/folders');") + 80]
+        create_block = create_region[: create_region.index("const folderHash = '#/folders/'") + 200]
         self.assertIn("prksNavigate('#/folders'", create_block)
+        # Anywhere else the new folder opens in the tab that saved it (#827).
+        self.assertIn("prksNavigate(folderHash, { tabId: ownerCtx.tabId })", create_block)
         self.assertNotIn("renderDashboard(", create_block)
 
     def test_vue_feature_owns_preview_lifecycle_helpers(self):
