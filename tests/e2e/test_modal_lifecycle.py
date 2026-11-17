@@ -5,7 +5,8 @@ import os
 import unittest
 
 from tests.e2e.fixtures import PERSON_DISPLAY, seed_library
-from tests.e2e.harness import AppServer, open_app_page, require_chromium
+from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
+from tests.e2e.test_app import _open_details_drawer_if_tiled, _open_work_from_home
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -234,6 +235,76 @@ class ModalLifecycleTests(unittest.TestCase):
         self.assertEqual(page.locator("#person-birth-date").input_value(), "")
         page.keyboard.press("Escape")
         page.locator("#person-modal").wait_for(state="hidden")
+
+    def test_cancelled_work_new_folder_does_not_claim_a_later_global_folder(self):
+        """A Work's "New folder", cancelled, leaves no attach behind.
+
+        The next New Folder from the global Add menu is an independent
+        creation: it opens the Folder library and leaves the Work where it was.
+        """
+        server = AppServer(seed_fn=seed_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin)
+        self.addCleanup(context.close)
+        self.addCleanup(collector.assert_clean)
+        page.wait_for_selector("#sidebar")
+        work_id = server.ids["work_a"]
+        folder_of = """async (id) => {
+            const res = await prksRequest('/api/works/' + encodeURIComponent(id));
+            const work = await res.json();
+            return work.folder_id == null ? '' : String(work.folder_id);
+        }"""
+        folder_before = page.evaluate(folder_of, work_id)
+
+        _open_work_from_home(page, server.ids["work_a_title"])
+        _open_details_drawer_if_tiled(page)
+        edit = page.locator("#prks-work-folder-edit-btn")
+        edit.wait_for(state="visible", timeout=10000)
+        edit.click()
+        new_btn = page.locator("#prks-work-folder-new-btn")
+        new_btn.wait_for(state="visible", timeout=10000)
+        page.locator("#prks-work-folder-search").fill("Cancelled Work Folder")
+        new_btn.click()
+        _wait_baseline(page, "folder-modal")
+        self.assertEqual(page.locator("#folder-title").input_value(), "Cancelled Work Folder")
+        self.assertTrue(page.evaluate("() => !!window.__prksPendingWorkFolderAttach"))
+        page.keyboard.press("Escape")
+        page.locator("#folder-modal").wait_for(state="hidden")
+        self.assertIsNone(page.evaluate("() => window.__prksPendingWorkFolderAttach || null"))
+
+        self._open_menu_action(page, "new-folder")
+        _wait_baseline(page, "folder-modal")
+        page.locator("#folder-title").fill("Independent Global Folder")
+        page.locator("#save-folder-btn").click()
+        page.locator("#folder-modal").wait_for(state="hidden")
+
+        # An independent create opens the Folder library; an attach would
+        # have kept the Work page instead.
+        page.wait_for_function("() => location.hash === '#/folders'", timeout=20000)
+        wait_for_async(
+            page,
+            """async () => {
+                const res = await prksRequest('/api/folders');
+                if (!res.ok) return false;
+                const rows = await res.json();
+                const list = Array.isArray(rows) ? rows : (rows.folders || rows.items || []);
+                return list.some((f) => f.title === 'Independent Global Folder');
+            }""",
+            timeout=20000,
+            message="the global New Folder never reached the server",
+        )
+        # Give a stray attach every chance to land before checking the Work.
+        wait_for_async(
+            page,
+            """async () => {
+                const rows = await prksSync.store.listOperations();
+                return !rows.some((op) => op.status !== 'conflict');
+            }""",
+            timeout=30000,
+            message="durable operations never drained",
+        )
+        self.assertEqual(page.evaluate(folder_of, work_id), folder_before)
 
     def test_new_person_create_reopens_blank_and_edit_keeps_existing(self):
         page = self._start()

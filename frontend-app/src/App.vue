@@ -6,6 +6,7 @@
   </Teleport>
   <CommandPalette />
   <ModalHost />
+  <CreateFormsHost />
   <WorkspaceShell />
   <AppChrome />
 </template>
@@ -14,6 +15,7 @@
 import { ref } from 'vue'
 import AppChrome from './app-shell/AppChrome.vue'
 import SettingsSurface from './features/settings/SettingsSurface.vue'
+import CreateFormsHost from './features/create-forms/CreateFormsHost.vue'
 import CommandPalette from './palette/CommandPalette.vue'
 import ModalHost from './modal/ModalHost.vue'
 import WorkspaceShell from './workspace-shell/WorkspaceShell.vue'

@@ -374,11 +374,16 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # discarding the People cache would make a Person the user created
         # offline disappear until the next successful read. Both creation
         # surfaces go through the one durable writer.
-        for path in (os.path.join(_FRONTEND, "js", "app.js"), os.path.join(_FRONTEND, "js", "ui.js")):
+        for path in (
+            os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "create-forms", "submit.ts"),
+            os.path.join(_FRONTEND, "js", "ui.js"),
+        ):
             src = _read(path)
             with self.subTest(module=os.path.basename(path)):
                 self.assertIn("prksCreatePersonDurably(", src)
-                self.assertNotIn("'/api/persons', {", src.replace(" ", ""),
+                # Whitespace-free needle against whitespace-free source, so
+                # `'/api/persons', {` and `'/api/persons',{` both count.
+                self.assertNotIn("'/api/persons',{", src.replace(" ", ""),
                                  "Person creation must not POST directly")
         runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
         self.assertIn("reconcileCreatedPerson", runtime)

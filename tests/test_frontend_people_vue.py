@@ -32,8 +32,10 @@ class PeopleVueContracts(unittest.TestCase):
         self.assertIn("previousPersonDraft", detail)
         self.assertIn("prksRetainPersonEditAcrossRefresh", detail)
         self.assertLess(app.index("const previousPersonDraft"), app.index("const generation = ctx.beginRoute(route)"))
-        self.assertIn("prksTakePersonIndexCreateTabId", app)
-        self.assertIn("tabId: createTabId", app)
+        submit = (ROOT / "frontend-app" / "src" / "features" / "create-forms" / "submit.ts").read_text()
+        # The call, not the interface declaration: the tab id is taken at Save.
+        self.assertIn("? w.prksTakePersonIndexCreateTabId() :", submit)
+        self.assertIn("tabId: createTabId", submit)
         self.assertIn("availability: 'unavailable'", detail)
         self.assertIn("notFoundTitle: 'Person not available offline'", detail)
 

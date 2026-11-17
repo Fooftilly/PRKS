@@ -62,6 +62,15 @@ function prksCaptureModalBaseline(modalId) {
     if (!modalId) return;
     const store = prksGetModalBaselineStore();
     store[modalId] = prksSerializeModalFormState(modalId);
+    const forms = window.prksCreateForms;
+    if (
+        forms &&
+        typeof forms.owns === 'function' &&
+        forms.owns(modalId) &&
+        typeof forms.captureBaseline === 'function'
+    ) {
+        forms.captureBaseline(modalId);
+    }
 }
 
 function prksModalBaselineReadyStore() {
@@ -105,6 +114,13 @@ function prksModalNeedsUnsavedConfirm(modalId) {
 
 function prksModalHasUnsavedChanges(modalId) {
     if (!modalId || !prksModalNeedsUnsavedConfirm(modalId)) return false;
+    // Folder, Person, and Group report dirty from the Vue form. The DOM
+    // snapshot below remains for Work and the role linker. Retire this
+    // branch when those shells move into ModalHost (#1036).
+    const forms = window.prksCreateForms;
+    if (forms && typeof forms.owns === 'function' && forms.owns(modalId)) {
+        return forms.isDirty(modalId) === true;
+    }
     const store = prksGetModalBaselineStore();
     const baseline = Object.prototype.hasOwnProperty.call(store, modalId) ? store[modalId] : null;
     if (baseline == null) return false;
@@ -115,6 +131,9 @@ function prksModalHasUnsavedChanges(modalId) {
 function prksResetModalBaselines() {
     window.__prksModalFormBaseline = {};
     window.__prksModalBaselineReady = {};
+    if (window.prksCreateForms && typeof window.prksCreateForms.resetBaselines === 'function') {
+        window.prksCreateForms.resetBaselines();
+    }
 }
 
 // Not named prksModalHost: a classic-script function declaration is the
@@ -501,10 +520,14 @@ function openModal(id) {
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     const modalEl = document.getElementById(id);
     modalEl.classList.remove('hidden');
-    if (id === 'folder-modal' && typeof prksSetButtonBusy === 'function') {
+    if (id === 'folder-modal') {
         // A dismissed save may still be awaiting its durable create. The new
         // opening owns this same button, not the old opening's busy snapshot.
-        prksSetButtonBusy(document.getElementById('save-folder-btn'), false);
+        if (window.prksCreateForms && typeof window.prksCreateForms.releaseFolderSave === 'function') {
+            window.prksCreateForms.releaseFolderSave();
+        } else if (typeof prksSetButtonBusy === 'function') {
+            prksSetButtonBusy(document.getElementById('save-folder-btn'), false);
+        }
     }
 
     let deferBaseline = false;
@@ -572,6 +595,14 @@ function openModal(id) {
         }
         resetPersonCreateForm();
     } else if (id === 'folder-modal' && typeof window.prksRefreshFolderModalValidation === 'function') {
+        // A Work's "New folder" attach belongs to the one opening it was made
+        // for. Stamp it here; any later opening (the global Add menu after a
+        // cancel) finds a stamp that is not its own and drops it.
+        const pendingAttach = window.__prksPendingWorkFolderAttach;
+        if (pendingAttach && typeof pendingAttach === 'object') {
+            if (pendingAttach.modalOpening == null) pendingAttach.modalOpening = String(openGeneration);
+            else if (pendingAttach.modalOpening !== String(openGeneration)) window.__prksPendingWorkFolderAttach = null;
+        }
         const parentSearch = document.getElementById('folder-parent-search');
         const parentId = document.getElementById('folder-parent-id');
         if (parentSearch && !window.__prksPendingWorkFolderAttach) parentSearch.value = '';
@@ -1018,6 +1049,9 @@ function resetPersonCreateForm() {
         el.value = '';
         el.removeAttribute('aria-invalid');
     });
+    if (window.prksCreateForms && typeof window.prksCreateForms.afterPersonReset === 'function') {
+        window.prksCreateForms.afterPersonReset();
+    }
 }
 
 function syncPersonAliasesFromNames() {
@@ -1030,6 +1064,10 @@ function syncPersonAliasesFromNames() {
 }
 
 function closeModals() {
+    // A Work's "New folder" attach ends with its dialog. Kept after a cancel,
+    // the next unrelated New Folder would be filed into that Work. A Save in
+    // flight captured its own copy when it was pressed.
+    window.__prksPendingWorkFolderAttach = null;
     prksHideModalUnsavedConfirm({ restoreFocus: false });
     const playlistModal = document.getElementById('playlist-modal');
     const playlistWasOpen = playlistModal && !playlistModal.classList.contains('hidden');
