@@ -105,7 +105,7 @@ describe('playlist save gate', () => {
     expect(busy).toBe(false)
   })
 
-  it('does not closeModals when the Playlist shell was dismissed before create settles', async () => {
+  it('still attaches the captured Work but does not close or navigate when the shell was dismissed', async () => {
     const gate = createPlaylistSaveGate()
     const pendingCreate = deferred<string | null>()
     const shell = modal('1')
@@ -148,8 +148,9 @@ describe('playlist save gate', () => {
     pendingCreate.resolve('PL-1')
     await save
     expect(closed).toBe(0)
-    expect(attached).toBe(0)
-    expect(livePending).toBe(attach)
+    // The playlist exists, so the Work captured at Save still gets it.
+    expect(attached).toBe(1)
+    expect(livePending).toBeNull()
   })
 
   it('does not clear a newer pending attach when the older create finishes', async () => {
@@ -159,6 +160,7 @@ describe('playlist save gate', () => {
     const firstAttach: PlaylistPending = { workId: 'W-1' }
     const secondAttach: PlaylistPending = { workId: 'W-2' }
     let livePending: PlaylistPending | null = firstAttach
+    const cleared: Array<PlaylistPending | null> = []
     let busy = false
     await Promise.resolve()
     const first = gate.save({
@@ -171,6 +173,7 @@ describe('playlist save gate', () => {
       createPlaylist: () => pendingCreate.promise,
       pendingAttach: () => firstAttach,
       clearPendingIfSame: (captured) => {
+        cleared.push(captured ?? null)
         if (captured && livePending === captured) livePending = null
       },
       capturedWorkStill: () => false,
@@ -194,6 +197,8 @@ describe('playlist save gate', () => {
     livePending = secondAttach
     pendingCreate.resolve('PL-1')
     await first
+    // The older Save clears only its own capture, never the newer opener's.
+    expect(cleared).toEqual([firstAttach])
     expect(livePending).toBe(secondAttach)
   })
 })

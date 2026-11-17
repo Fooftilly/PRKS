@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import PrksField from '../../components/PrksField.vue'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
-import { finishFolderCreate, type FolderDraft } from './folder-effects'
+import { finishFolderCreate, type FolderDraft, type PendingAttach } from './folder-effects'
 import { FOLDER_TITLE_CONFLICT, folderTitleConflicts, type FolderTitleRow } from './folder-rules'
 import { createFolderSaveGate } from './folder-save'
 
@@ -145,6 +145,8 @@ function onSave(): void {
     guardRefusal: (error) => w.prksOfflineWasGuardRefusal?.(error) === true,
     revalidate: () => applyChrome(),
     owner: () => w.prksGetFocusedTabContext?.() ?? null,
+    pendingAttach: () => (window as unknown as { __prksPendingWorkFolderAttach?: PendingAttach | null })
+      .__prksPendingWorkFolderAttach ?? null,
     afterCreate: finishFolderCreate,
   })
 }

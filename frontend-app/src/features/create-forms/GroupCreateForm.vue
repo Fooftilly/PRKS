@@ -71,10 +71,19 @@ async function prepare(): Promise<void> {
 }
 
 function onParentFocus(): void {
-  void runtime().prksEnsureAllGroupsCache?.().then((rows) => {
-    if (Array.isArray(rows)) groups = rows
+  const load = runtime().prksEnsureAllGroupsCache?.()
+  if (!load) {
     renderParents()
-  })
+    return
+  }
+  // A failed catalogue read still shows the list, from the groups already known.
+  void load.then(
+    (rows) => {
+      if (Array.isArray(rows)) groups = rows
+      renderParents()
+    },
+    () => renderParents(),
+  )
 }
 
 function onParentInput(): void {

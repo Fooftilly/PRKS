@@ -10,7 +10,11 @@ export interface GroupSaveDeps {
   isBusy: () => boolean
   setBusy: (busy: boolean) => void
   readDraft: () => GroupDraft | null
-  resolveParent: (parentId: string, parentQuery: string) => Promise<string | undefined>
+  resolveParent: (
+    parentId: string,
+    parentQuery: string,
+    stillOwns: () => boolean,
+  ) => Promise<string | undefined>
   createGroup: (body: {
     name: string
     description: string
@@ -45,9 +49,11 @@ export function createGroupSaveGate() {
     try {
       let created: { entity_id?: string } | null
       try {
-        const parentId = await deps.resolveParent(draft.parentId, draft.parentQuery)
+        // A dismissal keeps the generation, so ownership is the live opening:
+        // a dismissed Save must not create a typed parent or the group itself.
+        const parentId = await deps.resolveParent(draft.parentId, draft.parentQuery, isLiveOpening)
         if (parentId === undefined) return
-        if (!matchesOpening()) return
+        if (!isLiveOpening()) return
         created = await deps.createGroup({
           name: draft.name.trim(),
           description: draft.description.trim(),

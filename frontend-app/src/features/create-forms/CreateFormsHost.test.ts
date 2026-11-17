@@ -100,7 +100,8 @@ describe('create form host', () => {
     expect(document.querySelector('#group-modal #save-group-btn')).not.toBeNull()
     expect(document.querySelector('#playlist-modal #playlist-title')).not.toBeNull()
     expect(document.querySelector('#playlist-modal #save-playlist-btn')).not.toBeNull()
-    expect(document.querySelector('#playlist-modal #playlist-error')?.classList.contains('hidden')).toBe(true)
+    // No error region until there is an error to describe the Title with.
+    expect(document.querySelector('#playlist-modal #playlist-title-error')).toBeNull()
   })
 
   it('tracks a dirty folder draft from the view and blocks a duplicate title', async () => {
@@ -257,10 +258,11 @@ describe('create form host', () => {
     expect(hash).toBe('#/people/groups/G-1')
 
     let playlists = 0
+    let playlistArgs: [string, string] | null = null
     w.createPlaylist = async (title, description) => {
       playlists += 1
-      expect(title).toBe('Lectures')
-      expect(description).toBe('Week one')
+      // Asserted after the save: an expect in here would be swallowed by its catch.
+      playlistArgs = [title, description]
       return 'PL-1'
     }
     w.prksTakePlaylistIndexCreateTabId = () => ''
@@ -269,7 +271,8 @@ describe('create form host', () => {
     if (playlistModal) playlistModal.dataset.prksOpenGeneration = '1'
     document.getElementById('save-playlist-btn')?.click()
     await flush()
-    expect(document.getElementById('playlist-error')?.textContent).toContain('Playlist title is required.')
+    expect(document.getElementById('playlist-title-error')?.textContent).toContain('Playlist title is required.')
+    expect(document.getElementById('playlist-title')?.getAttribute('aria-describedby')).toContain('playlist-title-error')
     expect(playlists).toBe(0)
     const title = document.getElementById('playlist-title') as HTMLInputElement
     const description = document.getElementById('playlist-description') as HTMLTextAreaElement
@@ -278,6 +281,7 @@ describe('create form host', () => {
     document.getElementById('save-playlist-btn')?.click()
     await flush()
     expect(playlists).toBe(1)
+    expect(playlistArgs).toEqual(['Lectures', 'Week one'])
   })
 
   it('keeps a reopened Person draft when an older create is still pending', async () => {

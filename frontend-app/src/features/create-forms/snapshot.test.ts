@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { snapshotModalFields } from './snapshot'
 
 describe('create form snapshot', () => {
-  it('records text, checks, and files the way the classic serializer does', () => {
+  it('records each field as an exact key and value pair', () => {
     const modal = document.createElement('div')
     modal.innerHTML = [
       '<input id="title" type="text" value="Ada">',
@@ -21,10 +21,13 @@ describe('create form snapshot', () => {
     }
     Object.defineProperty(file, 'files', { value: list })
     const raw = snapshotModalFields(modal)
-    expect(raw).toContain('input:text:title')
-    expect(raw).toContain('Ada')
-    expect(raw).toContain('input:checkbox:pick')
-    expect(raw).toContain('hello')
-    expect(raw).toContain('paper.pdf:3:5')
+    // Exact [key, value] pairs, in document order, so a value paired with the
+    // wrong key fails.
+    expect(JSON.parse(raw)).toEqual([
+      ['input:text:title', 'Ada'],
+      ['input:checkbox:pick', '1'],
+      ['input:file:file', 'paper.pdf:3:5'],
+      ['textarea:textarea:note', 'hello'],
+    ])
   })
 })
