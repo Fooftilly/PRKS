@@ -27,10 +27,9 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import shutil
-import time
-from typing import Any, BinaryIO, Optional
+import threading
+from typing import Any, BinaryIO, Callable, Optional, TypeVar
 
 from backend.domain.objects import ingest
 from backend.domain.search import text as search_text
@@ -38,7 +37,7 @@ from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
 from backend.storage.objects import LocalFilesystemStorage
-from tests.pdf_corpus import CORPUS, MARKER, Case
+from tests.pdf_corpus import CORPUS, DUPLICATE_ANNOTATION_ID, MARKER, PDF_ENCRYPT_AES_256, Case
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_http_processing import ProcessingHttpTestCase
 
@@ -63,6 +62,51 @@ EXTRACT_SECONDS = 10.0
 LINEARIZE_SECONDS = 10.0
 # The process's peak resident size may grow by at most this over the corpus.
 PEAK_MEMORY_GROWTH_KIB = 256 * 1024
+
+T = TypeVar("T")
+
+
+def bounded(seconds: float, call: Callable[[], T]) -> T:
+    """``call()``'s answer, or a failure once it has run ``seconds``: a hang fails, it never blocks the suite.
+
+    A call still running then is left on a daemon thread; the test has failed.
+    """
+    done: list[T] = []
+    errors: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            done.append(call())
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the test's thread
+            errors.append(exc)
+
+    worker = threading.Thread(target=target, name="corpus-bounded", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise AssertionError(f"still running after {seconds} s")
+    if errors:
+        raise errors[0]
+    return done[0]
+
+
+def reset_peak_rss() -> bool:
+    """Reset this process's peak resident size (Linux ``clear_refs``), so earlier tests' peaks cannot mask growth."""
+    try:
+        with open("/proc/self/clear_refs", "w", encoding="ascii") as handle:
+            handle.write("5")
+        return True
+    except OSError:
+        return False
+
+
+def peak_rss_kib() -> int:
+    """The peak resident size since :func:`reset_peak_rss`, in KiB (``VmHWM``)."""
+    with open("/proc/self/status", encoding="ascii") as handle:
+        for line in handle:
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1])
+    raise AssertionError("no VmHWM in /proc/self/status")
 
 
 class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
@@ -92,6 +136,9 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
         return rows[0]
 
     def test_the_corpus_is_generated_small_and_covers_the_issue(self) -> None:
+        import pymupdf
+
+        self.assertEqual(PDF_ENCRYPT_AES_256, getattr(pymupdf, "PDF_ENCRYPT_AES_256"))
         names = {case.name for case in CORPUS}
         self.assertEqual(names, set(EXPECTED))
         for case in CORPUS:
@@ -101,14 +148,17 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
                 self.assertEqual(data.startswith(b"%PDF-"), case.pdf_magic)
 
     def test_every_case_has_its_documented_outcome_at_each_stage(self) -> None:
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux only: the peak is reset here and read back as VmHWM, both in KiB.
+        measured = reset_peak_rss()
+        start = peak_rss_kib() if measured else 0
         for case in CORPUS:
             with self.subTest(case=case.name):
                 self.check(case, EXPECTED[case.name])
         # The server still serves the whole library afterwards.
         works = self.ok(self.get("/api/works"))
         self.assertEqual(len(works), sum(1 for value in EXPECTED.values() if value is not None))
-        self.assertLess(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - peak, PEAK_MEMORY_GROWTH_KIB)
+        if measured:
+            self.assertLess(peak_rss_kib() - start, PEAK_MEMORY_GROWTH_KIB)
 
     def check(self, case: Case, expected: Optional[tuple[str, int, bool]]) -> None:
         data = case.build()
@@ -126,9 +176,7 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
         self.assertEqual((after["works"] - before["works"], after["assets"] - before["assets"]), (1, 1))
 
         status, thumbnail, linearized = expected
-        started = time.monotonic()
-        outcomes = self.run_jobs()
-        self.assertLess(time.monotonic() - started, EXTRACT_SECONDS)
+        outcomes = bounded(EXTRACT_SECONDS, self.run_jobs)
         self.assertTrue(outcomes, "the import queued no extraction")
         self.assertEqual(set(outcomes), {Outcome.SUCCEEDED})
         row = self.text_status(work_id)
@@ -159,24 +207,23 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             for annot in doc[0].annots():
                 rect = annot.rect
-                viewer.append({"id": annot.info["name"], "type": 9 if annot.type[0] == 8 else 1, "pageIndex": 0,
+                viewer.append({"id": annot.info["id"], "type": 9 if annot.type[0] == 8 else 1, "pageIndex": 0,
                                "contents": annot.info.get("content", ""),
                                "rect": {"origin": {"x": rect.x0, "y": rect.y0},
                                         "size": {"width": rect.width, "height": rect.height}}})
         self.assertEqual(len(viewer), 3)
-        self.assertEqual({item["id"] for item in viewer}, {"corpus-duplicate"})
+        self.assertEqual({item["id"] for item in viewer}, {DUPLICATE_ANNOTATION_ID})
         adopted = self.ok(self.send("POST", f"/api/works/{work_id}/annotations/adopt", {"viewer_annotations": viewer}))
-        self.assertEqual(adopted["adopted"], ["corpus-duplicate"])
+        self.assertEqual(adopted["adopted"], [DUPLICATE_ANNOTATION_ID])
         stored = json.loads(self.ok(self.get(f"/api/works/{work_id}/annotations"))["annotations_json"])
-        self.assertEqual([item["id"] for item in stored], ["corpus-duplicate"])
+        self.assertEqual([item["id"] for item in stored], [DUPLICATE_ANNOTATION_ID])
 
     def check_linearize(self, case: Case, data: bytes, linearized: bool) -> None:
         def write(handle: BinaryIO) -> None:
             handle.write(data)
 
-        started = time.monotonic()
-        stored = ingest.store_pdf(self.objects, f"{case.name}.pdf", write, context="corpus")
-        self.assertLess(time.monotonic() - started, LINEARIZE_SECONDS)
+        stored = bounded(LINEARIZE_SECONDS,
+                         lambda: ingest.store_pdf(self.objects, f"{case.name}.pdf", write, context="corpus"))
         if shutil.which("qpdf") is None:
             # Without qpdf linearization is off unless forced on (PRKS_PDF_LINEARIZE).
             self.assertIn(stored.linearize, ("disabled", "missing-qpdf"))

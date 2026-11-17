@@ -67,7 +67,7 @@ Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the exis
 
 ## Adversarial PDF corpus (#1287)
 
-`tests/pdf_corpus.py` generates a small synthetic corpus at test time. It is built from PyMuPDF and hand-written PDF syntax, with fixed metadata so each build gives the same bytes, and no third-party document is committed. The cases are:
+`tests/pdf_corpus.py` generates a small synthetic corpus at test time. It is built from PyMuPDF and hand-written PDF syntax, with fixed metadata so each build of an unencrypted case gives the same bytes (AES-256 draws a random key, so the encrypted case differs), and no third-party document is committed. The cases are:
 
 - a valid control file;
 - a truncated file;
@@ -90,9 +90,9 @@ Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the exis
 - The thumbnail is an image or the documented 404.
 - The reader gets the stored bytes back unchanged.
 - A shared annotation id is adopted once.
-- Linearization writes a copy, keeps the source on a qpdf refusal, or reports `disabled` when qpdf is absent.
+- Linearization writes a copy, keeps the source on a qpdf refusal, or reports `disabled` or `missing-qpdf` when qpdf is absent.
 
-Time is bounded per stage, peak memory growth is bounded for the whole run, and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
+Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). On Linux, the peak resident size is reset before the run and its growth is bounded, and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
 
 ## TypeScript property-based workspace tests (#854)
 

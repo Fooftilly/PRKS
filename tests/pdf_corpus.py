@@ -19,6 +19,9 @@ from typing import Callable
 MARKER = "zebracorpus"
 PASSWORD = "corpus-secret"
 MANY_PAGES = 400
+# ``pymupdf.PDF_ENCRYPT_AES_256``, which PyMuPDF's type stubs do not declare;
+# the corpus test checks the two agree.
+PDF_ENCRYPT_AES_256 = 5
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,8 @@ def _document(pages: int = 1, text: str | None = MARKER, rotate: int = 0):
     return doc
 
 
-# Fixed metadata and no fresh /ID, so every build of a case is the same bytes.
+# Fixed metadata and no fresh /ID, so every build of an unencrypted case is the
+# same bytes (AES-256 draws a random key and IV, so ``encrypted`` differs each time).
 _METADATA = {"producer": "PRKS test corpus", "creator": "PRKS test corpus", "title": "", "author": "",
              "subject": "", "keywords": "", "creationDate": "D:20260101000000Z", "modDate": "D:20260101000000Z"}
 
@@ -74,9 +78,7 @@ def damaged_xref() -> bytes:
 
 def encrypted() -> bytes:
     """AES-256 with a user password: nothing opens it without the password."""
-    import pymupdf
-
-    return _save(_document(), encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw=PASSWORD, owner_pw=PASSWORD + "-owner")
+    return _save(_document(), encryption=PDF_ENCRYPT_AES_256, user_pw=PASSWORD, owner_pw=PASSWORD + "-owner")
 
 
 def zero_pages() -> bytes:
@@ -133,19 +135,21 @@ def odd_font_encoding() -> bytes:
     ])
 
 
+DUPLICATE_ANNOTATION_ID = "corpus-duplicate"
+
+
 def duplicate_annotation_ids() -> bytes:
-    """Two highlights and a note that share one annotation name (``/NM``)."""
+    """Two highlights and a note that share one annotation id (``/NM``, the id a viewer reports)."""
     import pymupdf
 
     doc = _document()
     page = doc[0]
-    for rect in ((20, 30, 100, 45), (20, 60, 100, 75)):
-        annot = page.add_highlight_annot(pymupdf.Rect(rect))
-        annot.set_name("corpus-duplicate")
+    annots = [page.add_highlight_annot(pymupdf.Rect(rect)) for rect in ((20, 30, 100, 45), (20, 60, 100, 75))]
+    annots.append(page.add_text_annot((150, 150), "a note"))
+    for annot in annots:
         annot.update()
-    note = page.add_text_annot((150, 150), "a note")
-    note.set_name("corpus-duplicate")
-    note.update()
+        # Written last: PyMuPDF gives each new annotation its own /NM.
+        doc.xref_set_key(annot.xref, "NM", pymupdf.get_pdf_str(DUPLICATE_ANNOTATION_ID))
     return _save(doc)
 
 
