@@ -111,7 +111,7 @@ class WorkLifecycleModelTests(TagSyncTestCase):
             "revisions": {key: model.rev(key) for key in keys},
         }
 
-    def assert_integrity(self, where: Any) -> None:
+    def assert_nothing_dangles(self, where: Any) -> None:
         dangling_links = self.sql(
             "SELECT l.work_id, l.tag_id FROM prks.work_tags l"
             " LEFT JOIN prks.works w ON w.library_id = l.library_id AND w.id = l.work_id"
@@ -268,7 +268,7 @@ class WorkLifecycleModelTests(TagSyncTestCase):
                         refusals += 1
                     sent.append((data, (status, result)))
                 self.assertEqual(self.observe(model), self.expected(model), where)
-                self.assert_integrity(where)
+                self.assert_nothing_dangles(where)
                 now = self.all_revisions()
                 moved_back = {key: (old, now.get(key)) for key, old in seen.items() if now.get(key, -1) < old}
                 self.assertEqual(moved_back, {}, where)
@@ -288,6 +288,6 @@ class WorkLifecycleModelTests(TagSyncTestCase):
         self.assertEqual(self.send(self.envelope("DELETE_WORK", work_id, {}))[1]["changed"], True)
         self.assertEqual(self.send(data), first)
         self.assertEqual(self.sql("SELECT 1 FROM prks.work_tags WHERE work_id = %s", (work_id,)), [])
-        self.assert_integrity("after the replay")
+        self.assert_nothing_dangles("after the replay")
 
 
