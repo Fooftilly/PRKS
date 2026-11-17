@@ -45,12 +45,13 @@ function resetFields(): void {
 async function onSave(): Promise<void> {
   const title = fieldValue('playlist-title').trim()
   const description = fieldValue('playlist-description').trim()
+  // A new attempt replaces the last failure, whatever this one finds.
+  saveError.value = ''
   if (!title) {
     playlistError.value = 'Playlist title is required.'
     return
   }
   playlistError.value = ''
-  saveError.value = ''
   const w = runtime()
   await gate.save({
     modal: () => {
@@ -142,7 +143,6 @@ defineExpose({ resetFields })
       class="folder-field-error"
       :class="{ hidden: !saveError }"
       role="alert"
-      aria-live="polite"
     >{{ saveError }}</p>
   </div>
 </template>
