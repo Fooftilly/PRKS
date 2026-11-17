@@ -12,6 +12,26 @@ from tests.narrowing import must_search
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _INDEX = os.path.join(_FRONTEND, "index.html")
+_NEW_FILE_FORM = os.path.join(
+    _PROJECT_DIR, "frontend-app", "src", "features", "create-forms", "NewFileForm.vue"
+)
+_WORK_MODAL_MOUNT = '<div id="work-modal-vue" class="modal-body modal-body--scroll"></div>'
+
+
+def _work_modal():
+    """The New File dialog as the page renders it.
+
+    The shell, header and sticky footer stay in index.html; the body is the
+    Vue form teleported into ``#work-modal-vue`` (#1036). Splice the two so
+    the order checks (body before footer) still hold.
+    """
+    html = _read(_INDEX)
+    shell = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+    if _WORK_MODAL_MOUNT not in shell:
+        raise AssertionError("New File shell lost its Vue body mount")
+    form = _read(_NEW_FILE_FORM)
+    body = form.split("<template>", 1)[1].rsplit("</template>", 1)[0]
+    return shell.replace(_WORK_MODAL_MOUNT, _WORK_MODAL_MOUNT[:-6] + body + "</div>")
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
@@ -94,8 +114,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertNotIn("ribbon-create.js", _read(_INDEX))
 
     def test_modal_primary_and_advanced_hierarchy(self):
-        html = _read(_INDEX)
-        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        modal = _work_modal()
         self.assertIn("work-create-source-heading", modal)
         self.assertIn("work-create-basic-heading", modal)
         self.assertIn(">Source<", modal)
@@ -125,8 +144,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
 
     def test_essentials_first_enrichment_in_disclosures(self):
         """#85: essentials first; enrichment lives in collapsed Optional disclosures."""
-        html = _read(_INDEX)
-        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        modal = _work_modal()
         body = modal.split("modal-footer", 1)[0]
         first_details = body.index('id="work-upload-biblio-details"')
         essentials = body[:first_details]
@@ -149,8 +167,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn('aria-required="true"', url)
 
     def test_people_have_no_role_surface_before_a_person(self):
-        html = _read(_INDEX)
-        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        modal = _work_modal()
         # No always-visible role tiles and no separate Link step.
         self.assertNotIn("upload-role-seg-mount", modal)
         self.assertNotIn("prks-upload-role-seg", modal)
@@ -310,8 +327,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("addRoleToUploadList() === true", quick)
 
     def test_selected_source_markup(self):
-        html = _read(_INDEX)
-        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        modal = _work_modal()
         self.assertIn('id="upload-selected-file"', modal)
         self.assertIn('id="upload-selected-file-name"', modal)
         self.assertIn('id="upload-selected-file-size"', modal)
@@ -396,8 +412,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("aria-invalid", set_field_error)
 
     def test_video_source_is_youtube_only_contract(self):
-        html = _read(_INDEX)
-        modal = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
+        modal = _work_modal()
         self.assertIn(">YouTube<", modal)
         self.assertIn("YouTube URL", modal)
         self.assertRegex(modal, r'id="work-video-url"[^>]*aria-describedby="[^"]*\bwork-video-url-error\b')
