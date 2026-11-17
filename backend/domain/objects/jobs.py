@@ -13,8 +13,9 @@ claims it) and each bounded:
   period that nothing names. It never deletes an object: the claims are
   settled by the cleanup job. The pass that reaches the end of the listing
   also removes up to :data:`SWEEP_BATCH` stale write temporaries per
-  namespace (``.prks-write-*.tmp`` a killed write left, never a key), inside
-  a fenced transaction; any left over go in the next cycle. When keys are left, the pass enqueues the next one with a
+  namespace (``.prks-write-*.tmp`` a killed write left, never a key): it
+  lists them outside any transaction, then removes them inside a fenced one;
+  any left over go in the next cycle. When keys are left, the pass enqueues the next one with a
   cursor (the namespace and the last key name examined) in its payload;
   :meth:`~backend.storage.objects.StorageBackend.list_keys` returns a
   bounded page in name order after a name, so the next pass resumes after it.
@@ -214,8 +215,11 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
     each claim is its own fenced transaction that checks the references under
     the per-object lock. A key younger than ``grace`` is left alone (a write
     may still adopt it). When keys are left, the next pass is enqueued with
-    this pass's last key; the pass that reaches the end removes the stale
-    write temporaries (``lifecycle.remove_stale_temporaries``) and records
+    this pass's last key; the pass that reaches the end lists up to ``batch``
+    stale write temporaries per namespace outside any transaction
+    (``lifecycle.stale_temporaries``), removes them in one fenced command
+    (``lifecycle.remove_temporaries``), so no transaction stays open over the
+    directory scan, and records
     ``{"complete": true}`` in its progress, which ends the sweep cycle.
     """
     if grace < timedelta(0):
@@ -250,9 +254,13 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
             run.heartbeat({"examined": examined, "claimed": claimed})
             return claimed
     for namespace in SWEEP_NAMESPACES:
-        # Fenced like a settle: a run that lost its lease removes nothing.
-        run.command(lambda tx, namespace=namespace: lifecycle.remove_stale_temporaries(
-            storage, namespace, cutoff, limit=batch))
+        # The scan reads only, so it runs outside any transaction; the bounded
+        # removal is fenced like a settle: a run that lost its lease removes nothing.
+        run.check()
+        names = lifecycle.stale_temporaries(storage, namespace, cutoff, limit=batch)
+        if names:
+            run.command(lambda tx, namespace=namespace, names=names: lifecycle.remove_temporaries(
+                storage, namespace, names, cutoff))
     run.heartbeat({"examined": examined, "claimed": claimed, "complete": True})
     return claimed
 

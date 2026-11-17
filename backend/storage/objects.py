@@ -245,7 +245,9 @@ class StaleTemporaryPruning(Protocol):
     ever finds them (storage-architecture "Temporary / staging").
     """
 
-    def remove_stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> int: ...
+    def stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> list[str]: ...
+
+    def remove_temporaries(self, namespace: str, names: list[str], *, older_than: float) -> int: ...
 
 
 @runtime_checkable
@@ -591,16 +593,20 @@ class LocalFilesystemStorage:
             ))
         return [StorageKey(namespace, name) for name in names]
 
-    def remove_stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> int:
-        """Maintenance only: delete up to ``limit`` write temporaries modified before ``older_than``; how many.
+    @staticmethod
+    def _is_temporary_name(name: str) -> bool:
+        return (name.startswith(_WRITE_TEMPORARY_PREFIX) and name.endswith(_WRITE_TEMPORARY_SUFFIX)
+                and os.sep not in name and (os.altsep is None or os.altsep not in name))
+
+    def stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> list[str]:
+        """Maintenance only: up to ``limit`` names of write temporaries modified before ``older_than``.
 
         Only plain files named ``.prks-write-*.tmp`` directly in the namespace
-        directory are touched, never a link or any other name. A write in
-        progress keeps its temporary's modification time current, so a
-        cutoff older than any write's pause never removes one in use. A
-        temporary that cannot be removed is skipped (it stays for the next
-        sweep); the directory is synced once something was removed, so a
-        crash cannot bring the names back.
+        directory, never a link or any other name. Reads only: the caller
+        removes them with :meth:`remove_temporaries`, which checks each again,
+        so the scan can run outside the fenced transaction that removes them.
+        A write in progress keeps its temporary's modification time current,
+        so a cutoff older than any write's pause never names one in use.
         """
         if namespace not in NAMESPACES:
             raise InvalidStorageKey("unknown storage namespace")
@@ -608,30 +614,60 @@ class LocalFilesystemStorage:
             raise ValueError("limit must be at least 1")
         directory = self._namespace_dir(namespace, create=False)
         if directory is None:
-            return 0
-        removed = 0
+            return []
+        found: list[str] = []
         with os.scandir(directory) as it:
             for entry in it:
-                if removed >= limit:
+                if len(found) >= limit:
                     break
-                if not (entry.name.startswith(_WRITE_TEMPORARY_PREFIX)
-                        and entry.name.endswith(_WRITE_TEMPORARY_SUFFIX)):
+                if not self._is_temporary_name(entry.name):
                     continue
                 try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                    if entry.stat(follow_symlinks=False).st_mtime >= older_than:
-                        continue
-                    os.remove(entry.path)
+                    if entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < older_than:
+                        found.append(entry.name)
                 except FileNotFoundError:
                     continue  # its writer finished meanwhile
-                except OSError:
-                    LOGGER.warning("storage_stale_temporary_remove_failed")
+        return found
+
+    def remove_temporaries(self, namespace: str, names: list[str], *, older_than: float) -> int:
+        """Maintenance only: delete those of ``names`` that are still stale write temporaries; how many.
+
+        Each name is checked again (the temporary name, a plain file, modified
+        before ``older_than``), so a name listed earlier that a writer has
+        touched or that is no temporary is left alone. A temporary that cannot
+        be removed is skipped (it stays for the next sweep); the directory is
+        synced once something was removed, so a crash cannot bring the names back.
+        """
+        if namespace not in NAMESPACES:
+            raise InvalidStorageKey("unknown storage namespace")
+        directory = self._namespace_dir(namespace, create=False)
+        if directory is None:
+            return 0
+        removed = 0
+        for name in names:
+            if not self._is_temporary_name(name):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                info = os.lstat(path)
+                if not stat.S_ISREG(info.st_mode) or info.st_mtime >= older_than:
                     continue
-                removed += 1
+                os.remove(path)
+            except FileNotFoundError:
+                continue  # its writer finished meanwhile
+            except OSError as exc:
+                LOGGER.warning("storage_stale_temporary_remove_failed namespace=%s error=%s",
+                               namespace, type(exc).__name__)
+                continue
+            removed += 1
         if removed and not fsync_directory(directory):
-            LOGGER.warning("storage_dir_sync_failed op=remove_stale_temporaries")
+            LOGGER.warning("storage_dir_sync_failed op=remove_temporaries")
         return removed
+
+    def remove_stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> int:
+        """:meth:`stale_temporaries` then :meth:`remove_temporaries`, for a caller with no transaction to fence."""
+        names = self.stale_temporaries(namespace, older_than=older_than, limit=limit)
+        return self.remove_temporaries(namespace, names, older_than=older_than) if names else 0
 
     # -- local-only extension (§10.3) -------------------------------------------------
 

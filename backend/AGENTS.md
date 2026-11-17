@@ -153,8 +153,10 @@ docstring before changing it. The rules that must not be weakened:
   never an unbounded scan at startup.
 - **Stale write temporaries** (`.prks-write-*.tmp`, never keys, left only by a
   write killed mid-stream) are the one thing the sweep deletes directly: the
-  completing `objects.sweep` pass removes a bounded number older than the
-  grace period, inside its lease-fenced transaction.
+  completing `objects.sweep` pass lists a bounded number older than the
+  grace period outside any transaction, then removes them (each checked
+  again) inside its lease-fenced transaction, so no transaction stays open
+  over the directory scan.
 
 Derived state (search rows, research index rows, thumbnails) is disposable:
 rebuild it from canonical state instead of keeping retry records for it.

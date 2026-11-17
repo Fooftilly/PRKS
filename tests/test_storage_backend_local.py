@@ -318,6 +318,23 @@ class TestLocalSpecifics(LocalStorageTestCase):
         self.assertEqual(removed, 2, "one that cannot be removed does not stop the others")
         self.assertEqual([path for path in paths if os.path.exists(path)], [stuck])
 
+    def test_removal_checks_each_listed_temporary_again(self):
+        self.backend.put_new(self.key, _writer(b"x"))
+        pdfs = os.path.join(self.root, "pdfs")
+        past = time.time() - 3600
+        paths = {name: os.path.join(pdfs, name) for name in (".prks-write-a.tmp", ".prks-write-b.tmp")}
+        for path in paths.values():
+            open(path, "w").close()
+            os.utime(path, (past, past))
+        listed = self.backend.stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=past + 1, limit=10)
+        self.assertEqual(sorted(listed), sorted(paths))
+        os.utime(paths[".prks-write-b.tmp"])  # its writer touched it after the scan
+        names = [*listed, self.key.name, "../outside.tmp", ".prks-write-gone.tmp"]
+        self.assertEqual(self.backend.remove_temporaries(NAMESPACE_ASSET_OBJECTS, names, older_than=past + 1), 1)
+        self.assertFalse(os.path.exists(paths[".prks-write-a.tmp"]))
+        self.assertTrue(os.path.exists(paths[".prks-write-b.tmp"]), "a temporary touched since the scan stays")
+        self.assertTrue(os.path.exists(os.path.join(pdfs, self.key.name)), "a key is never removed")
+
     def _fill(self, count):
         pdfs = os.path.join(self.root, "pdfs")
         os.makedirs(pdfs, exist_ok=True)
