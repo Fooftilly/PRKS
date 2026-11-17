@@ -92,6 +92,38 @@ describe('folder create follow-up', () => {
     expect(tabId).toBe('tab-library')
   })
 
+  it('opens the new folder in the owner tab when saved from a folder or a Work (#827)', async () => {
+    const w = effects()
+    w.__prksPendingWorkFolderAttach = null
+    const navs: Array<[string, string, boolean]> = []
+    w.closeModals = () => {}
+    w.prksNavigate = (next, options) => {
+      navs.push([next, options?.tabId || '', options?.replace === true])
+    }
+    await finishFolderCreate('F-SUB', { tabId: 'tab-parent', route: { name: 'folder-detail' } }, () => true)
+    await finishFolderCreate('F/2', { tabId: 'tab-work', lastResolvedRoute: { name: 'work' } }, () => true)
+    await finishFolderCreate('F-3', null, () => true)
+    expect(navs).toEqual([
+      ['#/folders/F-SUB', 'tab-parent', false],
+      ['#/folders/F%2F2', 'tab-work', false],
+      ['#/folders/F-3', '', false],
+    ])
+  })
+
+  it('drops the navigation when the tab that saved has closed', async () => {
+    const w = effects()
+    let navigated = false
+    w.closeModals = () => {}
+    w.prksGetTabContext = (tabId) => (tabId === 'tab-open' ? { ui: {} } : null)
+    w.prksNavigate = () => {
+      navigated = true
+    }
+    await finishFolderCreate('F-6', { tabId: 'tab-closed', route: { name: 'folder-detail' } }, () => true)
+    expect(navigated).toBe(false)
+    await finishFolderCreate('F-7', { tabId: 'tab-open', route: { name: 'folder-detail' } }, () => true)
+    expect(navigated).toBe(true)
+  })
+
   it('attaches only the Work captured at Save and leaves a newer opener its own attach', async () => {
     const w = effects()
     const captured = { workId: 'W-OLD', tabId: 'tab-1' }
