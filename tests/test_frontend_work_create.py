@@ -441,14 +441,16 @@ class FrontendWorkCreateTests(unittest.TestCase):
             self.assertNotIn(" for=", paragraph, error_id)
             self.assertIn('role="alert"', paragraph, error_id)
         # Each control names its error and says when it is invalid.
-        for control_id, error_id in (("upload-drop-zone", "work-file-error"),
-                                     ("work-video-url", "work-video-url-error"),
-                                     ("work-folder-search", "work-folder-error"),
-                                     ("work-date", "work-date-error"),
-                                     ("work-video-published-date", "work-video-published-date-error")):
+        for control_id, error_id, field in (("upload-drop-zone", "work-file-error", "file"),
+                                            ("work-video-url", "work-video-url-error", "videoUrl"),
+                                            ("work-folder-search", "work-folder-error", "folder"),
+                                            ("work-date", "work-date-error", "date"),
+                                            ("work-video-published-date",
+                                             "work-video-published-date-error", "videoDate")):
             tag = must_search(r'<(?:input|div)[^>]*id="%s"[^>]*>' % control_id, modal).group(0)
             self.assertIn(error_id, tag, control_id)
-            self.assertIn(':aria-invalid="state.errors.', tag, control_id)
+            # Its own error key, so one field's error never marks another invalid.
+            self.assertIn(':aria-invalid="state.errors.%s ?' % field, tag, control_id)
 
     def test_video_source_is_youtube_only_contract(self):
         modal = _work_modal()
