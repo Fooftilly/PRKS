@@ -62,7 +62,8 @@ class ProtocolTests(SyncTestCase):
         # A lone surrogate in an id no validator inspects reached psycopg (a 500).
         surrogate = self.envelope("DELETE_TAG", "T-\ud800", {}, entity_type="tag")
         self.assertEqual(self.send(surrogate), (400, {"code": "INVALID_ENVELOPE"}))
-        # A validator's own UnicodeEncodeError is a malformed envelope, not the code "utf-8".
+        # Refused by the same storability check before the tag validator's UTF-8
+        # length test could raise UnicodeEncodeError (answered {"code": "utf-8"}).
         create = self.envelope("CREATE_TAG", "T-" + "0" * 32, {"name": "a\ud800", "color": "#000000"},
                                entity_type="tag")
         self.assertEqual(self.send(create), (400, {"code": "INVALID_ENVELOPE"}))

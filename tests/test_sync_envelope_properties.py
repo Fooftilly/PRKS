@@ -23,16 +23,19 @@ surrogate refusal is pinned by ``tests/pg/test_sync_protocol.py``.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import math
 import unittest
 from pathlib import Path
+from unittest import mock
 from typing import Any
 
 from hypothesis import example, given, strategies as st
 
 from backend import sync_protocol as rules
 from backend.sync import protocol
+from backend.sync.families import FamilyHandler
 from tests.hypothesis_profiles import FUZZ
 
 _SEEDS_PATH = Path(__file__).resolve().parent / "fixtures" / "sync_envelope_seeds.json"
@@ -184,6 +187,24 @@ class SyncEnvelopePropertyTests(unittest.TestCase):
                     container[key] = shape
                     with self.subTest(operation=seed["operation"], key=key, shape=repr(shape)):
                         self.check(envelope)
+
+    def test_a_validator_error_that_is_not_a_refusal_code_is_a_malformed_envelope(self) -> None:
+        """A library's ValueError never reaches the wire as the code (it once said "utf-8")."""
+        validate = mock.Mock()
+        original = protocol._HANDLERS["CREATE_TAG"]
+        assert isinstance(original, FamilyHandler)
+        handler = dataclasses.replace(original, validate_fn=validate)
+        with mock.patch.dict(protocol._HANDLERS, {"CREATE_TAG": handler}):
+            for raised, code in (
+                    (UnicodeEncodeError("utf-8", "a", 0, 1, "surrogates not allowed"), "INVALID_ENVELOPE"),
+                    (ValueError("'Producer' is not a Work role"), "INVALID_ENVELOPE"),
+                    (ValueError(["INVALID_ENVELOPE"]), "INVALID_ENVELOPE"),
+                    (ValueError(), "INVALID_ENVELOPE"),
+                    (ValueError("INVALID_BASE_REVISION"), "INVALID_BASE_REVISION")):
+                validate.side_effect = raised
+                seed = next(seed for seed in SEEDS if seed["operation"] == "CREATE_TAG")
+                with self.subTest(raised=repr(raised)):
+                    self.assertEqual(protocol.validate_operation(copy.deepcopy(seed)), (400, {"code": code}))
 
     @FUZZ
     @given(data=json_values)

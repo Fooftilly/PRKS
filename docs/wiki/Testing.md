@@ -41,7 +41,7 @@ python run_tests.py --ux-tour
 
 ## Property-based sync tests (#854)
 
-The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in PG-C2. Its PostgreSQL form is `tests/pg/test_tags_properties.py` and `tests/pg/test_works_metadata_properties.py`: the PostgreSQL job installs only runtime pins, so those sequences are enumerated exhaustively or replayed from named seeds rather than drawn by Hypothesis.
+The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in PG-C2. Its PostgreSQL form is `tests/pg/test_tags_properties.py` and `tests/pg/test_works_metadata_properties.py`: the PostgreSQL job installs the runtime pins plus `openapi-core`, but not Hypothesis, so those sequences are enumerated exhaustively or replayed from named seeds rather than drawn by Hypothesis.
 
 ## Sync envelope fuzzing
 
@@ -50,7 +50,7 @@ The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in
 Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
 
 - `pr` (default, the Unit / API / contract gate): `derandomize=True`, so every run draws the same inputs and a red pull request is caused by that pull request. About 2 seconds.
-- `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on changes to the fuzz files): random seeds and 5,000 examples per property. Not a required check.
+- `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
 
 ```bash
 python -m unittest tests.test_sync_envelope_properties -v
