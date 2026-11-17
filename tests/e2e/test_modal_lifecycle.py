@@ -275,6 +275,8 @@ class ModalLifecycleTests(unittest.TestCase):
 
         self._open_menu_action(page, "new-folder")
         _wait_baseline(page, "folder-modal")
+        # The cancelled draft went with its dialog (#373).
+        self.assertEqual(page.locator("#folder-title").input_value(), "")
         page.locator("#folder-title").fill("Independent Global Folder")
         page.locator("#save-folder-btn").click()
         page.locator("#folder-modal").wait_for(state="hidden")

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import PrksField from '../../components/PrksField.vue'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
 import { finishFolderCreate, type FolderDraft, type PendingAttach } from './folder-effects'
 import { FOLDER_TITLE_CONFLICT, folderTitleConflicts, type FolderTitleRow } from './folder-rules'
 import { createFolderSaveGate } from './folder-save'
+import { bindComboboxKeys, createSubmitKeyHandler, focusField, markComboboxRendered } from './keyboard'
 
 interface FolderWindow {
   fetchFolders?: () => Promise<FolderTitleRow[] | null>
@@ -17,6 +18,7 @@ interface FolderWindow {
 }
 
 const folderError = ref<string | null>(null)
+const parentError = ref<string | null>(null)
 const folderBusy = ref(false)
 const folderBlocked = ref(false)
 const folderLabel = ref('Save Folder')
@@ -26,6 +28,9 @@ const { hidden: parentHidden, open: parentOpen, show: showParent, hide: hidePare
 
 let folders: FolderTitleRow[] = []
 const gate = createFolderSaveGate()
+
+/** Typed parent text that was never picked is a query, not a parent (#467). */
+const PARENT_NOT_PICKED = 'Pick a parent folder from the list, or clear this field.'
 
 function runtime(): FolderWindow {
   return window as unknown as FolderWindow
@@ -77,29 +82,61 @@ function renderParents(): void {
     label: rowLabel(folder),
   }))
   showParent()
+  markComboboxRendered('folder-parent-search', nextTick())
 }
+
+function parentNotPicked(): boolean {
+  return !!fieldValue('folder-parent-search').trim() && !fieldValue('folder-parent-id').trim()
+}
+
+function bindParentKeys(): void {
+  bindComboboxKeys('folder-parent-search', 'folder-parent-results', {
+    onOpen: renderParents,
+    onEscape: hideParentNow,
+  })
+}
+
+onMounted(bindParentKeys)
 
 function onTitleInput(): void {
   applyChrome()
 }
 
 function onParentFocus(): void {
+  cancelBlurCollapse()
+  bindParentKeys()
   renderParents()
 }
 
 function onParentInput(): void {
+  parentError.value = null
   setFieldValue('folder-parent-id', '')
   renderParents()
   applyChrome()
 }
 
+/** The blur collapse waits for a row's mousedown; a refocus must cancel it. */
+let blurTimer: number | null = null
+
+function cancelBlurCollapse(): void {
+  if (blurTimer == null) return
+  window.clearTimeout(blurTimer)
+  blurTimer = null
+}
+
 function onParentBlur(): void {
-  window.setTimeout(() => hideParent(), 200)
+  cancelBlurCollapse()
+  blurTimer = window.setTimeout(() => {
+    blurTimer = null
+    hideParent()
+  }, 200)
+  parentError.value = parentNotPicked() ? PARENT_NOT_PICKED : null
 }
 
 function pickParent(row: { id: string; label: string }): void {
   setFieldValue('folder-parent-id', row.id)
   setFieldValue('folder-parent-search', row.label)
+  parentError.value = null
   hideParentNow()
   applyChrome()
 }
@@ -120,6 +157,11 @@ function releaseSave(): void {
 }
 
 function onSave(): void {
+  if (parentNotPicked()) {
+    parentError.value = PARENT_NOT_PICKED
+    focusField('folder-parent-search')
+    return
+  }
   const w = runtime()
   void gate.save({
     modal: () => {
@@ -151,11 +193,36 @@ function onSave(): void {
   })
 }
 
-defineExpose({ refreshValidation, releaseSave })
+const onKeydown = createSubmitKeyHandler(['folder-title'], onSave)
+
+function focusInitial(): void {
+  focusField('folder-title')
+}
+
+/** A closed dialog drops its draft, so the next New Folder starts blank (#373). */
+function resetFields(): void {
+  setFieldValue('folder-title', '')
+  setFieldValue('folder-description', '')
+  setFieldValue('folder-parent-search', '')
+  setFieldValue('folder-parent-id', '')
+  parentError.value = null
+  hideParentNow()
+  applyChrome()
+}
+
+/** Escape's inner layer: closes an open parent list. True when one was open. */
+function closeParentList(): boolean {
+  if (!parentOpen.value) return false
+  cancelBlurCollapse()
+  hideParentNow()
+  return true
+}
+
+defineExpose({ refreshValidation, releaseSave, focusInitial, resetFields, closeParentList })
 </script>
 
 <template>
-  <div class="form-pane">
+  <div class="form-pane" @keydown="onKeydown">
     <p class="modal-helper">Folders can nest. Pick a parent to create a subfolder, or leave blank for top-level.</p>
     <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="folder-title" :error="folderError">
       <input
@@ -174,6 +241,7 @@ defineExpose({ refreshValidation, releaseSave })
       label="Parent folder (optional)"
       for-id="folder-parent-search"
       help="Search and choose a parent folder to create this one as a subfolder."
+      :error="parentError"
     >
       <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
         <div class="tag-add-shell__field">
@@ -187,6 +255,7 @@ defineExpose({ refreshValidation, releaseSave })
             aria-label="Search parent folder"
             :aria-labelledby="labelledBy"
             :aria-describedby="describedBy"
+            :aria-invalid="parentError ? 'true' : undefined"
             @focus="onParentFocus"
             @input="onParentInput"
             @blur="onParentBlur"
