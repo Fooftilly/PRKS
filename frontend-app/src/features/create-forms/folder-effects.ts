@@ -8,6 +8,8 @@ export interface PendingAttach {
   workId?: string
   tabId?: string
   generation?: number
+  /** The Folder dialog opening this attach was made for (`openModal` stamps it). */
+  modalOpening?: string
 }
 
 interface TabCtx {
