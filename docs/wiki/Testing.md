@@ -65,6 +65,35 @@ The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg
 
 Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the existing runtime and unit/test dependency pins. These are **pure mapper tests**, not evidence that PostgreSQL, session authorization, or HTTP translation passed: `tests/pg/test_db_errors.py` remains the real disposable-PostgreSQL integration authority. No extra runner or package is installed.
 
+## Adversarial PDF corpus (#1287)
+
+`tests/pdf_corpus.py` generates a small synthetic corpus at test time. It is built from PyMuPDF and hand-written PDF syntax, with fixed metadata so each build gives the same bytes, and no third-party document is committed. The cases are:
+
+- a valid control file;
+- a truncated file;
+- a damaged xref table;
+- an AES-256 password file;
+- zero pages;
+- 400 tiny pages;
+- rotated pages;
+- a page with no text;
+- a font whose ToUnicode map sends codes to control, private-use and non-BMP characters;
+- three annotations sharing one `/NM`;
+- a `%PDF-` header followed by garbage;
+- PNG bytes under a `.pdf` name.
+
+`tests/pg/test_adversarial_pdf_corpus.py` sends each case through the real HTTP routes. The stages are upload into the Processing queue, import, the `text.extract` job, any-mode search, the thumbnail, the reader's byte stream, markup adoption for the shared-id case, and `ingest.store_pdf` linearization. Each stage has one asserted outcome per case, in `EXPECTED`:
+
+- An upload is kept, or refused with `PROCESSING_NOT_A_PDF` and leaves no item.
+- An import always creates exactly one Work and one Asset. Import does not parse the PDF.
+- Extraction ends `indexed`, `empty` or `failed`, and its job succeeds.
+- The thumbnail is an image or the documented 404.
+- The reader gets the stored bytes back unchanged.
+- A shared annotation id is adopted once.
+- Linearization writes a copy, keeps the source on a qpdf refusal, or reports `disabled` when qpdf is absent.
+
+Time is bounded per stage, peak memory growth is bounded for the whole run, and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
+
 ## TypeScript property-based workspace tests (#854)
 
 The frontend has a bounded **fast-check + Vitest** pilot for the canonical workspace tree and tab transitions. This checks generated move/remove/reorder sequences for leaf uniqueness, split-tree validity, identity preservation, and unchanged Main/focus. It imports the real pure workspace transitions; it does not implement a second workspace store or exercise the browser.
