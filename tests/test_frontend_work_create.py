@@ -212,7 +212,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("w.prksSetRoleCreditPickerValue?.(PREFIX", people)
         self.assertIn("runtime().prksReadRoleCreditName", people)
         self.assertIn("const PREFIX = 'upload-role'", people)
-        self.assertIn("PRKS_PEOPLE_ROLES", people)
+        self.assertIn("import { PEOPLE_ROLES } from '../../../domain/people-roles'", people)
         self.assertNotIn("PRKS_UPLOAD_ROLE_LABELS", people)
         # Choosing a person IS adding them: no separate Link step.
         pick = people.split("function pick(row: PersonOption)", 1)[1].split("\n}\n", 1)[0]

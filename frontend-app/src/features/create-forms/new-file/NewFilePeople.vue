@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { fieldValue, setFieldValue } from '../dom'
+import { PEOPLE_ROLES } from '../../../domain/people-roles'
 import { useInlineCombobox } from './combobox'
 import { runtime, type PersonRow } from './runtime'
 import { useNewFileState, type UploadRole } from './state'
@@ -51,11 +52,9 @@ function render(): void {
 
 const combobox = useInlineCombobox('upload-person-search', 'person-results', { onOpen: render })
 
-function roleLabels(): string[] {
-  // navigation.js owns the bibliographic subset (no Mentioned). Fail closed
-  // to Author-only if the registry is absent.
-  const shared = runtime().PRKS_PEOPLE_ROLES
-  return Array.isArray(shared) && shared.length ? shared : ['Author']
+function roleLabels(): readonly string[] {
+  // The bibliographic subset (no Mentioned) from its domain owner.
+  return PEOPLE_ROLES
 }
 
 function hasRole(list: readonly UploadRole[], personId: string, roleType: string): boolean {
@@ -254,7 +253,7 @@ function userIcon(): string {
   return runtime().prksIcon?.('user', { size: 'sm' }) ?? ''
 }
 
-function optionsFor(role: UploadRole): string[] {
+function optionsFor(role: UploadRole): readonly string[] {
   const labels = roleLabels()
   return labels.includes(role.role_type) ? labels : labels.concat([role.role_type])
 }

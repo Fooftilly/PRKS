@@ -95,7 +95,6 @@ export interface NewFileWindow {
     options: { tags: Array<{ id: string; name: string }> },
   ) => Promise<{ create?: { entity_id?: string } } | null>
   // Role credit picker (`upload-role` prefix)
-  PRKS_PEOPLE_ROLES?: string[]
   prksWorkHasRoleLink?: (roles: RoleLink[], personId: string, roleType: string) => boolean
   prksBindRoleCreditPicker?: (prefix: string) => void
   prksRefreshRoleCreditPicker?: (prefix: string, person: PersonRow | null) => void
