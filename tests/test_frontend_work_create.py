@@ -236,6 +236,10 @@ class FrontendWorkCreateTests(unittest.TestCase):
             self.assertIn("useInlineCombobox('%s'" % input_id, _nf(name), name)
         self.assertIn("enterCreates: true", _nf("NewFileTags.vue"))
         self.assertIn("enterCreates: true", _nf("NewFilePlaylist.vue"))
+        # People too (maintainer decision on #1289): combobox-keys.js picks
+        # the first real match before a create row, so Enter quick-creates
+        # only when nothing matches.
+        self.assertIn("enterCreates: true", _nf("NewFilePeople.vue"))
         keys = _read(os.path.join(_FRONTEND, "js", "combobox-keys.js"))
         self.assertIn("aria-activedescendant", keys)
         self.assertIn("result-item--create", keys)
@@ -257,6 +261,19 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("createSubmitKeyHandler(['work-title']", form)
         keyboard = _read(os.path.join(_CREATE_FORMS, "keyboard.ts"))
         self.assertIn("event.ctrlKey || event.metaKey", keyboard)
+
+    def test_source_kind_switch_is_a_radio_group(self):
+        """It switches fields across the form, not two tab panels."""
+        source = _nf("NewFileSource.vue")
+        self.assertIn('role="radiogroup" aria-labelledby="work-file-kind-label"', source)
+        self.assertEqual(source.count('role="radio"'), 2)
+        self.assertNotIn('role="tab', source)
+        self.assertNotIn("aria-selected", source)
+        for kind in ("pdf", "video"):
+            self.assertIn(":aria-checked=\"state.kind.value === '%s'" % kind, source)
+            self.assertIn(":tabindex=\"state.kind.value === '%s' ? 0 : -1\"" % kind, source)
+        for key in ("ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "'Home'", "'End'"):
+            self.assertIn(key, source)
 
     def test_inline_combobox_is_open_is_synchronous(self):
         """Keyboard readiness must not wait a frame after rows exist (#WorkCreate E2E)."""

@@ -13668,6 +13668,41 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         names = [(r.get("first_name"), r.get("last_name"), r["role_type"]) for r in work["roles"]]
         self.assertEqual(names, [("Zed", "Quickmade", "Author")])
 
+    def test_people_enter_quick_creates_only_without_a_match(self):
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        # A matching person: Enter picks them, never a duplicate.
+        page.fill("#upload-person-search", "E2E Auth")
+        page.wait_for_selector("#person-results.is-open .result-item--person-pick")
+        page.keyboard.press("Enter")
+        rows = page.locator("#upload-roles-list .prks-upload-person-row")
+        rows.first.wait_for()
+        self.assertIn(PERSON_DISPLAY, rows.first.inner_text())
+        # Nothing matches: Enter quick-creates the typed person.
+        page.fill("#upload-person-search", "Novel Enterperson")
+        page.wait_for_selector("#person-results.is-open .result-item--create")
+        page.keyboard.press("Enter")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#upload-roles-list .prks-upload-person-row').length === 2",
+            timeout=15000,
+        )
+        self.assertIn("Novel Enterperson", rows.nth(1).inner_text())
+
+    def test_source_switch_is_a_keyboard_radio_group(self):
+        server, page, _collector = self._start_app()
+        self._open_new_file_ready(page)
+        self.assertEqual(page.get_attribute(".prks-kind-toggle", "role"), "radiogroup")
+        self.assertEqual(page.get_attribute("[data-kind='pdf']", "aria-checked"), "true")
+        self.assertEqual(page.get_attribute("[data-kind='video']", "tabindex"), "-1")
+        page.focus("[data-kind='pdf']")
+        page.keyboard.press("ArrowRight")
+        page.locator("#work-video-url").wait_for(state="visible")
+        self.assertEqual(page.get_attribute("[data-kind='video']", "aria-checked"), "true")
+        self.assertEqual(page.evaluate("() => document.activeElement.dataset.kind"), "video")
+        page.keyboard.press("Home")
+        page.locator("#drop-zone-prompt").wait_for(state="visible")
+        self.assertEqual(page.evaluate("() => document.activeElement.dataset.kind"), "pdf")
+
     def test_a_typed_person_never_picked_blocks_create(self):
         """Like the Folder field, typed People text is a choice not yet made:
         Create refuses it inline instead of silently dropping the person."""

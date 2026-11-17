@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { fieldValue, setFieldValue } from '../dom'
 import { CHOOSE_PDF, BAD_YOUTUBE_URL, type SourceKind } from './save'
 import { alertMessage, runtime, type VideoMeta } from './runtime'
@@ -61,6 +61,25 @@ function setKind(next: SourceKind, switched = true): void {
     state.clearErrors()
   }
   props.onKindChanged(next, switched && next !== prev)
+}
+
+const KINDS: readonly SourceKind[] = ['pdf', 'video']
+
+/** Radio-group keys: arrows (and Home/End) move the choice and its focus. */
+function onKindKeydown(event: KeyboardEvent): void {
+  const step: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+  const at = KINDS.indexOf(state.kind.value)
+  let next: SourceKind | undefined
+  if (event.key in step) next = KINDS[(at + step[event.key] + KINDS.length) % KINDS.length]
+  else if (event.key === 'Home') next = KINDS[0]
+  else if (event.key === 'End') next = KINDS[KINDS.length - 1]
+  if (!next) return
+  event.preventDefault()
+  const group = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  if (next !== state.kind.value) setKind(next)
+  void nextTick(() => {
+    group?.querySelector<HTMLElement>(`.prks-kind-toggle__btn[data-kind="${next}"]`)?.focus()
+  })
 }
 
 function handleFile(file: File | null | undefined): void {
@@ -202,14 +221,15 @@ defineExpose({ previewVideo, isValidYoutubeUrl, initialControl, reset })
       <span class="prks-field__required">Required</span>
       <p id="work-file-kind-label" class="prks-sr-only">Source type</p>
       <input id="work-source-kind" type="hidden" :value="state.kind.value">
-      <div class="prks-kind-toggle prks-kind-toggle--compact" role="tablist" aria-labelledby="work-file-kind-label">
+      <div class="prks-kind-toggle prks-kind-toggle--compact" role="radiogroup" aria-labelledby="work-file-kind-label" @keydown="onKindKeydown">
         <button
           type="button"
           class="prks-kind-toggle__btn"
           :class="{ 'is-active': state.kind.value === 'pdf' }"
           data-kind="pdf"
-          role="tab"
-          :aria-selected="state.kind.value === 'pdf' ? 'true' : 'false'"
+          role="radio"
+          :aria-checked="state.kind.value === 'pdf' ? 'true' : 'false'"
+          :tabindex="state.kind.value === 'pdf' ? 0 : -1"
           @click="setKind('pdf')"
         >
           <span class="prks-kind-toggle__icon"><i data-lucide="file-text" class="prks-icon" aria-hidden="true"></i></span>
@@ -220,8 +240,9 @@ defineExpose({ previewVideo, isValidYoutubeUrl, initialControl, reset })
           class="prks-kind-toggle__btn"
           :class="{ 'is-active': state.kind.value === 'video' }"
           data-kind="video"
-          role="tab"
-          :aria-selected="state.kind.value === 'video' ? 'true' : 'false'"
+          role="radio"
+          :aria-checked="state.kind.value === 'video' ? 'true' : 'false'"
+          :tabindex="state.kind.value === 'video' ? 0 : -1"
           @click="setKind('video')"
         >
           <span class="prks-kind-toggle__icon"><i data-lucide="play" class="prks-icon" aria-hidden="true"></i></span>

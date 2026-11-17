@@ -52,7 +52,8 @@ function render(): void {
   combobox.shown()
 }
 
-const combobox = useInlineCombobox('upload-person-search', 'person-results', { onOpen: render })
+// Enter picks the first real match; it quick-creates only when nothing matches.
+const combobox = useInlineCombobox('upload-person-search', 'person-results', { onOpen: render, enterCreates: true })
 
 function roleLabels(): readonly string[] {
   // The bibliographic subset (no Mentioned) from its domain owner.
