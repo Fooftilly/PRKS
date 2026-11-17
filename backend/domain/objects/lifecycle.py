@@ -71,6 +71,7 @@ from backend.storage.objects import (
     ObjectIntegrityError,
     StorageBackend,
     StorageKey,
+    StaleTemporaryPruning,
     StorageObjectError,
 )
 
@@ -451,7 +452,9 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
           namespaces: Iterable[str] = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS)) -> int:
     """Claim every object older than ``grace`` that nothing names; returns how many were claimed.
 
-    Never deletes: the claims are settled by :func:`settle` like any other.
+    Never deletes an object: the claims are settled by :func:`settle` like any
+    other. Write temporaries older than ``grace`` are removed
+    (:func:`remove_stale_temporaries`).
     A write still in progress is younger than the grace period; one that
     stalls past it is caught by its own :func:`adopt`.
     """
@@ -468,7 +471,26 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
                 continue
             if db.command(lambda tx, key=key: claim_orphan(tx, key)):
                 claimed += 1
+        remove_stale_temporaries(storage, namespace, cutoff)
     return claimed
+
+
+def remove_stale_temporaries(storage: StorageBackend, namespace: str, cutoff: float) -> int:
+    """The stale sweep of write temporaries older than ``cutoff``; 0 for a backend without them.
+
+    A temporary is never a key: no row names it and nothing can adopt it, so
+    it needs no claim. Only a process killed mid-write leaves one.
+    """
+    if not isinstance(storage, StaleTemporaryPruning):
+        return 0
+    try:
+        removed = storage.remove_stale_temporaries(namespace, older_than=cutoff)
+    except OSError as exc:
+        LOGGER.warning("stale_temporaries_failed namespace=%s error=%s", namespace, type(exc).__name__)
+        return 0
+    if removed:
+        LOGGER.info("stale_temporaries_removed namespace=%s count=%d", namespace, removed)
+    return removed
 
 
 def claim_orphan(tx: Transaction, key: StorageKey) -> bool:

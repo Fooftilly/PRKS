@@ -53,6 +53,9 @@ MAX_KEY_NAME_BYTES = 255
 # with one of these prefixes is never a key, so it can never collide with an
 # in-flight temporary, and maintenance listings skip them.
 RESERVED_NAME_PREFIXES = (".prks-", ".linearized_")
+# A write's temporary, beside the object it publishes (``fs_durability`` uses the same form).
+_WRITE_TEMPORARY_PREFIX = ".prks-write-"
+_WRITE_TEMPORARY_SUFFIX = ".tmp"
 IO_CHUNK_SIZE = 64 * 1024
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # ``os.link`` failures that mean "this filesystem has no hard links" rather
@@ -234,6 +237,18 @@ class StorageBackend(Protocol):
 
 
 @runtime_checkable
+class StaleTemporaryPruning(Protocol):
+    """Maintenance extension: remove write temporaries a killed process left (the stale sweep).
+
+    A write publishes its temporary or removes it, but a process killed
+    mid-write does neither, and listings skip temporaries, so nothing else
+    ever finds them (storage-architecture "Temporary / staging").
+    """
+
+    def remove_stale_temporaries(self, namespace: str, *, older_than: float) -> int: ...
+
+
+@runtime_checkable
 class LocalPathCapable(Protocol):
     """Local-only extension (§10.3) for infrastructure that needs a real file.
 
@@ -387,7 +402,7 @@ class LocalFilesystemStorage:
     def _write_temporary(
         self, directory: str, write: Writer, *, hash: bool
     ) -> tuple[str, int, Optional[str]]:
-        fd, tmp = tempfile.mkstemp(prefix=".prks-write-", suffix=".tmp", dir=directory)
+        fd, tmp = tempfile.mkstemp(prefix=_WRITE_TEMPORARY_PREFIX, suffix=_WRITE_TEMPORARY_SUFFIX, dir=directory)
         try:
             with os.fdopen(fd, "wb") as handle:
                 sink = _HashingWriter(handle, hashlib.sha256() if hash else None)
@@ -575,6 +590,34 @@ class LocalFilesystemStorage:
                 and entry.is_file(follow_symlinks=False) and _is_key_name(entry.name)
             ))
         return [StorageKey(namespace, name) for name in names]
+
+    def remove_stale_temporaries(self, namespace: str, *, older_than: float) -> int:
+        """Maintenance only: delete this backend's write temporaries modified before ``older_than``; how many.
+
+        Only plain files named ``.prks-write-*.tmp`` directly in the namespace
+        directory are touched, never a link or any other name. A write in
+        progress keeps its temporary's modification time current, so a
+        cutoff older than any write's pause never removes one in use.
+        """
+        if namespace not in NAMESPACES:
+            raise InvalidStorageKey("unknown storage namespace")
+        directory = self._namespace_dir(namespace, create=False)
+        if directory is None:
+            return 0
+        removed = 0
+        with os.scandir(directory) as it:
+            for entry in it:
+                if not (entry.name.startswith(_WRITE_TEMPORARY_PREFIX)
+                        and entry.name.endswith(_WRITE_TEMPORARY_SUFFIX)):
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False) or entry.stat(follow_symlinks=False).st_mtime >= older_than:
+                        continue
+                    os.remove(entry.path)
+                except FileNotFoundError:
+                    continue  # its writer finished meanwhile
+                removed += 1
+        return removed
 
     # -- local-only extension (§10.3) -------------------------------------------------
 

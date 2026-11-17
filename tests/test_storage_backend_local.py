@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import time
 import tracemalloc
 import unittest
 from unittest.mock import patch
@@ -261,6 +262,35 @@ class TestLocalSpecifics(LocalStorageTestCase):
         self.assertEqual([k.name for k in self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS)], [self.key.name])
         self.assertEqual([k.name for k in self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, limit=1)],
                          [self.key.name], "skipped names take no place in a page")
+
+    def test_stale_write_temporaries_are_removed_and_nothing_else(self):
+        self.backend.put_new(self.key, _writer(b"x"))
+        pdfs = os.path.join(self.root, "pdfs")
+        now = time.time()
+        stale, fresh = os.path.join(pdfs, ".prks-write-stale.tmp"), os.path.join(pdfs, ".prks-write-fresh.tmp")
+        kept = [os.path.join(pdfs, name) for name in (".linearized_x.pdf", ".prks-cache-1.tmp", "notes.tmp")]
+        for path in [stale, fresh, *kept]:
+            open(path, "w").close()
+        os.mkdir(os.path.join(pdfs, ".prks-write-dir.tmp"))
+        for path in [stale, *kept, os.path.join(pdfs, self.key.name)]:
+            os.utime(path, (now - 3600, now - 3600))
+        if hasattr(os, "symlink"):
+            target = os.path.join(self.root, "outside")
+            open(target, "w").close()
+            link = os.path.join(pdfs, ".prks-write-link.tmp")
+            os.symlink(target, link)
+            os.utime(link, (now - 3600, now - 3600), follow_symlinks=False)
+        removed = self.backend.remove_stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=now - 60)
+        self.assertEqual(removed, 1)
+        self.assertFalse(os.path.exists(stale))
+        for path in [fresh, *kept, os.path.join(pdfs, ".prks-write-dir.tmp"), os.path.join(pdfs, self.key.name)]:
+            self.assertTrue(os.path.exists(path), path)
+        if hasattr(os, "symlink"):
+            self.assertTrue(os.path.lexists(os.path.join(pdfs, ".prks-write-link.tmp")))
+        self.assertEqual(self.backend.remove_stale_temporaries(NAMESPACE_PORTRAITS, older_than=now), 0,
+                         "a namespace with no directory has nothing to remove")
+        with self.assertRaises(InvalidStorageKey):
+            self.backend.remove_stale_temporaries("nope", older_than=now)
 
     def _fill(self, count):
         pdfs = os.path.join(self.root, "pdfs")

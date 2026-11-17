@@ -210,7 +210,8 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
     each claim is its own fenced transaction that checks the references under
     the per-object lock. A key younger than ``grace`` is left alone (a write
     may still adopt it). When keys are left, the next pass is enqueued with
-    this pass's last key; the pass that reaches the end records
+    this pass's last key; the pass that reaches the end removes the stale
+    write temporaries (``lifecycle.remove_stale_temporaries``) and records
     ``{"complete": true}`` in its progress, which ends the sweep cycle.
     """
     if grace < timedelta(0):
@@ -244,6 +245,9 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
             run.command(lambda tx, position=position: enqueue_sweep(tx, position))
             run.heartbeat({"examined": examined, "claimed": claimed})
             return claimed
+    for namespace in SWEEP_NAMESPACES:
+        run.check()
+        lifecycle.remove_stale_temporaries(storage, namespace, cutoff)
     run.heartbeat({"examined": examined, "claimed": claimed, "complete": True})
     return claimed
 
