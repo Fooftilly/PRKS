@@ -245,7 +245,7 @@ class StaleTemporaryPruning(Protocol):
     ever finds them (storage-architecture "Temporary / staging").
     """
 
-    def remove_stale_temporaries(self, namespace: str, *, older_than: float) -> int: ...
+    def remove_stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> int: ...
 
 
 @runtime_checkable
@@ -591,32 +591,46 @@ class LocalFilesystemStorage:
             ))
         return [StorageKey(namespace, name) for name in names]
 
-    def remove_stale_temporaries(self, namespace: str, *, older_than: float) -> int:
-        """Maintenance only: delete this backend's write temporaries modified before ``older_than``; how many.
+    def remove_stale_temporaries(self, namespace: str, *, older_than: float, limit: int) -> int:
+        """Maintenance only: delete up to ``limit`` write temporaries modified before ``older_than``; how many.
 
         Only plain files named ``.prks-write-*.tmp`` directly in the namespace
         directory are touched, never a link or any other name. A write in
         progress keeps its temporary's modification time current, so a
-        cutoff older than any write's pause never removes one in use.
+        cutoff older than any write's pause never removes one in use. A
+        temporary that cannot be removed is skipped (it stays for the next
+        sweep); the directory is synced once something was removed, so a
+        crash cannot bring the names back.
         """
         if namespace not in NAMESPACES:
             raise InvalidStorageKey("unknown storage namespace")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
         directory = self._namespace_dir(namespace, create=False)
         if directory is None:
             return 0
         removed = 0
         with os.scandir(directory) as it:
             for entry in it:
+                if removed >= limit:
+                    break
                 if not (entry.name.startswith(_WRITE_TEMPORARY_PREFIX)
                         and entry.name.endswith(_WRITE_TEMPORARY_SUFFIX)):
                     continue
                 try:
-                    if not entry.is_file(follow_symlinks=False) or entry.stat(follow_symlinks=False).st_mtime >= older_than:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    if entry.stat(follow_symlinks=False).st_mtime >= older_than:
                         continue
                     os.remove(entry.path)
                 except FileNotFoundError:
                     continue  # its writer finished meanwhile
+                except OSError:
+                    LOGGER.warning("storage_stale_temporary_remove_failed")
+                    continue
                 removed += 1
+        if removed and not fsync_directory(directory):
+            LOGGER.warning("storage_dir_sync_failed op=remove_stale_temporaries")
         return removed
 
     # -- local-only extension (§10.3) -------------------------------------------------

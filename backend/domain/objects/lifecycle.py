@@ -88,6 +88,8 @@ _TRY_OBJECTS_LOCK_SQL: LiteralString = (
 )
 
 DEFAULT_SWEEP_GRACE = timedelta(hours=24)
+# Stale write temporaries removed per namespace per sweep (``remove_stale_temporaries``).
+DEFAULT_TEMPORARY_LIMIT = 1000
 DEFAULT_RETRY_LIMIT = 100
 # The instance job that settles due claims; one runs at a time (§7.4).
 CLEANUP_KIND = "objects.cleanup"
@@ -475,16 +477,18 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
     return claimed
 
 
-def remove_stale_temporaries(storage: StorageBackend, namespace: str, cutoff: float) -> int:
-    """The stale sweep of write temporaries older than ``cutoff``; 0 for a backend without them.
+def remove_stale_temporaries(storage: StorageBackend, namespace: str, cutoff: float, *,
+                             limit: int = DEFAULT_TEMPORARY_LIMIT) -> int:
+    """The stale sweep of up to ``limit`` write temporaries older than ``cutoff``; 0 for a backend without them.
 
     A temporary is never a key: no row names it and nothing can adopt it, so
-    it needs no claim. Only a process killed mid-write leaves one.
+    it needs no claim. Only a process killed mid-write leaves one, so a
+    bounded pass per sweep cycle keeps up; what is left goes in the next cycle.
     """
     if not isinstance(storage, StaleTemporaryPruning):
         return 0
     try:
-        removed = storage.remove_stale_temporaries(namespace, older_than=cutoff)
+        removed = storage.remove_stale_temporaries(namespace, older_than=cutoff, limit=limit)
     except OSError as exc:
         LOGGER.warning("stale_temporaries_failed namespace=%s error=%s", namespace, type(exc).__name__)
         return 0

@@ -337,6 +337,21 @@ class SweepPassTests(ObjectJobsTestCase):
         self.assertFalse(os.path.exists(stale))
         self.assertTrue(os.path.exists(fresh), "a write still in progress is younger than the grace period")
 
+    def test_a_sweep_that_lost_its_lease_removes_no_temporary(self) -> None:
+        pdfs = os.path.join(self.storage.root, "pdfs")
+        self.orphans(1)
+        stale = os.path.join(pdfs, ".prks-write-killed.tmp")
+        with open(stale, "wb") as handle:
+            handle.write(b"%PDF-1.4 partial")
+        past = time.time() - 2 * DAY
+        os.utime(stale, (past, past))
+        self.enqueue(jobs.enqueue_sweep)
+        run = self.claimed(jobs.SWEEP_KIND)
+        self.sql("UPDATE prks.jobs SET locked_until = now() - interval '1 second' WHERE id = %s", (run.job.id,))
+        with self.assertRaises(queue.LeaseLost):
+            jobs.sweep_pass(run, self.objects)
+        self.assertTrue(os.path.exists(stale))
+
     def test_a_running_restores_staged_key_is_not_claimed(self) -> None:
         staged = StorageKey(NAMESPACE_PORTRAITS, "staged.webp")
         self.objects.put_new(staged, lambda stream: stream.write(b"image"))
