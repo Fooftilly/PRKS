@@ -1,0 +1,53 @@
+name: Nightly property fuzzing (advisory)
+
+# The property tests run in the required Unit / API / contract gate with the
+# `pr` profile: fixed (derandomized) inputs, so a pull request is never red for
+# a new random draw. This scheduled run uses the `nightly` profile instead:
+# random seeds and many more examples (tests/hypothesis_profiles.py). It is not
+# a required check. A failure prints the shrunk input and a reproduce blob; pin
+# the input as an @example in the fix so the `pr` profile replays it.
+# Pure functions only: no database, no server, no network.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 3 * * *"
+      timezone: Europe/Podgorica
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/hypothesis-nightly.yml
+      - tests/hypothesis_profiles.py
+      - tests/test_sync_envelope_properties.py
+      - tests/fixtures/sync_envelope_seeds.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hypothesis-nightly-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  properties:
+    name: Property fuzzing, nightly profile (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the unit test pins
+        run: python scripts/ci/install_pinned_python.py unit
+
+      - name: Run the property tests with random seeds
+        env:
+          PRKS_HYPOTHESIS_PROFILE: nightly
+        run: python -m unittest -v tests.test_sync_envelope_properties

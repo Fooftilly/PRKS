@@ -261,6 +261,16 @@ class SyncTests(AnnotationTestCase):
             self.assertEqual(self.scopes(asset_id),
                              {store.scope_id(asset_id, "ann-1"): 2 if edit == "ACKNOWLEDGED" else 1})
 
+    def test_a_number_jsonb_cannot_hold_is_refused_before_the_ledger(self) -> None:
+        """Python's json reads NaN and Infinity; jsonb refuses both (tests/test_sync_envelope_properties.py)."""
+        work_id = self.add_pdf_work()
+        for name, value in (("NaN", float("nan")), ("Infinity", float("-inf"))):
+            with self.subTest(number=name):
+                self.assertEqual(self.create(work_id, {**HIGHLIGHT, "color": value}),
+                                 (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.ledger(), [])
+        self.assertEqual(self.listed(work_id), [])
+
     def test_a_failure_after_the_write_rolls_everything_back(self) -> None:
         work_id = self.add_pdf_work()
         data = self.op("CREATE_PDF_ANNOTATION", work_id, HIGHLIGHT)

@@ -7,9 +7,9 @@ function, so the request hash of an operation is the same bytes it was; a malfor
 before the ledger and never burns an ``op_id``; an exception is never
 ledgered; an ``op_id`` seen before replays its stored status and body, or is
 ``OP_ID_REUSE`` when the request differs; dependencies must be acknowledged
-operations of the same device. One refusal is new: a NUL anywhere in the
-envelope is ``INVALID_ENVELOPE``, because PostgreSQL text and ``jsonb``
-cannot hold it (SQLite stores it).
+operations of the same device. One refusal is new: a NUL, a lone surrogate,
+``NaN`` or an infinity anywhere in the envelope is ``INVALID_ENVELOPE``,
+because PostgreSQL text and ``jsonb`` cannot hold them (SQLite stores them).
 
 What changes is how one operation is made exactly-once without SQLite's
 single writer:
@@ -49,6 +49,8 @@ operation raises :class:`~backend.library.NotPortedError` (answered 501).
 
 from __future__ import annotations
 
+import math
+import re
 from datetime import datetime, timezone
 from typing import Any, LiteralString, Optional
 
@@ -125,19 +127,11 @@ def process_operation(database: Database, ctx: RequestContext, data: object,
     does. Raises :class:`AccessRefused` (nothing written) when the actor may
     not edit the Library, the epoch changed or the device is not the user's.
     """
-    try:
-        op = rules.normalize_envelope(data)
-    except ValueError as exc:
-        return 400, {"code": exc.args[0]}
-    if _holds_nul(op):
-        return 400, {"code": "INVALID_ENVELOPE"}  # PostgreSQL text and jsonb cannot hold it
-    handler = _HANDLERS.get(op["operation"])
-    if handler is None:
-        raise NotPortedError("sync operation " + op["operation"])
-    try:
-        handler.validate(op)
-    except ValueError as exc:
-        return 400, {"code": exc.args[0]}
+    checked = validate_operation(data)
+    if not isinstance(checked, dict):
+        return checked
+    op = checked
+    handler = _HANDLERS[op["operation"]]
     if ctx.user_id is None:
         raise AccessRefused(Refusal.FORBIDDEN)  # the ledger records a person, never a job
     digest = bytes.fromhex(rules.request_hash(op))
@@ -163,14 +157,63 @@ def process_operation(database: Database, ctx: RequestContext, data: object,
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _holds_nul(value: object) -> bool:
+def validate_operation(data: object) -> dict[str, Any] | Result:
+    """The normalized operation, or the 400 that refuses ``data``; no database.
+
+    Everything :func:`process_operation` decides before it reads the ledger:
+    the shared envelope, text PostgreSQL can store, and the family's payload
+    rules. A refusal names one of :data:`REFUSAL_CODES`. Raises
+    :class:`~backend.library.NotPortedError` for a well-formed operation no
+    handler implements.
+    """
+    try:
+        op = rules.normalize_envelope(data)
+    except ValueError as exc:
+        return 400, {"code": _refusal_code(exc)}
+    if _unstorable(op):
+        return 400, {"code": "INVALID_ENVELOPE"}  # PostgreSQL text and jsonb cannot hold it
+    handler = _HANDLERS.get(op["operation"])
+    if handler is None:
+        raise NotPortedError("sync operation " + op["operation"])
+    try:
+        handler.validate(op)
+    except ValueError as exc:
+        return 400, {"code": _refusal_code(exc)}
+    return op
+
+
+# The codes a validator raises; anything else (a ValueError from a library,
+# UnicodeError among them) is a malformed envelope, never a code on the wire.
+REFUSAL_CODES = frozenset(("INVALID_ENVELOPE", "INVALID_BASE_REVISION"))
+
+
+def _refusal_code(exc: ValueError) -> str:
+    code = exc.args[0] if exc.args else None
+    if isinstance(exc, UnicodeError) or not isinstance(code, str) or code not in REFUSAL_CODES:
+        return "INVALID_ENVELOPE"
+    return code
+
+
+def _unstorable(value: object) -> bool:
+    """NUL, a lone surrogate, NaN or an infinity anywhere: ``jsonb`` holds none.
+
+    JSON's ``\\ud800`` escape decodes to a lone surrogate, which is not
+    UTF-8, so psycopg would raise ``UnicodeEncodeError`` mid-transaction; and
+    Python's ``json`` reads ``NaN`` and ``Infinity``, which ``jsonb`` refuses
+    and a text column would keep as the word ``nan``.
+    """
     if isinstance(value, str):
-        return "\x00" in value
+        return "\x00" in value or _SURROGATE.search(value) is not None
+    if isinstance(value, float):
+        return not math.isfinite(value)
     if isinstance(value, dict):
-        return any(_holds_nul(key) or _holds_nul(item) for key, item in value.items())
+        return any(_unstorable(key) or _unstorable(item) for key, item in value.items())
     if isinstance(value, list):
-        return any(_holds_nul(item) for item in value)
+        return any(_unstorable(item) for item in value)
     return False
+
+
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 def _stored(scope: LibraryScope, ctx: RequestContext, op: dict[str, Any]) -> Optional[dict[str, Any]]:
