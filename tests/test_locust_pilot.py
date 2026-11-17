@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scripts.ci.locust_pilot import (
     CLI_TIMEOUT, DURATION_SECONDS, GENERATOR_CPU_LIMIT, LOCUSTFILE, ROOT, ROUTES, SPAWN_RATE, USERS,
-    command, compare, problems, require_loopback, summarize,
+    command, compare, problems, require_loopback, summarize, summary_path,
 )
 
 HEADER = ("Type,Name,Request Count,Failure Count,Median Response Time,Average Response Time,"
@@ -93,6 +93,13 @@ class LocustPilotSafeguards(unittest.TestCase):
         self.assertEqual(problems({**clean, "POST /api/works": numbers()}), ["unexpected routes: POST /api/works"])
         self.assertEqual(problems(clean, GENERATOR_CPU_LIMIT + 0.1),
                          [f"load generator saturated: {GENERATOR_CPU_LIMIT + 0.1:.2f} of one CPU"])
+
+    def test_summary_paths_stay_inside_the_working_directory(self):
+        root = Path.cwd().resolve()
+        self.assertEqual(summary_path(Path("baseline.json")), root / "baseline.json")
+        for bad in ("../outside.json", "/etc/passwd", "summary.txt"):
+            with self.subTest(path=bad), self.assertRaisesRegex(ValueError, "inside the working directory"):
+                summary_path(Path(bad))
 
     def test_comparison_is_per_route_and_same_tier_only(self):
         run = {"pilot": "locust-readonly", "tier": "small", "routes": {ROUTES[0]: numbers()}}

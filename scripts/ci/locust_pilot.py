@@ -206,7 +206,18 @@ def warm_up(origin: str, ids: dict[str, Any]) -> int:
     return int(ids["catalog_size"])
 
 
+def summary_path(path: Path) -> Path:
+    """A ``.json`` summary path inside the working directory; anything else is refused."""
+    root = Path.cwd().resolve()
+    resolved = (root / path).resolve()
+    if resolved.suffix != ".json" or not resolved.is_relative_to(root):
+        raise ValueError("summary paths must be .json files inside the working directory")
+    return resolved
+
+
 def run(tier: str, out: Path | None, baseline: Path | None = None) -> int:
+    out = summary_path(out) if out is not None else None
+    baseline = summary_path(baseline) if baseline is not None else None
     if os.environ.get("PRKS_AUTH", "").strip() or os.environ.get("PRKS_DATABASE_URL", "").strip():
         raise RuntimeError("refusing an inherited PRKS_AUTH or PRKS_DATABASE_URL: the pilot uses only its own server")
     if not os.environ.get("PRKS_TEST_DATABASE_URL"):
