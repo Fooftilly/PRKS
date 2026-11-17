@@ -135,6 +135,8 @@ export function createNewFileState() {
     playlistId.value = ''
     videoEmbedUrl.value = ''
     creditIdx.value = -1
+    counts.biblio = 0
+    counts.more = 0
     personLocked.value = false
     videoMeta = null
     lastPreviewUrl = ''

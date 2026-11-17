@@ -315,6 +315,7 @@ async function prepare(stillOpening: () => boolean): Promise<void> {
   people.value?.reset()
   tags.value?.reset()
   playlist.value?.reset()
+  folder.value?.reset()
   folder.value?.applyFolder('')
   setBusy(false)
   const w = runtime()

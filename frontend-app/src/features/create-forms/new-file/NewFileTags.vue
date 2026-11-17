@@ -63,10 +63,19 @@ function pick(row: TagOption): void {
   combobox.hide()
 }
 
+/** Tag names being created in this opening: a repeat press is ignored. */
+const creating = new Set<string>()
+
 function create(): void {
   const name = createName.value
   if (!name) return
+  const key = name.toLowerCase()
+  if (creating.has(key)) return
+  creating.add(key)
   const w = runtime()
+  // A create that outlives its opening must never touch the next form.
+  const opening = state.currentOpening()
+  const stillApplies = () => state.isOpening(opening)
   // Create File waits for this, so the Work is created with the tag or not at all.
   void state.trackQuickCreate(
     (async () => {
@@ -74,17 +83,21 @@ function create(): void {
         const known = await loadList(w.fetchTags)
         if (typeof w.prksCreateTagDurably !== 'function') throw new Error('Could not create tag')
         const created = await w.prksCreateTagDurably({ name, color: '#6d6cf7' }, known)
+        if (!stillApplies()) return false
         attach(created.entity_id, name)
         setFieldValue('upload-tag-search', '')
         combobox.hide()
         return true
       } catch (error) {
+        if (!stillApplies()) return false
         const message =
           typeof w.prksTagVocabularyMessage === 'function'
             ? w.prksTagVocabularyMessage(error, 'create this tag')
             : 'Could not create this tag.'
         await alertMessage(message, 'Could not save')
         return false
+      } finally {
+        if (stillApplies()) creating.delete(key)
       }
     })(),
   )
@@ -96,6 +109,9 @@ function remove(idx: number): void {
 }
 
 function reset(): void {
+  // A catalogue answer for the last opening must not reopen this list.
+  renderSeq += 1
+  creating.clear()
   setFieldValue('upload-tag-search', '')
   combobox.hideNow()
 }

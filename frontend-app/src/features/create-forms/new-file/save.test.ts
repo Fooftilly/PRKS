@@ -256,6 +256,35 @@ describe('saveNewFile', () => {
     expect(r.opened).toEqual([])
   })
 
+  it('leaves a reopened dialog alone when an earlier opening create settles', async () => {
+    let current = '3'
+    let release: (res: Response) => void = () => {}
+    const r = recorder(
+      {
+        stillOpening: () => current === '3',
+        request: (url, init) => {
+          r.requests.push({ url, body: JSON.parse(String(init.body || '{}')) })
+          if (url !== '/api/works') return Promise.resolve(json(200, {}))
+          return new Promise<Response>((resolve) => {
+            release = resolve
+          })
+        },
+      },
+      draft({ tags: [{ id: 'T1', name: 'a' }] }),
+    )
+    const run = saveNewFile(r.deps)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Closed and opened again while the create was in flight.
+    current = '4'
+    release(json(201, { id: 'W-OLD' }))
+    await run
+    // The Work exists with what was asked for, but the new form is not touched.
+    expect(r.requests.map((req) => req.url)).toEqual(['/api/works', '/api/works/W-OLD/tags'])
+    expect(r.opened).toEqual([])
+    expect(r.status).toEqual([''])
+    expect(r.alerts).toEqual([])
+  })
+
   it('ignores a second press while this opening is creating', async () => {
     let release: (res: Response) => void = () => {}
     const r = recorder({

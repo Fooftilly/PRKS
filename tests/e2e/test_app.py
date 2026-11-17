@@ -12713,6 +12713,9 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         page.locator(".prks-kind-toggle__btn[data-kind='pdf']").click()
         page.locator("#upload-source-pdf").wait_for(state="visible")
+        # Back on PDF: the file chosen before the switch is gone, not hidden.
+        self.assertFalse(page.locator("#upload-selected-file").is_visible())
+        self.assertTrue(page.locator("#drop-zone-prompt").is_visible())
         self.assertEqual(page.locator("#work-video-url").input_value(), "")
         self.assertEqual(page.locator("#work-title").input_value(), "Switch Title")
 

@@ -119,8 +119,10 @@ export function validateDraft(
 function thumbPageOf(raw: string): number | null {
   const text = raw.trim()
   if (!text) return null
-  const n = parseInt(text, 10)
-  return Number.isFinite(n) && n >= 1 ? n : null
+  // Whole page numbers only: "1.5" or "1e2" is not a page.
+  if (!/^\d+$/.test(text)) return null
+  const n = Number(text)
+  return Number.isSafeInteger(n) && n >= 1 ? n : null
 }
 
 function roleLinks(roles: readonly RoleLink[]): RoleLink[] {

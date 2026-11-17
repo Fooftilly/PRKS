@@ -109,31 +109,57 @@ function applyFolder(folderId: string): void {
   choose(choice.id, choice.label, choice.isDefault)
 }
 
+/** True while this opening's folder create runs: a repeat press is ignored. */
+const creating = ref(false)
+
 async function quickCreate(): Promise<void> {
-  const title = fieldValue('work-folder-search')
+  const title = fieldValue('work-folder-search').trim()
   if (!title) {
     await alertMessage('Please enter a folder title first', 'Validation')
     return
   }
+  if (creating.value) return
+  creating.value = true
   const w = runtime()
-  // The canonical create boundary owns the offline guard and the Folder
-  // coherence hook, so this surface cannot reopen either gap.
-  let newId: string
-  try {
-    if (typeof w.createFolder !== 'function') throw new Error('Could not create folder')
-    newId = await w.createFolder(title, 'Quick created via upload')
-  } catch (error) {
-    if (w.prksOfflineWasGuardRefusal?.(error) !== true) {
-      await alertMessage((error instanceof Error && error.message) || 'Could not create folder', 'Could not save')
+  // A create that outlives its opening must never touch the next form.
+  const opening = state.currentOpening()
+  const stillApplies = () => state.isOpening(opening)
+  const done = (async () => {
+    try {
+      // The canonical create boundary owns the offline guard and the Folder
+      // coherence hook, so this surface cannot reopen either gap.
+      let newId: string
+      try {
+        if (typeof w.createFolder !== 'function') throw new Error('Could not create folder')
+        newId = await w.createFolder(title, 'Quick created via upload')
+      } catch (error) {
+        if (stillApplies() && w.prksOfflineWasGuardRefusal?.(error) !== true) {
+          await alertMessage((error instanceof Error && error.message) || 'Could not create folder', 'Could not save')
+        }
+        return
+      }
+      const folders = await loadList(w.fetchFolders)
+      if (!stillApplies()) return
+      state.folders.value = folders
+      choose(newId, title, false)
+      combobox.hide()
+    } finally {
+      if (stillApplies()) creating.value = false
     }
-    return
-  }
-  state.folders.value = await loadList(w.fetchFolders)
-  choose(newId, title, false)
-  combobox.hide()
+  })()
+  // Create File waits for this. A failed create leaves the Folder
+  // uncommitted, which validation then reports on the field, so the task
+  // itself never refuses the save.
+  void state.trackQuickCreate(done.then(() => true, () => true))
+  await done
 }
 
-defineExpose({ applyFolder, isCommitted, close: combobox.close })
+/** Opening reset: a create from the last opening no longer holds the button. */
+function reset(): void {
+  creating.value = false
+}
+
+defineExpose({ applyFolder, isCommitted, reset, close: combobox.close })
 </script>
 
 <template>
@@ -178,6 +204,8 @@ defineExpose({ applyFolder, isCommitted, close: combobox.close })
         class="prks-btn prks-btn--secondary prks-btn--sm"
         title="Create New Folder"
         aria-label="Create New Folder"
+        :disabled="creating"
+        :aria-busy="creating ? 'true' : undefined"
         @click="quickCreate"
       ><span class="ribbon-btn__icon"><i data-lucide="plus" class="prks-icon prks-icon--sm" aria-hidden="true"></i></span></button>
     </div>

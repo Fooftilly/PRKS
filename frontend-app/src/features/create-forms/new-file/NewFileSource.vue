@@ -43,6 +43,9 @@ function clearPdf(): void {
 function clearVideo(): void {
   setFieldValue('work-video-url', '')
   setFieldValue('work-video-channel', '')
+  setFieldValue('work-video-published-date', '')
+  setFieldValue('work-video-playlist-search', '')
+  state.playlistId.value = ''
   state.setLastPreviewUrl('')
   state.setVideoMeta(null)
   state.videoEmbedUrl.value = ''
@@ -107,6 +110,8 @@ function onFileChange(event: Event): void {
 /** Editing the URL voids the last preview; it is fetched again on blur. */
 function onVideoInput(): void {
   state.errors.videoUrl = ''
+  // A preview still in flight is for the old URL: it must not fill this draft.
+  state.nextPreviewSeq()
   if (fieldValue('work-video-url').trim() === state.getLastPreviewUrl().trim()) return
   state.setVideoMeta(null)
   state.videoEmbedUrl.value = ''
@@ -308,6 +313,7 @@ defineExpose({ previewVideo, isValidYoutubeUrl, initialControl, reset })
         <div v-if="state.videoEmbedUrl.value" class="prks-video-preview">
           <div class="prks-video-preview__frame">
             <iframe
+              title="YouTube video preview"
               :src="state.videoEmbedUrl.value"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               allowfullscreen

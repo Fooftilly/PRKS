@@ -31,10 +31,21 @@ const combobox = useInlineCombobox('work-video-playlist-search', 'work-video-pla
   enterCreates: true,
 })
 
+let loadSeq = 0
+
+/** Loads the catalogue; only the newest load for this opening lands. */
+async function loadPlaylists(): Promise<boolean> {
+  const seq = ++loadSeq
+  const opening = state.currentOpening()
+  const list = await loadList(runtime().fetchPlaylists)
+  if (seq !== loadSeq || !state.isOpening(opening)) return false
+  playlists = list
+  return true
+}
+
 async function onFocus(): Promise<void> {
   combobox.cancelBlur()
-  playlists = await loadList(runtime().fetchPlaylists)
-  render()
+  if (await loadPlaylists()) render()
 }
 
 function onInput(): void {
@@ -48,10 +59,17 @@ function pick(row: PlaylistRow): void {
   combobox.hide()
 }
 
+/** True while this opening's playlist create runs: a repeat press is ignored. */
+const creating = ref(false)
+
 function create(): void {
   const title = createTitle.value
-  if (!title) return
+  if (!title || creating.value) return
+  creating.value = true
   const w = runtime()
+  // A create that outlives its opening must never touch the next form.
+  const opening = state.currentOpening()
+  const stillApplies = () => state.isOpening(opening)
   void state.trackQuickCreate(
     (async () => {
       try {
@@ -59,20 +77,27 @@ function create(): void {
         // pickable at once.
         const id = typeof w.createPlaylist === 'function' ? await w.createPlaylist(title, '') : null
         if (!id) throw new Error('create failed')
-        playlists = await loadList(w.fetchPlaylists)
+        if (!stillApplies()) return false
+        await loadPlaylists()
+        if (!stillApplies()) return false
         setFieldValue('work-video-playlist-search', title)
         state.playlistId.value = id
         combobox.hide()
         return true
       } catch {
+        if (!stillApplies()) return false
         await alertMessage('Could not create playlist.', 'Error')
         return false
+      } finally {
+        if (stillApplies()) creating.value = false
       }
     })(),
   )
 }
 
 function reset(): void {
+  loadSeq += 1
+  creating.value = false
   setFieldValue('work-video-playlist-search', '')
   state.playlistId.value = ''
   combobox.hideNow()
