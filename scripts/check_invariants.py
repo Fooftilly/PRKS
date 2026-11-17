@@ -336,7 +336,8 @@ PYRIGHT_TYPED_SLICE_STRICT = (
     "backend/process_roles.py",
     "backend/readiness.py",
     "backend/research_markup.py",
-    "backend/services",
+    "backend/services/__init__.py",
+    "backend/services/work_pdf_replace.py",
     "backend/startup_profile.py",
     "backend/storage/__init__.py",
     "backend/storage/config.py",
@@ -3952,7 +3953,9 @@ def _check_typed_slice_strict(cfg: dict, root: Path) -> list[Finding]:
         )
     for path in sorted(listed):
         # A missing typed-slice scope is already reported as INV-PYRIGHT-002.
-        if path not in PYRIGHT_TYPED_SLICE_SCOPES and not (root / path).exists():
+        if path in PYRIGHT_TYPED_SLICE_SCOPES:
+            continue
+        if not (root / path).exists():
             findings.append(
                 Finding(
                     "INV-PYRIGHT-004",
@@ -3965,7 +3968,27 @@ def _check_typed_slice_strict(cfg: dict, root: Path) -> list[Finding]:
                     ),
                 )
             )
+        elif not _under_typed_slice_scope(path):
+            findings.append(
+                Finding(
+                    "INV-PYRIGHT-004",
+                    PYRIGHT_TYPED_SLICE_CONFIG,
+                    1,
+                    (
+                        f"typed-slice strict path {path!r} is outside every typed-slice "
+                        "include scope; Pyright applies strict only to included files, "
+                        "so add it to PYRIGHT_TYPED_SLICE_SCOPES first"
+                    ),
+                )
+            )
     return findings
+
+
+def _under_typed_slice_scope(path: str) -> bool:
+    return any(
+        path == scope or path.startswith(scope.rstrip("/") + "/")
+        for scope in PYRIGHT_TYPED_SLICE_SCOPES
+    )
 
 
 def _reject_typed_slice_suppression(cfg: dict) -> list[Finding]:

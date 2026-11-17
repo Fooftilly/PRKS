@@ -1579,10 +1579,10 @@ class EngineeringInvariantTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
-            (root / "backend" / "extra.py").write_text("", encoding="utf-8")
+            (root / "tests" / "extra.py").write_text("", encoding="utf-8")
             self._rewrite_typed_slice(
                 root,
-                strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/extra.py"],
+                strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "tests/extra.py"],
             )
             self.assertEqual(checker.check_pyright_configs(root), [])
 
@@ -1596,6 +1596,23 @@ class EngineeringInvariantTests(unittest.TestCase):
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
             self.assertIn("'backend/gone.py' does not exist", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_strict_path_outside_include(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / "backend" / "uncovered.py").write_text("", encoding="utf-8")
+            self._rewrite_typed_slice(
+                root, strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/uncovered.py"]
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+            self.assertIn("outside every typed-slice include scope", findings[0].message)
+
+    def test_pyright_typed_slice_strict_pins_are_included(self):
+        for path in checker.PYRIGHT_TYPED_SLICE_STRICT:
+            with self.subTest(path=path):
+                self.assertTrue(checker._under_typed_slice_scope(path))
 
     def test_pyright_typed_slice_rejects_dropped_scope(self):
         for dropped in checker.PYRIGHT_TYPED_SLICE_SCOPES:
