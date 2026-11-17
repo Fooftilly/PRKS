@@ -18,8 +18,9 @@ Afterwards it checks that:
 
 The summary is bounded and privacy-safe: ZAP and PRKS versions, the image
 digest, the tested route templates with their answers, and per passive rule
-its id, name, risk, confidence, count and route templates. No URLs with
-values, evidence, parameters, cookies or bodies. Alerts are advisory and do not
+its id, name, risk, confidence, count and route templates. No dynamic or
+private URL values, evidence, cookies or bodies (the fixed synthetic search
+query stays in its route). Alerts are advisory and do not
 fail the run; only the checks above do. Never targets anything but the
 server it started.
 """
@@ -209,18 +210,33 @@ def send(zap_port: int, origin: str, step: Step, path: str, cookie: str | None,
 def fingerprint(conninfo: str, library_id: str) -> dict[str, tuple[int, str]]:
     """A digest of every Library content table's rows for the served Library."""
     import psycopg
+    from psycopg import sql
 
     from backend.domain.maintenance import tables
 
+    query = sql.SQL("SELECT count(*), md5(coalesce(string_agg(t::text, ',' ORDER BY t::text), ''))"
+                    " FROM {} t WHERE t.library_id = %s")
     out = {}
     with psycopg.connect(conninfo, connect_timeout=10) as conn:
         for table in tables.BACKUP_CONTENT_TABLES:
             schema, name = table.split(".")
-            row = conn.execute(
-                f'SELECT count(*), md5(coalesce(string_agg(t::text, \',\' ORDER BY t::text), \'\'))'  # noqa: S608
-                f' FROM "{schema}"."{name}" t WHERE t.library_id = %s', (library_id,)).fetchone()
+            row = conn.execute(query.format(sql.Identifier(schema, name)), (library_id,)).fetchone()
             out[table] = (int(row[0]), str(row[1])) if row else (0, "")
     return out
+
+
+# A real server's settings: the pilot's server must not inherit them. A public
+# origin would also make every login fail its Origin check.
+INHERITED_REFUSED = ("PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_PUBLIC_ORIGIN")
+
+
+def summary_path(path: Path) -> Path:
+    """A ``.json`` summary path inside the working directory; anything else is refused."""
+    root = Path.cwd().resolve()
+    resolved = (root / path).resolve()
+    if resolved.suffix != ".json" or not resolved.is_relative_to(root):
+        raise ValueError("summary paths must be .json files inside the working directory")
+    return resolved
 
 
 def free_port() -> int:
@@ -230,8 +246,9 @@ def free_port() -> int:
 
 
 def run(out: Path | None) -> int:
-    if os.environ.get("PRKS_AUTH", "").strip() or os.environ.get("PRKS_DATABASE_URL", "").strip():
-        raise RuntimeError("refusing an inherited PRKS_AUTH or PRKS_DATABASE_URL: the pilot uses only its own server")
+    out = summary_path(out) if out is not None else None
+    if any(os.environ.get(name, "").strip() for name in INHERITED_REFUSED):
+        raise RuntimeError("refusing an inherited " + ", ".join(INHERITED_REFUSED) + ": the pilot uses only its own server")
     if not os.environ.get("PRKS_TEST_DATABASE_URL"):
         raise RuntimeError("PRKS_TEST_DATABASE_URL must name a disposable PostgreSQL server")
     if not shutil.which("docker"):
@@ -285,9 +302,11 @@ def run(out: Path | None) -> int:
         if changed:
             found.append("Library content changed: " + ", ".join(changed))
     finally:
-        if container:
-            subprocess.run(["docker", "rm", "--force", name], capture_output=True, timeout=60, check=False)
-        server.stop()
+        try:
+            if container:
+                subprocess.run(["docker", "rm", "--force", name], capture_output=True, timeout=60, check=False)
+        finally:
+            server.stop()
     summary = {
         "pilot": "zap-passive", "zap_version": version, "zap_image": ZAP_IMAGE, "prks_version": PRKS_VERSION,
         "mode": "safe, passive rules only", "requests": answers,

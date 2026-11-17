@@ -206,21 +206,22 @@ The committed JSON stores a small 48×30 RGB sampling fingerprint per scene (zli
 
 ## OWASP ZAP — passive security pilot (#860)
 
-The manual [ZAP workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/zap-passive-pilot.yml) looks for runtime HTTP weaknesses that source scanners miss, such as missing security headers, cookie flags and information leaks. It is **passive only**. `scripts/ci/zap_passive_pilot.py` starts a disposable `AppServer --testing` on loopback in session-auth mode (its own database on the `PRKS_TEST_DATABASE_URL` server, an owner and one editor, the UX-tour synthetic library). It also starts a ZAP 2.17.0 container, pinned by digest, in daemon mode with `-silent` and the API bound to loopback, and switches ZAP to **safe mode**, so ZAP can neither spider nor attack. The pilot itself sends a fixed allowlist of requests through ZAP's proxy: anonymous, signed in as the owner, and signed in as the editor. The only non-GET request is `POST /api/login`. ZAP's passive rules only watch that traffic. The official `zap-baseline.py` and `zap-api-scan.py` recipes are not used, because they spider or scan actively by default.
+The manual [ZAP workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/zap-passive-pilot.yml) looks for runtime HTTP weaknesses that source scanners miss, such as missing security headers, cookie flags and information leaks. It is **passive only**. `scripts/ci/zap_passive_pilot.py` starts a disposable `AppServer --testing` on loopback in session-auth mode (its own database on the `PRKS_TEST_DATABASE_URL` server, an owner and one editor, the UX-tour synthetic library). It also starts a ZAP 2.17.0 container, pinned by digest, in daemon mode with `-silent` and the API bound to loopback, and switches ZAP to **safe mode**, so ZAP can neither spider nor attack. The pilot itself sends a fixed allowlist of requests through ZAP's proxy: anonymous, signed in as the owner, and signed in as the editor. The only non-GET route is `POST /api/login`, sent three times: one failed anonymous login, then the owner's and the editor's logins. ZAP's passive rules only watch that traffic. The official `zap-baseline.py` and `zap-api-scan.py` recipes are not used, because they spider or scan actively by default.
 
 A run fails (exit 1, listed under `problems`) when:
 
 - a request gets a different answer than the allowlist expects, for example the editor's `GET /api/backups/download` must be 403;
-- ZAP's history holds anything but the pilot's own requests;
+- ZAP's history of completed exchanges (those with a response) is not exactly the pilot's own requests;
 - any Library content table changed.
 
-Alerts are advisory and do not fail the run. The summary holds the ZAP and PRKS versions, the image digest, each request's route template and answer, and per passive rule its id, name, risk, confidence, count and route templates. It holds no URLs with values, evidence, parameters, cookies or bodies. Triage verified findings into focused issues, or into private reporting under `SECURITY.md` when sensitive, before any check blocks. The existing HTTP auth and Origin/CSRF suites stay authoritative.
+Alerts are advisory and do not fail the run. The summary holds the ZAP and PRKS versions, the image digest, each request's route template and answer, and per passive rule its id, name, risk, confidence, count and route templates. It holds no dynamic or private URL values, evidence, cookies or bodies; the fixed synthetic search query (`/api/search?q=Graph`) stays in its route. Triage verified findings into focused issues, or into private reporting under `SECURITY.md` when sensitive, before any check blocks. The existing HTTP auth and Origin/CSRF suites stay authoritative.
 
-Locally, with Docker and a disposable PostgreSQL 18 server:
+Locally, with Docker and a disposable PostgreSQL 18 server that stays up while the pilot runs (the pilot refuses an inherited `PRKS_AUTH`, `PRKS_DATABASE_URL` or `PRKS_PUBLIC_ORIGIN`, so the command clears them):
 
 ```bash
 docker pull "$(python -c 'from scripts.ci.zap_passive_pilot import ZAP_IMAGE; print(ZAP_IMAGE)')"
-PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1 \
+env -u PRKS_AUTH -u PRKS_DATABASE_URL -u PRKS_PUBLIC_ORIGIN \
+  PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1 \
   python scripts/ci/zap_passive_pilot.py --out zap-summary.json
 ```
 

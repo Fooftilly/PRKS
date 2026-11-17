@@ -1,10 +1,14 @@
 """Pure safeguards for the passive-only ZAP pilot (#860)."""
 from __future__ import annotations
 
+import os
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from scripts.ci.zap_passive_pilot import (
-    ROOT, STEPS, ZAP_IMAGE, exchanged, require_loopback, summarize_alerts, zap_command,
+    INHERITED_REFUSED, ROOT, STEPS, ZAP_IMAGE, exchanged, require_loopback, run, summarize_alerts,
+    summary_path, zap_command,
 )
 
 
@@ -27,16 +31,49 @@ class ZapPassivePilotSafeguards(unittest.TestCase):
         for forbidden in ("-quickurl", "-cmd", "spider", "ascan", "zap-baseline.py", "zap-api-scan.py", "zap-full-scan.py"):
             self.assertNotIn(forbidden, " ".join(args))
 
-    def test_the_allowlist_only_reads_except_signing_in(self):
-        for step in STEPS:
-            with self.subTest(step=step):
-                if step.method != "GET":
-                    self.assertEqual((step.method, step.template), ("POST", "/api/login"))
-                self.assertTrue(step.template.startswith("/"))
-        callers = {step.caller for step in STEPS}
-        self.assertEqual(callers, {"anonymous", "owner", "editor"})
-        self.assertIn(("anonymous", "/api/works", 401), {(s.caller, s.template, s.expect) for s in STEPS})
-        self.assertIn(("editor", "/api/backups/download", 403), {(s.caller, s.template, s.expect) for s in STEPS})
+    def test_the_allowlist_is_exactly_these_requests(self):
+        self.assertEqual(
+            [(s.caller, s.method, s.template, s.expect, s.login, s.wrong_password) for s in STEPS],
+            [
+                ("anonymous", "GET", "/", 200, None, False),
+                ("anonymous", "GET", "/healthz", 200, None, False),
+                ("anonymous", "GET", "/api/session", 401, None, False),
+                ("anonymous", "GET", "/api/works", 401, None, False),
+                ("anonymous", "GET", "/api/works/{work}", 401, None, False),
+                ("anonymous", "POST", "/api/login", 401, "owner", True),
+                ("owner", "POST", "/api/login", 200, "owner", False),
+                ("owner", "GET", "/", 200, None, False),
+                ("owner", "GET", "/api/session", 200, None, False),
+                ("owner", "GET", "/api/works", 200, None, False),
+                ("owner", "GET", "/api/works/{work}", 200, None, False),
+                ("owner", "GET", "/api/works/{work}/annotations", 200, None, False),
+                ("owner", "GET", "/api/tags", 200, None, False),
+                ("owner", "GET", "/api/persons", 200, None, False),
+                ("owner", "GET", "/api/publishers", 200, None, False),
+                ("owner", "GET", "/api/search?q=Graph", 200, None, False),
+                ("owner", "GET", "/api/settings", 200, None, False),
+                ("owner", "GET", "/api/research-graph", 200, None, False),
+                ("owner", "GET", "/api/works/unknown-work", 404, None, False),
+                ("editor", "POST", "/api/login", 200, "editor", False),
+                ("editor", "GET", "/api/works", 200, None, False),
+                ("editor", "GET", "/api/backups/download", 403, None, False),
+            ],
+        )
+
+    def test_a_real_servers_settings_are_refused(self):
+        self.assertEqual(INHERITED_REFUSED, ("PRKS_AUTH", "PRKS_DATABASE_URL", "PRKS_PUBLIC_ORIGIN"))
+        for name in INHERITED_REFUSED:
+            env = {"PRKS_TEST_DATABASE_URL": "postgresql://postgres@127.0.0.1:1/postgres", name: "x"}
+            with self.subTest(name=name), mock.patch.dict(os.environ, env), \
+                    self.assertRaisesRegex(RuntimeError, "refusing an inherited"):
+                run(None)
+
+    def test_summary_paths_stay_inside_the_working_directory(self):
+        root = Path.cwd().resolve()
+        self.assertEqual(summary_path(Path("zap-summary.json")), root / "zap-summary.json")
+        for bad in ("../outside.json", "/etc/passwd", "summary.txt"):
+            with self.subTest(path=bad), self.assertRaisesRegex(ValueError, "inside the working directory"):
+                summary_path(Path(bad))
 
     def test_history_counts_only_messages_that_were_sent(self):
         messages = [
@@ -68,9 +105,7 @@ class ZapPassivePilotSafeguards(unittest.TestCase):
     def test_workflow_is_manual_only(self):
         workflow = (ROOT / ".github" / "workflows" / "zap-passive-pilot.yml").read_text(encoding="utf-8")
         triggers = workflow.split("\non:", 1)[1].split("\npermissions:", 1)[0]
-        self.assertIn("workflow_dispatch:", triggers)
-        self.assertNotIn("pull_request", triggers)
-        self.assertNotIn("schedule", triggers)
+        self.assertEqual(triggers.strip(), "workflow_dispatch:")
         self.assertIn("contents: read", workflow)
         self.assertNotIn("zaproxy/action", workflow)
 
