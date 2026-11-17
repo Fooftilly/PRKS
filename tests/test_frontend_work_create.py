@@ -12,26 +12,47 @@ from tests.narrowing import must_search
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _INDEX = os.path.join(_FRONTEND, "index.html")
-_NEW_FILE_FORM = os.path.join(
-    _PROJECT_DIR, "frontend-app", "src", "features", "create-forms", "NewFileForm.vue"
-)
+_CREATE_FORMS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "create-forms")
+_NEW_FILE_FORM = os.path.join(_CREATE_FORMS, "NewFileForm.vue")
+_NEW_FILE_DIR = os.path.join(_CREATE_FORMS, "new-file")
 _WORK_MODAL_MOUNT = '<div id="work-modal-vue" class="modal-body modal-body--scroll"></div>'
+_WORK_FOOTER_MOUNT = '<div id="work-modal-footer-vue" class="modal-footer modal-footer--sticky prks-form-actions"></div>'
+_FOOTER_TELEPORT = '<Teleport to="#work-modal-footer-vue">'
+
+
+def _nf(name: str) -> str:
+    """A New File module under create-forms/new-file."""
+    return _read(os.path.join(_NEW_FILE_DIR, name))
+
+
+def _template(source: str) -> str:
+    return source.split("<template>", 1)[1].rsplit("</template>", 1)[0]
 
 
 def _work_modal():
     """The New File dialog as the page renders it.
 
-    The shell, header and sticky footer stay in index.html; the body is the
-    Vue form teleported into ``#work-modal-vue`` (#1036). Splice the two so
-    the order checks (body before footer) still hold.
+    The shell and header stay in index.html; the Vue form teleports its body
+    into ``#work-modal-vue`` and its footer into ``#work-modal-footer-vue``
+    (#1036). Splice the section components into the form and both into the
+    shell, so order checks (essentials before disclosures, body before
+    footer) still hold.
     """
     html = _read(_INDEX)
     shell = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
-    if _WORK_MODAL_MOUNT not in shell:
-        raise AssertionError("New File shell lost its Vue body mount")
-    form = _read(_NEW_FILE_FORM)
-    body = form.split("<template>", 1)[1].rsplit("</template>", 1)[0]
-    return shell.replace(_WORK_MODAL_MOUNT, _WORK_MODAL_MOUNT[:-6] + body + "</div>")
+    for mount in (_WORK_MODAL_MOUNT, _WORK_FOOTER_MOUNT):
+        if mount not in shell:
+            raise AssertionError("New File shell lost a Vue mount: " + mount)
+    form = _template(_read(_NEW_FILE_FORM))
+    for name in ("NewFileSource", "NewFileFolder", "NewFilePeople", "NewFilePlaylist", "NewFileTags"):
+        tag = must_search(r"<%s\b[^>]*/>" % name, form).group(0)
+        form = form.replace(tag, _template(_nf(name + ".vue")))
+    body, footer = form.split(_FOOTER_TELEPORT, 1)
+    footer = footer.rsplit("</Teleport>", 1)[0]
+    shell = shell.replace(_WORK_MODAL_MOUNT, _WORK_MODAL_MOUNT[:-6] + body + "</div>")
+    return shell.replace(_WORK_FOOTER_MOUNT, _WORK_FOOTER_MOUNT[:-6] + footer + "</div>")
+
+
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _CSS = os.path.join(_FRONTEND, "css", "style.css")
@@ -184,37 +205,37 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("#work-modal .prks-role-credit-picker[hidden]", css)
 
     def test_people_rows_keep_role_and_credit_semantics(self):
-        ui = _read(_UI)
-        chunk = ui.split("function prksUploadRoleLabels()", 1)[1].split(
-            "function prksBindUploadPeopleUi", 1
-        )[0]
-        self.assertIn("prksWorkHasRoleLink", chunk)
-        self.assertIn("prksResolveRoleCreditNameForLink('upload-role'", chunk)
-        self.assertIn("prksRefreshRoleCreditPicker('upload-role', person)", chunk)
-        self.assertIn("prksSetRoleCreditPickerValue('upload-role'", chunk)
-        self.assertIn("prksReadRoleCreditName('upload-role')", chunk)
-        self.assertIn("prksUploadRoleLabels", chunk)
-        self.assertIn("PRKS_PEOPLE_ROLES", chunk)
-        self.assertNotIn("PRKS_UPLOAD_ROLE_LABELS", chunk)
-        pick = ui.split("initSearchableCombobox('upload-person-search'", 1)[1].split("});", 2)
-        self.assertIn("onPersonPick", "".join(pick[:2]))
-        self.assertIn("addRoleToUploadList()", "".join(pick[:2]))
+        people = _nf("NewFilePeople.vue")
+        self.assertIn("prksWorkHasRoleLink", people)
+        self.assertIn("w.prksResolveRoleCreditNameForLink(PREFIX, personId, 'upload-person-search')", people)
+        self.assertIn("refreshPicker(person)", people)
+        self.assertIn("w.prksSetRoleCreditPickerValue?.(PREFIX", people)
+        self.assertIn("runtime().prksReadRoleCreditName", people)
+        self.assertIn("const PREFIX = 'upload-role'", people)
+        self.assertIn("PRKS_PEOPLE_ROLES", people)
+        self.assertNotIn("PRKS_UPLOAD_ROLE_LABELS", people)
+        # Choosing a person IS adding them: no separate Link step.
+        pick = people.split("function pick(row: PersonOption)", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("addPicked()", pick)
+        # The one credit picker moves under the row being edited.
+        self.assertIn('<Teleport defer :to="creditTarget"', people)
         # Only the fields the canonical create reads are sent.
-        app = _read(_APP)
-        work_chunk = app.split("document.getElementById('save-work-btn')", 1)[1]
-        self.assertIn("credit_name: r.credit_name || ''", work_chunk)
+        save = _nf("save.ts")
+        self.assertIn("credit_name: role.credit_name || ''", save)
         # YouTube Works store their accessed date (urldate) at creation.
-        self.assertIn("urldate: sourceKind === 'video' ? new Date().toISOString().slice(0, 10)", work_chunk)
-        self.assertIn("urldate: payload.urldate || ''", work_chunk)
+        self.assertIn("urldate: deps.today(),", save)
+        self.assertIn("today: () => new Date().toISOString().slice(0, 10)", _read(_NEW_FILE_FORM))
 
     def test_keyboard_and_escape_layers(self):
-        ui = _read(_UI)
-        self.assertIn("function prksBindWorkModalComboboxKeys", ui)
-        for input_id in ("work-folder-search", "upload-person-search", "upload-tag-search",
-                         "work-video-playlist-search"):
-            self.assertIn("prksBindWorkModalComboboxKeys('%s'" % input_id, ui)
-        wrapper = ui.split("function prksBindWorkModalComboboxKeys", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("prksBindComboboxKeys", wrapper)
+        combobox = _nf("combobox.ts")
+        self.assertIn("bindComboboxKeys(inputId, resultsId", combobox)
+        for name, input_id in (("NewFileFolder.vue", "work-folder-search"),
+                               ("NewFilePeople.vue", "upload-person-search"),
+                               ("NewFileTags.vue", "upload-tag-search"),
+                               ("NewFilePlaylist.vue", "work-video-playlist-search")):
+            self.assertIn("useInlineCombobox('%s'" % input_id, _nf(name), name)
+        self.assertIn("enterCreates: true", _nf("NewFileTags.vue"))
+        self.assertIn("enterCreates: true", _nf("NewFilePlaylist.vue"))
         keys = _read(os.path.join(_FRONTEND, "js", "combobox-keys.js"))
         self.assertIn("aria-activedescendant", keys)
         self.assertIn("result-item--create", keys)
@@ -224,13 +245,18 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("stale = false", keys)
         self.assertIn("if (stale)", keys)
         self.assertIn("Escape", keys)
-        tags = ui.split("function initUploadTagCombobox", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("if (seq !== renderSeq) return;", tags)
+        self.assertIn("markComboboxRendered(inputId, nextTick())", combobox)
+        self.assertIn("if (seq !== renderSeq) return", _nf("NewFileTags.vue"))
+        # An open list is Escape's inner layer, before the dialog.
+        ui = _read(_UI)
         escape = ui.split("function prksDismissModalInnerEscapeLayer", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("prksIsComboboxPanelOpen", escape)
-        form = ui.split("function prksBindWorkModalFormUi", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("e.ctrlKey || e.metaKey", form)
-        self.assertIn("work-title", form)
+        self.assertIn("dismissInnerLayer(modal.id)", escape)
+        host = _read(os.path.join(_CREATE_FORMS, "CreateFormsHost.vue"))
+        self.assertIn("if (modalId === 'work-modal') return newFileRef.value?.closeOpenList() ?? false", host)
+        form = _read(_NEW_FILE_FORM)
+        self.assertIn("createSubmitKeyHandler(['work-title']", form)
+        keyboard = _read(os.path.join(_CREATE_FORMS, "keyboard.ts"))
+        self.assertIn("event.ctrlKey || event.metaKey", keyboard)
 
     def test_inline_combobox_is_open_is_synchronous(self):
         """Keyboard readiness must not wait a frame after rows exist (#WorkCreate E2E)."""
@@ -266,65 +292,55 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("document.activeElement === input", blur)
 
     def test_errors_inside_disclosures_open_them_first(self):
-        ui = _read(_UI)
-        focus = ui.split("function prksFocusWorkModalControl", 1)[1].split("\n}\n", 1)[0]
+        form = _read(_NEW_FILE_FORM)
+        focus = form.split("function focusControl(", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("details.open = true", focus)
-        self.assertIn("prksSyncWorkModalDisclosureInert", focus)
+        self.assertIn("syncDisclosureInert()", focus)
+        # Pointing at a field ends the submit: a frozen form refuses focus.
+        self.assertIn("setBusy(false)", focus)
 
     def test_outcome_messages_say_whether_a_work_exists(self):
-        app = _read(_APP)
-        self.assertIn("Nothing was saved.", app)
-        self.assertIn("FOLDER_NOT_FOUND", app)
-        self.assertIn("This folder no longer exists", app)
-        self.assertIn("The file was created, but", app)
+        save = _nf("save.ts")
+        self.assertIn("Nothing was saved.", save)
+        self.assertIn("FOLDER_NOT_FOUND", save)
+        self.assertIn("FOLDER_GONE", save)
+        self.assertIn("This folder no longer exists", _nf("folder.ts"))
+        self.assertIn("The file was created, but", save)
         # A lost response or a server error does not prove nothing was saved.
-        self.assertIn("Could not confirm whether the file was saved", app)
-        self.assertIn("res.status >= 500", app)
-        self.assertNotIn("Could not reach PRKS. Nothing was saved", app)
-        ui = _read(_UI)
-        quick = ui.split("onQuickCreate: (typedName) => {\n            const search", 1)[1].split("onPersonPick", 1)[0]
-        self.assertIn("search.readOnly = true", quick)
+        self.assertIn("Could not confirm whether the file was saved", save)
+        self.assertIn("res.status >= 500", save)
+        self.assertNotIn("Could not reach PRKS. Nothing was saved", save)
+        people = _nf("NewFilePeople.vue")
+        quick = people.split("function quickCreate(): void {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("state.personLocked.value = true", quick)
         self.assertIn("finally", quick)
-        self.assertIn("window.__prksUploadPersonPending = pending", ui)
-        # Scoped to one opening of the form: reset drops it and the lock.
-        self.assertIn("pending.prksOpenGeneration = openGeneration", ui)
+        self.assertIn("state.setPersonPending(opening, done)", quick)
+        self.assertIn("{ stillApplies }", quick)
+        self.assertIn("addPicked() === true", quick)
+        # Scoped to one opening: a new opening drops the pending create.
+        state = _nf("state.ts")
+        reset = state.split("function reset(): void {", 1)[1].split("\n  }\n", 1)[0]
+        self.assertIn("personPending = null", reset)
+        self.assertIn("quickCreates = []", reset)
+        self.assertIn("personLocked.value = false", reset)
+        self.assertIn("personPending.opening === opening", state)
         # Tag and playlist quick-creates are awaited by Create, per opening.
-        self.assertEqual(ui.count("void prksTrackWorkModalQuickCreate("), 2)
-        # A discarded form voids a submit still waiting before its create.
-        app = _read(_APP)
-        person_wait = app.split("personAdded = (await pendingPerson) === true;", 1)[1][:400]
-        self.assertIn("if (!createFormStillOpen()) return;", person_wait)
-        self.assertIn("window.__prksWorkCreateInFlight === createGeneration", app)
-        self.assertIn("for (const t of tagsToAttach)", app)
-        # The details refresh and every error path stop once the opening is gone.
-        self.assertIn("await window.prksHandleVideoUrlInput(sourceUrl);\n"
-                      "                // Discarded or reopened during the details fetch: void.\n"
-                      "                if (!createFormStillOpen()) return;", app)
-        self.assertIn("} catch (_readErr) {\n                if (!createFormStillOpen()) return;", app)
-        self.assertIn("// A failure for a form that is gone has no one to tell.\n"
-                      "                if (!createFormStillOpen()) return;", app)
-        video = ui.split("window.prksHandleVideoUrlInput = async function", 1)[1].split("\n        };", 1)[0]
-        self.assertEqual(video.count("if (!stillThisOpening()) return;"), 3)
-        # ...and to the latest request, so out-of-order details cannot win.
-        self.assertIn("window.__prksVideoPreviewSeq === requestSeq", video)
-        self.assertIn("if (!createFormStillOpen()) return;\n        if (!peopleReady)", app)
-        self.assertIn("if (!createFormStillOpen()) return;\n                const batch = await prksCreateWorkDurably", app)
-        reset = ui.split("function resetUploadModal", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("window.__prksUploadPersonPending = null", reset)
-        self.assertIn("personSearch.readOnly = false", reset)
-        self.assertIn("window.__prksWorkModalQuickCreates = [];", reset)
-        self.assertIn("prksThawWorkModalForm();", reset)
-        busy = ui.split("function prksSetWorkModalCreateBusy", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("body.setAttribute('inert', '')", busy)
-        focus = ui.split("function prksFocusWorkModalControl", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("prksThawWorkModalForm();", focus)
-        self.assertIn("{ stillApplies }", ui)
-        # Create waits for an in-flight quick-create before building the payload.
-        save = app.split("document.getElementById('save-work-btn').onclick", 1)[1]
-        self.assertLess(save.index("__prksUploadPersonPending"), save.index("const payload"))
-        # A failed quick-create stops Create rather than dropping the person.
+        self.assertIn("state.trackQuickCreate(", _nf("NewFileTags.vue"))
+        self.assertIn("state.trackQuickCreate(", _nf("NewFilePlaylist.vue"))
+        # Create waits for them before it reads the form, and a failed
+        # person quick-create stops Create rather than dropping the person.
+        self.assertLess(save.index("deps.pendingPerson()"), save.index("deps.readDraft()"))
+        self.assertLess(save.index("deps.pendingQuickCreates()"), save.index("deps.readDraft()"))
         self.assertIn("(await pendingPerson) === true", save)
-        self.assertIn("addRoleToUploadList() === true", quick)
+        # The in-flight mark names its opening.
+        self.assertIn("if (deps.inFlight() === opening) return", save)
+        self.assertIn("for (const tag of tagsToAttach)", save)
+        # Every wait re-checks the opening before it touches the form.
+        self.assertGreaterEqual(save.count("if (!stillOpening()) return"), 8)
+        source = _nf("NewFileSource.vue")
+        preview = source.split("async function previewVideo(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("state.isOpening(opening) && state.isPreviewSeq(seq)", preview)
+        self.assertEqual(preview.count("if (!still()) return"), 3)
 
     def test_selected_source_markup(self):
         modal = _work_modal()
@@ -340,42 +356,53 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertNotIn("Library root", modal)
 
     def test_js_preserves_canonical_create_path(self):
-        app = _read(_APP)
+        save = _nf("save.ts")
+        form = _read(_NEW_FILE_FORM)
+        self.assertIn("setInFlight(opening)", save)
+        self.assertIn("deps.setBusy(true)", save)
+        self.assertIn("'Choose a PDF file.'", save)
+        self.assertIn("'Enter a valid YouTube URL.'", save)
+        self.assertIn("draft.folderCommitted", save)
+        self.assertIn("FOLDER_NOT_PICKED", save)
+        self.assertIn("Choose a folder from the list", _nf("folder.ts"))
+        self.assertIn("Could not read this PDF", save)
+        self.assertIn("deps.closeAndOpen(", save)
+        self.assertIn("w.prksNavigate(`#/works/${encodeURIComponent(workId)}`)", form)
+        self.assertIn("w.prksCreateWorkDurably(fields, { tags: selectedTags })", form)
+        self.assertIn("batch.create.entity_id", save)
+        self.assertNotIn("attachWorkTagsAfterCreate", save)
+        self.assertNotIn("location.reload()", save + form)
+        self.assertIn("'Creating…'", form)
+        folder = _nf("folder.ts")
+        self.assertIn("export function canonicalUncategorizedFolder", folder)
+        self.assertIn("export function defaultFolderId", folder)
+        self.assertIn("export function folderChoiceFor", folder)
+        self.assertIn("function isCommitted()", _nf("NewFileFolder.vue"))
+        self.assertNotIn("Library root", folder + _nf("NewFileFolder.vue"))
         ui = _read(_UI)
-        work_chunk = app.split("document.getElementById('save-work-btn')", 1)[1].split(
-            "// Vue owns these submits when prksCreateForms is installed", 1
-        )[0]
-        self.assertIn("__prksWorkCreateInFlight", work_chunk)
-        self.assertIn("prksSetWorkModalCreateBusy", work_chunk)
-        self.assertIn("Choose a PDF file.", work_chunk)
-        self.assertIn("Enter a valid YouTube URL.", work_chunk)
-        self.assertIn("prksIsWorkModalFolderCommitted", work_chunk)
-        self.assertIn("Choose a folder from the list", work_chunk)
-        self.assertIn("Could not read this PDF", work_chunk)
-        self.assertIn("prksNavigate", work_chunk)
-        self.assertIn("prksCreateWorkDurably", work_chunk)
-        self.assertIn("{ tags: selectedTags }", work_chunk)
-        self.assertIn("batch.create.entity_id", work_chunk)
-        self.assertNotIn("attachWorkTagsAfterCreate", work_chunk)
-        self.assertNotIn("window.location.reload()", work_chunk)
-        self.assertIn("Creating…", ui)
-        self.assertIn("prksShowUploadPdfSelected", ui)
-        self.assertIn("prksSetWorkModalFolderFromId", ui)
-        self.assertIn("prksFolderIdFromFocusedContext", ui)
-        self.assertIn("prksCanonicalUncategorizedFolder", ui)
-        self.assertIn("prksIsWorkModalFolderCommitted", ui)
         self.assertIn("prksIsValidYoutubeUrl", ui)
         self.assertIn("prksIsRecognizedYoutubeHost", ui)
-        self.assertNotIn("Library root", ui)
-        self.assertIn("prksSyncWorkModalDisclosureInert", ui)
-        self.assertIn("switched: true", ui)
+        self.assertIn("prksExtractYoutubeVideoId", _nf("NewFileSource.vue"))
+        self.assertIn("syncDisclosureInert", form)
+        # A kind switch drops the other source's entry.
+        source = _nf("NewFileSource.vue")
+        self.assertIn("if (switched && next !== prev)", source)
+        # The classic New File module is gone.
+        app = _read(_APP)
+        for retired in ("uploadRoles", "uploadTagsSelected", "__prksPendingUploadPdfFile",
+                        "__prksUploadVideoMeta", "__prksWorkCreateInFlight", "resetUploadModal",
+                        "populateUploadComboboxes", "prksHandleVideoUrlInput", "initUploadDragAndDrop",
+                        "prksSetWorkModalCreateBusy", "__prksUploadPersonPending"):
+            self.assertNotIn(retired, ui, retired)
+            self.assertNotIn(retired, app, retired)
 
     def test_work_modal_open_settles_after_exactly_once(self):
         """The work-modal open path must run its `after` continuation once."""
         ui = _read(_UI)
-        chunk = ui.split("const after = () => {", 1)[1].split("} else if (id ===", 1)[0]
+        chunk = ui.split("} else if (id === 'work-modal') {", 1)[1].split("} else if (id ===", 1)[0]
         # Two-argument then: one of the two handlers runs, never both.
-        self.assertIn("populateUploadComboboxes().then(after, after);", chunk)
+        self.assertIn("prepared.then(after, after);", chunk)
+        self.assertIn("window.prksCreateForms.prepareNewFile(isCurrentOpening)", chunk)
         # Negative checks look at code only -- the source comment right above
         # the call names the rejected form in order to explain it.
         code = re.sub(r"//[^\n]*", "", chunk)
@@ -383,33 +410,45 @@ class FrontendWorkCreateTests(unittest.TestCase):
         # call itself throws, re-focusing the modal and re-capturing its
         # baseline over the state the first run already established.
         self.assertNotIn(".catch(after)", code)
-        # populateUploadComboboxes is async, so there is no non-promise arm to
-        # fall back to; a resurrected one would be dead code.
-        self.assertNotIn("typeof p.then === 'function'", code)
+        # The Vue form drops a load that finished after a newer opening.
+        form = _read(_NEW_FILE_FORM)
+        prepare = form.split("async function prepare(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("if (!stillOpening()) return", prepare)
 
     def test_folder_combobox_commit_semantics(self):
-        ui = _read(_UI)
-        # Free text must not be treated as a selection: oninput clears both
-        # the hidden folder ID and the explicit default-commit flag.
-        oninput_chunk = ui.split(
-            "hidden.value = '';\n        if (type === 'folder') delete input.dataset.prksFolderDefault;",
-            1,
-        )
-        self.assertEqual(len(oninput_chunk), 2, "expected exactly one folder-aware oninput clearer")
-        # Selecting a real folder result clears the default flag too.
-        self.assertIn("delete input.dataset.prksFolderDefault", ui)
+        folder = _nf("NewFileFolder.vue")
+        # Free text must not be treated as a selection: typing clears both the
+        # picked folder ID and the explicit default-commit flag.
+        on_input = folder.split("function onInput(): void {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("setFieldValue('work-folder-id', '')", on_input)
+        self.assertIn("state.folderDefault.value = false", on_input)
         # The synthetic default row is suppressed when a real Uncategorized
         # folder already exists in loaded data (no duplicate-looking rows).
-        self.assertIn("prksCanonicalUncategorizedFolder(data)", ui)
+        self.assertIn("if (!canonicalUncategorizedFolder(all))", folder)
+        committed = folder.split("function isCommitted(): boolean {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("fieldValue('work-folder-id').trim()", committed)
+        self.assertIn("state.folderDefault.value", committed)
+        # The shared person/work combobox no longer knows about folders.
+        ui = _read(_UI)
+        combobox = ui.split("function initSearchableCombobox(", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("folder", combobox)
 
     def test_no_meaningless_for_attribute_on_error_paragraphs(self):
-        ui = _read(_UI)
-        set_field_error = ui.split("function prksSetWorkModalFieldError", 1)[1].split(
-            "\n}\n", 1
-        )[0]
-        self.assertNotIn("setAttribute('for'", set_field_error)
-        self.assertIn("aria-describedby", set_field_error)
-        self.assertIn("aria-invalid", set_field_error)
+        modal = _work_modal()
+        for error_id in ("work-file-error", "work-video-url-error", "work-folder-error",
+                         "work-date-error", "work-video-published-date-error"):
+            paragraph = must_search(r'<p[^>]*id="%s"[^>]*>' % error_id, modal).group(0)
+            self.assertNotIn(" for=", paragraph, error_id)
+            self.assertIn('role="alert"', paragraph, error_id)
+        # Each control names its error and says when it is invalid.
+        for control_id, error_id in (("upload-drop-zone", "work-file-error"),
+                                     ("work-video-url", "work-video-url-error"),
+                                     ("work-folder-search", "work-folder-error"),
+                                     ("work-date", "work-date-error"),
+                                     ("work-video-published-date", "work-video-published-date-error")):
+            tag = must_search(r'<(?:input|div)[^>]*id="%s"[^>]*>' % control_id, modal).group(0)
+            self.assertIn(error_id, tag, control_id)
+            self.assertIn(':aria-invalid="state.errors.', tag, control_id)
 
     def test_video_source_is_youtube_only_contract(self):
         modal = _work_modal()

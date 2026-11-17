@@ -12644,7 +12644,6 @@ class WorkCreateWorkflowTests(_BrowserE2E):
                 d.open = true;
                 const m = document.getElementById('work-upload-more-details');
                 m.open = true;
-                if (window.prksSyncWorkModalDisclosureInert) window.prksSyncWorkModalDisclosureInert();
             }"""
         )
         page.fill("#work-doi", "10.1000/e2e")
@@ -12678,19 +12677,15 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.evaluate(
             """() => {
                 document.getElementById('work-upload-biblio-details').open = false;
-                if (window.prksSyncWorkModalDisclosureInert) window.prksSyncWorkModalDisclosureInert();
             }"""
         )
-        self.assertEqual(
-            page.evaluate(
-                "() => document.querySelector('#work-upload-biblio-details .work-upload-meta__details-body').hasAttribute('inert')"
-            ),
-            True,
+        # The disclosure's toggle event re-syncs inert.
+        page.wait_for_function(
+            "() => document.querySelector('#work-upload-biblio-details .work-upload-meta__details-body').hasAttribute('inert')"
         )
         page.evaluate(
             """() => {
                 document.getElementById('work-upload-biblio-details').open = true;
-                if (window.prksSyncWorkModalDisclosureInert) window.prksSyncWorkModalDisclosureInert();
             }"""
         )
         self.assertEqual(page.locator("#work-doi").input_value(), "10.1000/e2e")
@@ -12698,7 +12693,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#drop-zone-prompt").wait_for(state="visible")
         self.assertEqual(page.locator("#work-title").input_value(), "Kept Title")
         self.assertEqual(
-            page.evaluate("() => window.__prksPendingUploadPdfFile instanceof File"),
+            page.locator("#upload-selected-file").is_visible(),
             False,
         )
 
@@ -12712,7 +12707,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
         page.locator("#work-video-url").wait_for(state="visible")
         self.assertFalse(page.locator("#upload-source-pdf").is_visible())
-        self.assertEqual(page.evaluate("() => window.__prksPendingUploadPdfFile instanceof File"), False)
+        self.assertFalse(page.locator("#upload-selected-file").is_visible())
         page.evaluate(
             "() => { document.getElementById('work-video-url').value = 'https://example.com/watch?v=stale'; }"
         )
@@ -12800,13 +12795,13 @@ class WorkCreateWorkflowTests(_BrowserE2E):
     def _wait_work_modal_folder(self, page, folder_id, folder_label):
         """Wait for openModal's after-continuation to populate folder fields.
 
-        `#work-modal:not(.hidden)` appears before `populateUploadComboboxes()`
+        `#work-modal:not(.hidden)` appears before `prepareNewFile()`
         finishes and writes `#work-folder-id`. A bare `input_value()` read races
         that continuation under parallel load (#64). For the Uncategorized
         default, folder_id is "" and folder_label is "Uncategorized" — waiting
         on the label avoids the vacuous-empty pass before the continuation runs.
         """
-        # resetUploadModal() already writes the Uncategorized default before the
+        # The New File reset already writes the Uncategorized default before the
         # async continuation runs, so the values alone can match while the
         # modal is still inert -- and a fill into an inert field is dropped.
         page.wait_for_function(
@@ -13379,7 +13374,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertEqual(page.locator("#work-title").input_value(), "")
         self.assertEqual(page.locator("#work-abstract").input_value(), "")
         self.assertFalse(page.locator("#upload-roles-list").is_visible())
-        self.assertEqual(page.evaluate("() => uploadRoles.length"), 0)
+        self.assertEqual(page.locator("#upload-roles-list li").count(), 0)
         self.assertFalse(page.evaluate("() => document.getElementById('work-upload-more-details').open"))
         self.assertTrue(page.locator("[data-prks-count-for='work-upload-more-details']").is_hidden())
         page.keyboard.press("Escape")
@@ -13465,7 +13460,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
         page.keyboard.type("bet")
         page.keyboard.press("Enter")  # the open rows still belong to the empty query
-        self.assertEqual(page.evaluate("() => uploadTagsSelected.map((t) => t.name)"), [])
+        self.assertEqual(page.locator("#upload-tags-list .work-tag-chip").count(), 0)
         page.evaluate("() => { const g = window.__prksTagGate; window.__prksTagGate = null; g.release(); }")
         page.wait_for_function(
             """() => {
@@ -13475,7 +13470,10 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             }"""
         )
         page.keyboard.press("Enter")
-        page.wait_for_function("() => uploadTagsSelected.map((t) => t.name).join() === 'beta'")
+        page.wait_for_function(
+            """() => [...document.querySelectorAll('#upload-tags-list .work-tag-chip')]
+                .map((chip) => chip.firstChild.textContent.trim()).join() === 'beta'"""
+        )
 
     def _hold_youtube_oembed(self, page):
         """Route the preview iframe; hold every oEmbed fetch until released."""
@@ -13525,16 +13523,16 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.wait_for_function("() => window.__e2eOembedWaiters.length > 0")
         self._discard_and_reopen(page)
         page.evaluate("() => window.__e2eReleaseOembed()")
-        page.wait_for_function("() => !window.__prksWorkCreateInFlight")
+        page.wait_for_function("() => !document.querySelector('#work-modal [data-prks-create-in-flight]')")
         state = page.evaluate(
             """() => ({
                 title: document.getElementById('work-title').value,
                 channel: (document.getElementById('work-video-channel') || {}).value || '',
-                meta: window.__prksUploadVideoMeta || null,
+                preview: !document.getElementById('upload-viewer').classList.contains('hidden'),
                 statusHidden: document.getElementById('upload-status-msg').classList.contains('hidden'),
             })"""
         )
-        self.assertEqual(state, {"title": "", "channel": "", "meta": None, "statusHidden": True})
+        self.assertEqual(state, {"title": "", "channel": "", "preview": False, "statusHidden": True})
         titles = page.evaluate(
             """async () => (await (await prksRequest('/api/works')).json()).map((w) => w.title)"""
         )
@@ -13565,7 +13563,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.wait_for_function("() => typeof window.__e2eRejectCreate === 'function'")
         self._discard_and_reopen(page)
         page.evaluate("() => window.__e2eRejectCreate()")
-        page.wait_for_function("() => !window.__prksWorkCreateInFlight")
+        page.wait_for_function("() => !document.querySelector('#work-modal [data-prks-create-in-flight]')")
         state = page.evaluate(
             """() => ({
                 statusHidden: document.getElementById('upload-status-msg').classList.contains('hidden'),
@@ -13622,12 +13620,11 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             """() => ({
                 title: document.getElementById('work-title').value,
                 channel: document.getElementById('work-video-channel').value,
-                metaTitle: (window.__prksUploadVideoMeta || {}).title || '',
-                lastUrl: window.__prksLastVideoPreviewUrl || '',
+                embed: (document.querySelector('#upload-viewer iframe') || {}).src || '',
             })"""
         )
         self.assertEqual(state, {
-            "title": "Title B", "channel": "Channel B", "metaTitle": "Title B", "lastUrl": url_b,
+            "title": "Title B", "channel": "Channel B", "embed": "https://www.youtube.com/embed/9bZkp7q19f0",
         })
 
     def test_create_waits_for_an_in_flight_quick_create(self):
@@ -13730,7 +13727,7 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator("#work-modal").wait_for(state="hidden")
         hash_before = page.evaluate("() => location.hash")
         page.evaluate("() => window.__e2eReleasePeople()")
-        page.wait_for_function("() => !window.__prksWorkCreateInFlight")
+        page.wait_for_function("() => !document.querySelector('#work-modal [data-prks-create-in-flight]')")
         self.assertEqual(posts, [])
         self.assertEqual(page.evaluate("() => location.hash"), hash_before)
         titles = page.evaluate(
