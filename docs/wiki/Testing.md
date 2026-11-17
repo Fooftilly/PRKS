@@ -204,6 +204,28 @@ The five synthetic states are Folder library, Work detail with mounted notes/PDF
 The committed JSON stores a small 48×30 RGB sampling fingerprint per scene (zlib/base64, not a full screenshot). The pilot tolerates mild font-antialias variations and is aimed at meaningful visual shifts, not single-pixel precision; the pure unit test deliberately inverts a controlled synthetic image and proves comparison fails. Incomplete scenario readiness, missing baselines in check mode and malformed metadata fail closed. When capture fails, a bounded `prks-visual-failure.json` contains only a fixed stage label, exception **type** and completed scene names (never the raw Playwright exception, URL, selector, document text or Work id); the advisory job summary identifies the interrupted stage. For completed comparisons, each scene reports the exact triggering class: dimensions, mean color change, changed-pixel fraction, both thresholds, or within tolerance. To replay locally from the PRKS checkout root with the same pinned E2E dependencies and Chromium, run `repo="$(pwd)"; temp="$(mktemp -d)"; (cd "$temp" && python "$repo/scripts/ci/visual_regression.py" --mode check)`; check CI environment/commit parity before treating a difference as a regression. Reusing a temporary directory is safe: each capture removes only its prior candidate/results/failure JSON and five known synthetic scene PNGs before starting, so a stale success cannot hide a new failure. The runner does not retry captures or accept new baselines automatically. PNGs/artifacts are fixture-only, retained seven days, not committed and never sent to Argos. Avoid GitHub log dumps containing real file names/URLs; user library content must never be captured. Evaluate Argos adoption separately under #857 after measuring actionable findings, flake rate, runner-minutes and privacy safeguards.
 
 
+## OWASP ZAP — passive security pilot (#860)
+
+The manual [ZAP workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/zap-passive-pilot.yml) looks for runtime HTTP weaknesses that source scanners miss, such as missing security headers, cookie flags and information leaks. It is **passive only**. `scripts/ci/zap_passive_pilot.py` starts a disposable `AppServer --testing` on loopback in session-auth mode (its own database on the `PRKS_TEST_DATABASE_URL` server, an owner and one editor, the UX-tour synthetic library). It also starts a ZAP 2.17.0 container, pinned by digest, in daemon mode with `-silent` and the API bound to loopback, and switches ZAP to **safe mode**, so ZAP can neither spider nor attack. The pilot itself sends a fixed allowlist of requests through ZAP's proxy: anonymous, signed in as the owner, and signed in as the editor. The only non-GET request is `POST /api/login`. ZAP's passive rules only watch that traffic. The official `zap-baseline.py` and `zap-api-scan.py` recipes are not used, because they spider or scan actively by default.
+
+A run fails (exit 1, listed under `problems`) when:
+
+- a request gets a different answer than the allowlist expects, for example the editor's `GET /api/backups/download` must be 403;
+- ZAP's history holds anything but the pilot's own requests;
+- any Library content table changed.
+
+Alerts are advisory and do not fail the run. The summary holds the ZAP and PRKS versions, the image digest, each request's route template and answer, and per passive rule its id, name, risk, confidence, count and route templates. It holds no URLs with values, evidence, parameters, cookies or bodies. Triage verified findings into focused issues, or into private reporting under `SECURITY.md` when sensitive, before any check blocks. The existing HTTP auth and Origin/CSRF suites stay authoritative.
+
+Locally, with Docker and a disposable PostgreSQL 18 server:
+
+```bash
+docker pull "$(python -c 'from scripts.ci.zap_passive_pilot import ZAP_IMAGE; print(ZAP_IMAGE)')"
+PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1 \
+  python scripts/ci/zap_passive_pilot.py --out zap-summary.json
+```
+
+The image is about 3.7 GB unpacked. Active scans stay out of scope: they need explicit manual authorization, a target allowlist, operation exclusions, time limits and a disposable reset.
+
 ## Schemathesis — bounded read-only API contract pilot (#855)
 
 PRKS's `/api/openapi.json` is **Positions-only**, not an application-wide contract. The opt-in [Schemathesis workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-readonly-pilot.yml) instead verifies `docs/api/openapi-publishers.json` against its Pydantic-generated builder and live `GET /api/openapi/publishers.json`. The test creates a **second, one-operation copy** containing only `GET /api/publishers` (`listPublishersInUse`); the published fragment's POST and DELETE routes are never passed to the scanner.
