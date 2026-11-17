@@ -14,7 +14,9 @@ import tempfile
 import unittest
 from collections import defaultdict
 from pathlib import Path
-from unittest.loader import _FailedTest
+
+# unittest's private placeholder for a module that failed to import.
+_FailedTest = getattr(unittest.loader, "_FailedTest")
 
 
 class DiscoveryError(Exception):

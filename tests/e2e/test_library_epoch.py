@@ -96,11 +96,14 @@ class LibraryEpochQueueTests(unittest.TestCase):
 
     def restore_epoch(self):
         """Advances the Library's epoch, as a restore's commit does (§11.4)."""
+        assert self.server.library is not None
         with psycopg.connect(self.server.library.conninfo, autocommit=True) as conn:
+            assert self.server.library is not None
             row = conn.execute(
                 "UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s RETURNING epoch",
                 (self.server.library.library_id,),
             ).fetchone()
+        assert row is not None
         return str(row[0])
 
     def open_page(self):

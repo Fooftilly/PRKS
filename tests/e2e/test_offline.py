@@ -1202,6 +1202,7 @@ class OfflineFoundationTests(unittest.TestCase):
         server = AppServer(seed_fn=seed_library)
         self.addCleanup(server.stop)
         server.start()
+        assert _BROWSER is not None
         context = _BROWSER.new_context(
             viewport={"width": 1400, "height": 900},
             service_workers="allow",

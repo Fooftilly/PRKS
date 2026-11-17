@@ -25,7 +25,9 @@ def setUpModule():
 
 
 def tearDownModule():
+    assert _BROWSER is not None
     _BROWSER.close()
+    assert _PW is not None
     _PW.stop()
 
 

@@ -374,7 +374,7 @@ class LibraryNavFolderSwitcherTests(unittest.TestCase):
             (t for t in snap["routes"] if t["route"] and ids["ethics"] in t["route"]),
             None,
         )
-        self.assertIsNotNone(ethics_tab)
+        assert ethics_tab is not None
         page.evaluate("id => prksWorkspaceActivateTab(id)", ethics_tab["id"])
         page.wait_for_selector(".prks-tile--main [data-prks-role='folder-detail']", timeout=10000)
         self.force_narrow_folder_layout(page)

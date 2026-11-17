@@ -9,6 +9,7 @@ boundaries. All Folder data is synthetic.
 """
 import os
 import unittest
+from typing import TYPE_CHECKING
 
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
@@ -48,7 +49,14 @@ def seed(root):
     return ids
 
 
-class _FolderRemindersPage:
+# The checker sees these page mixins as TestCases; at runtime they stay plain mixins.
+if TYPE_CHECKING:
+    _PageBase = unittest.TestCase
+else:
+    _PageBase = object
+
+
+class _FolderRemindersPage(_PageBase):
     def start(self, without_locks=False):
         server = AppServer(seed_fn=seed)
         self.addCleanup(server.stop); server.start()

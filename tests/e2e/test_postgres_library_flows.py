@@ -484,12 +484,13 @@ cat "$2" > "$3" && printf '%s\\n' '% prks-e2e-linearized' >> "$3"
         # Same document: no reload.
         self.assertTrue(page.evaluate("() => (%s).viewer === window.__prksViewerBeforeSave" % a._FOCUSED_PDF))
 
+        assert server.library is not None
         with psycopg.connect(server.library.conninfo) as conn:
             row = conn.execute(
                 "SELECT content_sha256 FROM prks.assets WHERE library_id = %s AND storage_locator = %s",
                 (str(server.library.library_id), canonical[len("/api/pdfs/"):]),
             ).fetchone()
-        self.assertIsNotNone(row, canonical)
+        assert row is not None, canonical
         content_sha256 = str(row[0])
 
         cached_js = """async (path) => {

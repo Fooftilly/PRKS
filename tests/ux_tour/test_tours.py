@@ -121,12 +121,16 @@ def setUpModule():
 def tearDownModule():
     global _PW, _BROWSER
     try:
+        assert _RUN_DIR is not None
+        assert _RUN_ID is not None
         harness.write_manifest_and_report(_RUN_DIR, _RUN_ID, _RESULTS, record_all=_RECORD_ALL)
         passed = harness.all_passed(_RESULTS)
         print("\n" + ("UX TOUR PASS" if passed else "UX TOUR FAIL"))
         print("Artifacts:")
         print(str(_RUN_DIR) + os.sep)
         if _RECORD_ALL:
+            assert _RUN_DIR is not None
+            assert _RUN_ID is not None
             archive = harness.zip_run(_RUN_DIR, _RUN_ID)
             print("Archive:")
             print(str(archive))
@@ -143,6 +147,7 @@ def tearDownModule():
 
 class _UXTour(unittest.TestCase):
     def open_tour(self, name: str, seed_fn=seed_ux_tour_library, extra_env=None):
+        assert _RUN_DIR is not None
         return harness.open_tour_page(
             _BROWSER,
             _RUN_DIR,

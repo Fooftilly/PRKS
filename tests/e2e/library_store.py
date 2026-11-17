@@ -13,7 +13,7 @@ domain function inside the facade's ``library_command`` transaction.
 from __future__ import annotations
 
 import contextlib
-from typing import Any
+from typing import Any, LiteralString
 
 from tests.e2e.postgres_identity import owner_facade
 
@@ -43,15 +43,15 @@ class LibraryStore:
 
         return call
 
-    def query(self, postgres: str, *, params: tuple = ()) -> list[dict]:
+    def query(self, postgres: LiteralString, *, params: tuple = ()) -> list[dict]:
         """Rows of one read against the ``prks`` schema, with ``%s`` placeholders."""
         import psycopg
-        from psycopg.rows import dict_row
+        from psycopg.rows import DictRow, dict_row
 
-        with psycopg.connect(self._server.library.conninfo, row_factory=dict_row) as conn:
+        with psycopg.Connection[DictRow].connect(self._server.library.conninfo, row_factory=dict_row) as conn:
             return [dict(row) for row in conn.execute(postgres, params).fetchall()]
 
-    def execute(self, postgres: str, *, params: tuple = ()) -> None:
+    def execute(self, postgres: LiteralString, *, params: tuple = ()) -> None:
         """One write, committed (a test arranging state the UI cannot)."""
         import psycopg
 

@@ -25,6 +25,7 @@ from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PLAYLIST_VIDEO_ONE_TITLE, WORK_A_TITLE, seed_playlists_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 # Three videos, each in both spellings PRKS accepts. The pairs exist so a
 # re-spelling can be told apart from a different video: SHORT_TWO and WATCH_TWO
@@ -216,9 +217,10 @@ class OfflineWorkSourceTests(unittest.TestCase):
         from backend.domain.works import source
 
         desired = work_source_sync.canonical_source({'kind': 'video', 'url': url})
+        assert desired is not None
         self.db_for(server).command(
             lambda scope: source.set_source(
-                scope, source._target(scope, work_id, for_update=True), desired))
+                scope, require(source._target(scope, work_id, for_update=True)), desired))
 
     def columns(self, server, work_id):
         row = self.db_for(server).get_work(work_id)

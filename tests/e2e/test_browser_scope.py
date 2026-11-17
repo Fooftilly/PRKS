@@ -218,6 +218,7 @@ class BrowserScopeTests(unittest.TestCase):
     # --- tests ---------------------------------------------------------------
 
     def test_two_accounts_in_one_browser_never_see_each_others_queue(self):
+        assert self.server.library is not None
         owner_id = self.server.library.accounts[OWNER_LOGIN]
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
@@ -383,6 +384,7 @@ class BrowserScopeTests(unittest.TestCase):
         )
 
     def test_an_older_refusal_never_forgets_a_newer_accounts_scope(self):
+        assert self.server.library is not None
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
         stale = self.open_page()
@@ -435,6 +437,7 @@ class BrowserScopeTests(unittest.TestCase):
         )
 
     def test_a_superseded_first_answer_never_binds_the_older_account(self):
+        assert self.server.library is not None
         owner_id = self.server.library.accounts[OWNER_LOGIN]
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
@@ -522,6 +525,7 @@ class BrowserScopeTests(unittest.TestCase):
         )
 
     def test_another_account_signing_in_retires_the_open_page(self):
+        assert self.server.library is not None
         reader_id = self.server.library.accounts[READER]
         self.sign_in(OWNER_LOGIN)
         page = self.open_page()
@@ -562,6 +566,7 @@ class BrowserScopeTests(unittest.TestCase):
         self.wait_delivered(page)
 
     def test_two_accounts_in_one_browser_never_see_each_others_recovery_drafts(self):
+        assert self.server.library is not None
         owner_id = self.server.library.accounts[OWNER_LOGIN]
         self.sign_in(OWNER_LOGIN)
         page = self.open_page()

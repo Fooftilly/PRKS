@@ -60,6 +60,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.addCleanup(server.stop)
         server.start()
         e2e_diag("SERVER_READY", tid)
+        assert _HOLDER is not None
         page, context, collector = open_app_page(
             _HOLDER.get_browser(), server.origin, service_workers='allow'
         )
@@ -67,6 +68,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         def _after_context():
             e2e_diag("CONTEXT_CLOSED", tid)
+            assert _HOLDER is not None
             _HOLDER.after_context_closed()
 
         self.addCleanup(_after_context)
@@ -129,6 +131,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS if timeout is None else timeout,
             message='listOperations did not settle',
         )
+        assert result is not None
         return result['rows']
 
     def pending(self, page, count, timeout=None):
@@ -464,6 +467,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS,
             message='recently-added list did not settle',
         )
+        assert result is not None
         return result['value']
 
     def test_pending_publisher_is_searchable_in_recently_added_before_it_syncs(self):
@@ -593,6 +597,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS,
             message='cached list read did not settle',
         )
+        assert result is not None
         return result['value']
 
     def cached_person_work_field(self, page, person_id, work_id, field):
@@ -612,6 +617,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             timeout=self._OPS_TIMEOUT_MS,
             message='cached person read did not settle',
         )
+        assert result is not None
         return result['value']
 
     def test_a_pending_year_reaches_every_surface_that_shows_one(self):
