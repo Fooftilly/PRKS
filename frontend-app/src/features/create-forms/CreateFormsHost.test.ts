@@ -282,6 +282,21 @@ describe('create form host', () => {
     await flush()
     expect(playlists).toBe(1)
     expect(playlistArgs).toEqual(['Lectures', 'Week one'])
+
+    // A failed create is shown for the form, not as a Title error.
+    w.createPlaylist = async () => {
+      throw new Error('Server unavailable')
+    }
+    playlistModal?.classList.remove('hidden')
+    if (playlistModal) playlistModal.dataset.prksOpenGeneration = '2'
+    title.value = 'Seminars'
+    document.getElementById('save-playlist-btn')?.click()
+    await flush()
+    await flush()
+    expect(document.getElementById('playlist-error')?.textContent).toContain('Server unavailable')
+    expect(document.getElementById('playlist-error')?.getAttribute('role')).toBe('alert')
+    expect(document.getElementById('playlist-title-error')).toBeNull()
+    expect(title.getAttribute('aria-invalid')).toBeNull()
   })
 
   it('keeps a reopened Person draft when an older create is still pending', async () => {

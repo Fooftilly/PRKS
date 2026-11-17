@@ -11,6 +11,8 @@ import {
 } from './submit'
 
 const playlistError = ref('')
+// A failed create is not a Title problem, so it is shown for the form.
+const saveError = ref('')
 const playlistBusy = ref(false)
 const gate = createPlaylistSaveGate()
 
@@ -34,6 +36,7 @@ function resetFields(): void {
   setFieldValue('playlist-title', '')
   setFieldValue('playlist-description', '')
   playlistError.value = ''
+  saveError.value = ''
   // New opening: allow a fresh Create. An older in-flight save keeps its own
   // opening token and captured pending attachment.
   playlistBusy.value = false
@@ -47,6 +50,7 @@ async function onSave(): Promise<void> {
     return
   }
   playlistError.value = ''
+  saveError.value = ''
   const w = runtime()
   await gate.save({
     modal: () => {
@@ -90,7 +94,7 @@ async function onSave(): Promise<void> {
       w.prksNavigate?.(hash, options)
     },
     onError: async (message) => {
-      playlistError.value = message
+      saveError.value = message
     },
   })
 }
@@ -133,5 +137,12 @@ defineExpose({ resetFields })
       busy-label="Creating…"
       @click="onSave"
     >Create playlist</PrksButton>
+    <p
+      id="playlist-error"
+      class="folder-field-error"
+      :class="{ hidden: !saveError }"
+      role="alert"
+      aria-live="polite"
+    >{{ saveError }}</p>
   </div>
 </template>
