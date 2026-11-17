@@ -129,10 +129,13 @@ class PlaylistsVueContracts(unittest.TestCase):
         gate = (forms / "playlist-save.ts").read_text(encoding="utf-8")
         view = (forms / "PlaylistCreateForm.vue").read_text(encoding="utf-8")
         pending = gate.index("const pending = deps.pendingAttach()")
-        save = gate[pending:]
-        self.assertIn("takeIndexCreateTabId", save)
-        self.assertIn("tabId: createTabId", save)
-        self.assertIn("#/playlists/", save)
+        save = gate[pending : gate.index("return { save }", pending)]
+        self.assertIn("const createTabId = deps.takeIndexCreateTabId()", save)
+        self.assertIn(
+            "if (!attachedWork && createTabId) {\n"
+            "        deps.navigate(`#/playlists/${encodeURIComponent(newId)}`, { tabId: createTabId })",
+            save,
+        )
         self.assertNotIn("location.hash", save)
         self.assertIn("prksOpenGeneration", gate)
         self.assertIn("clearPendingIfSame", gate)

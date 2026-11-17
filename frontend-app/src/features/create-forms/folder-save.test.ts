@@ -39,6 +39,7 @@ describe('folder save gate', () => {
       guardRefusal: () => false,
       revalidate: () => {},
       owner: () => null,
+      pendingAttach: () => null,
       afterCreate: async () => {},
     }
     const first = gate.save(deps)
@@ -76,6 +77,7 @@ describe('folder save gate', () => {
       guardRefusal: () => false,
       revalidate: () => {},
       owner: () => ({ tabId: 'tab' }),
+      pendingAttach: () => null,
       afterCreate: async () => {
         after += 1
       },
@@ -110,6 +112,7 @@ describe('folder save gate', () => {
       guardRefusal: () => false,
       revalidate: () => {},
       owner: () => null,
+      pendingAttach: () => null,
       afterCreate: async () => {},
     })
     expect(alerts).toBe(0)
@@ -127,6 +130,7 @@ describe('folder save gate', () => {
       guardRefusal: () => true,
       revalidate: () => {},
       owner: () => null,
+      pendingAttach: () => null,
       afterCreate: async () => {},
     })
     expect(alerts).toBe(0)
@@ -148,6 +152,7 @@ describe('folder save gate', () => {
       guardRefusal: () => false,
       revalidate: () => {},
       owner: () => null,
+      pendingAttach: () => null,
       afterCreate: async () => {},
     })
     expect(calls).toBe(0)

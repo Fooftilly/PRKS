@@ -3,7 +3,7 @@ import { nextTick, onMounted, ref } from 'vue'
 import PrksField from '../../components/PrksField.vue'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
-import { finishFolderCreate, type FolderDraft } from './folder-effects'
+import { finishFolderCreate, type FolderDraft, type PendingAttach } from './folder-effects'
 import { FOLDER_TITLE_CONFLICT, folderTitleConflicts, type FolderTitleRow } from './folder-rules'
 import { createFolderSaveGate } from './folder-save'
 import { bindComboboxKeys, createSubmitKeyHandler, focusField, markComboboxRendered } from './keyboard'
@@ -103,6 +103,7 @@ function onTitleInput(): void {
 }
 
 function onParentFocus(): void {
+  cancelBlurCollapse()
   bindParentKeys()
   renderParents()
 }
@@ -114,8 +115,21 @@ function onParentInput(): void {
   applyChrome()
 }
 
+/** The blur collapse waits for a row's mousedown; a refocus must cancel it. */
+let blurTimer: number | null = null
+
+function cancelBlurCollapse(): void {
+  if (blurTimer == null) return
+  window.clearTimeout(blurTimer)
+  blurTimer = null
+}
+
 function onParentBlur(): void {
-  window.setTimeout(() => hideParent(), 200)
+  cancelBlurCollapse()
+  blurTimer = window.setTimeout(() => {
+    blurTimer = null
+    hideParent()
+  }, 200)
   parentError.value = parentNotPicked() ? PARENT_NOT_PICKED : null
 }
 
@@ -173,6 +187,8 @@ function onSave(): void {
     guardRefusal: (error) => w.prksOfflineWasGuardRefusal?.(error) === true,
     revalidate: () => applyChrome(),
     owner: () => w.prksGetFocusedTabContext?.() ?? null,
+    pendingAttach: () => (window as unknown as { __prksPendingWorkFolderAttach?: PendingAttach | null })
+      .__prksPendingWorkFolderAttach ?? null,
     afterCreate: finishFolderCreate,
   })
 }
@@ -194,7 +210,15 @@ function resetFields(): void {
   applyChrome()
 }
 
-defineExpose({ refreshValidation, releaseSave, focusInitial, resetFields })
+/** Escape's inner layer: closes an open parent list. True when one was open. */
+function closeParentList(): boolean {
+  if (!parentOpen.value) return false
+  cancelBlurCollapse()
+  hideParentNow()
+  return true
+}
+
+defineExpose({ refreshValidation, releaseSave, focusInitial, resetFields, closeParentList })
 </script>
 
 <template>

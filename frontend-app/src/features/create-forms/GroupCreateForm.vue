@@ -108,11 +108,21 @@ async function prepare(): Promise<void> {
 }
 
 function onParentFocus(): void {
+  cancelBlurCollapse()
   bindParentKeys()
-  void runtime().prksEnsureAllGroupsCache?.().then((rows) => {
-    if (Array.isArray(rows)) groups = rows
+  const load = runtime().prksEnsureAllGroupsCache?.()
+  if (!load) {
     renderParents()
-  })
+    return
+  }
+  // A failed catalogue read still shows the list, from the groups already known.
+  void load.then(
+    (rows) => {
+      if (Array.isArray(rows)) groups = rows
+      renderParents()
+    },
+    () => renderParents(),
+  )
 }
 
 function onParentInput(): void {
@@ -122,8 +132,21 @@ function onParentInput(): void {
   renderParents()
 }
 
+/** The blur collapse waits for a row's mousedown; a refocus must cancel it. */
+let blurTimer: number | null = null
+
+function cancelBlurCollapse(): void {
+  if (blurTimer == null) return
+  window.clearTimeout(blurTimer)
+  blurTimer = null
+}
+
 function onParentBlur(): void {
-  window.setTimeout(() => hideParent(), 200)
+  cancelBlurCollapse()
+  blurTimer = window.setTimeout(() => {
+    blurTimer = null
+    hideParent()
+  }, 200)
   parentError.value = parentNotPicked() ? PARENT_NOT_PICKED : null
 }
 
@@ -189,7 +212,15 @@ function resetFields(): void {
   hideParentNow()
 }
 
-defineExpose({ prepare, focusInitial, resetFields })
+/** Escape's inner layer: closes an open parent list. True when one was open. */
+function closeParentList(): boolean {
+  if (!parentOpen.value) return false
+  cancelBlurCollapse()
+  hideParentNow()
+  return true
+}
+
+defineExpose({ prepare, focusInitial, resetFields, closeParentList })
 </script>
 
 <template>

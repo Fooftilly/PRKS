@@ -442,6 +442,15 @@ function prksDismissModalInnerEscapeLayer() {
         prksHideInlineComboboxResults(openResults);
         return true;
     }
+    // The Vue create forms own their parent lists' open state.
+    if (
+        window.prksCreateForms &&
+        window.prksCreateForms.owns(modal.id) &&
+        typeof window.prksCreateForms.dismissInnerLayer === 'function' &&
+        window.prksCreateForms.dismissInnerLayer(modal.id)
+    ) {
+        return true;
+    }
     const openPanel = modal.querySelector('.prks-doc-type-menu__panel:not(.hidden)');
     if (!openPanel) return false;
     if (typeof prksCloseAllDocTypeMenus === 'function') {
