@@ -220,22 +220,22 @@ The workflow runs manually or for changes to the pilot/Publishers schema/depende
 The [mutation scan workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-mutations.yml) runs `scripts/ci/schemathesis_mutations.py`. Unlike the read-only pilot above, it sends writes, so it is held tighter, not looser:
 
 - It targets only a fresh `AppServer --testing` on loopback, on its own disposable PostgreSQL database seeded with synthetic data. It refuses `PRKS_AUTH` in the calling shell.
-- It scans three families: Positions, Saved Views and Publishers. Each has an exact operation allowlist in the script. If a family's checked-in fragment (`docs/api/openapi-*.json`) differs from its Pydantic builder or from the live `/api/openapi/<family>.json`, or gains or loses an operation, the scan stops before any request.
+- It scans three families: Positions, Saved Views and Publishers. Each has an exact operation allowlist in the script. Before the first request, every family's checked-in fragment (`docs/api/openapi-*.json`) is compared with its Pydantic builder, its operations with the allowlist, and then with the live `/api/openapi/<family>.json`. Any difference stops the scan before any write.
 - Every request carries the instance's own `Origin` and `PRKS-Library-Epoch`, so generated input reaches the route rather than the admission refusal.
 - Limits: fixed seed 855, 50 examples per operation, examples and fuzzing phases only (no stateful sequences, no coverage phase), one worker, 50 requests per second, and a 120-second timeout per family.
 - It checks for server errors and for status codes, content types and response bodies the fragment does not document.
-- NUL is not generated. The server refuses NUL in the request target before routing, with a status the family fragments do not document.
+- NUL is not generated. The server refuses NUL in the request target before routing with a 400, and several of the families' read and delete operations do not document a 400.
 
 Its first run found five ways a request got a 500 or no answer at all:
 
 - a body that is not UTF-8;
 - JSON nested past the decoder's recursion limit;
 - a `\ud800` escape that reached psycopg;
-- `%00` in a query or path, which reached a PostgreSQL bind.
+- `%00` in a query or path, which reached a PostgreSQL bind (`%2500` too, on the alias routes, which decode a value twice).
 
 `backend/server.py` now answers all of these with 400. They are pinned in `tests/pg/test_http_request_fuzz_regressions.py`, and the scan's own safeguards are in `tests/test_schemathesis_mutations.py`.
 
-To run it locally, start a disposable PostgreSQL server and install the pins with `./.venv/bin/python scripts/ci/install_pinned_python.py schemathesis`. Then run `PRKS_TESTING=1 PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/postgres ./.venv/bin/python scripts/ci/schemathesis_mutations.py`.
+To run it locally, start a disposable PostgreSQL server and install the pins with `./.venv/bin/python scripts/ci/install_pinned_python.py schemathesis`. Then run `PATH="$PWD/.venv/bin:$PATH" PRKS_TESTING=1 PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/postgres ./.venv/bin/python scripts/ci/schemathesis_mutations.py` (the script finds the pinned `st` on `PATH`).
 
 Output is sanitized the same way as the pilot's, and `--debug-local` is likewise refused in GitHub Actions. The workflow is advisory. It runs manually, or when a pull request changes the scanned families, the server, the harness or the pins.
 

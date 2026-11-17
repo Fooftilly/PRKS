@@ -7,7 +7,8 @@ publishers families. Before the fixes in ``backend/server.py`` it found:
   limit, escaped ``_read_json_body`` and the connection closed with no answer;
 * a ``"\\ud800"`` escape decoded to a lone surrogate, and psycopg failed to
   encode it when the route stored the name (a 500);
-* ``%00`` in a query reached a PostgreSQL bind, which refuses NUL (a 500).
+* ``%00`` in a query reached a PostgreSQL bind, which refuses NUL (a 500),
+  and ``%2500`` did too on a route that decodes a value twice.
 
 Each is now a 400 before any route runs. Every case is sent with the owner's
 session, Origin and Library epoch, so the refusal is the body or URL check and
@@ -70,7 +71,11 @@ class RequestFuzzRegressionTests(ServerApiTestCase):
         publisher = self.ok(self.send("POST", "/api/publishers", {"name": "Fuzz Press"}))
         for method, path in (("GET", "/api/search?q=%00"),
                              ("GET", "/api/publishers/%00"),
-                             ("DELETE", f"/api/publishers/{publisher['id']}/aliases?alias=a%00b")):
+                             ("DELETE", f"/api/publishers/{publisher['id']}/aliases?alias=a%00b"),
+                             # The alias route decodes the value a second time.
+                             ("DELETE", f"/api/publishers/{publisher['id']}/aliases?alias=a%2500b"),
+                             # A static file path: os.path refuses NUL.
+                             ("GET", "/%00"), ("GET", "/js/%2500.js")):
             with self.subTest(method=method, path=path):
                 res = (self.get(path) if method == "GET" else self.send(method, path))
                 self.assertEqual(self.refused(res, 400), {"error": "invalid_request"})

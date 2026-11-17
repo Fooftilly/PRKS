@@ -13,8 +13,8 @@ does, so it is held tighter than the pilot rather than looser:
   generated input reaches the route instead of the admission refusal;
 * no stateful sequences, no coverage phase, a fixed seed, a request rate limit
   and a process timeout. NUL is not generated: the server refuses it before
-  routing (``tests/pg/test_http_request_fuzz_regressions.py``) with a status the
-  family fragments do not document.
+  routing (``tests/pg/test_http_request_fuzz_regressions.py``) with a 400 that
+  several family read and delete operations do not document.
 
 Output is sanitized exactly as the pilot's: no generated payloads, bodies or
 URLs are printed in GitHub Actions.
@@ -170,8 +170,10 @@ def scan(*, debug_local: bool = False) -> int:
     try:
         server.start()
         epoch = library_epoch(server.origin)
+        # Every live fragment before the first write, not family by family.
         for family, document in contracts:
             live_contract_matches(server.origin, family, document)
+        for family, document in contracts:
             with tempfile.TemporaryDirectory(prefix="prks-schemathesis-mutations-") as directory:
                 schema = Path(directory) / f"{family.name}.json"
                 schema.write_text(json.dumps(document), encoding="utf-8")

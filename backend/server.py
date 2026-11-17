@@ -12,6 +12,7 @@ import re
 import uuid
 import logging
 import ipaddress
+import itertools
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, TypeVar
 from email.message import Message
@@ -106,13 +107,23 @@ PRKS_TESTING_DEFAULT_PORT = 8070
 # Minimum uncompressed JSON size before gzip (Accept-Encoding: gzip).
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
 _PRKS_MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
-_URL_NUL = re.compile(r"%00|\x00")
 _LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+# Some routes decode a query value a second time (the alias routes unquote
+# what parse_qs already decoded), so "%2500" is a NUL to them.
+_URL_DECODE_ROUNDS = 4
 
 
 def _url_holds_nul(raw_path: str) -> bool:
-    """NUL in the request target, raw or percent-encoded."""
-    return _URL_NUL.search(raw_path or "") is not None
+    """NUL in the request target, raw or percent-encoded, nested encodings included."""
+    text = raw_path or ""
+    for _ in range(_URL_DECODE_ROUNDS):
+        if "\x00" in text:
+            return True
+        decoded = unquote(text)
+        if decoded == text:
+            return False
+        text = decoded
+    return "\x00" in text
 
 
 def _json_holds_lone_surrogate(value) -> bool:
@@ -120,18 +131,25 @@ def _json_holds_lone_surrogate(value) -> bool:
 
     Iterative: the document may be nested as deep as the decoder allows.
     """
-    stack = [value]
+    if isinstance(value, str):
+        return _LONE_SURROGATE.search(value) is not None
+    # One iterator per open container: memory bounded by depth, not width.
+    stack: list = [iter((value,))]
     while stack:
-        item = stack.pop()
-        if isinstance(item, str):
+        item = next(stack[-1], _JSON_WALK_DONE)
+        if item is _JSON_WALK_DONE:
+            stack.pop()
+        elif isinstance(item, str):
             if _LONE_SURROGATE.search(item):
                 return True
         elif isinstance(item, dict):
-            stack.extend(item.keys())
-            stack.extend(item.values())
+            stack.append(itertools.chain.from_iterable(item.items()))
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.append(iter(item))
     return False
+
+
+_JSON_WALK_DONE = object()
 
 
 # No Content-Length, or a zero-length document. Distinct from {} and from JSON null.
@@ -803,11 +821,6 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         """
         self._prks_library_epoch = None
         self._prks_request_context = None
-        if _url_holds_nul(self.path):
-            # No identifier or query PRKS stores can hold NUL, and psycopg
-            # refuses to bind one (a ValueError, answered 500 before).
-            self._reject_request(400, "invalid_request", "url_nul")
-            return False
         method = (getattr(self, "command", "") or "").upper()
         auth = getattr(self.server, "prks_auth", None)
         if auth is None:
@@ -922,6 +935,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     )
             except Exception:
                 pass
+            if _url_holds_nul(getattr(self, "path", "") or ""):
+                # Before any route or static file: no identifier or query PRKS
+                # stores can hold NUL, psycopg refuses to bind one (a 500
+                # before) and os.path refuses it for a static file.
+                self.close_connection = True
+                self._reject_request(400, "invalid_request", "url_nul")
+                return False
         return ok
 
     def handle_one_request(self):
