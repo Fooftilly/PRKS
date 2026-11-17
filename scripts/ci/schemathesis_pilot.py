@@ -96,6 +96,9 @@ def command(schema: Path, origin: str, binary: str) -> list[str]:
         "--checks", "not_a_server_error,status_code_conformance,"
                     "content_type_conformance,response_schema_conformance",
         "--mode", "all", "--max-examples", str(MAX_EXAMPLES),
+        # NUL in the request target is refused before routing with a 400 the
+        # fragment does not document (tests/pg/test_http_request_fuzz_regressions.py).
+        "--generation-allow-x00", "false",
         "--max-failures", "1",
         "--workers", "1", "--rate-limit", "10/s",
         "--seed", str(SEED), "--max-redirects", "0",
