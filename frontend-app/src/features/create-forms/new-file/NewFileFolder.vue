@@ -157,6 +157,7 @@ async function quickCreate(): Promise<void> {
 /** Opening reset: a create from the last opening no longer holds the button. */
 function reset(): void {
   creating.value = false
+  combobox.hideNow()
 }
 
 defineExpose({ applyFolder, isCommitted, reset, close: combobox.close })

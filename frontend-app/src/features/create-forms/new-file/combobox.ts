@@ -38,7 +38,9 @@ export function useInlineCombobox(
     if (scrollTimer != null) window.clearTimeout(scrollTimer)
     scrollTimer = window.setTimeout(() => {
       scrollTimer = null
-      if (!el || typeof el.scrollIntoView !== 'function') return
+      // Closed, or focus moved on, meanwhile: do not scroll a list no one is using.
+      if (!el || !panel.open.value || document.activeElement !== el) return
+      if (typeof el.scrollIntoView !== 'function') return
       try {
         el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
       } catch {

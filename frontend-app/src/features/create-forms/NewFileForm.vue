@@ -9,7 +9,7 @@
  * snapshot and the shared widgets (doc-type menu, status segments, credit
  * picker) read and write them in the DOM.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { fieldValue, setFieldValue } from './dom'
 import PrksButton from '../../components/PrksButton.vue'
 import { createSubmitKeyHandler } from './keyboard'
@@ -97,6 +97,10 @@ function scheduleCounts(): void {
     refreshCounts()
   })
 }
+
+// Tags and the playlist also change without a form event (a quick-create
+// settling): the section counts follow them.
+watch([() => state.tags.value, () => state.playlistId.value], scheduleCounts)
 
 /** Points at a field: the submit is over, and a control in a closed disclosure opens it first. */
 function focusControl(el: HTMLElement | null): void {

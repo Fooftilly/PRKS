@@ -622,6 +622,11 @@ class ContractParityTests(unittest.TestCase):
             "import { PEOPLE_ROLES } from '../../../domain/people-roles'",
             new_file_people,
         )
+        self.assertRegex(
+            new_file_people,
+            r"(?s)function\s+roleLabels\(\)[^{]*\{\s*(?://[^\n]*\n\s*)*return\s+PEOPLE_ROLES\s*\n",
+            "The New File role picker must return the domain registry itself",
+        )
         self.assertNotRegex(
             new_file_people,
             r"(?:const|let)\s+\w*ROLE\w*\s*=\s*\[\s*['\"]Author",

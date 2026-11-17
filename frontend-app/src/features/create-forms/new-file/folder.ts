@@ -29,7 +29,12 @@ function folderIdFromHash(w: NewFileWindow, hash: string): string {
   }
   if (hash.startsWith('#/folders/')) {
     const part = hash.split('/')[2] || ''
-    return decodeURIComponent(part.split('?')[0] || '')
+    // A malformed hash must not stop New File opening: no default then.
+    try {
+      return decodeURIComponent(part.split('?')[0] || '')
+    } catch {
+      return ''
+    }
   }
   return ''
 }
