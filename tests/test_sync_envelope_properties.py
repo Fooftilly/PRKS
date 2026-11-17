@@ -171,8 +171,8 @@ class SyncEnvelopePropertyTests(unittest.TestCase):
         self.assertTrue(_storable(op), op)
         json.dumps(op, ensure_ascii=False, allow_nan=False).encode("utf-8")
         again = protocol.validate_operation(copy.deepcopy(op))
-        self.assertIsInstance(again, dict)
-        assert isinstance(again, dict)
+        if not isinstance(again, dict):
+            self.fail(f"a normalized operation was refused on revalidation: {again!r}")
         self.assertEqual(rules.request_hash(again), rules.request_hash(op))
         reordered = _reversed_keys(op)
         self.assertEqual(rules.request_hash(reordered), rules.request_hash(op))
@@ -201,7 +201,8 @@ class SyncEnvelopePropertyTests(unittest.TestCase):
         """A library's ValueError never reaches the wire as the code (it once said "utf-8")."""
         validate = mock.Mock()
         original = protocol._HANDLERS["CREATE_TAG"]
-        assert isinstance(original, FamilyHandler)
+        if not isinstance(original, FamilyHandler):
+            self.fail("CREATE_TAG is no longer a FamilyHandler")
         handler = dataclasses.replace(original, validate_fn=validate)
         with mock.patch.dict(protocol._HANDLERS, {"CREATE_TAG": handler}):
             for raised, code in (
