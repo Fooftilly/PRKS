@@ -243,7 +243,9 @@ async function createWork(deps: NewFileSaveDeps, draft: NewFileDraft): Promise<v
 
   if (isVideo) {
     const fields: DurableWorkFields = {
-      title: draft.title,
+      // Submitted before the preview filled Title: the fetched title, as
+      // the input would now show it. A typed title always wins.
+      title: draft.title.trim() ? draft.title : (meta && meta.title ? String(meta.title).trim() : ''),
       status: draft.status,
       doc_type: 'online',
       abstract: draft.abstract || '',

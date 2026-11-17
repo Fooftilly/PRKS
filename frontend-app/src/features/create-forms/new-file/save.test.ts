@@ -206,6 +206,17 @@ describe('saveNewFile', () => {
     expect(r.opened).toEqual(['W-VIDEO'])
   })
 
+  it('uses the fetched video title when Create was pressed before the preview filled it', async () => {
+    const video = { kind: 'video' as const, pdf: null, videoUrl: 'https://www.youtube.com/watch?v=abc' }
+    const blank = recorder({}, draft({ ...video, title: '' }))
+    await saveNewFile(blank.deps)
+    expect(blank.durable[0].fields.title).toBe('Lecture')
+
+    const typed = recorder({}, draft({ ...video, title: 'My title' }))
+    await saveNewFile(typed.deps)
+    expect(typed.durable[0].fields.title).toBe('My title')
+  })
+
   it('waits for a quick-created person and refuses to create without them', async () => {
     let finish: (added: boolean) => void = () => {}
     const pending = new Promise<boolean>((resolve) => {

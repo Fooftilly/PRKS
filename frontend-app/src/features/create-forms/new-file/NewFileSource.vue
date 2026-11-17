@@ -10,6 +10,8 @@ const props = defineProps<{
   focusControl: (el: HTMLElement | null) => void
   /** Kind switch: the doc type, counts and errors follow the new source. */
   onKindChanged: (kind: SourceKind, switched: boolean) => void
+  /** Title or Channel was filled programmatically: the section counts follow. */
+  onAutofilled: () => void
 }>()
 
 const state = useNewFileState()
@@ -149,6 +151,7 @@ async function previewVideo(rawUrl: string): Promise<VideoMeta | null> {
         if (!fieldValue('work-video-channel').trim() && meta.author_name) {
           setFieldValue('work-video-channel', String(meta.author_name).trim())
         }
+        props.onAutofilled()
       }
     }
   } catch {

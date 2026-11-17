@@ -6154,6 +6154,18 @@ window.prksIsValidYoutubeUrl = prksIsValidYoutubeUrl;
 let allPersons = [];
 let allWorks = [];
 
+/**
+ * The one writer of the shared person catalogue: the lexical list the
+ * classic pickers append to and its window alias always move together, so
+ * a quick-create never publishes a catalogue missing the people a Vue form
+ * loaded (#1036).
+ */
+function prksSetPersonCatalogue(persons) {
+    allPersons = Array.isArray(persons) ? persons : [];
+    window.allPersons = allPersons;
+}
+window.prksSetPersonCatalogue = prksSetPersonCatalogue;
+
 /** Extra line under the name in person comboboxes (disambiguate same names). Uses helpers from people.js when loaded. */
 function formatPersonComboboxSubtitle(p) {
     const bits = [];

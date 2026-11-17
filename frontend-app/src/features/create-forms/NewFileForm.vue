@@ -11,6 +11,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref } from 'vue'
 import { fieldValue, setFieldValue } from './dom'
+import PrksButton from '../../components/PrksButton.vue'
 import { createSubmitKeyHandler } from './keyboard'
 import NewFileFolder from './new-file/NewFileFolder.vue'
 import NewFilePeople from './new-file/NewFilePeople.vue'
@@ -321,8 +322,10 @@ async function prepare(stillOpening: () => boolean): Promise<void> {
   if (!stillOpening()) return
   state.persons.value = persons
   state.folders.value = folders
-  // The shared person lookups (credit names, quick-create) read this list.
-  w.allPersons = persons
+  // The shared person lookups (credit names, quick-create) read this list;
+  // one setter keeps the classic catalogue and its window alias together.
+  if (typeof w.prksSetPersonCatalogue === 'function') w.prksSetPersonCatalogue(persons)
+  else w.allPersons = persons
   folder.value?.applyFolder(defaultFolderId(w, window.location.hash))
   syncDisclosureInert()
   state.clearErrors()
@@ -360,7 +363,7 @@ defineExpose({ prepare, focusInitial, closeOpenList })
     @change="scheduleCounts"
     @click="scheduleCounts"
   >
-    <NewFileSource ref="source" :focus-control="focusControl" :on-kind-changed="onKindChanged" />
+    <NewFileSource ref="source" :focus-control="focusControl" :on-kind-changed="onKindChanged" :on-autofilled="scheduleCounts" />
 
     <section class="prks-create-section" aria-labelledby="work-create-basic-heading">
       <h4 id="work-create-basic-heading" class="prks-create-section__title">Basic information</h4>
@@ -538,7 +541,12 @@ defineExpose({ prepare, focusInitial, closeOpenList })
 
   <Teleport to="#work-modal-footer-vue">
     <p id="upload-status-msg" class="upload-status" :class="{ hidden: !state.status.value }" role="status">{{ state.status.value }}</p>
-    <button id="work-modal-cancel" type="button" class="prks-btn prks-btn--secondary" @click="onCancel">Cancel</button>
+    <PrksButton id="work-modal-cancel" variant="secondary" @click="onCancel">Cancel</PrksButton>
+    <!--
+      Native button on purpose, like New Folder Save. PrksButton ignores a
+      click while its last rendered busy prop is still set, and a same-turn
+      reopen-and-save must reach the opening-scoped gate in saveNewFile.
+    -->
     <button
       id="save-work-btn"
       type="button"

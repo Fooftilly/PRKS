@@ -72,6 +72,7 @@ export interface NewFileWindow {
   fetchTags?: (options?: { used?: boolean }) => Promise<TagRow[] | null>
   fetchPlaylists?: () => Promise<PlaylistRow[] | null>
   allPersons?: PersonRow[]
+  prksSetPersonCatalogue?: (persons: PersonRow[]) => void
   // Row labels and matching shared with the other pickers
   prksFolderRowLabel?: (folder: FolderRow, all: FolderRow[]) => string
   personMatchesComboboxQuery?: (person: PersonRow, queryLower: string) => boolean
