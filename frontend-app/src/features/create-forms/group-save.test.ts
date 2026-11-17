@@ -111,7 +111,7 @@ describe('group save gate', () => {
     expect(busy).toBe(true)
   })
 
-  it('creates neither the typed parent nor the group once the dialog is dismissed during the parent lookup', async () => {
+  it('does not call createGroup once the dialog is dismissed during the parent lookup', async () => {
     const gate = createGroupSaveGate()
     const lookup = deferred<string | undefined>()
     const shell = modal('1')
