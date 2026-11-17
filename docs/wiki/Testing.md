@@ -57,6 +57,10 @@ The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg
 
 Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the existing runtime and unit/test dependency pins. These are **pure mapper tests**, not evidence that PostgreSQL, session authorization, or HTTP translation passed: `tests/pg/test_db_errors.py` remains the real disposable-PostgreSQL integration authority. No extra runner or package is installed.
 
+## HTTP authorization matrix (#1286)
+
+`tests/pg/test_http_authorization_matrix.py` sends one real request per `backend/api` route family (and per route that streams a managed file) over HTTP as seven callers: owner, editor, reader, a revoked member, a signed-out browser, the owner of another Library, and no session. Each row says whether it needs read, edit or Library administration; a caller without the right gets 403 `forbidden` (a member) or 401 `not_authenticated` (everyone else), the refusal names neither the Library nor the seeded entities, and every Library content table is unchanged afterwards. The owner's answer must be a success, so each row is a real route with a valid request. A `backend/api` module without a row fails `test_every_api_module_has_a_row`, so a new family joins the matrix. Run it with `scripts/test-postgres tests.pg.test_http_authorization_matrix`.
+
 ## TypeScript property-based workspace tests (#854)
 
 The frontend has a bounded **fast-check + Vitest** pilot for the canonical workspace tree and tab transitions. This checks generated move/remove/reorder sequences for leaf uniqueness, split-tree validity, identity preservation, and unchanged Main/focus. It imports the real pure workspace transitions; it does not implement a second workspace store or exercise the browser.
