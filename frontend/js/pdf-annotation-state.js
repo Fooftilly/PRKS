@@ -487,11 +487,40 @@
             setRevision < snap;
     }
 
+    /**
+     * The per-annotation revision the runtime already holds for an id: its
+     * acknowledged row's revision, or its deletion tombstone's. The server
+     * bumps an annotation's revision on every change, delete included, and
+     * never reuses an id, so it orders ACKs for that one annotation.
+     */
+    function runtimeAnnotationRevision(runtime, annotationId) {
+        const state = runtime && runtime.annotationState;
+        if (!state || typeof state !== 'object') return null;
+        const rows = Array.isArray(state.annotations) ? state.annotations : [];
+        for (let i = 0; i < rows.length; i += 1) {
+            const row = rows[i];
+            if (row && String(row.annotation_id) === annotationId &&
+                Number.isSafeInteger(row.revision)) {
+                return row.revision;
+            }
+        }
+        const absent = state.known_absent && state.known_absent[annotationId];
+        return Number.isSafeInteger(absent) ? absent : null;
+    }
+
     function patchRuntimeAcknowledged(runtime, data) {
         if (!runtime || !data || !data.annotation_id) return false;
         // A snapshot newer than this ACK already holds its change and any
         // later one: patching it in would revert them.
         if (ackPredatesRuntimeSnapshot(runtime, data.canonical_annotation_set_revision)) {
+            return false;
+        }
+        // ACK callbacks can finish out of order, so an older ACK for this
+        // annotation can arrive after a newer one: it must not put the older
+        // body (or presence) back. ACKs for other annotations are independent.
+        const held = runtimeAnnotationRevision(runtime, String(data.annotation_id));
+        if (held !== null && Number.isSafeInteger(data.server_revision) &&
+            data.server_revision < held) {
             return false;
         }
         if (Number.isSafeInteger(data.canonical_annotation_set_revision)) {

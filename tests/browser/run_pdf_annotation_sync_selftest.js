@@ -331,6 +331,31 @@ function acknowledgedStateOnlyMovesForward() {
         // No revision to compare: nothing is refused.
         assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime(runtime, undefined), false);
         assert.equal(globalThis.prksPdfAnnotationSnapshotPredatesRuntime({}, 0), false);
+        // Same annotation, ACKs applied out of order: gen 7 then gen 8, then
+        // the delayed gen 7 must not put the older comment back.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(7, 'ann-2', 'first edit', 1)).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(8, 'ann-2', 'second edit', 2)).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(7, 'ann-2', 'first edit', 1)).length, 0);
+        const ann2 = () => runtime.annotationCache.items.find(a => a.id === 'ann-2');
+        assert.equal(ann2().contents, 'second edit');
+        assert.equal(runtime.annotationState.annotations
+            .find(r => r.annotation_id === 'ann-2').revision, 2);
+        // A delete tombstone is not undone by a delayed older present ACK.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes({
+            work_id: 'W-1', annotation_id: 'ann-2', present: false, server_revision: 3,
+            changed: true, canonical_annotation_set_revision: 9,
+        }).length, 1);
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(8, 'ann-2', 'second edit', 2)).length, 0);
+        assert.equal(ann2(), undefined);
+        assert.equal(runtime.annotationState.known_absent['ann-2'], 3);
+        // An older set generation for a different annotation still applies.
+        assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+            ack(6, 'ann-3', 'other', 0)).length, 1);
+        assert.ok(runtime.annotationCache.items.some(a => a.id === 'ann-3'));
     } finally {
         if (prev) globalThis.prksForEachLiveTabContext = prev;
         else delete globalThis.prksForEachLiveTabContext;
