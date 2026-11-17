@@ -5442,9 +5442,13 @@ function initForms() {
                     return;
                 }
                 /* Not a reload: the record is local, and reloading would throw away
-                 * every other pending change on the page. The Folder Library is
-                 * where a new folder belongs, so go there. */
-                if (typeof prksNavigate === 'function') prksNavigate('#/folders');
+                 * every other pending change on the page. Open the new folder in
+                 * the tab that saved it (#827). */
+                if (typeof prksNavigate === 'function') {
+                    const folderHash = '#/folders/' + encodeURIComponent(String(newFolderId));
+                    if (ownerCtx && ownerCtx.tabId) prksNavigate(folderHash, { tabId: ownerCtx.tabId });
+                    else prksNavigate(folderHash);
+                }
             } finally {
                 if (folderCreateInFlight === saveToken) {
                     folderCreateInFlight = null;

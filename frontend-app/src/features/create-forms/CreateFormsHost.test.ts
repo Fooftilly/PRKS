@@ -158,7 +158,7 @@ describe('create form host', () => {
     expect(button.textContent?.trim()).toBe('Creating…')
     resolveCreate('F-NEW')
     await flush()
-    expect(navigated).toBe('#/folders')
+    expect(navigated).toBe('#/folders/F-NEW')
   })
 
   it('refuses a person without a last name and creates one with the durable writer', async () => {

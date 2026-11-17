@@ -73,6 +73,24 @@ describe('folder create follow-up', () => {
     expect(tabId).toBe('tab-library')
   })
 
+  it('opens the new folder in the owner tab when saved from a folder or a Work (#827)', async () => {
+    const w = effects()
+    w.__prksPendingWorkFolderAttach = null
+    const navs: Array<[string, string, boolean]> = []
+    w.closeModals = () => {}
+    w.prksNavigate = (next, options) => {
+      navs.push([next, options?.tabId || '', options?.replace === true])
+    }
+    await finishFolderCreate('F-SUB', { tabId: 'tab-parent', route: { name: 'folder-detail' } }, () => true)
+    await finishFolderCreate('F/2', { tabId: 'tab-work', lastResolvedRoute: { name: 'work' } }, () => true)
+    await finishFolderCreate('F-3', null, () => true)
+    expect(navs).toEqual([
+      ['#/folders/F-SUB', 'tab-parent', false],
+      ['#/folders/F%2F2', 'tab-work', false],
+      ['#/folders/F-3', '', false],
+    ])
+  })
+
   it('does not attach a folder when the captured Work panel is gone', async () => {
     const w = effects()
     w.__prksPendingWorkFolderAttach = { workId: 'W-1', tabId: 'tab-1' }

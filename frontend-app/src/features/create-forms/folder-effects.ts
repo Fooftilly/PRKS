@@ -43,7 +43,8 @@ function effectsWindow(): FolderEffectsWindow {
 
 /**
  * After `createFolder` resolves: attach the new folder to the Work that
- * opened the modal, or open the Folder library. The owner is the one
+ * opened the modal, or open the new folder (the Folder Library root stays
+ * on the library). The owner is the one
  * captured when Save was pressed.
  */
 export async function finishFolderCreate(
@@ -88,10 +89,15 @@ export async function finishFolderCreate(
   }
   if (!stillOpening()) return
   w.closeModals?.()
+  if (typeof w.prksNavigate !== 'function') return
   const ownerRoute = owner && (owner.lastResolvedRoute || owner.route)
-  if (ownerRoute && ownerRoute.name === 'folders' && typeof w.prksNavigate === 'function') {
-    w.prksNavigate('#/folders', { replace: true, tabId: owner.tabId })
+  const tabOption = owner && owner.tabId ? { tabId: owner.tabId } : {}
+  // Saved from the Folder Library root: the library already lists the new folder.
+  if (ownerRoute && ownerRoute.name === 'folders') {
+    w.prksNavigate('#/folders', { replace: true, ...tabOption })
     return
   }
-  w.prksNavigate?.('#/folders')
+  // Anywhere else, open the folder just made in the tab that saved it (#827),
+  // as New Group, New Person and New File open what they create.
+  w.prksNavigate(`#/folders/${encodeURIComponent(newFolderId)}`, tabOption)
 }
