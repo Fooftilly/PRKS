@@ -4,7 +4,7 @@ Run only by ``scripts/ci/locust_pilot.py``, which starts a disposable
 ``--testing`` server on loopback and passes the seeded ids through the
 environment. Every task is a GET of a route a browser uses while reading the
 library, and every answer is checked for its meaning, not only its status:
-a fast 4xx/5xx or an empty catalog is a failure, never a fast success.
+a fast 4xx/5xx or an incomplete catalog is a failure, never a fast success.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ from locust import HttpUser, between, task
 
 WORK_IDS = [value for value in os.environ.get("PRKS_LOCUST_WORK_IDS", "").split(",") if value]
 SEARCH_TERM = os.environ.get("PRKS_LOCUST_SEARCH", "")
-MIN_WORKS = int(os.environ.get("PRKS_LOCUST_MIN_WORKS", "1"))
+WORKS = int(os.environ.get("PRKS_LOCUST_WORKS", "1"))
+TAGS = int(os.environ.get("PRKS_LOCUST_TAGS", "1"))
 MIN_SEARCH_HITS = int(os.environ.get("PRKS_LOCUST_MIN_SEARCH_HITS", "1"))
 
 
@@ -44,8 +45,8 @@ class Reader(HttpUser):
     @task(4)
     def catalog(self) -> None:
         self._check("/api/works", "/api/works",
-                    lambda body: isinstance(body, list) and len(body) >= MIN_WORKS,
-                    "catalog smaller than the seeded library")
+                    lambda body: isinstance(body, list) and len(body) == WORKS,
+                    "catalog is not the seeded library")
 
     @task(4)
     def work_detail(self) -> None:
@@ -62,7 +63,8 @@ class Reader(HttpUser):
 
     @task(1)
     def tags(self) -> None:
-        self._check("/api/tags", "/api/tags", lambda body: isinstance(body, list), "tags is not a list")
+        self._check("/api/tags", "/api/tags", lambda body: isinstance(body, list) and len(body) == TAGS > 0,
+                    "tags are not the seeded tags")
 
     @task(1)
     def research_graph(self) -> None:

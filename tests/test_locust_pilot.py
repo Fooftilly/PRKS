@@ -53,10 +53,24 @@ class LocustPilotSafeguards(unittest.TestCase):
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                  and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "client"}
         self.assertEqual(calls, {"get"})
-        names = {node.args[1].value for node in ast.walk(tree)
-                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_check"
-                 and isinstance(node.args[1], ast.Constant)}
-        self.assertEqual({f"GET {name}" for name in names}, set(ROUTES))
+        checks = [node for node in ast.walk(tree)
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_check"]
+        self.assertEqual(len(checks), len(ROUTES))
+        sent = {}
+        for node in checks:
+            name = node.args[1]
+            self.assertIsInstance(name, ast.Constant)
+            assert isinstance(name, ast.Constant)
+            sent[f"GET {name.value}"] = ast.unparse(node.args[0])
+        # Each label names the path it sends, so a route cannot quietly target another endpoint.
+        self.assertEqual(sent, {
+            "GET /api/works": "'/api/works'",
+            "GET /api/works/:id": "f'/api/works/{work_id}'",
+            "GET /api/search": "f'/api/search?q={SEARCH_TERM}'",
+            "GET /api/tags": "'/api/tags'",
+            "GET /api/research-graph": "'/api/research-graph'",
+        })
+        self.assertEqual(set(sent), set(ROUTES))
 
     def test_summary_reads_locust_stats_per_route(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -95,7 +109,12 @@ class LocustPilotSafeguards(unittest.TestCase):
         self.assertIn("workflow_dispatch:", triggers)
         self.assertNotIn("pull_request", triggers)
         self.assertNotIn("schedule", triggers)
-        self.assertIn("python scripts/ci/install_pinned_python.py locust", workflow)
+        runs = [line.strip() for line in workflow.splitlines() if line.strip().startswith("run:")]
+        self.assertEqual(runs[0], "run: python scripts/ci/install_pinned_python.py locust")
+        installs = [line for line in workflow.splitlines()
+                    if "pip install" in line or "install_pinned_python" in line or "pipx" in line]
+        self.assertEqual([line.strip() for line in installs],
+                         ["run: python scripts/ci/install_pinned_python.py locust"])
         self.assertIn("contents: read", workflow)
 
 

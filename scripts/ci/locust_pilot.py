@@ -94,6 +94,9 @@ def seeder(extra: int) -> Callable[[str], dict[str, Any]]:
                         doc_type="article", status="Planned")
             for index in range(extra)
         ]
+        # The whole seeded library, so a catalog or tag list missing any fixture fails.
+        ids["catalog_size"] = len(db.get_all_works())
+        ids["tag_count"] = len(db.get_all_tags())
         return ids
 
     return seed
@@ -179,7 +182,7 @@ def prks_version() -> str:
         return "unknown"
 
 
-def warm_up(origin: str, ids: dict[str, Any], extra: int) -> int:
+def warm_up(origin: str, ids: dict[str, Any]) -> int:
     """Each route once, checked, before any load: a broken fixture fails here, not as load errors.
 
     Answers the catalog size, which the summary reports as the library size.
@@ -188,20 +191,19 @@ def warm_up(origin: str, ids: dict[str, Any], extra: int) -> int:
 
     port = require_loopback(origin)
     work_ids = ids["load_works"] + [ids["work_a"]]
-    catalog = 0
+    hits = min(len(ids["load_works"]), SEARCH_HIT_FLOOR)
     for path, check in (
-        ("/api/works", lambda body: isinstance(body, list) and len(body) >= extra),
+        ("/api/works", lambda body: isinstance(body, list) and len(body) == ids["catalog_size"]),
         (f"/api/works/{work_ids[0]}", lambda body: body.get("id") == work_ids[0]),
-        (f"/api/search?q={SEARCH_TERM}", lambda body: isinstance(body, list) and len(body) >= min(extra, SEARCH_HIT_FLOOR)),
+        (f"/api/search?q={SEARCH_TERM}", lambda body: isinstance(body, list) and len(body) >= hits),
+        ("/api/tags", lambda body: isinstance(body, list) and len(body) == ids["tag_count"] > 0),
         ("/api/research-graph", lambda body: bool(body.get("nodes"))),
     ):
         with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=20) as response:  # noqa: S310
             body = json.loads(response.read())
         if not check(body):
-            raise AssertionError("warm-up check failed for a seeded route")
-        if path == "/api/works":
-            catalog = len(body)
-    return catalog
+            raise AssertionError(f"warm-up check failed for a seeded route: {path.split('?')[0]}")
+    return int(ids["catalog_size"])
 
 
 def run(tier: str, out: Path | None, baseline: Path | None = None) -> int:
@@ -211,6 +213,7 @@ def run(tier: str, out: Path | None, baseline: Path | None = None) -> int:
         raise RuntimeError("PRKS_TEST_DATABASE_URL must name a disposable PostgreSQL server")
     prior = json.loads(baseline.read_text(encoding="utf-8")) if baseline is not None else None
     binary = shutil.which("locust")
+    binary = os.path.abspath(binary) if binary else None  # the CLI runs from a temporary directory
     if not binary:
         raise RuntimeError("the pinned Locust CLI is not installed")
     from tests.e2e.harness import AppServer
@@ -220,10 +223,11 @@ def run(tier: str, out: Path | None, baseline: Path | None = None) -> int:
     started = time.monotonic()
     server.start()
     try:
-        catalog = warm_up(server.origin, server.ids, extra)
+        catalog = warm_up(server.origin, server.ids)
         work_ids = server.ids["load_works"] + [server.ids["work_a"]]
         env = dict(os.environ, PRKS_LOCUST_WORK_IDS=",".join(work_ids), PRKS_LOCUST_SEARCH=SEARCH_TERM,
-                   PRKS_LOCUST_MIN_WORKS=str(extra), PRKS_LOCUST_MIN_SEARCH_HITS=str(min(extra, SEARCH_HIT_FLOOR)))
+                   PRKS_LOCUST_WORKS=str(catalog), PRKS_LOCUST_TAGS=str(server.ids["tag_count"]),
+                   PRKS_LOCUST_MIN_SEARCH_HITS=str(min(extra, SEARCH_HIT_FLOOR)))
         if server.library is None or server.proc is None:
             raise RuntimeError("the pilot server did not start")
         database = server.library.database
