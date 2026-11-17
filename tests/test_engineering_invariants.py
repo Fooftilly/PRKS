@@ -1280,6 +1280,12 @@ class EngineeringInvariantTests(unittest.TestCase):
                 (root / scope).write_text("", encoding="utf-8")
             else:
                 (root / scope).mkdir(parents=True, exist_ok=True)
+        for path in checker.PYRIGHT_TYPED_SLICE_STRICT:
+            if path.endswith(".py"):
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text("", encoding="utf-8")
+            else:
+                (root / path).mkdir(parents=True, exist_ok=True)
         (root / ".github" / "workflows").mkdir(parents=True)
         (root / "pyrightconfig.json").write_text(
             json.dumps(
@@ -1297,6 +1303,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             json.dumps(
                 {
                     "include": list(checker.PYRIGHT_TYPED_SLICE_SCOPES),
+                    "strict": list(checker.PYRIGHT_TYPED_SLICE_STRICT),
                     "exclude": ["**/__pycache__"],
                     "typeCheckingMode": "standard",
                     "reportUndefinedVariable": "error",
@@ -1545,6 +1552,51 @@ class EngineeringInvariantTests(unittest.TestCase):
             )
             self.assertEqual(checker.check_pyright_configs(root), [])
 
+    def _rewrite_typed_slice(self, root: Path, **changes: object) -> None:
+        path = root / "pyrightconfig.typed-slice.json"
+        typed = json.loads(path.read_text())
+        typed.update(changes)
+        path.write_text(json.dumps(typed), encoding="utf-8")
+
+    def test_pyright_typed_slice_strict_list_is_a_ratchet(self):
+        """Strict-clean paths cannot leave the strict list; extra ones may join."""
+        dropped = checker.PYRIGHT_TYPED_SLICE_STRICT[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self._rewrite_typed_slice(
+                root, strict=[p for p in checker.PYRIGHT_TYPED_SLICE_STRICT if p != dropped]
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+            self.assertIn(repr([dropped]), findings[0].message)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self._rewrite_typed_slice(root, strict=None)
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            (root / "backend" / "extra.py").write_text("", encoding="utf-8")
+            self._rewrite_typed_slice(
+                root,
+                strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/extra.py"],
+            )
+            self.assertEqual(checker.check_pyright_configs(root), [])
+
+    def test_pyright_typed_slice_rejects_missing_strict_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_valid_pyright_tree(root)
+            self._rewrite_typed_slice(
+                root, strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/gone.py"]
+            )
+            findings = checker.check_pyright_configs(root)
+            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
+            self.assertIn("'backend/gone.py' does not exist", findings[0].message)
+
     def test_pyright_typed_slice_rejects_dropped_scope(self):
         for dropped in checker.PYRIGHT_TYPED_SLICE_SCOPES:
             with self.subTest(dropped=dropped), tempfile.TemporaryDirectory() as tmp:
@@ -1701,6 +1753,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 json.dumps(
                     {
                         "include": list(checker.PYRIGHT_TYPED_SLICE_INCLUDE),
+                        "strict": list(checker.PYRIGHT_TYPED_SLICE_STRICT),
                         "typeCheckingMode": "off",
                         "reportUndefinedVariable": "error",
                         "reportUnboundVariable": "error",
