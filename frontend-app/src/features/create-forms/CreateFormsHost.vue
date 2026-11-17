@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import FolderCreateForm from './FolderCreateForm.vue'
 import GroupCreateForm from './GroupCreateForm.vue'
+import NewFileForm from './NewFileForm.vue'
 import PersonCreateForm from './PersonCreateForm.vue'
 import PlaylistCreateForm from './PlaylistCreateForm.vue'
 import { snapshotModalFields } from './snapshot'
@@ -91,7 +92,8 @@ onBeforeUnmount(() => {
   <!--
     Temporary adapter (#1036). ModalHost does not mount feature forms yet,
     so these bodies teleport into the classic shells. Retire the teleport
-    when the host grows a feature-form slot. Work, Saved View, role link,
+    when the host grows a feature-form slot. The New File body is markup
+    only for now (its behavior is still classic). Saved View, role link,
     the person template, and Settings stay on their shells.
   -->
   <Teleport to="#folder-modal-vue">
@@ -105,5 +107,8 @@ onBeforeUnmount(() => {
   </Teleport>
   <Teleport to="#playlist-modal-vue">
     <PlaylistCreateForm ref="playlistRef" />
+  </Teleport>
+  <Teleport to="#work-modal-vue">
+    <NewFileForm />
   </Teleport>
 </template>

@@ -49,6 +49,8 @@ function installShells(): void {
     '<div id="person-modal" class="modal hidden"><div id="person-modal-vue" class="modal-body"></div></div>',
     '<div id="group-modal" class="modal hidden"><div id="group-modal-vue" class="modal-body"></div></div>',
     '<div id="playlist-modal" class="modal hidden"><div id="playlist-modal-vue" class="modal-body"></div></div>',
+    '<div id="work-modal" class="modal hidden"><div id="work-modal-vue" class="modal-body modal-body--scroll"></div>' +
+      '<div class="modal-footer"><button id="save-work-btn" type="button">Create File</button></div></div>',
   ].join('')
 }
 
