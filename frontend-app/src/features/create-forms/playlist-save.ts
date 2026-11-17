@@ -69,9 +69,11 @@ export function createPlaylistSaveGate() {
         return
       }
       // Dismiss leaves the generation unchanged; require visibility so we do not
-      // closeModals() into an unrelated open modal draft.
-      if (!isLiveOpening()) return
-      deps.closeModals()
+      // closeModals() into an unrelated open modal draft. The playlist exists
+      // either way, so the Work captured at Save still gets it (guarded by
+      // still()); only closing and navigating need the live opening.
+      const wasLive = isLiveOpening()
+      if (wasLive) deps.closeModals()
       const still = () => deps.capturedWorkStill(pending)
       let attachedWork = false
       if (pending && pending.workId && still()) {
@@ -83,13 +85,13 @@ export function createPlaylistSaveGate() {
         }
       }
       deps.clearPendingIfSame(pending)
-      // After the intentional close the shell is hidden; generation-only checks
-      // still refuse a newer Create Playlist opening.
-      if (!matchesOpening()) return
       if (attachedWork) {
         await deps.refreshSelects(newId)
         await deps.refreshAllSelects(newId)
       }
+      // After the intentional close the shell is hidden; generation-only checks
+      // still refuse a newer Create Playlist opening.
+      if (!wasLive || !matchesOpening()) return
       if (deps.returnToWorkModal()) return
       const createTabId = deps.takeIndexCreateTabId()
       if (!attachedWork && createTabId) {

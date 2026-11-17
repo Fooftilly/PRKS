@@ -6,7 +6,6 @@ import { fieldValue, setFieldValue } from './dom'
 import { createPlaylistSaveGate } from './playlist-save'
 import {
   clearPendingPlaylistAttachIfSame,
-  playlistFailureMessage,
   readPendingPlaylistAttach,
   type PlaylistPending,
 } from './submit'
@@ -26,7 +25,6 @@ interface PlaylistWindow {
   prksTakePlaylistIndexCreateTabId?: () => string
   __prksReturnToWorkModalAfterPlaylist?: boolean
   prksNavigate?: (hash: string, options?: { tabId?: string }) => void
-  prksAlertMessage?: (message: string, title?: string) => Promise<void> | void
 }
 
 function runtime(): PlaylistWindow {
@@ -94,9 +92,6 @@ async function onSave(): Promise<void> {
     },
     onError: async (message) => {
       playlistError.value = message
-      if (!document.getElementById('playlist-error')) {
-        await w.prksAlertMessage?.(playlistFailureMessage(new Error(message)), 'Error')
-      }
     },
   })
 }
@@ -113,7 +108,12 @@ defineExpose({ resetFields, focusInitial })
 <template>
   <div class="form-pane" @keydown="onKeydown">
     <p class="modal-helper">Playlists group related videos (e.g. course lectures) and keep an ordered sequence.</p>
-    <PrksField v-slot="{ labelledBy, describedBy }" label="Title" for-id="playlist-title">
+    <PrksField
+      v-slot="{ labelledBy, describedBy }"
+      label="Title"
+      for-id="playlist-title"
+      :error="playlistError || null"
+    >
       <input
         id="playlist-title"
         type="text"
@@ -140,12 +140,5 @@ defineExpose({ resetFields, focusInitial })
       busy-label="Creating…"
       @click="onSave"
     >Create playlist</PrksButton>
-    <p
-      id="playlist-error"
-      class="folder-field-error"
-      :class="{ hidden: !playlistError }"
-      role="alert"
-      aria-live="polite"
-    >{{ playlistError }}</p>
   </div>
 </template>

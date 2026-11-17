@@ -62,6 +62,7 @@ interface GroupWindow {
     parentId: string,
     parentName: string,
     selfId: null,
+    stillOwns?: () => boolean,
   ) => Promise<string | undefined>
   prksCreatePersonGroupDurably?: (body: {
     name: string
@@ -89,12 +90,13 @@ export function groupCreateFailureMessage(error: unknown): string {
 export async function resolveGroupParent(
   parentId: string,
   parentQuery: string,
+  stillOwns: () => boolean,
 ): Promise<string | undefined> {
   const w = groupWindow()
   if (typeof w.prksResolvePersonGroupParent !== 'function') {
     throw new Error('Could not create group.')
   }
-  return w.prksResolvePersonGroupParent(parentId, parentQuery, null)
+  return w.prksResolvePersonGroupParent(parentId, parentQuery, null, stillOwns)
 }
 
 export async function createGroupDurably(body: {

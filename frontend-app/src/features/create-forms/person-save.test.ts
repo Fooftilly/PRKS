@@ -108,11 +108,13 @@ describe('person save gate', () => {
     await Promise.resolve()
     // Dismiss Person, then open another modal (generation unchanged).
     shell.classList.add('hidden')
-    busy = false
+    expect(busy).toBe(true)
     pending.resolve({ entity_id: 'P-1' })
     await save
     expect(finishes).toBe(0)
-    expect(busy).toBe(false)
+    // A dismissed opening keeps its busy flag; only the next opening's reset
+    // clears it, so the gate itself must not.
+    expect(busy).toBe(true)
   })
 
   it('creates once when save is clicked twice in the same opening', async () => {
