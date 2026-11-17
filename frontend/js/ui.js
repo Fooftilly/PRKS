@@ -604,6 +604,14 @@ function openModal(id) {
         }
         resetPersonCreateForm();
     } else if (id === 'folder-modal' && typeof window.prksRefreshFolderModalValidation === 'function') {
+        // A Work's "New folder" attach belongs to the one opening it was made
+        // for. Stamp it here; any later opening (the global Add menu after a
+        // cancel) finds a stamp that is not its own and drops it.
+        const pendingAttach = window.__prksPendingWorkFolderAttach;
+        if (pendingAttach && typeof pendingAttach === 'object') {
+            if (pendingAttach.modalOpening == null) pendingAttach.modalOpening = String(openGeneration);
+            else if (pendingAttach.modalOpening !== String(openGeneration)) window.__prksPendingWorkFolderAttach = null;
+        }
         const parentSearch = document.getElementById('folder-parent-search');
         const parentId = document.getElementById('folder-parent-id');
         if (parentSearch && !window.__prksPendingWorkFolderAttach) parentSearch.value = '';
@@ -1069,6 +1077,10 @@ function syncPersonAliasesFromNames() {
 }
 
 function closeModals() {
+    // A Work's "New folder" attach ends with its dialog. Kept after a cancel,
+    // the next unrelated New Folder would be filed into that Work. A Save in
+    // flight captured its own copy when it was pressed.
+    window.__prksPendingWorkFolderAttach = null;
     prksHideModalUnsavedConfirm({ restoreFocus: false });
     const playlistModal = document.getElementById('playlist-modal');
     const playlistWasOpen = playlistModal && !playlistModal.classList.contains('hidden');
