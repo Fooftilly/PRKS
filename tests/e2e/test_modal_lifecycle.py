@@ -240,7 +240,7 @@ class ModalLifecycleTests(unittest.TestCase):
         """A Work's "New folder", cancelled, leaves no attach behind.
 
         The next New Folder from the global Add menu is an independent
-        creation: it opens the Folder library and leaves the Work where it was.
+        creation: it opens the new Folder and leaves the Work where it was.
         """
         server = AppServer(seed_fn=seed_library)
         self.addCleanup(server.stop)
@@ -281,9 +281,8 @@ class ModalLifecycleTests(unittest.TestCase):
         page.locator("#save-folder-btn").click()
         page.locator("#folder-modal").wait_for(state="hidden")
 
-        # An independent create opens the Folder library; an attach would
+        # An independent create opens the new Folder (#827); an attach would
         # have kept the Work page instead.
-        page.wait_for_function("() => location.hash === '#/folders'", timeout=20000)
         wait_for_async(
             page,
             """async () => {
@@ -291,10 +290,11 @@ class ModalLifecycleTests(unittest.TestCase):
                 if (!res.ok) return false;
                 const rows = await res.json();
                 const list = Array.isArray(rows) ? rows : (rows.folders || rows.items || []);
-                return list.some((f) => f.title === 'Independent Global Folder');
+                const hit = list.find((f) => f.title === 'Independent Global Folder');
+                return !!hit && location.hash === '#/folders/' + encodeURIComponent(hit.id);
             }""",
             timeout=20000,
-            message="the global New Folder never reached the server",
+            message="the global New Folder did not open its own Folder",
         )
         # Give a stray attach every chance to land before checking the Work.
         wait_for_async(
