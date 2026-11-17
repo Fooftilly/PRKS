@@ -1,7 +1,7 @@
 {
   "complete": true,
   "count": 6,
-  "generated_at": "2026-11-16T20:27:22Z",
+  "generated_at": "2026-11-17T03:50:49Z",
   "issues": [
     {
       "agent": "Claude Code",
@@ -48,6 +48,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 43949929215,
-  "stale_after": "2026-11-17T08:27:22Z"
+  "source_run_id": 44013010002,
+  "stale_after": "2026-11-17T15:50:49Z"
 }
