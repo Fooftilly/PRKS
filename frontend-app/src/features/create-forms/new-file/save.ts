@@ -1,5 +1,7 @@
 import type { DurableWorkFields, RoleLink, VideoMeta } from './runtime'
 import { FOLDER_GONE, FOLDER_NOT_PICKED } from './folder'
+import { PrksApiError } from '../../../api/http'
+import { isInvalidCreateAnswer, type PdfWorkCreateRequest, type WorkCreated } from '../../../api/works-create'
 
 export type SourceKind = 'pdf' | 'video'
 
@@ -89,7 +91,10 @@ export interface NewFileSaveDeps {
   ) => Promise<{ create?: { entity_id?: string } } | null>
   offlineRefused: (message: string) => boolean
   waitForPeople: (personIds: string[]) => Promise<boolean>
-  request: (url: string, init: RequestInit) => Promise<Response>
+  /** `POST /api/works` for a PDF (src/api/works-create.ts). */
+  createPdfWork: (request: PdfWorkCreateRequest) => Promise<WorkCreated>
+  /** `POST /api/works/:id/tags` for one of the new Work's first Tags. */
+  attachTag: (workId: string, tagId: string) => Promise<void>
   /** The Work exists: stale the cached projections it joins (never Recent). */
   markCreated: (changes: { people: boolean }) => void
   failureText: (errText: string) => string
@@ -298,7 +303,7 @@ async function createWork(deps: NewFileSaveDeps, draft: NewFileDraft): Promise<v
     return
   }
 
-  const payload = {
+  const payload: PdfWorkCreateRequest = {
     title: draft.title,
     status: draft.status,
     doc_type: draft.docType || 'article',
@@ -331,32 +336,27 @@ async function createWork(deps: NewFileSaveDeps, draft: NewFileDraft): Promise<v
   // What this submit asked for, read while the form is frozen.
   const tagsToAttach = draft.tags.slice()
 
-  let res: Response
+  let created: WorkCreated
   try {
-    res = await deps.request('/api/works', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } catch {
-    // A dropped response does not prove the create failed: the Work may be
-    // committed. Never invite a blind retry.
-    if (stillOpening()) deps.setStatus(UNCONFIRMED_SAVE)
-    return
-  }
-  const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string; code?: string }
-  if (!res.ok) {
+    created = await deps.createPdfWork(payload)
+  } catch (error) {
+    if (!(error instanceof PrksApiError) || isInvalidCreateAnswer(error)) {
+      // A dropped response, or a 2xx we cannot read, does not prove the
+      // create failed: the Work may be committed. Never invite a blind retry.
+      if (isInvalidCreateAnswer(error)) deps.markCreated({ people: roles.length > 0 })
+      if (stillOpening()) deps.setStatus(UNCONFIRMED_SAVE)
+      return
+    }
     // A refusal for a form that is gone has no one to tell.
     if (!stillOpening()) return
-    const errText = data.error || 'Could not create the file.'
     // Only a refusal (4xx) proves nothing was created; a server error may
     // come after the row was committed.
-    deps.setStatus(res.status >= 500 ? SERVER_FAILED : deps.failureText(errText))
-    if (data.code === 'PERSON_NOT_FOUND') {
+    deps.setStatus(error.status >= 500 ? SERVER_FAILED : deps.failureText(error.message))
+    if (error.code === 'PERSON_NOT_FOUND') {
       deps.setPeopleError(PERSON_NOT_ON_SERVER)
       return
     }
-    if (data.code === 'FOLDER_NOT_FOUND') {
+    if (error.code === 'FOLDER_NOT_FOUND') {
       // A stale destination (deleted elsewhere) is a Folder-field problem.
       deps.setFieldError('folder', FOLDER_GONE)
       deps.focusField('folder')
@@ -365,20 +365,13 @@ async function createWork(deps: NewFileSaveDeps, draft: NewFileDraft): Promise<v
   }
   deps.markCreated({ people: roles.length > 0 })
 
-  const newId = data.id || ''
+  const newId = created.id
   let tagsFailed = 0
-  if (newId) {
-    for (const tag of tagsToAttach) {
-      try {
-        const attached = await deps.request(`/api/works/${encodeURIComponent(newId)}/tags`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tag_id: tag.id }),
-        })
-        if (!attached.ok) throw new Error('tag attach failed')
-      } catch {
-        tagsFailed += 1
-      }
+  for (const tag of tagsToAttach) {
+    try {
+      await deps.attachTag(newId, tag.id)
+    } catch {
+      tagsFailed += 1
     }
   }
   // Sent before a discard: the Work exists with what was asked for, but the

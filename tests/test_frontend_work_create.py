@@ -325,7 +325,11 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("The file was created, but", save)
         # A lost response or a server error does not prove nothing was saved.
         self.assertIn("Could not confirm whether the file was saved", save)
-        self.assertIn("res.status >= 500", save)
+        self.assertIn("error.status >= 500 ? SERVER_FAILED", save)
+        # The create goes through the typed src/api service, never raw transport.
+        self.assertNotIn("prksRequest", save)
+        self.assertNotIn("prksRequest", _read(_NEW_FILE_FORM))
+        self.assertIn("import { attachTagToWork, createPdfWork } from '../../api/works-create'", _read(_NEW_FILE_FORM))
         self.assertNotIn("Could not reach PRKS. Nothing was saved", save)
         people = _nf("NewFilePeople.vue")
         quick = people.split("function quickCreate(): void {", 1)[1].split("\n}\n", 1)[0]

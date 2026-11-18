@@ -20,6 +20,7 @@ import NewFileSource from './new-file/NewFileSource.vue'
 import NewFileTags from './new-file/NewFileTags.vue'
 import { defaultFolderId } from './new-file/folder'
 import { loadList, runtime } from './new-file/runtime'
+import { attachTagToWork, createPdfWork } from '../../api/works-create'
 import { BAD_DATE, saveNewFile, type NewFileDraft, type NewFileField, type SourceKind } from './new-file/save'
 import { createNewFileState, FIELD_CONTROL_IDS, NEW_FILE_STATE } from './new-file/state'
 
@@ -240,10 +241,8 @@ async function onSave(): Promise<void> {
     },
     offlineRefused: (message) => w.prksOfflineGuardMutation?.(message) === true,
     waitForPeople: (ids) => (typeof w.prksWaitForPeopleOnServer === 'function' ? w.prksWaitForPeopleOnServer(ids) : Promise.resolve(true)),
-    request: (url, init) => {
-      if (typeof w.prksRequest !== 'function') return Promise.reject(new Error('Could not reach PRKS.'))
-      return w.prksRequest(url, init)
-    },
+    createPdfWork,
+    attachTag: attachTagToWork,
     markCreated: (changes) => {
       if (changes.people) {
         // The create can link people in the same request, bypassing

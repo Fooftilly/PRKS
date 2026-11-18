@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { PRKS_API_FALLBACK_ERROR, PrksApiError } from '../../../api/http'
+import { parseTagAttached, parseWorkCreated } from '../../../api/works-create'
 import {
   BAD_DATE,
   BAD_PDF_READ,
@@ -7,6 +9,7 @@ import {
   ENRICHMENT_NOT_ADDED,
   NOTHING_SAVED,
   PERSON_NOT_ADDED,
+  PERSON_NOT_ON_SERVER,
   PERSON_NOT_PICKED,
   SERVER_FAILED,
   UNCONFIRMED_SAVE,
@@ -70,6 +73,34 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+type FakeRequest = (url: string, init: { body: string }) => Promise<Response>
+
+/**
+ * The typed create and tag-attach operations over a fake HTTP answer, with
+ * prksApiRequest's semantics: a rejected request is a transport TypeError,
+ * a non-2xx answer a PrksApiError carrying the envelope's message and code.
+ */
+function over(request: FakeRequest): Pick<NewFileSaveDeps, 'createPdfWork' | 'attachTag'> {
+  const call = async (url: string, body: unknown): Promise<unknown> => {
+    let res: Response
+    try {
+      res = await request(url, { body: JSON.stringify(body) })
+    } catch {
+      throw new TypeError('PRKS API request failed.')
+    }
+    const payload = (await res.json().catch(() => null)) as { error?: string; code?: string } | null
+    if (!res.ok) {
+      throw new PrksApiError(payload?.error || PRKS_API_FALLBACK_ERROR, res.status, payload?.code ?? null)
+    }
+    return payload
+  }
+  return {
+    createPdfWork: async (req) => parseWorkCreated(await call('/api/works', req)),
+    attachTag: async (workId, tagId) =>
+      parseTagAttached(await call(`/api/works/${encodeURIComponent(workId)}/tags`, { tag_id: tagId })),
+  }
+}
+
 function recorder(overrides: Partial<NewFileSaveDeps> = {}, input: NewFileDraft = draft()): Recorder {
   const r: Omit<Recorder, 'deps'> = {
     open: { value: true },
@@ -111,10 +142,10 @@ function recorder(overrides: Partial<NewFileSaveDeps> = {}, input: NewFileDraft 
     },
     offlineRefused: () => false,
     waitForPeople: async () => true,
-    request: async (url, init) => {
-      r.requests.push({ url, body: JSON.parse(String(init.body || '{}')) })
-      return url === '/api/works' ? json(201, { id: 'W-PDF' }) : json(200, {})
-    },
+    ...over(async (url, init) => {
+      r.requests.push({ url, body: JSON.parse(init.body) as Record<string, unknown> })
+      return url === '/api/works' ? json(200, { id: 'W-PDF' }) : json(200, { status: 'added' })
+    }),
     markCreated: () => {},
     failureText: (text) => `${text} Nothing was saved.`,
     closeAndOpen: (id) => r.opened.push(id),
@@ -272,13 +303,13 @@ describe('saveNewFile', () => {
     const r = recorder(
       {
         stillOpening: () => current === '3',
-        request: (url, init) => {
-          r.requests.push({ url, body: JSON.parse(String(init.body || '{}')) })
-          if (url !== '/api/works') return Promise.resolve(json(200, {}))
+        ...over((url, init) => {
+          r.requests.push({ url, body: JSON.parse(init.body) as Record<string, unknown> })
+          if (url !== '/api/works') return Promise.resolve(json(200, { status: 'added' }))
           return new Promise<Response>((resolve) => {
             release = resolve
           })
-        },
+        }),
       },
       draft({ tags: [{ id: 'T1', name: 'a' }] }),
     )
@@ -286,7 +317,7 @@ describe('saveNewFile', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     // Closed and opened again while the create was in flight.
     current = '4'
-    release(json(201, { id: 'W-OLD' }))
+    release(json(200, { id: 'W-OLD' }))
     await run
     // The Work exists with what was asked for, but the new form is not touched.
     expect(r.requests.map((req) => req.url)).toEqual(['/api/works', '/api/works/W-OLD/tags'])
@@ -298,36 +329,54 @@ describe('saveNewFile', () => {
   it('ignores a second press while this opening is creating', async () => {
     let release: (res: Response) => void = () => {}
     const r = recorder({
-      request: (url, init) => {
-        r.requests.push({ url, body: JSON.parse(String(init.body || '{}')) })
+      ...over((url, init) => {
+        r.requests.push({ url, body: JSON.parse(init.body) as Record<string, unknown> })
         return new Promise<Response>((resolve) => {
           release = resolve
         })
-      },
+      }),
     })
     const first = saveNewFile(r.deps)
     await new Promise((resolve) => setTimeout(resolve, 0))
     await saveNewFile(r.deps)
     expect(r.requests).toHaveLength(1)
-    release(json(201, { id: 'W-1' }))
+    release(json(200, { id: 'W-1' }))
     await first
     expect(r.opened).toEqual(['W-1'])
   })
 
   it('says whether a Work may exist after a failure', async () => {
-    const dropped = recorder({ request: () => Promise.reject(new Error('offline')) })
+    const dropped = recorder(over(() => Promise.reject(new Error('offline'))))
     await saveNewFile(dropped.deps)
     expect(dropped.status.at(-1)).toBe(UNCONFIRMED_SAVE)
 
-    const crashed = recorder({ request: async () => json(500, { error: 'boom' }) })
+    const crashed = recorder(over(async () => json(500, { error: 'boom' })))
     await saveNewFile(crashed.deps)
     expect(crashed.status.at(-1)).toBe(SERVER_FAILED)
 
-    const gone = recorder({ request: async () => json(404, { error: 'Folder not found', code: 'FOLDER_NOT_FOUND' }) })
+    const gone = recorder(over(async () => json(404, { error: 'Folder not found', code: 'FOLDER_NOT_FOUND' })))
     await saveNewFile(gone.deps)
     expect(gone.status.at(-1)).toBe('Folder not found Nothing was saved.')
     expect(gone.errors).toEqual([['folder', FOLDER_GONE]])
     expect(gone.focused).toEqual(['folder'])
+
+    const unsaved = recorder(
+      over(async () => json(409, { error: 'A person on this file has not finished saving yet.', code: 'PERSON_NOT_FOUND' })),
+    )
+    await saveNewFile(unsaved.deps)
+    expect(unsaved.peopleErrors).toEqual([PERSON_NOT_ON_SERVER])
+    expect(unsaved.opened).toEqual([])
+  })
+
+  it('treats a create answer it cannot read as unconfirmed, never as created', async () => {
+    let marked = 0
+    const r = recorder({ ...over(async () => json(200, { ok: true })), markCreated: () => (marked += 1) })
+    await saveNewFile(r.deps)
+    expect(r.status.at(-1)).toBe(UNCONFIRMED_SAVE)
+    // The Work may exist, so the lists it would join are refreshed, but
+    // nothing is opened and no retry is invited.
+    expect(marked).toBe(1)
+    expect(r.opened).toEqual([])
   })
 
   it('reports an unreadable PDF on the drop zone', async () => {
@@ -340,7 +389,7 @@ describe('saveNewFile', () => {
   it('opens the Work even when a tag could not be attached, and says so', async () => {
     const r = recorder(
       {
-        request: async (url) => (url === '/api/works' ? json(201, { id: 'W-2' }) : json(500, {})),
+        ...over(async (url) => (url === '/api/works' ? json(200, { id: 'W-2' }) : json(500, {}))),
       },
       draft({ tags: [{ id: 'T1', name: 'a' }, { id: 'T2', name: 'b' }] }),
     )
