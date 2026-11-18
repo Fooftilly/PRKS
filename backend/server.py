@@ -108,22 +108,16 @@ PRKS_TESTING_DEFAULT_PORT = 8070
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
 _PRKS_MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
 _LONE_SURROGATE = re.compile("[\ud800-\udfff]")
-# Some routes decode a query value a second time (the alias routes unquote
-# what parse_qs already decoded), so "%2500" is a NUL to them.
-_URL_DECODE_ROUNDS = 4
 
 
 def _url_holds_nul(raw_path: str) -> bool:
-    """NUL in the request target, raw or percent-encoded, nested encodings included."""
+    """NUL in the request target, raw or after the one percent-decode routes apply.
+
+    One round only: ``%2500`` is the literal text ``%00`` to every route
+    (``parse_qs`` and ``unquote`` each decode once), a valid search.
+    """
     text = raw_path or ""
-    for _ in range(_URL_DECODE_ROUNDS):
-        if "\x00" in text:
-            return True
-        decoded = unquote(text)
-        if decoded == text:
-            return False
-        text = decoded
-    return "\x00" in text
+    return "\x00" in text or "\x00" in unquote(text)
 
 
 def _json_holds_lone_surrogate(value) -> bool:

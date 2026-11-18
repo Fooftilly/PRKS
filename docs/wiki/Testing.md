@@ -231,7 +231,7 @@ Its first run found five ways a request got a 500 or no answer at all:
 - a body that is not UTF-8;
 - JSON nested past the decoder's recursion limit;
 - a `\ud800` escape that reached psycopg;
-- `%00` in a query or path, which reached a PostgreSQL bind (`%2500` too, on the alias routes, which decode a value twice).
+- `%00` in a query or path, which reached a PostgreSQL bind. The Publisher and Tag alias routes decoded their value twice, so `%2500` did too; they now decode once, like every other query value.
 
 `backend/server.py` now answers all of these with 400. They are pinned in `tests/pg/test_http_request_fuzz_regressions.py`, and the scan's own safeguards are in `tests/test_schemathesis_mutations.py`.
 

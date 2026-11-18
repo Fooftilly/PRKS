@@ -7,8 +7,9 @@ publishers families. Before the fixes in ``backend/server.py`` it found:
   limit, escaped ``_read_json_body`` and the connection closed with no answer;
 * a ``"\\ud800"`` escape decoded to a lone surrogate, and psycopg failed to
   encode it when the route stored the name (a 500);
-* ``%00`` in a query reached a PostgreSQL bind, which refuses NUL (a 500),
-  and ``%2500`` did too on a route that decodes a value twice.
+* ``%00`` in a query reached a PostgreSQL bind, which refuses NUL (a 500).
+  The alias routes decoded their value a second time; they now decode it
+  once, so ``%2500`` is the literal text ``%00`` everywhere.
 
 Each is now a 400 before any route runs. Every case is sent with the owner's
 session, Origin and Library epoch, so the refusal is the body or URL check and
@@ -72,14 +73,34 @@ class RequestFuzzRegressionTests(ServerApiTestCase):
         for method, path in (("GET", "/api/search?q=%00"),
                              ("GET", "/api/publishers/%00"),
                              ("DELETE", f"/api/publishers/{publisher['id']}/aliases?alias=a%00b"),
-                             # The alias route decodes the value a second time.
-                             ("DELETE", f"/api/publishers/{publisher['id']}/aliases?alias=a%2500b"),
                              # A static file path: os.path refuses NUL.
-                             ("GET", "/%00"), ("GET", "/js/%2500.js")):
+                             ("GET", "/%00")):
             with self.subTest(method=method, path=path):
                 res = (self.get(path) if method == "GET" else self.send(method, path))
                 self.assertEqual(self.refused(res, 400), {"error": "invalid_request"})
         self.assertEqual([row["name"] for row in self.sql("SELECT name FROM publishers")], ["Fuzz Press"])
+
+    def test_an_encoded_percent_is_literal_text_not_a_nul(self) -> None:
+        """``%2500`` decodes once, to the text ``%00``: a valid search, not a refusal."""
+        for query in ("%2500", "hello%2500world"):
+            with self.subTest(query=query):
+                self.assertEqual(self.ok(self.get(f"/api/search?q={query}")), [])
+
+    def test_an_alias_with_a_percent_sign_is_removed_by_its_own_text(self) -> None:
+        """The alias routes decode the value once, like every other query value."""
+        publisher = self.ok(self.send("POST", "/api/publishers", {"name": "Percent Press"}))
+        aliases = f"/api/publishers/{publisher['id']}/aliases"
+        for alias in ("50%", "a%00b", "a%41"):
+            self.ok(self.send("POST", aliases, {"alias": alias}))
+        # encodeURIComponent, as the client sends it: "%" is "%25".
+        for encoded, alias in (("50%25", "50%"), ("a%2500b", "a%00b"), ("a%2541", "a%41")):
+            with self.subTest(alias=alias):
+                self.assertEqual(self.ok(self.send("DELETE", f"{aliases}?alias={encoded}")),
+                                 {"status": "deleted"})
+        tag = self.ok(self.send("POST", "/api/tags", {"name": "percent-tag"}))
+        tag_aliases = f"/api/tags/{tag['id']}/aliases"
+        self.ok(self.send("POST", tag_aliases, {"alias": "100%"}))
+        self.assertEqual(self.ok(self.send("DELETE", f"{tag_aliases}?alias=100%25"))["status"], "deleted")
 
     def test_a_raw_nul_in_the_request_line_is_refused(self) -> None:
         with socket.create_connection(("127.0.0.1", self.port), timeout=30) as sock:
