@@ -5,19 +5,11 @@
  *   {"parse": text}        -> refs with code-point offsets (Python's indices)
  *   {"keys": [names...]}   -> prksNormalizeConceptKey of each name
  */
-const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const vm = require('vm');
 
-const rootDir = path.resolve(__dirname, '../..');
-const src = fs.readFileSync(path.join(rootDir, 'frontend/js/research-links.js'), 'utf8');
-const sandbox = { console, module: { exports: {} }, exports: {}, require };
-sandbox.global = sandbox;
-sandbox.window = sandbox;
-vm.createContext(sandbox);
-vm.runInContext(src, sandbox);
-const api = sandbox.module.exports;
+// research-links.js exports its API through module.exports under Node.
+const api = require(path.resolve(__dirname, '../../frontend/js/research-links.js'));
 
 function codePoints(text, index) {
     return Array.from(text.slice(0, index)).length;
