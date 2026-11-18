@@ -510,7 +510,6 @@ function runScript(rel) {
 runScript('frontend/js/route-model.js');
 runScript('frontend/js/navigation.js');
 runScript('frontend/js/search-query-codec.js');
-runScript('frontend/js/saved-views.js');
 runScript('frontend/js/work-selection.js');
 runScript('frontend/js/command-palette.js');
 

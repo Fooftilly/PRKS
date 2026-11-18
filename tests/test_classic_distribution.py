@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from scripts.benchmark_classic_script_bundle import EXPECTED_CLASSIC_COUNTS
 from scripts.build_classic_distribution import (
     BODY_BUNDLE,
     HEAD_BUNDLE,
@@ -22,13 +23,13 @@ def fixture(root: Path) -> Path:
     js.mkdir(parents=True)
     lines = ["<!doctype html>\n", "<html><head>\n"]
     originals = []
-    for i in range(5):
+    for i in range(EXPECTED_CLASSIC_COUNTS["head"]):
         path = f"/js/head{i}.js"
         (js / f"head{i}.js").write_text(f"window.prksHead{i} = {i};\n", encoding="utf-8")
         originals.append(path)
         lines.append(f'    <script src="{path}"></script>\n')
     lines.append("</head><body>\n")
-    for i in range(80):
+    for i in range(EXPECTED_CLASSIC_COUNTS["body"]):
         path = f"/js/body{i}.js"
         (js / f"body{i}.js").write_text(f"window.prksBody{i} = {i};\n", encoding="utf-8")
         originals.append(path)
@@ -60,7 +61,7 @@ class ClassicDistributionTests(unittest.TestCase):
         self.assertEqual(html.count(f'<script src="{BODY_BUNDLE}"></script>'), 1)
         self.assertEqual(html.count('<script type="module" src='), 2)
         self.assertEqual(bundles[HEAD_BUNDLE].count("/* bundled source:"), 5)
-        self.assertEqual(bundles[BODY_BUNDLE].count("/* bundled source:"), 80)
+        self.assertEqual(bundles[BODY_BUNDLE].count("/* bundled source:"), EXPECTED_CLASSIC_COUNTS["body"])
         self.assertIn(f"'{HEAD_BUNDLE}',", worker)
         self.assertIn(f"'{BODY_BUNDLE}',", worker)
         self.assertIn("const CLASSIC_BUNDLE_REVISION = '", worker)

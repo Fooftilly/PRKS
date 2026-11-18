@@ -126,7 +126,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     initForms();
     if (typeof prksInitCommandPalette === 'function') prksInitCommandPalette();
-    if (typeof prksInitSavedViews === 'function') prksInitSavedViews();
 });
 
 /** Last known Processing inbox count. null = unknown (do not show “0”). */

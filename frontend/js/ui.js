@@ -497,7 +497,7 @@ window.prksAutosizeTextarea = prksAutosizeTextarea;
 window.prksBindAutosizeTextareas = prksBindAutosizeTextareas;
 
 // Modal Logic
-function openModal(id) {
+function openModal(id, options) {
     // `group-modal` has NO connectivity guard: creating a Person Group is
     // durable-first, under an id this device mints, so the modal opens and
     // saves with or without the server.
@@ -514,7 +514,10 @@ function openModal(id) {
     prksHideModalUnsavedConfirm({ restoreFocus: false });
     const backdrop = document.getElementById('modal-backdrop');
     if (backdrop && backdrop.classList.contains('hidden')) {
-        const ae = document.activeElement;
+        // An opener that went busy (disabled) while it loaded what the dialog
+        // shows has already lost focus, so it names itself (#487).
+        const named = options && options.returnFocus;
+        const ae = named && document.contains(named) ? named : document.activeElement;
         window.__prksModalFocusRestore = ae && ae !== document.body ? ae : window.__prksModalFocusRestore;
     }
     document.getElementById('modal-backdrop').classList.remove('hidden');
