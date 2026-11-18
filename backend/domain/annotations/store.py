@@ -27,8 +27,10 @@ from the start, as ``lifecycle.replace_object`` does.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
@@ -185,22 +187,28 @@ def require_pdf(target: Target) -> str:
     return target.asset_id
 
 
+_WALK_DONE = object()
 _UNSTORABLE_TEXT = re.compile("[\x00\ud800-\udfff]")
 
 
 def _holds_unstorable_text(value: Any) -> bool:
-    """NUL or a lone surrogate in any text, keys included (iterative: any depth)."""
-    stack = [value]
+    """NUL or a lone surrogate in any text, keys included.
+
+    Iterative with one iterator per open container, so any depth is walked
+    and auxiliary memory is bounded by depth, not by width.
+    """
+    stack: list[Iterator[Any]] = [iter((value,))]
     while stack:
-        item = stack.pop()
-        if isinstance(item, str):
+        item = next(stack[-1], _WALK_DONE)
+        if item is _WALK_DONE:
+            stack.pop()
+        elif isinstance(item, str):
             if _UNSTORABLE_TEXT.search(item):
                 return True
         elif isinstance(item, dict):
-            stack.extend(item.keys())
-            stack.extend(item.values())
+            stack.append(itertools.chain.from_iterable(item.items()))
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.append(iter(item))
     return False
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 from typing import Any, Iterable, Optional
 
 
@@ -39,18 +40,27 @@ def _refuse_constant(name: str) -> Any:
     raise ValueError(f"{name} is not JSON")
 
 
+_WALK_DONE = object()
+
+
 def _holds_non_finite(value: Any) -> bool:
-    """A NaN or infinity anywhere in ``value`` (a list or object from json.loads)."""
-    stack = [value]
+    """A NaN or infinity anywhere in ``value`` (a list or object from json.loads).
+
+    One iterator per open container: auxiliary memory is bounded by nesting
+    depth, not by how wide a list or object is.
+    """
+    stack: list[Iterator[Any]] = [iter((value,))]
     while stack:
-        item = stack.pop()
-        if isinstance(item, float):
+        item = next(stack[-1], _WALK_DONE)
+        if item is _WALK_DONE:
+            stack.pop()
+        elif isinstance(item, float):
             if not math.isfinite(item):
                 return True
         elif isinstance(item, dict):
-            stack.extend(item.values())
+            stack.append(iter(item.values()))
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.append(iter(item))
     return False
 
 
