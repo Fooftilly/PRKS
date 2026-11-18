@@ -10,8 +10,8 @@ compares what PostgreSQL holds with a small reference model:
   link family shares: a future base is ``FUTURE_REVISION``, a stale base that
   disagrees is ``REVISION_CONFLICT``, anything else is acknowledged and
   advances the revision only on a real change;
-- refusals for a target that is gone: a deleted Work is ``ENTITY_NOT_FOUND``,
-  a deleted Tag ``TAG_DELETED``;
+- refusals for a target that is gone: a deleted Work is 404 ``ENTITY_NOT_FOUND``,
+  a deleted Tag 409 ``TAG_DELETED``;
 
 and that hold whatever the sequence:
 
@@ -169,7 +169,7 @@ class WorkLifecycleModelTests(TagSyncTestCase):
             if work_id not in model.works:
                 return label, self.link(data_op, work_id, tag_id, 0), (404, "ENTITY_NOT_FOUND"), None
             if tag_id not in model.tags:
-                return label, self.link(data_op, work_id, tag_id, 0), (None, "TAG_DELETED"), None
+                return label, self.link(data_op, work_id, tag_id, 0), (409, "TAG_DELETED"), None
             key = link_key(work_id, tag_id)
             base, expected = self.decide(model, key, (work_id, tag_id) in model.links, desired, base_kind)
 
@@ -280,10 +280,8 @@ class WorkLifecycleModelTests(TagSyncTestCase):
                     assert data is not None and expected is not None
                     scopes_before = self.revisions_of(data["entity_id"]) if data["operation"] == "DELETE_WORK" else {}
                     status, result = self.send(data)
-                    if expected[0] is not None:
-                        self.assertEqual(status, expected[0], (where, result))
-                    if expected[1] is not None:
-                        self.assertEqual(result["code"], expected[1], (where, result))
+                    self.assertEqual(status, expected[0], (where, result))
+                    self.assertEqual(result["code"], expected[1], (where, result))
                     if len(expected) == 3:
                         self.assertEqual(result["changed"], expected[2], (where, result))
                     if status == 200 and result.get("code") == "ACKNOWLEDGED":
