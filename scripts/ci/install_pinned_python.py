@@ -26,6 +26,7 @@ DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "plan": ("playwright",),
     "e2e": ("playwright",),
     "schemathesis": ("schemathesis",),
+    "locust": ("locust",),
     # PostgreSQL requirements are part of the runtime image (#630); the
     # PostgreSQL HTTP contract tests validate against the OpenAPI slice (#641).
     "postgres": ("openapi-core",),

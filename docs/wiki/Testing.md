@@ -231,6 +231,29 @@ Locally, install the existing exact pins with `python scripts/ci/install_pinned_
 The workflow runs manually or for changes to the pilot/Publishers schema/dependency pins. Its only reported outcome is a small sanitized route/method/seed/elapsed/exit summary. On failure, reproduce from a new disposable test server with the fixed seed; use `python scripts/ci/schemathesis_pilot.py --debug-local` for full raw Schemathesis details **only on a private local machine**. The flag is rejected in GitHub Actions, and logs are sanitized by default. No generated payloads, raw request/response bodies, cookies, secrets, research documents, database paths or dynamic query strings are uploaded to CI artifacts. Before expanding API coverage, verify the real HTTP contract for the new family and require explicit allowlisting of every method/path. Existing deterministic Pydantic/openapi-core tests remain the primary contract gate.
 
 
+## Locust — bounded read-only load pilot (#859, #765 T08)
+
+The manual [Locust workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/locust-readonly-pilot.yml) measures throughput and latency of the routes a browser uses while reading the library: `GET /api/works`, `GET /api/works/:id`, `GET /api/search`, `GET /api/tags` and `GET /api/research-graph`. It complements the single-user E2E suite; it is not a PR gate. Gating it on paths would need separate stability evidence and maintainer approval.
+
+`scripts/ci/locust_pilot.py` starts its own disposable `AppServer --testing` on loopback (its own database on the `PRKS_TEST_DATABASE_URL` server, loopback-owner session, the UX-tour synthetic library plus 8 (`small`) or 64 (`medium`) synthetic Works), checks each of the five routes once before any load, then runs `scripts/ci/locustfile_readonly.py` headless with 5 users, spawn rate 5, for 30 seconds. It refuses any target but `http://127.0.0.1:<its port>` and refuses an inherited `PRKS_AUTH` or `PRKS_DATABASE_URL`. Every answer is checked for its meaning (status 200, JSON, a catalog of exactly the seeded Works, the UX-tour fixtures included, the requested Work, the seeded search hits, exactly the seeded non-empty tag list, a non-empty graph), so a fast 4xx/5xx or an empty answer counts as a failure, never as a fast success.
+
+The JSON summary holds the tier, users/spawn/duration, PRKS and PostgreSQL versions, the library size, and per route the request and failure counts, p50, p95, max and requests per second. It also holds the load generator's own CPU share, so a saturated generator (above 0.8 of one CPU) is flagged instead of read as a slow server, and the `pg_stat_database` counters of the pilot's database over the run (commits, rollbacks, blocks hit/read, tuples returned/fetched). A run with a route never exercised, any failed request or a saturated generator exits 1 and lists why under `problems`. No titles, ids, bodies or URLs with values are recorded.
+
+Locally, the pilot needs a disposable PostgreSQL 18 server that keeps running between the two commands. `scripts/test-postgres` is not suitable here: it picks a random port and removes its server when its command exits. Start one separately instead, for example:
+
+```bash
+docker run -d --rm --name prks-locust-pg -p 127.0.0.1:55432:5432 \
+  -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18.6
+python scripts/ci/install_pinned_python.py locust
+export PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1
+python scripts/ci/locust_pilot.py --tier small --out baseline.json
+# later, after a change, compare per-route p95 and throughput ratios:
+python scripts/ci/locust_pilot.py --tier small --compare baseline.json
+docker stop prks-locust-pg
+```
+
+`--compare` accepts only a summary of the same tier. Ratios within run-to-run noise (about ±20% on a laptop for these short runs) are not a regression; repeat both runs before drawing a conclusion. Write and contention workloads (an authenticated edit under CSRF) stay a separate, later experiment so the read-only baseline remains comparable.
+
 ## Schemathesis — bounded mutation scan of allowlisted families (fuzzing slice 2)
 
 The [mutation scan workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-mutations.yml) runs `scripts/ci/schemathesis_mutations.py`. Unlike the read-only pilot above, it sends writes, so it is held tighter, not looser:
