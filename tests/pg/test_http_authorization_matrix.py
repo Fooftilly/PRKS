@@ -236,7 +236,6 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
 
     def test_every_family_answers_each_caller_by_its_right_and_refusals_change_nothing(self) -> None:
         cookies = self.callers()
-        secrets = [self.lib, *[value for key, value in self.ids.items() if key != "pdf"]]
         for row in ROWS:
             for caller in ("owner", "reader", "editor", "revoked", "signed_out", "other_library", "anonymous"):
                 with self.subTest(family=row.family, method=row.method, path=row.path, caller=caller):
@@ -262,6 +261,8 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
                         continue
                     self.assertEqual(res.status, expected[0], res.raw[:300])
                     self.assertEqual(res.body.get("error"), expected[1], res.raw[:300])
+                    # Built after prepare(), so a fixture seeded for this request is checked too.
+                    secrets = [self.lib, *[value for key, value in self.ids.items() if key != "pdf"]]
                     for secret in secrets:
                         self.assertNotIn(secret, res.text)
                     self.assertEqual(self.fingerprint(), before, "a refused request changed the Library")
