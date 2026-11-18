@@ -13,7 +13,9 @@ domain commands directly, so this matrix sends one real request per family
 
 Each row states what the request needs (read, edit, or Library
 administration). A caller with the right gets a success (or the row's
-documented route-level refusal, which comes after admission); a reader
+documented route-level refusal, which comes after admission), and a row
+with ``verify`` also checks that the request did its work (the Research Note
+is saved, the Processing item is imported); a reader
 asking to edit or an editor asking to administer gets 403 ``forbidden``; the
 others get 401 ``not_authenticated``. A refusal never names the Library or
 the seeded entities, and a refused request leaves every Library table as it
@@ -57,6 +59,9 @@ class Row:
     body: Any = None
     # A route-level answer the owner may get: the backups download is 404 without a ready token.
     allowed: tuple[int, ...] = ()
+    # A check that a permitted request really did its work, not only answered 2xx:
+    # a method of the test case named ``verify_<name>``, given the sent body and the answer.
+    verify: Optional[str] = None
 
 
 # ``{work}``, ``{tag}`` … are the ids seeded in setUp. Bodies are valid for the owner,
@@ -65,7 +70,8 @@ ROWS: tuple[Row, ...] = (
     Row("works", READ, "GET", "/api/works/{work}"),
     Row("works", EDIT, "PATCH", "/api/works/{work}", {"title": "Renamed by the matrix"}),
     Row("works", READ, "GET", "/api/pdfs/{pdf}"),  # streams a managed file
-    Row("research_notes", EDIT, "PATCH", "/api/works/{work}", {"notes": "A note from the matrix"}),
+    Row("research_notes", EDIT, "PATCH", "/api/works/{work}", {"text_content": "A note from the matrix {unique}"},
+        verify="note_saved"),
     Row("annotations", READ, "GET", "/api/works/{work}/annotations"),
     Row("annotations", EDIT, "POST", "/api/works/{work}/annotations", {"annotations_json": "[]", "canonical_annotation_set_revision": 0}),
     Row("work_roles", EDIT, "POST", "/api/roles", {"person_id": "{person}", "work_id": "{work}", "role_type": "{role}"}),
@@ -86,7 +92,8 @@ ROWS: tuple[Row, ...] = (
     Row("publishers", EDIT, "POST", "/api/publishers", {"name": "Matrix press {unique}"}),
     Row("processing", READ, "GET", "/api/processing-items"),
     Row("processing", READ, "GET", "/api/processing-items/{item}/pdf"),  # streams the uploaded object
-    Row("processing", EDIT, "POST", "/api/processing-items/import", {"item_ids": ["PI-MATRIX"]}),
+    # ``{ready}`` is a ready item uploaded just before each request, so every permitted caller imports one.
+    Row("processing", EDIT, "POST", "/api/processing-items/import", {"item_ids": ["{ready}"]}, verify="imported"),
     Row("search", READ, "GET", "/api/search?q=matrix"),
     Row("settings", READ, "GET", "/api/settings"),
     Row("settings", ADMIN, "PATCH", "/api/settings", {}),
@@ -189,7 +196,27 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
             out[table] = (row["n"], row["h"])
         return out
 
-    def send(self, row: Row, cookie: Optional[dict[str, str]]) -> Response:
+    def prepare(self, row: Row) -> None:
+        """Seed what this request consumes, before the refusal check's fingerprint is taken."""
+        if "{ready}" in repr(row.body):
+            uploaded = self.raw_upload(pdf_bytes(f"Matrix ready {uuid.uuid4().hex[:8]}"), filename="matrix-ready.pdf")
+            self.assertEqual(uploaded.status, 201, uploaded.raw[:300])
+            self.ids["ready"] = uploaded.body["item"]["id"]
+
+    def verify_note_saved(self, body: dict[str, Any], res: Response) -> None:
+        rows = self.run_sql("SELECT body FROM prks.work_notes WHERE library_id = %s AND work_id = %s"
+                            " AND kind = 'research'", (self.lib, self.ids["work"]))
+        self.assertEqual([row["body"] for row in rows], [body["text_content"]], "the Research Note was not saved")
+
+    def verify_imported(self, body: dict[str, Any], res: Response) -> None:
+        (result,) = res.body["results"]
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["item_id"], body["item_ids"][0])
+        (row,) = self.run_sql("SELECT status FROM prks.processing_items WHERE library_id = %s AND id = %s",
+                              (self.lib, body["item_ids"][0]))
+        self.assertEqual(row["status"], "imported")
+
+    def send(self, row: Row, cookie: Optional[dict[str, str]]) -> tuple[Response, Any]:
         role = next(self.roles)  # one role per request, so each caller asks for a different one
 
         def fill(value: Any) -> Any:
@@ -202,7 +229,8 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
             return value
 
         epoch = self.library_epoch() if row.method not in ("GET", "HEAD") else None
-        return self.call(row.method, fill(row.path), body=fill(row.body), cookies=cookie, epoch=epoch)
+        body = fill(row.body)
+        return self.call(row.method, fill(row.path), body=body, cookies=cookie, epoch=epoch), body
 
     # -- the matrix -------------------------------------------------------------------------
 
@@ -212,8 +240,9 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         for row in ROWS:
             for caller in ("owner", "reader", "editor", "revoked", "signed_out", "other_library", "anonymous"):
                 with self.subTest(family=row.family, method=row.method, path=row.path, caller=caller):
+                    self.prepare(row)
                     before = self.fingerprint()
-                    res = self.send(row, cookies[caller])
+                    res, body = self.send(row, cookies[caller])
                     rank = _ROLE_RANK.get(caller)
                     if rank is None:
                         expected: Optional[tuple[int, str]] = (401, "not_authenticated")
@@ -228,6 +257,8 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
                             continue
                         # The route is real and the row's request is valid for every caller with the right.
                         self.assertLess(res.status, 300, res.raw[:300])
+                        if row.verify is not None:
+                            getattr(self, f"verify_{row.verify}")(body, res)
                         continue
                     self.assertEqual(res.status, expected[0], res.raw[:300])
                     self.assertEqual(res.body.get("error"), expected[1], res.raw[:300])
@@ -240,6 +271,9 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         covered = {row.family for row in ROWS}
         self.assertEqual(modules - covered, set(), "add a matrix row for each new backend/api family")
         self.assertEqual(covered - modules, set(), "a row names a family that no longer exists")
+        for row in ROWS:
+            if row.verify is not None:
+                self.assertTrue(callable(getattr(self, f"verify_{row.verify}", None)), row)
         for family in covered - _READ_ONLY:
             needs = {row.needs for row in ROWS if row.family == family}
             with self.subTest(family=family):
