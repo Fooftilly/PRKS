@@ -40,10 +40,26 @@ describe('Saved View dialog rules', () => {
     expect(stateFromOpening({ definition: { mode: 'bogus' } }).draft.mode).toBe('advanced')
   })
 
-  it('sends every field trimmed', () => {
-    expect(
-      inputFromDraft({ name: ' N ', mode: 'all', q: ' q ', tag: ' t ', author: ' a ', publisher: ' p ' }),
-    ).toEqual({ name: 'N', search: { mode: 'all', q: 'q', tag: 't', author: 'a', publisher: 'p' } })
+  it('sends only the fields the mode shows, trimmed', () => {
+    const draft = { name: ' N ', q: ' q ', tag: ' t ', author: ' a ', publisher: ' p ' }
+    expect(inputFromDraft({ ...draft, mode: 'all' })).toEqual({
+      name: 'N',
+      search: { mode: 'all', q: 'q', tag: '', author: '', publisher: '' },
+    })
+    expect(inputFromDraft({ ...draft, mode: 'advanced' }).search).toEqual({
+      mode: 'advanced',
+      q: 'q',
+      tag: '',
+      author: 'a',
+      publisher: 'p',
+    })
+    expect(inputFromDraft({ ...draft, mode: 'tag' }).search).toEqual({
+      mode: 'tag',
+      q: '',
+      tag: 't',
+      author: 'a',
+      publisher: 'p',
+    })
   })
 
   it('takes a Search hash through the route model and codec', () => {

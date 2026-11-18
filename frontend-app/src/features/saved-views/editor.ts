@@ -75,19 +75,21 @@ export function stateFromOpening(opening: SavedViewOpening | null | undefined): 
 }
 
 /**
- * The definition a Save sends. Every field is sent, trimmed, whatever the
- * mode shows, as the classic dialog did; the server ignores what a mode
- * does not use.
+ * The definition a Save sends, trimmed. Only the fields the mode shows are
+ * sent: the server refuses a tag on an Advanced view and any filter on an
+ * All-fields one, so a value left hidden by a mode switch would fail the
+ * Save. The draft keeps it, so switching back restores it.
  */
 export function inputFromDraft(draft: SavedViewDraft): SavedViewInput {
+  const { mode } = draft
   return {
     name: draft.name.trim(),
     search: {
-      mode: draft.mode,
-      q: draft.q.trim(),
-      tag: draft.tag.trim(),
-      author: draft.author.trim(),
-      publisher: draft.publisher.trim(),
+      mode,
+      q: mode === 'tag' ? '' : draft.q.trim(),
+      tag: mode === 'tag' ? draft.tag.trim() : '',
+      author: mode === 'all' ? '' : draft.author.trim(),
+      publisher: mode === 'all' ? '' : draft.publisher.trim(),
     },
   }
 }
