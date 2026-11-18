@@ -7,6 +7,9 @@ _PROJECT = Path(__file__).resolve().parents[1]
 _UI = (_PROJECT / "frontend" / "js" / "ui.js").read_text(encoding="utf-8")
 _APP = (_PROJECT / "frontend" / "js" / "app.js").read_text(encoding="utf-8")
 _ROLES = (_PROJECT / "frontend" / "js" / "work-role-editor.js").read_text(encoding="utf-8")
+_ROLE_LINK_SAVE = (
+    _PROJECT / "frontend-app" / "src" / "features" / "create-forms" / "role-link" / "save.ts"
+).read_text(encoding="utf-8")
 
 
 class WorkRoleEditorContractTests(unittest.TestCase):
@@ -14,21 +17,22 @@ class WorkRoleEditorContractTests(unittest.TestCase):
         still = "prksWorkRoleIntentStill("
         unlink = _UI[_UI.index("async function prksRemoveWorkRoleLink"):_UI.index("async function prksRefreshUiAfterWorkRoleRemoved")]
         credit = _UI[_UI.index("async function prksEditRoleCreditOnWork"):_UI.index("function prksSplitTypedPersonName")]
-        add = _UI[_UI.index("async function addRoleToWorkFromMetaEditor"):_UI.index("async function prepareRoleModal")]
-        modal = _APP[_APP.index("saveRoleBtn.onclick"):_APP.index("closeModals();", _APP.index("saveRoleBtn.onclick"))]
+        add = _UI[_UI.index("async function addRoleToWorkFromMetaEditor"):_UI.index("function prksSetTabActive")]
+        modal = _UI[_UI.index("async function prksLinkPersonFromRoleModal"):_UI.index("window.prksLinkPersonFromRoleModal")]
         for body, name in ((unlink, "unlink"), (credit, "credit"), (add, "add"), (modal, "modal")):
             write = body.index("prksSaveWorkPersonRoleDurably")
             self.assertLess(body.index(still), write, name)
-        self.assertLess(modal.index("result.code === 'stale'"), modal.index("Open it once"))
+        # A stale result returns before any outcome reaches the Vue form.
+        self.assertLess(modal.index("code === 'stale'"), modal.index("settle: function"))
+        self.assertNotIn("getElementById('save-role-btn')", _APP)
         self.assertIn("prksTabContextOwnsEntityRoute", unlink)
         self.assertIn("prksWorkRoleUnlinkSessionStill(", unlink)
         self.assertLess(unlink.index("result.code === 'stale'"), unlink.index("code === 'unavailable'"))
-        settle = modal.index("prksAlertDialog")
-        self.assertLess(modal.index("roleModalMaySettle"), settle)
-        self.assertLess(
-            modal.index("roleModalBusyGeneration === openGeneration"),
-            modal.index("prksSetButtonBusy(saveRoleBtn, false)"),
-        )
+        self.assertIn("prksRoleModalMaySettleUi(", modal)
+        # The form alerts and closes only while that opening may settle.
+        submit = _ROLE_LINK_SAVE[_ROLE_LINK_SAVE.index("export async function submitRoleLink"):]
+        self.assertLess(submit.index("if (maySettle())"), submit.index("deps.close()"))
+        self.assertLess(submit.rindex("if (maySettle())"), submit.index("deps.failureAlert("))
         self.assertNotIn("listOperations", _UI[_UI.index("function prksRefreshOwnedWorkPanelRead"):_UI.index("function prksWorkRoleIntentStill")])
 
     def test_save_rechecks_the_mounted_owner_before_the_store(self):

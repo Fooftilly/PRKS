@@ -4,10 +4,10 @@
  * Temporary adapter (#1036). `ModalHost` paints confirm, alert, prompt, and
  * unsaved dismissal only. Folder, Person, Person Group, and Playlist bodies
  * teleport into the shells in `frontend/index.html`, and so do New File's
- * body and footer and the Saved View body and title. Retire this object when
- * those shells move into the Vue host. Role link, the person template, and
- * Settings stay on their current shells until their own slices. Saved View
- * and Playlist have no unsaved-changes confirm (`ui.js`).
+ * body and footer, the Saved View body and title, and the Link Person to Work
+ * body. Retire this object when those shells move into the Vue host. The
+ * person template and Settings stay on their current shells until their own
+ * slices. Saved View and Playlist have no unsaved-changes confirm (`ui.js`).
  */
 export interface PrksCreateFormsApi {
   owns: (modalId: string) => boolean
@@ -25,6 +25,12 @@ export interface PrksCreateFormsApi {
    * newer opening is dropped through `stillOpening`.
    */
   prepareNewFile: (stillOpening: () => boolean) => Promise<void>
+  /**
+   * Link Person to Work's opening: a blank form, the People and File
+   * catalogues, and the opener's Person or File. Resolves once the dialog may
+   * thaw; work after a newer opening is dropped through `stillOpening`.
+   */
+  prepareRoleLink: (stillOpening: () => boolean) => Promise<void>
   /** Focuses the first field of an owned dialog that `openModal` just showed. */
   focusInitial: (modalId: string) => void
   /** Clears the Folder and Group drafts once `closeModals` has hidden them. */
@@ -43,6 +49,7 @@ export const CREATE_FORM_MODAL_IDS = [
   'playlist-modal',
   'work-modal',
   'saved-view-modal',
+  'role-modal',
 ] as const
 
 export type CreateFormModalId = (typeof CREATE_FORM_MODAL_IDS)[number]

@@ -17,7 +17,6 @@ installMiniDocument([
     '<input id="role-work-search" />',
     '<input id="role-work-id" />',
     '<input id="role-type" value="Author" />',
-    '<button id="save-role-btn" type="button">Create Link</button>',
     '</div>',
     '<button id="save-work-btn" type="button">Save</button>',
     '<div id="panel-content"></div>',
@@ -68,10 +67,6 @@ require('../../frontend/js/work-notes-state.js');
 require(path.join(rootDir, 'frontend/js/work-role-editor.js'));
 
 const roleAlerts = [];
-// The modal's real initializer is tested separately before the existing
-// owner/epoch harness overrides it to isolate save behavior.
-const actualPrepareRoleModal = global.prepareRoleModal;
-global.prepareRoleModal = async function () {};
 global.prksAlertDialog = async function (opts) {
     roleAlerts.push(String(opts && opts.message || ''));
 };
@@ -94,102 +89,6 @@ function record(name, ok, detail) {
 }
 function assert(name, ok, detail) {
     record(name, !!ok, ok ? '' : (detail || ''));
-}
-
-async function roleModalCatalogsLoadConcurrently() {
-    // The real initializer runs against a tiny document and controlled
-    // projections. Test the timing contract without network timeouts.
-    const originals = {};
-    const replace = (key, value) => {
-        originals[key] = global[key];
-        global[key] = value;
-    };
-    let peopleRelease;
-    let worksRelease;
-    const starts = [];
-    const personPromise = new Promise(resolve => { peopleRelease = resolve; });
-    const workPromise = new Promise(resolve => { worksRelease = resolve; });
-    const previousHash = global.location && global.location.hash;
-    try {
-        replace('prksOfflinePeopleFetch', () => {
-            starts.push('people');
-            return personPromise;
-        });
-        replace('prksOfflineWorksBrowseFetch', () => {
-            starts.push('works');
-            return workPromise;
-        });
-        replace('fetchPersons', async () => { throw new Error('unexpected People fallback'); });
-        replace('fetchWorks', async () => { throw new Error('unexpected Work fallback'); });
-        replace('initSearchableCombobox', () => {});
-        replace('prksBindRoleCreditPicker', () => {});
-        replace('prksMountLinkRoleSegmented', () => {});
-        replace('prksRefreshRoleCreditPicker', () => {});
-        replace('prksParseRoute', () => ({ name: 'work', params: { workId: 'work-a' } }));
-        replace('prksFocusedEntity', () => ({ id: 'work-a', title: 'Focused Work' }));
-        replace('personDisplayName', p => p.first_name + ' ' + p.last_name);
-        if (!global.location) global.location = {};
-        global.location.hash = '#/works/work-a';
-        let settled = false;
-        const pending = actualPrepareRoleModal().then(() => { settled = true; });
-        assert('role modal starts both independent catalog reads before awaiting',
-            starts.join(',') === 'people,works', starts.join(','));
-        peopleRelease({ value: [{ id: 'person-1', first_name: 'Ada', last_name: 'Offline' }] });
-        await Promise.resolve();
-        assert('role modal does not settle before the Work catalog is ready', !settled);
-        worksRelease({ value: [{ id: 'work-a', title: 'Work A' }] });
-        await pending;
-        assert('role modal selects the current Work from the projected catalog',
-            document.getElementById('role-work-id').value === 'work-a' &&
-            document.getElementById('role-work-search').value === 'Work A');
-        assert('role modal keeps the effective People catalog',
-            Array.isArray(global.allPersons) && global.allPersons.length === 1 &&
-            global.allPersons[0].id === 'person-1');
-
-        // The initial network/cache projections may be unavailable. Keep the
-        // ordinary fallback functions and the focused Work as an independent
-        // preselection source; concurrency must not drop either.
-        let fallbackPeople = 0;
-        let fallbackWorks = 0;
-        global.prksOfflinePeopleFetch = async () => ({ source: 'unavailable', value: null });
-        global.prksOfflineWorksBrowseFetch = async () => ({ source: 'unavailable', value: null });
-        global.fetchPersons = async () => {
-            fallbackPeople += 1;
-            return [{ id: 'person-1', first_name: 'Ada', last_name: 'Offline' }];
-        };
-        global.fetchWorks = async () => {
-            fallbackWorks += 1;
-            return [{ id: 'work-b', title: 'Other Work' }];
-        };
-        await actualPrepareRoleModal();
-        assert('role modal preserves both unavailable-catalog fallbacks',
-            fallbackPeople === 1 && fallbackWorks === 1,
-            'people=' + fallbackPeople + ' works=' + fallbackWorks);
-        assert('role modal falls back to its focused Work when catalog lacks it',
-            document.getElementById('role-work-id').value === 'work-a' &&
-            document.getElementById('role-work-search').value === 'Focused Work');
-
-        // A Person route should preselect that Person even without a focused
-        // Work, while never guessing a Work association for the new link.
-        global.prksOfflinePeopleFetch = async () => ({
-            value: [{ id: 'person-1', first_name: 'Ada', last_name: 'Offline' }],
-        });
-        global.prksOfflineWorksBrowseFetch = async () => ({ value: [] });
-        global.prksParseRoute = () => ({ name: 'person', params: { personId: 'person-1' } });
-        global.prksFocusedEntity = () => null;
-        global.location.hash = '#/people/person-1';
-        await actualPrepareRoleModal();
-        assert('role modal retains Person-route preselection',
-            document.getElementById('role-person-id').value === 'person-1' &&
-            document.getElementById('role-person-search').value === 'Ada Offline');
-        assert('role modal does not invent a selected Work on the Person route',
-            document.getElementById('role-work-id').value === '');
-        assert('valid projected catalogs do not fall back to network fetches',
-            fallbackPeople === 1 && fallbackWorks === 1);
-    } finally {
-        for (const [key, value] of Object.entries(originals)) global[key] = value;
-        if (global.location) global.location.hash = previousHash || '#/folders';
-    }
 }
 
 function focus(tabId) { focusedId = tabId; }
@@ -216,8 +115,28 @@ function fillRole(personId, workId) {
     document.getElementById('role-work-id').value = workId;
     document.getElementById('role-type').value = 'Author';
 }
-function saveClick() {
-    return document.getElementById('save-role-btn').onclick();
+/* Create Link is the Vue form's (#1036): it passes the picked fields to
+ * prksLinkPersonFromRoleModal and, only while the result may settle, closes
+ * and settles or alerts. The form's own busy and message rules are covered
+ * by RoleLinkForm.test.ts; this mirrors the outcome handling so the opener
+ * checks run against the real tab contexts and durable save. */
+async function saveClick() {
+    const result = await prksLinkPersonFromRoleModal({
+        person_id: document.getElementById('role-person-id').value,
+        work_id: document.getElementById('role-work-id').value,
+        role_type: document.getElementById('role-type').value,
+        credit_name: '',
+    });
+    const maySettle = typeof result.maySettle === 'function' && result.maySettle() === true;
+    if (result.code === 'saved') {
+        if (maySettle) {
+            closeModals();
+            if (result.settle) result.settle();
+        }
+    } else if (result.code !== 'stale' && result.code !== 'duplicate' && maySettle) {
+        await prksAlertDialog({ title: 'Could not link', message: result.code });
+    }
+    return Object.assign({ settles: maySettle }, result);
 }
 async function until(pred) {
     for (let i = 0; i < 30; i += 1) {
@@ -433,14 +352,11 @@ async function olderRoleModalDoesNotSettleNewerOpening() {
     const secondSave = saveClick();
     await until(function () { return readStarted >= 4; });
     releaseFirst();
-    await firstSave;
-    const button = document.getElementById('save-role-btn');
+    const first = await firstSave;
     const modal = document.getElementById('role-modal');
-    assert('an older role-modal failure leaves the newer opening busy',
-        button.disabled === true && button.getAttribute('aria-busy') === 'true' &&
-        String(button.textContent || '').indexOf('Linking') !== -1,
-        'disabled=' + button.disabled + ' aria=' + button.getAttribute('aria-busy') +
-        ' label=' + button.textContent);
+    assert('an older role-modal failure may not settle the newer opening',
+        first.code === 'failed' && first.settles === false,
+        'code=' + first.code + ' settles=' + first.settles);
     assert('an older role-modal failure does not alert into the newer opening',
         roleAlerts.length === 0, roleAlerts.join(' | '));
     assert('an older role-modal failure does not close the newer opening',
@@ -449,7 +365,10 @@ async function olderRoleModalDoesNotSettleNewerOpening() {
         'generation=' + modal.dataset.prksOpenGeneration);
     releaseSecond();
     readGate = null;
-    await secondSave;
+    const second = await secondSave;
+    assert('the newer opening saves and may settle',
+        second.code === 'saved' && second.settles === true,
+        'code=' + second.code + ' settles=' + second.settles);
     global.prksSync.store.saveWorkPersonRole = realSave;
     prksDestroyAllTabContexts();
 }
@@ -578,7 +497,6 @@ async function tagsModeUpdatesClassicHost() {
 
 void (async function () {
     try {
-        await roleModalCatalogsLoadConcurrently();
         await openedOnAThenOwnerChangesBeforeSave();
         await differentTargetChangesDuringBaseRead();
         await focusMoveLeavesSecondaryMode();

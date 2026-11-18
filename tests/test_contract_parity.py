@@ -611,10 +611,16 @@ class ContractParityTests(unittest.TestCase):
             )
 
         # The New File role picker (Vue) imports the domain registry; no
-        # second bibliographic list may come back in it.
+        # second bibliographic list may come back in it, or in ui.js.
         upload_ui = read("frontend/js/ui.js")
-        self.assertIn("window.PRKS_PEOPLE_ROLES", upload_ui)
         self.assertNotIn("PRKS_UPLOAD_ROLE_LABELS", upload_ui)
+        self.assertNotIn("PRKS_LINK_ROLE_LABELS", upload_ui)
+        # Link Person to Work (Vue, #1036) offers the full Work-role
+        # vocabulary, Mentioned included, in the server's order.
+        link_roles = ts_const_string_array(
+            read("frontend-app/src/features/create-forms/role-link/save.ts"), "LINK_ROLES"
+        )
+        self.assertEqual(link_roles, tuple(ROLE_TYPES))
         new_file_people = read(
             "frontend-app/src/features/create-forms/new-file/NewFilePeople.vue"
         )

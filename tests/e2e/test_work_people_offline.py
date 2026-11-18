@@ -116,14 +116,14 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         page.locator('.work-link-person-btn').click()
         page.wait_for_selector('#role-modal:not(.hidden)')
         page.wait_for_function(
-            "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+            "() => { const m = document.getElementById('role-modal');"
+            "        return !m.classList.contains('hidden') && !m.hasAttribute('inert'); }")
         page.locator('#role-person-search').fill(person_display)
         result = page.locator('#role-person-results .result-item--person-pick').first
         result.wait_for(state='visible')
         result.click()
         if role != 'Author':
-            page.locator('#role-type-trigger').click()
-            page.locator('#role-type-listbox [role="option"][data-value="%s"]' % role).click()
+            page.locator('#role-role-seg-mount .prks-segmented__btn[data-value="%s"]' % role).click()
         if credit is not None:
             # The override is opt-in: the checkbox is what says "this file
             # credits them differently", and the input only then applies.

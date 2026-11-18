@@ -102,10 +102,10 @@ class WorkRoleSyncFrontendTests(unittest.TestCase):
         """A GET after durable link races the ACK and can replace the panel with
         a pre-link Work, dropping Unlink until a later remount. The modal must
         refresh from the owned entity / people mode instead."""
-        app = (FRONTEND / 'app.js').read_text()
-        start = app.index("const saveRoleBtn = document.getElementById('save-role-btn');")
-        end = app.index('\n    };\n}', start)
-        body = app[start:end]
+        ui = (FRONTEND / 'ui.js').read_text()
+        start = ui.index("async function prksLinkPersonFromRoleModal(input)")
+        end = ui.index('\n}\n', start)
+        body = ui[start:end]
         self.assertIn('prksSaveWorkPersonRoleDurably', body)
         self.assertIn("prksSetWorkDetailsMode('people')", body)
         self.assertNotIn('fetchWorkDetails', body)

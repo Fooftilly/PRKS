@@ -245,48 +245,8 @@
             <h3>Link Person to Work</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <p class="modal-helper">Search for someone already in your library, or type a name and choose <strong>Quick-create person</strong> in the list. Then click Create Link.</p>
-            <div class="form-pane">
-                <label for="role-person-search">Person</label>
-                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                    <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
-                        <input type="text" id="role-person-search" class="tag-add-shell__input" placeholder="Search person…" autocomplete="off" aria-label="Search person">
-                    </div>
-                    <input type="hidden" id="role-person-id">
-                    <div id="role-person-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                </div>
-                <label for="role-work-search">File</label>
-                <div class="tag-add-shell combobox-container tag-add-shell--flush prks-inline-combobox-shell">
-                    <div class="tag-add-shell__field">
-                        <span class="tag-add-shell__icon"><i data-lucide="search" class="prks-icon" aria-hidden="true"></i></span>
-                        <input type="text" id="role-work-search" class="tag-add-shell__input" placeholder="Search file…" autocomplete="off" aria-label="Search file">
-                    </div>
-                    <input type="hidden" id="role-work-id">
-                    <div id="role-work-results" class="combobox-results combobox-results--tag-panel hidden"></div>
-                </div>
-                <label for="role-type">Role</label>
-                <div class="prks-upload-person-stack__roles prks-upload-person-stack__roles--tiles prks-upload-person-stack__roles--tiles-2row prks-upload-person-stack__roles--tiles-link">
-                    <div class="prks-upload-role-seg" id="role-role-seg-mount"></div>
-                </div>
-                <div class="prks-role-credit-picker" id="role-link-credit-wrap" hidden>
-                    <label class="prks-role-credit-picker__heading" for="role-link-credit-input">Name on this file</label>
-                    <p id="role-link-credit-profile" class="prks-role-credit-picker__profile meta-row meta-row--hint"></p>
-                    <div id="role-link-credit-shell" class="tag-add-shell tag-add-shell--flush prks-role-credit-picker__shell prks-role-credit-picker__shell--off">
-                        <div class="tag-add-shell__field prks-role-credit-picker__field">
-                            <label class="prks-role-credit-picker__check" for="role-link-credit-enable" title="Use a different name on this file">
-                                <input type="checkbox" id="role-link-credit-enable" class="prks-role-credit-picker__enable-input" aria-label="Use a different name on this file">
-                            </label>
-                            <input type="text" id="role-link-credit-input" class="tag-add-shell__input prks-role-credit-picker__input" disabled placeholder="Uses profile name" autocomplete="off" aria-label="Name shown on this file">
-                        </div>
-                    </div>
-                    <div id="role-link-credit-aliases" class="prks-role-credit-picker__aliases" hidden role="group" aria-label="Known aliases"></div>
-                    <p class="meta-row meta-row--hint meta-row--compact">Check the box to override; pick an alias or type a name.</p>
-                </div>
-                <button id="save-role-btn" class="prks-btn prks-btn--primary">Create Link</button>
-            </div>
-        </div>
+        <!-- Vue Link Person to Work form (#1036). Shell stays until ModalHost mounts feature forms. -->
+        <div id="role-modal-vue" class="modal-body"></div>
     </div>
 
 

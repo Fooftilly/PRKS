@@ -114,9 +114,10 @@ function prksModalNeedsUnsavedConfirm(modalId) {
 
 function prksModalHasUnsavedChanges(modalId) {
     if (!modalId || !prksModalNeedsUnsavedConfirm(modalId)) return false;
-    // Folder, Person, and Group report dirty from the Vue form. The DOM
-    // snapshot below remains for Work and the role linker. Retire this
-    // branch when those shells move into ModalHost (#1036).
+    // The Vue create forms report dirty through prksCreateForms (New File
+    // and the role linker by a snapshot against the baseline taken once the
+    // opening is prepared). The store below remains for the shells it does
+    // not own. Retire this branch when those shells move into ModalHost (#1036).
     const forms = window.prksCreateForms;
     if (forms && typeof forms.owns === 'function' && forms.owns(modalId)) {
         return forms.isDirty(modalId) === true;
@@ -550,8 +551,14 @@ function openModal(id, options) {
             if (!isCurrentOpening()) return;
             prksScheduleModalBaselineCapture('role-modal');
             modalEl.removeAttribute('inert');
+            if (window.prksCreateForms) window.prksCreateForms.focusInitial('role-modal');
         };
-        prepareRoleModal().then(finishRole, finishRole);
+        // The Vue form loads both catalogues and names the opener's Person or
+        // Work (#1036).
+        const prepared = window.prksCreateForms && typeof window.prksCreateForms.prepareRoleLink === 'function'
+            ? window.prksCreateForms.prepareRoleLink(isCurrentOpening)
+            : Promise.resolve();
+        prepared.then(finishRole, finishRole);
     } else if (id === 'work-modal') {
         deferBaseline = true;
         modalEl.setAttribute('inert', '');
@@ -1456,15 +1463,6 @@ async function prksQuickCreatePersonForSearchField(typedName, searchInputRef, hi
 }
 
 
-async function prksQuickCreatePersonForRoleLink(typedName) {
-    await prksQuickCreatePersonForSearchField(
-        typedName,
-        'role-person-search',
-        'role-person-id',
-        'Quick-created from Link Person to Work'
-    );
-}
-
 async function addRoleToWorkFromMetaEditor(workId) {
     const ownerCtx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const generation = ownerCtx && ownerCtx.generation;
@@ -1562,97 +1560,6 @@ async function addRoleToWorkFromMetaEditor(workId) {
         if (addBtn) {
             addBtn.disabled = false;
             addBtn.textContent = '+ Link';
-        }
-    }
-}
-
-async function prepareRoleModal() {
-    /* Cached People, not a bare network fetch.
-     *
-     * Linking an EXISTING Person to an existing Work is durable-first, so the
-     * picker has to work without the server -- `fetchPersons()` returns an
-     * empty list offline, which made the one action this milestone enables
-     * impossible to perform precisely when it matters. Creating a NEW Person
-     * is also durable (`CREATE_PERSON`) from this modal.
-     */
-    /* The People and Work catalogs are independent projections. Initiate
-     * both reads together rather than serializing their offline transport
-     * fallback waits. Resolve the same validated/overlaid results and retain
-     * each catalog's existing fallback and selected-entity semantics. */
-    const [people, works] = await Promise.all([
-        typeof prksOfflinePeopleFetch === 'function'
-            ? prksOfflinePeopleFetch() : null,
-        typeof prksOfflineWorksBrowseFetch === 'function'
-            ? prksOfflineWorksBrowseFetch() : null,
-    ]);
-    allPersons = people && Array.isArray(people.value) ? people.value : await fetchPersons();
-    /* The same for files: `fetchWorks()` returns an empty list offline, which
-     * left the modal unable to name the Work the user opened it from. The
-     * browse catalog carries id and title, which is all this picker reads. */
-    allWorks = works && Array.isArray(works.value) ? works.value : await fetchWorks();
-    window.allPersons = allPersons;
-
-    initSearchableCombobox('role-person-search', 'role-person-results', 'role-person-id', 'person', {
-        onQuickCreate: (typedName) => {
-            void prksQuickCreatePersonForRoleLink(typedName);
-        },
-        onPersonPick: (person) => prksRefreshRoleCreditPicker('role-link', person),
-    });
-    initSearchableCombobox('role-work-search', 'role-work-results', 'role-work-id', 'work');
-    prksBindRoleCreditPicker('role-link');
-    if (typeof prksMountLinkRoleSegmented === 'function') {
-        const roleHidden = document.getElementById('role-type');
-        prksMountLinkRoleSegmented(roleHidden ? roleHidden.value : 'Author');
-    }
-
-    const hash = window.location.hash || '';
-    const personSearch = document.getElementById('role-person-search');
-    const personHidden = document.getElementById('role-person-id');
-    const workSearch = document.getElementById('role-work-search');
-    const workHidden = document.getElementById('role-work-id');
-
-    personSearch.value = '';
-    personHidden.value = '';
-    prksRefreshRoleCreditPicker('role-link', null);
-    workSearch.value = '';
-    workHidden.value = '';
-
-    if (
-        typeof prksParseRoute === 'function'
-            ? prksParseRoute(hash).name === 'person'
-            : hash.startsWith('#/people/') &&
-              !hash.startsWith('#/people/role/') &&
-              !hash.startsWith('#/people/groups')
-    ) {
-        const pid = typeof prksParseRoute === 'function' ? prksParseRoute(hash).params.personId : hash.split('/')[2];
-        const p = allPersons.find(x => String(x.id) === String(pid));
-        if (p) {
-            personHidden.value = p.id;
-            personSearch.value = personDisplayName(p);
-            prksRefreshRoleCreditPicker('role-link', p);
-        }
-    }
-
-    let workId = null;
-    if (typeof prksParseRoute === 'function') {
-        const wr = prksParseRoute(hash);
-        if (wr.name === 'work') workId = wr.params.workId || null;
-    } else if (hash.startsWith('#/works/')) {
-        workId = hash.split('/')[2];
-    }
-    const _cwModal = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
-    if (!workId && _cwModal && _cwModal.id) {
-        workId = _cwModal.id;
-    }
-    if (workId) {
-        /* The focused Work itself is the fallback, not only the catalog: the
-         * user opened this modal FROM that file, so failing to name it because
-         * a list could not be read would refuse the one action they asked for. */
-        const w = allWorks.find(x => String(x.id) === String(workId)) ||
-            (_cwModal && String(_cwModal.id) === String(workId) ? _cwModal : null);
-        if (w) {
-            workHidden.value = w.id;
-            workSearch.value = w.title || '';
         }
     }
 }
@@ -4175,6 +4082,86 @@ function prksRoleModalMaySettleUi(ctx, generation, openedOnWorkId, openGeneratio
     if (typeof prksTabContextIsFocused === 'function' && !prksTabContextIsFocused(ctx)) return false;
     return true;
 }
+/**
+ * Create Link in the role modal (#1036): the opener checks and the durable
+ * write, the same path the Work panel's Link button takes. The Vue form owns
+ * the fields, the busy state, and every message; this returns what happened.
+ *   { code: 'stale' }                 the opener is gone; say nothing
+ *   { code: 'duplicate', maySettle }  the open Work already has this link
+ *   { code, maySettle, settle }       the durable result ('saved', 'unavailable',
+ *                                     'too-long', 'busy', 'dependency-failed', ...)
+ * `maySettle()` says whether this opening may still show UI; `settle()`
+ * refreshes the opener's People panel after a saved link.
+ */
+async function prksLinkPersonFromRoleModal(input) {
+    const captured = prksRoleModalCapturedOrigin();
+    if (!captured) return { code: 'stale' };
+    const ownerCtx = captured.ctx;
+    const generation = captured.generation;
+    const openedOnWorkId = captured.openedOnWorkId;
+    const openGeneration = captured.openGeneration;
+    const maySettle = function () {
+        return prksRoleModalMaySettleUi(ownerCtx, generation, openedOnWorkId, openGeneration);
+    };
+    const personId = String((input && input.person_id) || '').trim();
+    const workId = String((input && input.work_id) || '').trim();
+    const roleType = String((input && input.role_type) || '').trim();
+    const creditName = String((input && input.credit_name) || '').trim();
+    const focusedWork = typeof prksFocusedEntity === 'function' ? prksFocusedEntity('work') : null;
+    if (
+        focusedWork &&
+        String(focusedWork.id) === workId &&
+        prksWorkHasRoleLink(focusedWork.roles, personId, roleType)
+    ) {
+        return { code: 'duplicate', maySettle: maySettle };
+    }
+    /* This modal can target a Work other than the one on screen, which is why
+     * the save reads the base for whichever Work it is given. */
+    const cachedPerson = typeof prksFindPersonInCache === 'function'
+        ? prksFindPersonInCache(personId) : null;
+    const personContext = cachedPerson ? {
+        id: personId,
+        first_name: cachedPerson.first_name || '',
+        last_name: cachedPerson.last_name || '',
+        aliases: cachedPerson.aliases || '',
+        canonical_name: prksPersonCanonicalName(cachedPerson) || '',
+    } : null;
+    const workSummary = prksWorkCardSummaryForRoleIntent(focusedWork, workId);
+    if (!prksWorkRoleIntentStill(ownerCtx, generation, workId, openedOnWorkId)) return { code: 'stale' };
+    let result;
+    try {
+        result = await prksSaveWorkPersonRoleDurably(
+            workId, personId, roleType, creditName, personContext, workSummary,
+            function () {
+                return prksRoleModalOwnerSessionStill(ownerCtx, generation, openedOnWorkId);
+            });
+    } catch (e) {
+        console.error(e);
+        return { code: 'failed', maySettle: maySettle };
+    }
+    const code = result && result.code ? String(result.code) : 'failed';
+    if (code === 'stale') return { code: 'stale' };
+    return {
+        code: code,
+        maySettle: maySettle,
+        settle: function () {
+            /* Durable save already wrote the pending overlay (and ACK will
+             * patch the live Work entity). A GET here races that ACK: a
+             * pre-link body can replace the panel and drop the Unlink control
+             * until a later remount. Refresh from the owned entity instead;
+             * never reload the whole app for a non-focused target. */
+            const expectedWork = ownerCtx && ownerCtx.getEntity ? ownerCtx.getEntity('work') : null;
+            if (expectedWork && String(expectedWork.id) === workId) {
+                if (typeof prksSetWorkDetailsMode === 'function') {
+                    void prksSetWorkDetailsMode('people');
+                } else if (typeof updatePanelContent === 'function') {
+                    updatePanelContent('details');
+                }
+            }
+        },
+    };
+}
+window.prksLinkPersonFromRoleModal = prksLinkPersonFromRoleModal;
 window.prksCaptureRoleModalOrigin = prksCaptureRoleModalOrigin;
 window.prksRoleModalCapturedOrigin = prksRoleModalCapturedOrigin;
 window.prksRoleModalOwnerSessionStill = prksRoleModalOwnerSessionStill;
@@ -5388,10 +5375,6 @@ function renderFolderTagsChipsHtml(folder) {
 
 window.renderFolderTagsChipsHtml = renderFolderTagsChipsHtml;
 
-/* Full Work-role vocabulary including Mentioned — Link Person modal only.
- * New File and meta bibliographic pickers use PRKS_PEOPLE_ROLES. */
-const PRKS_LINK_ROLE_LABELS = ['Author', 'Editor', 'Reviewer', 'Mentioned', 'Translator', 'Introduction', 'Foreword', 'Afterword'];
-
 function escapeHtml(s) {
     if (typeof window.prksEscapeHtml === 'function') return window.prksEscapeHtml(s);
     if (s == null || s === '') return '';
@@ -5432,49 +5415,6 @@ function prksEscapeAttr(s) {
     if (s == null || s === '') return '';
     return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
-
-function prksMountRoleSegmented(mountId, hiddenId, selectedValue, labels, ariaLabel) {
-    const mount = document.getElementById(mountId);
-    if (!mount || typeof prksSegmentedControlHtml !== 'function') return;
-    const labelsArr =
-        Array.isArray(labels) && labels.length
-            ? labels
-            : Array.isArray(window.PRKS_PEOPLE_ROLES) && window.PRKS_PEOPLE_ROLES.length
-              ? window.PRKS_PEOPLE_ROLES
-              : ['Author'];
-    const fallback = labelsArr[0] || 'Author';
-    const selRaw = selectedValue != null ? String(selectedValue) : '';
-    const sel = labelsArr.includes(selRaw) ? selRaw : fallback;
-    mount.innerHTML = prksSegmentedControlHtml(
-        hiddenId,
-        ariaLabel || 'Role for linked person',
-        labelsArr,
-        sel,
-        'roles',
-        {
-            compact: true,
-            withRoleIcons: true,
-        },
-    );
-    const hidden = document.getElementById(hiddenId);
-    if (hidden) delete hidden.dataset.prksSegBound;
-    if (typeof prksBindSegmentedHidden === 'function') {
-        prksBindSegmentedHidden(hiddenId);
-    }
-    if (typeof prksRefreshIcons === 'function') prksRefreshIcons(mount);
-}
-
-function prksMountLinkRoleSegmented(selectedValue) {
-    prksMountRoleSegmented(
-        'role-role-seg-mount',
-        'role-type',
-        selectedValue,
-        PRKS_LINK_ROLE_LABELS,
-        'Link role',
-    );
-}
-
-window.prksMountLinkRoleSegmented = prksMountLinkRoleSegmented;
 
 function prksSegmentedControlHtml(hiddenId, ariaLabel, labels, selectedValue, variant, options) {
     const opts = options && typeof options === 'object' ? options : {};
