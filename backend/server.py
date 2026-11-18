@@ -121,7 +121,6 @@ def _url_holds_nul(raw_path: str) -> bool:
     return "\x00" in text or "\x00" in unquote(text)
 
 
-_BYTE_RANGE_SPEC = re.compile(r"([0-9]*)-([0-9]*)", re.ASCII)
 # Longer digit runs are clamped: no file is that large, and int() refuses
 # strings past sys.get_int_max_str_digits().
 _BYTE_RANGE_MAX_DIGITS = 30
@@ -136,9 +135,26 @@ class ByteRangeAnswer:
     end: int = -1
 
 
+def _is_byte_position(text: str) -> bool:
+    """1*DIGIT, ASCII only (``str.isdigit`` alone accepts other scripts' digits)."""
+    return text.isascii() and text.isdigit()
+
+
+def _significant(digits: str) -> str:
+    return digits.lstrip("0") or "0"
+
+
+def _position_order(digits: str) -> tuple[int, str]:
+    """Orders decimal positions of any length without converting them."""
+    significant = _significant(digits)
+    return (len(significant), significant)
+
+
 def _byte_position(digits: str) -> int:
-    digits = digits.lstrip("0") or "0"
-    return int(digits) if len(digits) <= _BYTE_RANGE_MAX_DIGITS else 10 ** _BYTE_RANGE_MAX_DIGITS
+    significant = _significant(digits)
+    if len(significant) > _BYTE_RANGE_MAX_DIGITS:
+        return 10 ** _BYTE_RANGE_MAX_DIGITS
+    return int(significant)
 
 
 def parse_byte_range(header: str | None, size: int) -> ByteRangeAnswer:
@@ -163,10 +179,13 @@ def parse_byte_range(header: str | None, size: int) -> ByteRangeAnswer:
     specs = [spec for spec in specs if spec]
     if len(specs) != 1:
         return whole
-    match = _BYTE_RANGE_SPEC.fullmatch(specs[0])
-    if match is None or match.group(1) == match.group(2) == "":
+    first, dash, last = specs[0].partition("-")
+    if not dash or not (first or last):
         return whole
-    first, last = match.group(1), match.group(2)
+    if (first and not _is_byte_position(first)) or (last and not _is_byte_position(last)):
+        return whole
+    if first and last and _position_order(last) < _position_order(first):
+        return whole
     if first == "":
         suffix = _byte_position(last)
         if suffix == 0 or size == 0:
@@ -175,8 +194,6 @@ def parse_byte_range(header: str | None, size: int) -> ByteRangeAnswer:
     else:
         start = _byte_position(first)
         end = _byte_position(last) if last else size - 1
-        if last and end < start:
-            return whole
         if start >= size:
             return ByteRangeAnswer(416)
         end = min(end, size - 1)
@@ -1375,7 +1392,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
     def _send_pdf_stream(self, file_size: int, f, *, head_only: bool = False) -> None:
         """Serve ``file_size`` PDF bytes read from ``f`` (positioned at 0), with Range support."""
-        answer = parse_byte_range(self.headers.get("Range"), file_size)
+        # Repeated field lines are one comma-separated list (RFC 9110 §5.3).
+        answer = parse_byte_range(", ".join(self.headers.get_all("Range") or ()) or None, file_size)
         if answer.status == 416:
             self.send_response(416)
             self.send_header("Content-Range", f"bytes */{file_size}")

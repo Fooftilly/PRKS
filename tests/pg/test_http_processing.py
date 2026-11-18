@@ -329,6 +329,9 @@ class QueueTests(ProcessingHttpTestCase):
             with self.subTest(range=ignored):
                 answer = self.get(path, headers=[("Range", ignored)])
                 self.assertEqual((answer.status, answer.raw), (200, data))
+        # Two Range field lines are one list of two ranges: ignored too.
+        twice = self.get(path, headers=[("Range", "bytes=0-1"), ("Range", "bytes=4-5")])
+        self.assertEqual((twice.status, twice.raw), (200, data))
         self.ok(self.send("DELETE", f"/api/processing-items/{item['id']}"))
         self.refused(self.get(path), 404, "ENTITY_NOT_FOUND")
         self.assertEqual(self.call("HEAD", path, cookies=self.cookies).status, 404)

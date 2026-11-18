@@ -40,6 +40,8 @@ class ByteRangeProperties(unittest.TestCase):
     @given(header=st.one_of(st.none(), st.text(), st.text().map(lambda t: "bytes=" + t)), size=_SIZES)
     @example(header="bytes=0-" + "9" * 5000, size=10)
     @example(header="bytes=-" + "9" * 5000, size=10)
+    @example(header="bytes=" + "9" * 5000 + "-" + "8" * 5000, size=10)
+    @example(header="bytes=" + "9" * 31 + "-" + "1" * 31, size=10)
     @example(header="bytes=٠-٤", size=10)
     def test_never_raises_and_a_partial_answer_is_inside_the_file(self, header: str | None, size: int) -> None:
         answer = parse_byte_range(header, size)
@@ -89,7 +91,8 @@ class ByteRangeProperties(unittest.TestCase):
     def test_ignored_headers_send_the_whole_file(self) -> None:
         for header in ("", "bytes", "bytes=", "bytes=-", "items=0-1", "bytes=+0-4", "bytes=1_0-20",
                        "bytes=٠-٤", "bytes=0-1,4-5", "bytes=5-3", "bytes=--5", "bytes=5--3",
-                       "bytes=0-4;q=1"):
+                       "bytes=0-4;q=1", "bytes=" + "9" * 31 + "-" + "1" * 31,
+                       "bytes=" + "9" * 5000 + "-" + "8" * 5000, "bytes=\u00b2-3", "bytes=0x1-2"):
             with self.subTest(header=header):
                 self.assertEqual(parse_byte_range(header, 10), ByteRangeAnswer(200, 0, 9))
 
@@ -105,6 +108,8 @@ class ByteRangeProperties(unittest.TestCase):
             ("bytes=10-", 10, ByteRangeAnswer(416)),
             ("bytes=-0", 10, ByteRangeAnswer(416)),
             ("bytes=0-", 0, ByteRangeAnswer(416)),
+            ("bytes=" + "1" * 31 + "-" + "9" * 31, 10, ByteRangeAnswer(416)),
+            ("bytes=0007-0008", 10, ByteRangeAnswer(206, 7, 8)),
         ):
             with self.subTest(header=header, size=size):
                 self.assertEqual(parse_byte_range(header, size), answer)

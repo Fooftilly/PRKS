@@ -47,7 +47,11 @@ The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in
 
 `tests/test_sync_envelope_properties.py` fuzzes everything `POST /api/sync/operations` decides before it touches the ledger (`backend.sync.protocol.validate_operation`), with no database. It feeds arbitrary JSON, a deterministic sweep of awkward JSON shapes into every value of every seed, and Hypothesis mutations of real envelopes. The seeds in `tests/fixtures/sync_envelope_seeds.json` were recorded from the `tests/pg` sync suites, one per operation and payload shape; a test fails if any seed stops validating or an operation has none. For every input the answer must be a 400 with a known code (`INVALID_ENVELOPE`, `INVALID_BASE_REVISION`) or an operation PostgreSQL can store (no NUL, lone surrogate, NaN or infinity), and normalizing must be idempotent.
 
+## PDF Range header fuzzing
+
 `tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.server.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
+
+## Hypothesis profiles
 
 Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
 
