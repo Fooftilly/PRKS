@@ -23,7 +23,6 @@ dispatch continues.
 from __future__ import annotations
 
 from typing import Any, Optional
-from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.publishers import (
@@ -118,7 +117,9 @@ def handle_delete(handler: Any, db: Any, path: str, query: dict[str, list[str]])
         if publisher_id is None:
             handler.send_error(404, "API endpoint not found")
             return True
-        alias = unquote((query.get("alias") or [""])[0])
+        # parse_qs already decoded the value once; a second unquote mangled
+        # aliases that contain "%" (and turned "%2500" into NUL).
+        alias = (query.get("alias") or [""])[0]
         if not alias.strip():
             handler.send_json(400, {"error": "missing alias"})
             return True

@@ -12,6 +12,7 @@ import re
 import uuid
 import logging
 import ipaddress
+import itertools
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, TypeVar
 from email.message import Message
@@ -106,6 +107,45 @@ PRKS_TESTING_DEFAULT_PORT = 8070
 # Minimum uncompressed JSON size before gzip (Accept-Encoding: gzip).
 _PRKS_JSON_GZIP_MIN_BYTES = 1024
 _PRKS_MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _url_holds_nul(raw_path: str) -> bool:
+    """NUL in the request target, raw or after the one percent-decode routes apply.
+
+    One round only: ``%2500`` is the literal text ``%00`` to every route
+    (``parse_qs`` and ``unquote`` each decode once), a valid search.
+    """
+    text = raw_path or ""
+    return "\x00" in text or "\x00" in unquote(text)
+
+
+def _json_holds_lone_surrogate(value) -> bool:
+    """A lone surrogate anywhere in a decoded JSON document (keys included).
+
+    Iterative: the document may be nested as deep as the decoder allows.
+    """
+    if isinstance(value, str):
+        return _LONE_SURROGATE.search(value) is not None
+    # One iterator per open container: memory bounded by depth, not width.
+    stack: list = [iter((value,))]
+    while stack:
+        item = next(stack[-1], _JSON_WALK_DONE)
+        if item is _JSON_WALK_DONE:
+            stack.pop()
+        elif isinstance(item, str):
+            if _LONE_SURROGATE.search(item):
+                return True
+        elif isinstance(item, dict):
+            stack.append(itertools.chain.from_iterable(item.items()))
+        elif isinstance(item, list):
+            stack.append(iter(item))
+    return False
+
+
+_JSON_WALK_DONE = object()
+
+
 # No Content-Length, or a zero-length document. Distinct from {} and from JSON null.
 _JSON_BODY_ABSENT = object()
 # Distinct from JSON null. _read_json_body already sent the error response.
@@ -856,10 +896,19 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if not payload:
             return _JSON_BODY_ABSENT
         try:
-            return json.loads(payload)
-        except json.JSONDecodeError:
+            data = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+            # Not UTF-8 (UnicodeDecodeError) or nested past the decoder's
+            # recursion limit: before, either escaped and dropped the
+            # connection without an answer.
             self.send_json(400, {"error": "invalid_json"})
             return _JSON_BODY_REJECTED
+        if _json_holds_lone_surrogate(data):
+            # A "\\ud800" escape decodes to text that is not UTF-8: no column,
+            # log line or response can carry it (a 500 from psycopg before).
+            self.send_json(400, {"error": "invalid_json"})
+            return _JSON_BODY_REJECTED
+        return data
 
     def _parse_client_error_payload(self, data):
         return client_error_log_fields(data)
@@ -880,6 +929,13 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
                     )
             except Exception:
                 pass
+            if _url_holds_nul(getattr(self, "path", "") or ""):
+                # Before any route or static file: no identifier or query PRKS
+                # stores can hold NUL, psycopg refuses to bind one (a 500
+                # before) and os.path refuses it for a static file.
+                self.close_connection = True
+                self._reject_request(400, "invalid_request", "url_nul")
+                return False
         return ok
 
     def handle_one_request(self):

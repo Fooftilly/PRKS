@@ -220,12 +220,36 @@ The committed JSON stores a small 48×30 RGB sampling fingerprint per scene (zli
 
 PRKS's `/api/openapi.json` is **Positions-only**, not an application-wide contract. The opt-in [Schemathesis workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-readonly-pilot.yml) instead verifies `docs/api/openapi-publishers.json` against its Pydantic-generated builder and live `GET /api/openapi/publishers.json`. The test creates a **second, one-operation copy** containing only `GET /api/publishers` (`listPublishersInUse`); the published fragment's POST and DELETE routes are never passed to the scanner.
 
-The scanner runs on an existing fresh, isolated, loopback `AppServer --testing` with synthetic seeded Works and a populated Publisher catalog. It verifies the actual successful response DTO, a malformed Host refusal (HTTP 421), and then lets pinned **Schemathesis 4.32.5** generate bounded GET query variations. Defaults: seed 855, 25 generated fuzz examples per operation, examples/fuzzing phases only, 75-second process timeout, single worker and 10 requests/sec. It checks server errors, documented status codes, JSON content type and response schemas; no stateful sequences or mutations. Schemathesis generates a small built-in examples phase in addition to the 25-case fuzz bound. The coverage phase is excluded because it generates unexpected-method probes such as TRACE even with a GET filter; this pilot must never send non-GET operations. The process timeout and rate limit are additional safety limits.
+The scanner runs on an existing fresh, isolated, loopback `AppServer --testing` with synthetic seeded Works and a populated Publisher catalog. It verifies the actual successful response DTO, a malformed Host refusal (HTTP 421), and then lets pinned **Schemathesis 4.32.5** generate bounded GET query variations. Defaults: seed 855, 25 generated fuzz examples per operation, examples/fuzzing phases only, 75-second process timeout, single worker and 10 requests/sec. It checks server errors, documented status codes, JSON content type and response schemas; no stateful sequences or mutations. NUL is not generated, because the server refuses it in the request target before routing, with a 400 the fragment does not document. Schemathesis generates a small built-in examples phase in addition to the 25-case fuzz bound. The coverage phase is excluded because it generates unexpected-method probes such as TRACE even with a GET filter; this pilot must never send non-GET operations. The process timeout and rate limit are additional safety limits.
 
 Locally, install the existing exact pins with `python scripts/ci/install_pinned_python.py schemathesis`, then run `python scripts/ci/schemathesis_pilot.py` from the repository root. The command itself creates/deletes a **temporary** test server and reads no PRKS production data. Do not run it in a shell with `PRKS_AUTH` configured: the pilot refuses that setting because **it does not have a disposable PostgreSQL-backed session or authority**. This first read-only pass does **not** claim to test PG authentication, capability boundaries, mutation Origin/CSRF checks or app-wide OpenAPI conformance. The 421 Host check is only a host-admission probe, not a replacement for auth testing. Those require separate safe identities/fixtures and a future approved extension of #855.
 
 The workflow runs manually or for changes to the pilot/Publishers schema/dependency pins. Its only reported outcome is a small sanitized route/method/seed/elapsed/exit summary. On failure, reproduce from a new disposable test server with the fixed seed; use `python scripts/ci/schemathesis_pilot.py --debug-local` for full raw Schemathesis details **only on a private local machine**. The flag is rejected in GitHub Actions, and logs are sanitized by default. No generated payloads, raw request/response bodies, cookies, secrets, research documents, database paths or dynamic query strings are uploaded to CI artifacts. Before expanding API coverage, verify the real HTTP contract for the new family and require explicit allowlisting of every method/path. Existing deterministic Pydantic/openapi-core tests remain the primary contract gate.
 
+
+## Schemathesis — bounded mutation scan of allowlisted families (fuzzing slice 2)
+
+The [mutation scan workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-mutations.yml) runs `scripts/ci/schemathesis_mutations.py`. Unlike the read-only pilot above, it sends writes, so it is held tighter, not looser:
+
+- It targets only a fresh `AppServer --testing` on loopback, on its own disposable PostgreSQL database seeded with synthetic data. It refuses `PRKS_AUTH` in the calling shell.
+- It scans three families: Positions, Saved Views and Publishers. Each has an exact operation allowlist in the script. Before the first request, every family's checked-in fragment (`docs/api/openapi-*.json`) is compared with its Pydantic builder, its operations with the allowlist, and then with the live `/api/openapi/<family>.json`. Any difference stops the scan before any write.
+- Every request carries the instance's own `Origin` and `PRKS-Library-Epoch`, so generated input reaches the route rather than the admission refusal.
+- Limits: fixed seed 855, 50 examples per operation, examples and fuzzing phases only (no stateful sequences, no coverage phase), one worker, 50 requests per second, and a 120-second timeout per family.
+- It checks for server errors and for status codes, content types and response bodies the fragment does not document.
+- NUL is not generated. The server refuses NUL in the request target before routing with a 400, and several of the families' read and delete operations do not document a 400.
+
+Its first run found five ways a request got a 500 or no answer at all:
+
+- a body that is not UTF-8;
+- JSON nested past the decoder's recursion limit;
+- a `\ud800` escape that reached psycopg;
+- `%00` in a query or path, which reached a PostgreSQL bind. The Publisher and Tag alias routes decoded their value twice, so `%2500` did too; they now decode once, like every other query value.
+
+`backend/server.py` now answers all of these with 400. They are pinned in `tests/pg/test_http_request_fuzz_regressions.py`, and the scan's own safeguards are in `tests/test_schemathesis_mutations.py`.
+
+To run it locally, start a disposable PostgreSQL server and install the pins with `./.venv/bin/python scripts/ci/install_pinned_python.py schemathesis`. Then run `PATH="$PWD/.venv/bin:$PATH" PRKS_TESTING=1 PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/postgres ./.venv/bin/python scripts/ci/schemathesis_mutations.py` (the script finds the pinned `st` on `PATH`).
+
+Output is sanitized the same way as the pilot's, and `--debug-local` is likewise refused in GitHub Actions. The workflow is advisory. It runs manually, or when a pull request changes the scanned families, the server, the harness or the pins.
 
 ## Disposable PostgreSQL application-read readiness baseline (#765, T06)
 
