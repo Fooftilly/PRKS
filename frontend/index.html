@@ -152,13 +152,9 @@
             <h3 id="work-modal-title">New File</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')" aria-label="Close">&times;</button>
         </div>
-        <!-- Vue create form (#1036). Shell and footer stay until ModalHost mounts feature forms. -->
+        <!-- Vue create form and its footer (#1036). The shell stays until ModalHost mounts feature forms. -->
         <div id="work-modal-vue" class="modal-body modal-body--scroll"></div>
-        <div class="modal-footer modal-footer--sticky prks-form-actions">
-            <p id="upload-status-msg" class="upload-status hidden" role="status"></p>
-            <button type="button" class="prks-btn prks-btn--secondary" id="work-modal-cancel">Cancel</button>
-            <button type="button" id="save-work-btn" class="prks-btn prks-btn--primary" title="Create File (Ctrl+Enter)" aria-keyshortcuts="Control+Enter Meta+Enter">Create File</button>
-        </div>
+        <div id="work-modal-footer-vue" class="modal-footer modal-footer--sticky prks-form-actions"></div>
     </div>
 
     <div id="folder-modal" class="modal hidden">

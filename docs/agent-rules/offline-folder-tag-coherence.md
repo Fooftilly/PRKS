@@ -113,9 +113,9 @@ connectivity guard; what they can still refuse is an unknown base (Folder fields
 via `prksFolderSaveMessage()`, Folder tags when `folder-tag-options` has never
 been prepared). Folder-tag add/remove enqueue `ADD_FOLDER_TAG` /
 `REMOVE_FOLDER_TAG` through `coalesceFolderTag` / `prksFolderTagEdit`, mirroring
-Work tags. The three former quick-create surfaces (the Folder modal
-in `app.js`, `quickCreateFolder()` in `ui.js`, and the processing inbox) all
-route through `createFolder()` rather than posting raw. The one documented
+Work tags. The Folder create surfaces (New Folder and the New File folder picker in
+`NewFileFolder.vue`) both route through `createFolder()` rather than posting
+raw. The one documented
 exception is the coalesced private-notes autosave in `ui.js`, which is gated by
 its own runtime check and publishes Folder coherence on success;
 `tests/test_frontend_offline_runtime.py` fails the build if any other module

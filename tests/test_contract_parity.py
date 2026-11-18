@@ -610,13 +610,26 @@ class ContractParityTests(unittest.TestCase):
                 "Processing must not keep a second hard-coded role array",
             )
 
+        # The New File role picker (Vue) imports the domain registry; no
+        # second bibliographic list may come back in it.
         upload_ui = read("frontend/js/ui.js")
         self.assertIn("window.PRKS_PEOPLE_ROLES", upload_ui)
-        self.assertIn("function prksUploadRoleLabels", upload_ui)
         self.assertNotIn("PRKS_UPLOAD_ROLE_LABELS", upload_ui)
+        new_file_people = read(
+            "frontend-app/src/features/create-forms/new-file/NewFilePeople.vue"
+        )
+        self.assertIn(
+            "import { PEOPLE_ROLES } from '../../../domain/people-roles'",
+            new_file_people,
+        )
+        self.assertRegex(
+            new_file_people,
+            r"(?s)function\s+roleLabels\(\)[^{]*\{\s*(?://[^\n]*\n\s*)*return\s+PEOPLE_ROLES\s*\n",
+            "The New File role picker must return the domain registry itself",
+        )
         self.assertNotRegex(
-            upload_ui,
-            r"const\s+PRKS_UPLOAD_ROLE_LABELS\s*=\s*\[",
+            new_file_people,
+            r"(?:const|let)\s+\w*ROLE\w*\s*=\s*\[\s*['\"]Author",
             "Upload picker must not declare another bibliographic role list",
         )
 

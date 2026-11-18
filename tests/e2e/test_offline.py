@@ -6454,16 +6454,14 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")
         if role is not None:
-            person_id, role_type = role
-            page.evaluate(
-                """([pid, roleType]) => {
-                    document.getElementById('upload-person-id').value = pid;
-                    document.getElementById('upload-person-search').value = 'E2E linked person';
-                    window.addRoleToUploadList(roleType);
-                }""",
-                [person_id, role_type],
-            )
+            # Picked through the People combobox like a user: choosing a
+            # Person adds them with the first free role, then the row's own
+            # role select sets the one under test.
+            person_name, role_type = role
+            page.fill("#upload-person-search", person_name)
+            page.locator("#person-results .result-item--person-pick", has_text=person_name).first.click()
             page.locator("#upload-roles-list .prks-upload-person-row").first.wait_for()
+            page.select_option('#upload-roles-list [data-upload-role-select="0"]', role_type)
         page.locator("#save-work-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
 
@@ -6775,7 +6773,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         before_groups = _domain_generation(page, "person-groups")
         before_arguments = _domain_generation(page, "arguments")
         self._create_work_through_the_modal(
-            page, "Reviewer Modal Work", role=(person_a, "Reviewer")
+            page, "Reviewer Modal Work", role=(PERSON_DISPLAY, "Reviewer")
         )
         self._assert_people_invalidated(page, server, before_people)
         self._assert_person_groups_invalidated(page, server, before_groups)
@@ -6789,7 +6787,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
         before_groups = _domain_generation(page, "person-groups")
         before_arguments = _domain_generation(page, "arguments")
         self._create_work_through_the_modal(
-            page, "Author Modal Work", role=(person_a, "Author")
+            page, "Author Modal Work", role=(PERSON_DISPLAY, "Author")
         )
         self._assert_people_invalidated(page, server, before_people)
         self._assert_person_groups_invalidated(page, server, before_groups)
