@@ -10,6 +10,7 @@ contradictory duplicates (page / pageNumber / pageIndex, etc.).
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Iterable, Optional
 
 
@@ -34,6 +35,25 @@ _STRIP_FROM_GEOMETRY = frozenset(
 _MALFORMED = "malformed_annotation_payload"
 
 
+def _refuse_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not JSON")
+
+
+def _holds_non_finite(value: Any) -> bool:
+    """A NaN or infinity anywhere in ``value`` (a list or object from json.loads)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
+
+
 def parse_annotations_json(raw: Any) -> list:
     """Parse the HTTP `annotations_json` string into a JSON list.
 
@@ -46,8 +66,11 @@ def parse_annotations_json(raw: Any) -> list:
             "annotations_json must be a JSON list string.",
         )
     try:
-        items = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        # NaN and Infinity are not JSON: json.loads accepts them, and str()
+        # stored them as the text "nan". Nesting past the recursion limit
+        # raised RecursionError (a 500).
+        items = json.loads(raw, parse_constant=_refuse_constant)
+    except (ValueError, RecursionError) as exc:
         raise WorkAnnotationError(
             _MALFORMED,
             "annotations_json is not valid JSON.",
@@ -83,6 +106,9 @@ def normalize_annotation_list(items: Any) -> list[dict]:
 
 def normalize_annotation(item: dict) -> dict:
     """Return first-class columns plus leftover geometry for one annotation."""
+    if _holds_non_finite(item):
+        # The id, type and colour are kept as text: str() made NaN "nan".
+        raise WorkAnnotationError(_MALFORMED, "Annotation contains non-JSON fields.")
     ann_id = _canonical_id(item)
     a_type = _canonical_type(item)
     content = _canonical_content(item)

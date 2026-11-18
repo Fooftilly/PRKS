@@ -28,6 +28,7 @@ from the start, as ``lifecycle.replace_object`` does.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
@@ -184,25 +185,35 @@ def require_pdf(target: Target) -> str:
     return target.asset_id
 
 
-def _holds_nul(value: Any) -> bool:
-    if isinstance(value, str):
-        return "\x00" in value
-    if isinstance(value, dict):
-        return any(_holds_nul(key) or _holds_nul(item) for key, item in value.items())
-    if isinstance(value, list):
-        return any(_holds_nul(item) for item in value)
+_UNSTORABLE_TEXT = re.compile("[\x00\ud800-\udfff]")
+
+
+def _holds_unstorable_text(value: Any) -> bool:
+    """NUL or a lone surrogate in any text, keys included (iterative: any depth)."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if _UNSTORABLE_TEXT.search(item):
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
     return False
 
 
 def check_storable(normalized: dict[str, Any]) -> None:
     """Refuse what PostgreSQL cannot hold (SQLite stores it).
 
-    NUL in any text (``text`` and ``jsonb`` refuse it), an id over 200
+    NUL or a lone surrogate in any text (``text`` and ``jsonb`` refuse NUL;
+    psycopg cannot encode a surrogate, a 500 before), an id over 200
     characters (the sync families' bound, ``pdf_annotation_sync``), and a page
     index beyond ``integer``.
     """
     page = normalized["page_index"]
-    if (_holds_nul(normalized) or len(normalized["id"]) > _MAX_ID_CHARS
+    if (_holds_unstorable_text(normalized) or len(normalized["id"]) > _MAX_ID_CHARS
             or (page is not None and page > _MAX_PAGE_INDEX)):
         raise WorkAnnotationError(_MALFORMED, "Annotation cannot be stored.")
 

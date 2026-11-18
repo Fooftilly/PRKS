@@ -66,6 +66,26 @@ class TestAnnotationNormalizer(unittest.TestCase):
             parse_annotations_json([{"id": "a"}])
         self.assertEqual(ctx2.exception.http_status, 400)
 
+    def test_parse_refuses_what_json_does_not_allow(self):
+        """json.loads accepts NaN and Infinity, and raises RecursionError when
+        nested deep; each was a stored "nan" or a 500 before."""
+        for raw in ('[{"id":"a","color":NaN}]', '[{"id":"a","rect":Infinity}]',
+                    '[{"id":"a","pageIndex":-Infinity}]', "[" * 100_000):
+            with self.subTest(raw=raw[:40]):
+                with self.assertRaises(WorkAnnotationError) as ctx:
+                    parse_annotations_json(raw)
+                self.assertEqual(ctx.exception.code, "malformed_annotation_payload")
+
+    def test_normalize_refuses_a_non_finite_number_anywhere(self):
+        """The id, type and colour are kept as text, where NaN became "nan"."""
+        for key in ("id", "type", "color", "contents"):
+            for value in (float("nan"), float("inf")):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaises(WorkAnnotationError):
+                        normalize_annotation({"id": "a", "pageIndex": 0, key: value})
+        with self.assertRaises(WorkAnnotationError):
+            normalize_annotation({"id": "a", "custom": {"deep": [1.0, float("nan")]}})
+
     def test_normalize_strips_aliases_into_geometry(self):
         n = normalize_annotation(
             {
