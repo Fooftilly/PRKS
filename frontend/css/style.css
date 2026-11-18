@@ -8098,6 +8098,10 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
 .prks-upload-credit-panel .prks-role-credit-picker {
     margin-top: 0;
 }
+/* The row's slot for the teleported credit panel: the panel stays a flex item of the row. */
+.prks-upload-person-row__credit-slot {
+    display: contents;
+}
 .prks-upload-credit-panel__actions {
     display: flex;
     justify-content: flex-end;

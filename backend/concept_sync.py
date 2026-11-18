@@ -91,7 +91,8 @@ def validate_field(op):
     payload = op["payload"]
     if set(payload) != {"field", "value"}:
         raise ValueError("INVALID_ENVELOPE")
-    if payload["field"] not in FIELD_SET or not isinstance(payload["value"], str):
+    if (not isinstance(payload["field"], str) or payload["field"] not in FIELD_SET
+            or not isinstance(payload["value"], str)):
         raise ValueError("INVALID_ENVELOPE")
     if len(payload["value"]) > research_rules.CONCEPT_DEFINITION_MAX:
         raise ValueError("INVALID_ENVELOPE")

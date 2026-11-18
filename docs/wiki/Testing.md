@@ -41,15 +41,27 @@ python run_tests.py --ux-tour
 
 ## Property-based sync tests (#854)
 
-The Python unit suite includes a bounded [Hypothesis](https://hypothesis.readthedocs.io/) pilot for Work–Tag relationship revisions and the semantic-operation ledger. Hypothesis is **test-only** and does not ship with the PRKS server.
+The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in PG-C2. Its PostgreSQL form is `tests/pg/test_tags_properties.py` and `tests/pg/test_works_metadata_properties.py`: the PostgreSQL job installs the runtime pins plus `openapi-core`, but not Hypothesis, so those sequences are enumerated exhaustively or replayed from named seeds rather than drawn by Hypothesis.
 
-Run just the pilot (after installing `requirements.txt` and `requirements-dev.txt`):
+## Sync envelope fuzzing
+
+`tests/test_sync_envelope_properties.py` fuzzes everything `POST /api/sync/operations` decides before it touches the ledger (`backend.sync.protocol.validate_operation`), with no database. It feeds arbitrary JSON, a deterministic sweep of awkward JSON shapes into every value of every seed, and Hypothesis mutations of real envelopes. The seeds in `tests/fixtures/sync_envelope_seeds.json` were recorded from the `tests/pg` sync suites, one per operation and payload shape; a test fails if any seed stops validating or an operation has none. For every input the answer must be a 400 with a known code (`INVALID_ENVELOPE`, `INVALID_BASE_REVISION`) or an operation PostgreSQL can store (no NUL, lone surrogate, NaN or infinity), and normalizing must be idempotent.
+
+Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
+
+- `pr` (default, the Unit / API / contract gate): `derandomize=True`, so every run draws the same inputs and a red pull request is caused by that pull request. About 2 seconds.
+- `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
 
 ```bash
-./.venv/bin/python -m unittest tests.test_hypothesis_sync -v
+./.venv/bin/python -m unittest tests.test_sync_envelope_properties -v
+PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties -v
 ```
 
-Ordinary CI uses a small fixed maximum number of generated examples and state-machine steps; it is not a replacement for deterministic regression tests. A failure reports a minimized counterexample. Preserve it as an explicit `@example(...)` or a named deterministic regression test for reliable future replay; use a `@reproduce_failure(...)` blob when printed, or record a `@seed(...)` when reproducing a generated run. A plain rerun is not guaranteed to regenerate the same counterexample. Hypothesis' local example database (when enabled) is an accelerator, not a CI prerequisite. The tests deliberately set `database=None` to keep results independent of a developer's cached examples. Avoid hiding flaky failures behind relaxed deadlines or retry loops. Test databases and records are disposable, with no connection to a real research library.
+When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
+
+## PostgreSQL model-based Work lifecycle sequences (#1285)
+
+`tests/pg/test_work_lifecycle_model.py` draws seeded random sequences (10 seeds × 14 steps) of Work–Tag links, Work Folder moves, title edits, Work and Tag deletes and replays of earlier operations, sends each through the sync protocol, and compares PostgreSQL with a small reference model after every step: live Works/Tags, links, Folders, titles and every edited scope's revision as the shared decision table predicts (future base → `FUTURE_REVISION`, stale disagreeing base → `REVISION_CONFLICT`, else acknowledged and advanced only on a real change). It also checks that no link or filing dangles, no `entity_revisions` row moves backwards, a Work delete tombstones each of its scopes exactly once, and a replay answers as the first time and leaves every `entity_revisions` row as it was, deleted targets' tombstones included. Revisions are predicted by the model, never copied from the server's answer. The PostgreSQL job has no Hypothesis, so sequences come from a seeded `random.Random`; the generator picks fixtures by creation order and the trace names them `W0`, `T1`, `F0`, so a failure's seed and printed steps replay it exactly; keep a significant counterexample as a named regression test.
 
 ## PostgreSQL error-mapping property checks (#391)
 
@@ -60,6 +72,14 @@ Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the exis
 ## HTTP authorization matrix (#1286)
 
 `tests/pg/test_http_authorization_matrix.py` sends one real request per `backend/api` route family (and per route that streams a managed file) over HTTP as seven callers: owner, editor, reader, a revoked member, a signed-out browser, the owner of another Library, and no session. Each row says whether it needs read, edit or Library administration; a caller without the right gets 403 `forbidden` (a member) or 401 `not_authenticated` (everyone else), the refusal names neither the Library nor the seeded entities, and every Library content table is unchanged afterwards. Every caller with the right must get a success, so each row is a real route with a valid request, except three documented route-level refusals that still come after admission: the backup download's 404 without a ready token, the stage route's 415 for a body that is not an archive, and the sync route's 400 for an empty envelope. Where a 2xx alone would not show the route did its work, the row also checks the result: the Research Notes row must save the note it sent, and the Processing import row imports a ready item uploaded just before each request and must report it imported. A `backend/api` module without a row fails `test_every_api_module_has_a_row`, so a new family joins the matrix. Run it with `scripts/test-postgres tests.pg.test_http_authorization_matrix`.
+
+## PostgreSQL crash-point matrix (#1284)
+
+`tests/pg/test_crash_points.py` runs whole write workflows in a child process (`tests/pg/crash_point_child.py`) that `os._exit`s at a named point, so no `finally`, rollback or cleanup of the killed process runs. The parent then restarts as a new process does (backup/restore recovery, the orphan sweep, cleanup claims settled) and checks one shared set of invariants: every key a row names is stored, every stored object is named, no write temporary or leftover claim remains, and imported/ready Processing items are complete. The matrix covers Processing upload (mid-write, after the store, after the commit), Processing import (mid-transaction, after the commit), managed-PDF replacement (after the store, inside the command, after the commit), the cleanup settle (after the unlink) and a backup killed mid-archive. A separate in-process case ends a sync write's connection from the server side (`pg_terminate_backend`) and checks only its own outcome: nothing committed, and the retry applies once. A retry of an acknowledged-but-unanswered request must return the first answer and apply nothing twice. The tests run in the ordinary PostgreSQL helper job on disposable databases and data roots:
+
+```bash
+scripts/test-postgres tests.pg.test_crash_points
+```
 
 ## TypeScript property-based workspace tests (#854)
 

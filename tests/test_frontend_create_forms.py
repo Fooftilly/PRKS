@@ -17,6 +17,8 @@ class CreateFormVueContractTests(unittest.TestCase):
             ("person-modal", "person-modal-vue"),
             ("group-modal", "group-modal-vue"),
             ("playlist-modal", "playlist-modal-vue"),
+            ("work-modal", "work-modal-vue"),
+            ("work-modal", "work-modal-footer-vue"),
         ):
             self.assertIn(f'id="{modal_id}"', index)
             self.assertIn(f'id="{mount_id}"', index)
@@ -28,8 +30,8 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertNotIn('id="save-group-btn"', index)
         self.assertNotIn('id="playlist-title"', index)
         self.assertNotIn('id="save-playlist-btn"', index)
-        self.assertIn('id="work-modal"', index)
-        self.assertIn('id="save-work-btn"', index)
+        self.assertNotIn('id="work-title"', index)
+        self.assertNotIn('id="save-work-btn"', index)
         self.assertIn('id="saved-view-modal"', index)
 
     def test_vue_owns_the_fields_and_the_durable_writers(self):
@@ -124,7 +126,10 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("getElementById('save-playlist-btn')", fallback)
         self.assertNotIn("getElementById('save-person-btn')", app)
         self.assertNotIn("getElementById('save-group-btn')", app)
-        self.assertIn("id=\"save-work-btn\"", (ROOT / "frontend" / "index.html").read_text(encoding="utf-8"))
+        # New File's Create is the Vue form's: no classic handler is left.
+        self.assertNotIn("getElementById('save-work-btn')", app)
+        self.assertNotIn("initUploadDragAndDrop", app)
+        self.assertIn('id="save-work-btn"', (FORMS / "NewFileForm.vue").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

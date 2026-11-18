@@ -57,6 +57,18 @@ class ProtocolTests(SyncTestCase):
         self.assertEqual(self.send(self.op("MARK_WORK_OPENED", {}, 0)), (400, {"code": "INVALID_BASE_REVISION"}))
         self.assertEqual(self.ledger(), [])
 
+    def test_text_postgresql_cannot_store_is_refused_before_the_ledger(self) -> None:
+        """Found by tests/test_sync_envelope_properties.py."""
+        # A lone surrogate in an id no validator inspects reached psycopg (a 500).
+        surrogate = self.envelope("DELETE_TAG", "T-\ud800", {}, entity_type="tag")
+        self.assertEqual(self.send(surrogate), (400, {"code": "INVALID_ENVELOPE"}))
+        # Refused by the same storability check before the tag validator's UTF-8
+        # length test could raise UnicodeEncodeError (answered {"code": "utf-8"}).
+        create = self.envelope("CREATE_TAG", "T-" + "0" * 32, {"name": "a\ud800", "color": "#000000"},
+                               entity_type="tag")
+        self.assertEqual(self.send(create), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.ledger(), [])
+
     def test_each_family_answers_only_its_own_shape(self) -> None:
         tag_ack = self.send(self.op("ADD_WORK_TAG", {"tag_id": self.tag}, 0))[1]
         open_ack = self.send(self.op("MARK_WORK_OPENED", {}, None))[1]

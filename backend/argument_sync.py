@@ -153,7 +153,7 @@ def _check_targets_shape(targets):
         if not isinstance(raw, dict) or set(raw) != {"type", "id", "verdict_id"}:
             raise ValueError("INVALID_ENVELOPE")
         ttype, tid, verdict = raw["type"], raw["id"], raw["verdict_id"]
-        if ttype not in TARGET_TYPES:
+        if not isinstance(ttype, str) or ttype not in TARGET_TYPES:
             raise ValueError("INVALID_ENVELOPE")
         if not isinstance(tid, str) or not tid.strip() or tid != tid.strip():
             raise ValueError("INVALID_ENVELOPE")
@@ -191,7 +191,7 @@ def validate_field(op):
     if set(payload) != {"field", "value"}:
         raise ValueError("INVALID_ENVELOPE")
     field, value = payload["field"], payload["value"]
-    if field not in FIELD_SET or not isinstance(value, str):
+    if not isinstance(field, str) or field not in FIELD_SET or not isinstance(value, str):
         raise ValueError("INVALID_ENVELOPE")
     try:
         canonical_wire(field, value)

@@ -269,7 +269,9 @@ class SweepTests(ObjectsTestCase):
         with open(os.path.join(self.storage.pdfs_dir, ".prks-write-x.tmp"), "wb") as handle:
             handle.write(b"partial")
         self.assertEqual(self.sweep(), 1)
-        self.assertTrue(os.path.exists(os.path.join(self.storage.pdfs_dir, ".prks-write-x.tmp")))
+        self.assertNotIn(".prks-write-x.tmp", self.claims(), "a temporary is never claimed as a key")
+        # Older than the grace period, it is what a killed write left: the stale sweep removes it (#1284).
+        self.assertFalse(os.path.exists(os.path.join(self.storage.pdfs_dir, ".prks-write-x.tmp")))
 
 
 class RestoreRunTests(ObjectsTestCase):

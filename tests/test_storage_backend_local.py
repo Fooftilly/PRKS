@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import time
 import tracemalloc
 import unittest
 from unittest.mock import patch
@@ -261,6 +262,78 @@ class TestLocalSpecifics(LocalStorageTestCase):
         self.assertEqual([k.name for k in self.backend.iter_keys(NAMESPACE_ASSET_OBJECTS)], [self.key.name])
         self.assertEqual([k.name for k in self.backend.list_keys(NAMESPACE_ASSET_OBJECTS, limit=1)],
                          [self.key.name], "skipped names take no place in a page")
+
+    def test_stale_write_temporaries_are_removed_and_nothing_else(self):
+        self.backend.put_new(self.key, _writer(b"x"))
+        pdfs = os.path.join(self.root, "pdfs")
+        now = time.time()
+        stale, fresh = os.path.join(pdfs, ".prks-write-stale.tmp"), os.path.join(pdfs, ".prks-write-fresh.tmp")
+        kept = [os.path.join(pdfs, name) for name in (".linearized_x.pdf", ".prks-cache-1.tmp", "notes.tmp")]
+        for path in [stale, fresh, *kept]:
+            open(path, "w").close()
+        os.mkdir(os.path.join(pdfs, ".prks-write-dir.tmp"))
+        for path in [stale, *kept, os.path.join(pdfs, self.key.name), os.path.join(pdfs, ".prks-write-dir.tmp")]:
+            os.utime(path, (now - 3600, now - 3600))
+        if hasattr(os, "symlink"):
+            target = os.path.join(self.root, "outside")
+            open(target, "w").close()
+            link = os.path.join(pdfs, ".prks-write-link.tmp")
+            os.symlink(target, link)
+            os.utime(link, (now - 3600, now - 3600), follow_symlinks=False)
+        removed = self.backend.remove_stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=now - 60, limit=10)
+        self.assertEqual(removed, 1)
+        self.assertFalse(os.path.exists(stale))
+        for path in [fresh, *kept, os.path.join(pdfs, ".prks-write-dir.tmp"), os.path.join(pdfs, self.key.name)]:
+            self.assertTrue(os.path.exists(path), path)
+        if hasattr(os, "symlink"):
+            self.assertTrue(os.path.lexists(os.path.join(pdfs, ".prks-write-link.tmp")))
+        self.assertEqual(self.backend.remove_stale_temporaries(NAMESPACE_PORTRAITS, older_than=now, limit=10), 0,
+                         "a namespace with no directory has nothing to remove")
+        with self.assertRaises(InvalidStorageKey):
+            self.backend.remove_stale_temporaries("nope", older_than=now, limit=10)
+        with self.assertRaises(ValueError):
+            self.backend.remove_stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=now, limit=0)
+
+    def test_stale_temporary_removal_is_bounded_and_skips_what_it_cannot_remove(self):
+        self.backend.put_new(self.key, _writer(b"x"))
+        pdfs = os.path.join(self.root, "pdfs")
+        past = time.time() - 3600
+        paths = [os.path.join(pdfs, f".prks-write-{index}.tmp") for index in range(5)]
+        for path in paths:
+            open(path, "w").close()
+            os.utime(path, (past, past))
+        self.assertEqual(self.backend.remove_stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=past + 1, limit=2), 2)
+        self.assertEqual(sum(os.path.exists(path) for path in paths), 3, "the rest wait for the next sweep")
+        real_remove = os.remove
+        refused = {paths_left for paths_left in paths if os.path.exists(paths_left)}
+        stuck = sorted(refused)[0]
+
+        def remove(path, *args, **kwargs):
+            if path == stuck:
+                raise PermissionError("busy")
+            return real_remove(path, *args, **kwargs)
+
+        with patch.object(objects.os, "remove", remove):
+            removed = self.backend.remove_stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=past + 1, limit=10)
+        self.assertEqual(removed, 2, "one that cannot be removed does not stop the others")
+        self.assertEqual([path for path in paths if os.path.exists(path)], [stuck])
+
+    def test_removal_checks_each_listed_temporary_again(self):
+        self.backend.put_new(self.key, _writer(b"x"))
+        pdfs = os.path.join(self.root, "pdfs")
+        past = time.time() - 3600
+        paths = {name: os.path.join(pdfs, name) for name in (".prks-write-a.tmp", ".prks-write-b.tmp")}
+        for path in paths.values():
+            open(path, "w").close()
+            os.utime(path, (past, past))
+        listed = self.backend.stale_temporaries(NAMESPACE_ASSET_OBJECTS, older_than=past + 1, limit=10)
+        self.assertEqual(sorted(listed), sorted(paths))
+        os.utime(paths[".prks-write-b.tmp"])  # its writer touched it after the scan
+        names = [*listed, self.key.name, "../outside.tmp", ".prks-write-gone.tmp"]
+        self.assertEqual(self.backend.remove_temporaries(NAMESPACE_ASSET_OBJECTS, names, older_than=past + 1), 1)
+        self.assertFalse(os.path.exists(paths[".prks-write-a.tmp"]))
+        self.assertTrue(os.path.exists(paths[".prks-write-b.tmp"]), "a temporary touched since the scan stays")
+        self.assertTrue(os.path.exists(os.path.join(pdfs, self.key.name)), "a key is never removed")
 
     def _fill(self, count):
         pdfs = os.path.join(self.root, "pdfs")
