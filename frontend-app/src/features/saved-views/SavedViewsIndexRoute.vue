@@ -40,10 +40,12 @@ function clearRowError(viewId: string): void {
   rowErrors.value = next
 }
 
-function edit(viewId: string): void {
+function edit(viewId: string, event?: MouseEvent): void {
+  // The button is disabled while the record loads, which takes focus off it.
+  const opener = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
   void withBusy(editKey(viewId), async () => {
     try {
-      const outcome = await props.intents.editById(viewId)
+      const outcome = await props.intents.editById(viewId, opener)
       if (outcome.status === 'error') showRowError(viewId, outcome.message)
       else if (outcome.status === 'success') clearRowError(viewId)
     } catch (err) {
@@ -108,7 +110,7 @@ watch(rows, refreshIcons, { flush: 'post' })
               :busy="actionBusy(editKey(row.id))"
               :disabled="actionBlocked(editKey(row.id))"
               busy-label="Opening…"
-              @click="edit(row.id)"
+              @click="edit(row.id, $event)"
             >
               Edit
             </PrksButton>

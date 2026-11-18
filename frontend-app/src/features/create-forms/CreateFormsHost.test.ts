@@ -42,7 +42,9 @@ function installShells(): void {
     '<div id="group-modal" class="modal hidden"><div id="group-modal-vue" class="modal-body"></div></div>',
     '<div id="playlist-modal" class="modal hidden"><div id="playlist-modal-vue" class="modal-body"></div></div>',
     '<div id="work-modal" class="modal hidden"><div id="work-modal-vue" class="modal-body modal-body--scroll"></div>' +
-      '<div class="modal-footer"><button id="save-work-btn" type="button">Create File</button></div></div>',
+      '<div id="work-modal-footer-vue" class="modal-footer"></div></div>',
+    '<div id="saved-view-modal" class="modal hidden"><h3 id="saved-view-modal-title"></h3>' +
+      '<div id="saved-view-modal-vue" class="modal-body"></div></div>',
   ].join('')
 }
 
@@ -102,8 +104,8 @@ describe('create form host', () => {
     expect(document.querySelector('#group-modal #save-group-btn')).not.toBeNull()
     expect(document.querySelector('#playlist-modal #playlist-title')).not.toBeNull()
     expect(document.querySelector('#playlist-modal #save-playlist-btn')).not.toBeNull()
-    // New File: the Vue body lands in the shell's body mount, before the
-    // classic footer that keeps Create File.
+    // New File: the body lands in the shell's body mount and Create File
+    // in its footer mount.
     const workBody = document.getElementById('work-modal-vue')
     expect(workBody?.querySelector(':scope > .upload-grid.form-pane')).not.toBeNull()
     for (const id of ['upload-drop-zone', 'work-source-kind', 'work-title', 'work-folder-search', 'work-doc-type',
@@ -111,8 +113,24 @@ describe('create form host', () => {
       expect(workBody?.querySelector(`#${id}`), id).not.toBeNull()
     }
     expect(document.querySelectorAll('#save-work-btn')).toHaveLength(1)
+    expect(document.querySelector('#work-modal-footer-vue #save-work-btn')).not.toBeNull()
+    expect(document.querySelector('#work-modal-footer-vue #work-modal-cancel')).not.toBeNull()
+    expect(document.querySelector('#work-modal-footer-vue #upload-status-msg')).not.toBeNull()
     // No error region until there is an error to describe the Title with.
     expect(document.querySelector('#playlist-modal #playlist-title-error')).toBeNull()
+  })
+
+  it('owns the Saved View dialog: body and title land in its shell, focus starts on Name', async () => {
+    install()
+    await nextTick()
+    expect(window.prksCreateForms?.owns('saved-view-modal')).toBe(true)
+    expect(document.querySelector('#saved-view-modal-vue #saved-view-name')).not.toBeNull()
+    expect(document.querySelector('#saved-view-modal-vue #save-saved-view-btn')).not.toBeNull()
+    expect(document.getElementById('saved-view-modal-title')?.textContent).toBe('Save View')
+    window.prksCreateForms?.focusInitial('saved-view-modal')
+    expect(document.activeElement?.id).toBe('saved-view-name')
+    // No unsaved-changes confirm and no inner layer, as before.
+    expect(window.prksCreateForms?.dismissInnerLayer('saved-view-modal')).toBe(false)
   })
 
   it('tracks a dirty folder draft from the view and blocks a duplicate title', async () => {

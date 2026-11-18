@@ -198,7 +198,7 @@ def warm_up(origin: str, ids: dict[str, Any]) -> int:
 
     Answers the catalog size, which the summary reports as the library size.
     """
-    import urllib.request
+    import http.client
 
     port = require_loopback(origin)
     work_ids = ids["load_works"] + [ids["work_a"]]
@@ -210,8 +210,16 @@ def warm_up(origin: str, ids: dict[str, Any]) -> int:
         ("/api/tags", lambda body: isinstance(body, list) and len(body) == ids["tag_count"] > 0),
         ("/api/research-graph", lambda body: bool(body.get("nodes"))),
     ):
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=20) as response:  # noqa: S310
+        # A plain HTTP connection to loopback: no URL, so no scheme to choose.
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+        try:
+            connection.request("GET", path)
+            response = connection.getresponse()
+            if response.status != 200:
+                raise AssertionError(f"warm-up got {response.status} for a seeded route: {path.split('?')[0]}")
             body = json.loads(response.read())
+        finally:
+            connection.close()
         if not check(body):
             raise AssertionError(f"warm-up check failed for a seeded route: {path.split('?')[0]}")
     return int(ids["catalog_size"])

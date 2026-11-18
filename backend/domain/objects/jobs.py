@@ -10,8 +10,12 @@ claims it) and each bounded:
   are still due, the pass enqueues the next one.
 - ``objects.sweep`` examines at most :data:`SWEEP_BATCH` stored keys
   (:func:`sweep_pass`) and records a claim for each one older than the grace
-  period that nothing names. It never deletes: the claims are settled by the
-  cleanup job. When keys are left, the pass enqueues the next one with a
+  period that nothing names. It never deletes an object: the claims are
+  settled by the cleanup job. The pass that reaches the end of the listing
+  also removes up to :data:`SWEEP_BATCH` stale write temporaries per
+  namespace (``.prks-write-*.tmp`` a killed write left, never a key): it
+  lists them outside any transaction, then removes them inside a fenced one;
+  any left over go in the next cycle. When keys are left, the pass enqueues the next one with a
   cursor (the namespace and the last key name examined) in its payload;
   :meth:`~backend.storage.objects.StorageBackend.list_keys` returns a
   bounded page in name order after a name, so the next pass resumes after it.
@@ -19,8 +23,9 @@ claims it) and each bounded:
 **Fencing.** Every transaction of a pass runs through
 :meth:`~backend.jobs.runner.JobRun.command`, which locks the job row with its
 lease first: a run whose lease was reclaimed, reaped, released or cancelled,
-or has expired, commits nothing, and since a settle deletes the bytes inside
-that transaction, it deletes nothing either. The per-object lock, the claim
+or has expired, commits nothing, and since a settle deletes the bytes (and
+the completing sweep its stale temporaries) inside that transaction, it
+deletes nothing either. The per-object lock, the claim
 row lock and the Library objects lock are the ones :func:`lifecycle.settle_tx`
 and :func:`lifecycle.claim_orphan` take. A pass stopped half-way is repeated
 safely: a settled claim is gone, a stamped one is not due yet, and a sweep
@@ -210,7 +215,11 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
     each claim is its own fenced transaction that checks the references under
     the per-object lock. A key younger than ``grace`` is left alone (a write
     may still adopt it). When keys are left, the next pass is enqueued with
-    this pass's last key; the pass that reaches the end records
+    this pass's last key; the pass that reaches the end lists up to ``batch``
+    stale write temporaries per namespace outside any transaction
+    (``lifecycle.stale_temporaries``), removes them in one fenced command
+    (``lifecycle.remove_temporaries``), so no transaction stays open over the
+    directory scan, and records
     ``{"complete": true}`` in its progress, which ends the sweep cycle.
     """
     if grace < timedelta(0):
@@ -244,6 +253,14 @@ def sweep_pass(run: JobRun, storage: StorageBackend, *, grace: timedelta = lifec
             run.command(lambda tx, position=position: enqueue_sweep(tx, position))
             run.heartbeat({"examined": examined, "claimed": claimed})
             return claimed
+    for namespace in SWEEP_NAMESPACES:
+        # The scan reads only, so it runs outside any transaction; the bounded
+        # removal is fenced like a settle: a run that lost its lease removes nothing.
+        run.check()
+        names = lifecycle.stale_temporaries(storage, namespace, cutoff, limit=batch)
+        if names:
+            run.command(lambda tx, namespace=namespace, names=names: lifecycle.remove_temporaries(
+                storage, namespace, names, cutoff))
     run.heartbeat({"examined": examined, "claimed": claimed, "complete": True})
     return claimed
 

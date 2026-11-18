@@ -53,6 +53,7 @@ class SchemathesisPilotContracts(unittest.TestCase):
             self.assertLessEqual(MAX_EXAMPLES, 25)
             self.assertLessEqual(CLI_TIMEOUT, 90)
             self.assertIn("--max-failures", args)
+            self.assertEqual(args[args.index("--generation-allow-x00") + 1], "false")
             self.assertIn("--max-redirects", args)
             self.assertIn("--seed", args)
             for forbidden in ("POST", "PATCH", "DELETE", "stateful", "coverage"):

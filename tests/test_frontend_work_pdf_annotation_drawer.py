@@ -75,7 +75,7 @@ class WorkPdfAnnotationDrawerTests(unittest.TestCase):
         self.assertIn("data-prks-list-published", VIEW)
         self.assertIn("Annotations are listed on the PDF.", UI)
         self.assertIn('data-prks-role="open-pdf-annotation-drawer"', UI)
-        tab = UI[UI.index("function renderWorkAnnotationsTab"):UI.index("// Advanced Upload Logic")]
+        tab = UI[UI.index("function renderWorkAnnotationsTab"):UI.index("// Shared YouTube URL/host contract")]
         self.assertNotIn("annotation-row__delete", tab)
         self.assertIn("registerWorkPdfAnnotationDrawerBridge", MAIN)
         self.assertIn('aria-label="Annotations"', TOOLBAR)
