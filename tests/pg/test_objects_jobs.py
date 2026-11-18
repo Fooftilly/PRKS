@@ -322,6 +322,36 @@ class SweepPassTests(ObjectJobsTestCase):
         self.assertTrue(self.stored(orphan.key.name) and self.stored(live.key.name) and self.exists(young))
         self.assertEqual(jobs.sweep_pass(run, self.objects), 0, "a repeated pass records nothing new")
 
+    def test_the_completing_pass_removes_write_temporaries_a_killed_upload_left(self) -> None:
+        pdfs = os.path.join(self.storage.root, "pdfs")
+        self.orphans(1)  # makes the namespace directory
+        stale, fresh = os.path.join(pdfs, ".prks-write-killed.tmp"), os.path.join(pdfs, ".prks-write-live.tmp")
+        for path in (stale, fresh):
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.4 partial")
+        past = time.time() - 2 * DAY
+        os.utime(stale, (past, past))
+        self.enqueue(jobs.enqueue_sweep)
+        run = self.claimed(jobs.SWEEP_KIND)
+        jobs.sweep_pass(run, self.objects)
+        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.exists(fresh), "a write still in progress is younger than the grace period")
+
+    def test_a_sweep_that_lost_its_lease_removes_no_temporary(self) -> None:
+        pdfs = os.path.join(self.storage.root, "pdfs")
+        self.orphans(1)
+        stale = os.path.join(pdfs, ".prks-write-killed.tmp")
+        with open(stale, "wb") as handle:
+            handle.write(b"%PDF-1.4 partial")
+        past = time.time() - 2 * DAY
+        os.utime(stale, (past, past))
+        self.enqueue(jobs.enqueue_sweep)
+        run = self.claimed(jobs.SWEEP_KIND)
+        self.sql("UPDATE prks.jobs SET locked_until = now() - interval '1 second' WHERE id = %s", (run.job.id,))
+        with self.assertRaises(queue.LeaseLost):
+            jobs.sweep_pass(run, self.objects)
+        self.assertTrue(os.path.exists(stale))
+
     def test_a_running_restores_staged_key_is_not_claimed(self) -> None:
         staged = StorageKey(NAMESPACE_PORTRAITS, "staged.webp")
         self.objects.put_new(staged, lambda stream: stream.write(b"image"))
