@@ -2,7 +2,9 @@
 
 Wire shape matches existing research-network responses:
 ``{"error": "<message>", "code": "<stable_code>"}`` with ``code`` optional for
-legacy 404 bodies that only carried ``error``.
+legacy 404 bodies that only carried ``error``. Admission and route refusals
+(``backend/api/session.py``) answer ``{"error": code, "code": code,
+"message": text}``, so ``message`` is an optional field too.
 """
 from __future__ import annotations
 
@@ -20,6 +22,10 @@ class ApiErrorEnvelope(BaseModel):
     code: Optional[str] = Field(
         default=None,
         description="Stable machine-readable code when the domain provides one.",
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="Human-readable explanation sent with admission and route refusals.",
     )
 
     def as_dict(self) -> dict[str, Any]:
