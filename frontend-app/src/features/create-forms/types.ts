@@ -4,9 +4,10 @@
  * Temporary adapter (#1036). `ModalHost` paints confirm, alert, prompt, and
  * unsaved dismissal only. Folder, Person, Person Group, and Playlist bodies
  * teleport into the shells in `frontend/index.html`, and so do New File's
- * body and footer. Retire this object when those shells move into the Vue
- * host. Saved View, role link, the person template, and Settings stay on
- * their current shells until their own slices.
+ * body and footer and the Saved View body and title. Retire this object when
+ * those shells move into the Vue host. Role link, the person template, and
+ * Settings stay on their current shells until their own slices. Saved View
+ * and Playlist have no unsaved-changes confirm (`ui.js`).
  */
 export interface PrksCreateFormsApi {
   owns: (modalId: string) => boolean
@@ -41,6 +42,7 @@ export const CREATE_FORM_MODAL_IDS = [
   'group-modal',
   'playlist-modal',
   'work-modal',
+  'saved-view-modal',
 ] as const
 
 export type CreateFormModalId = (typeof CREATE_FORM_MODAL_IDS)[number]

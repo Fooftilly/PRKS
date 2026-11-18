@@ -27,7 +27,8 @@ export interface SavedViewIntents {
   /** Detail. Confirms, deletes, then sends this owner back to `#/views`. */
   remove(viewId: string): Promise<SavedViewActionOutcome>
   /** Index row. Reads that view, then opens the shared modal. */
-  editById(viewId: string): Promise<SavedViewActionOutcome>
+  /** `opener` is the control focus returns to when the dialog closes. */
+  editById(viewId: string, opener?: HTMLElement | null): Promise<SavedViewActionOutcome>
   /** Index row. Confirms and deletes. The shared list query refreshes the index. */
   removeFromIndex(viewId: string): Promise<SavedViewActionOutcome>
   openSearch(): void
@@ -80,7 +81,7 @@ function confirmDelete(): Promise<boolean> {
 /**
  * Saved View intents for one owner and generation. Reads and writes go
  * through the Saved View records service (typed client + shared QueryClient).
- * Edit still opens the shared classic `#saved-view-modal` until #303 B4.
+ * Edit opens the shared `#saved-view-modal`, whose body is `SavedViewForm.vue`.
  * `still` is this owner: a confirm that outlives the pane does not delete,
  * and a write that finishes late reports nothing to a replaced owner.
  */
@@ -114,7 +115,7 @@ export function browserSavedViewIntents(
       }
       return outcome
     },
-    async editById(viewId) {
+    async editById(viewId, opener) {
       const still = () => ownsIndex(owner, generation)
       if (!still() || !viewId) return quiet()
       let view: SavedViewRecord | null
@@ -125,7 +126,12 @@ export function browserSavedViewIntents(
       }
       if (!still()) return quiet()
       if (!view) return failure(EDIT_FAILURE)
-      window.prksOpenSavedViewModal?.({ viewId: view.id, name: view.name, definition: view.search })
+      window.prksOpenSavedViewModal?.({
+        viewId: view.id,
+        name: view.name,
+        definition: view.search,
+        returnFocus: opener ?? null,
+      })
       return success()
     },
     async removeFromIndex(viewId) {

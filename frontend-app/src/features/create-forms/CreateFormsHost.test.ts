@@ -43,6 +43,8 @@ function installShells(): void {
     '<div id="playlist-modal" class="modal hidden"><div id="playlist-modal-vue" class="modal-body"></div></div>',
     '<div id="work-modal" class="modal hidden"><div id="work-modal-vue" class="modal-body modal-body--scroll"></div>' +
       '<div id="work-modal-footer-vue" class="modal-footer"></div></div>',
+    '<div id="saved-view-modal" class="modal hidden"><h3 id="saved-view-modal-title"></h3>' +
+      '<div id="saved-view-modal-vue" class="modal-body"></div></div>',
   ].join('')
 }
 
@@ -116,6 +118,19 @@ describe('create form host', () => {
     expect(document.querySelector('#work-modal-footer-vue #upload-status-msg')).not.toBeNull()
     // No error region until there is an error to describe the Title with.
     expect(document.querySelector('#playlist-modal #playlist-title-error')).toBeNull()
+  })
+
+  it('owns the Saved View dialog: body and title land in its shell, focus starts on Name', async () => {
+    install()
+    await nextTick()
+    expect(window.prksCreateForms?.owns('saved-view-modal')).toBe(true)
+    expect(document.querySelector('#saved-view-modal-vue #saved-view-name')).not.toBeNull()
+    expect(document.querySelector('#saved-view-modal-vue #save-saved-view-btn')).not.toBeNull()
+    expect(document.getElementById('saved-view-modal-title')?.textContent).toBe('Save View')
+    window.prksCreateForms?.focusInitial('saved-view-modal')
+    expect(document.activeElement?.id).toBe('saved-view-name')
+    // No unsaved-changes confirm and no inner layer, as before.
+    expect(window.prksCreateForms?.dismissInnerLayer('saved-view-modal')).toBe(false)
   })
 
   it('tracks a dirty folder draft from the view and blocks a duplicate title', async () => {

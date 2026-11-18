@@ -89,7 +89,7 @@ class CreateFormVueContractTests(unittest.TestCase):
     def test_classic_modal_lifecycle_calls_the_create_form_hooks(self):
         """#603/#589, #373 and #467: the shell hands each moment to the Vue forms."""
         ui = UI.read_text(encoding="utf-8")
-        open_modal = ui[ui.index("function openModal(id) {") : ui.index("// —— In-app help hints")]
+        open_modal = ui[ui.index("function openModal(id, options) {") : ui.index("// —— In-app help hints")]
         # Focus moves into the first field once the dialog is shown.
         self.assertLess(
             open_modal.index("modalEl.classList.remove('hidden');"),

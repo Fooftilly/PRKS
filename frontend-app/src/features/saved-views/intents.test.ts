@@ -162,11 +162,18 @@ describe('saved view intents', () => {
 
     state.generation = 4
     const records = fakeRecords()
-    await expect(browserSavedViewIntents(indexOwner(state), 4, records).editById('SV-1')).resolves.toEqual({
+    const opener = document.createElement('button')
+    await expect(browserSavedViewIntents(indexOwner(state), 4, records).editById('SV-1', opener)).resolves.toEqual({
       status: 'success',
     })
     expect(records.get).toHaveBeenCalledWith('SV-1')
-    expect(open).toHaveBeenCalledWith({ viewId: 'SV-1', name: 'Critical theory', definition: VIEW.search })
+    // The row's Edit button, disabled while it read, is where focus returns (#487).
+    expect(open).toHaveBeenCalledWith({
+      viewId: 'SV-1',
+      name: 'Critical theory',
+      definition: VIEW.search,
+      returnFocus: opener,
+    })
     await expect(
       browserSavedViewIntents(owner({ generation: 4, entityId: 'SV-1' }), 4, records).editById('SV-1'),
     ).resolves.toEqual({ status: 'quiet' })
