@@ -322,6 +322,13 @@ class QueueTests(ProcessingHttpTestCase):
         head = self.call("HEAD", path, cookies=self.cookies)
         self.assertEqual((head.status, head.header("Content-Length"), head.raw), (200, [str(len(data))], b""))
         self.assertEqual(self.get(path, headers=[("Range", f"bytes={len(data)}-")]).status, 416)
+        tail = self.get(path, headers=[("Range", "bytes=-3")])
+        self.assertEqual((tail.status, tail.raw), (206, data[-3:]))
+        # Ignored, not refused (RFC 9110 §14): several ranges, or an invalid one.
+        for ignored in ("bytes=0-1,4-5", "bytes=5-3", "bytes=+0-4"):
+            with self.subTest(range=ignored):
+                answer = self.get(path, headers=[("Range", ignored)])
+                self.assertEqual((answer.status, answer.raw), (200, data))
         self.ok(self.send("DELETE", f"/api/processing-items/{item['id']}"))
         self.refused(self.get(path), 404, "ENTITY_NOT_FOUND")
         self.assertEqual(self.call("HEAD", path, cookies=self.cookies).status, 404)

@@ -44,4 +44,4 @@ jobs:
       - name: Run the property tests with random seeds
         env:
           PRKS_HYPOTHESIS_PROFILE: nightly
-        run: python -m unittest -v tests.test_sync_envelope_properties
+        run: python -m unittest -v tests.test_sync_envelope_properties tests.test_byte_range_properties
