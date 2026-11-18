@@ -16,7 +16,7 @@ from typing import Any
 from openapi_core import OpenAPI
 from openapi_core.testing import MockRequest, MockResponse
 
-from backend.api.session import _refused, route_failure
+from backend.api.session import Reply, _refused, route_failure
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.openapi import (
     positions_openapi_document,
@@ -34,6 +34,8 @@ class RefusalBodiesMatchTheEnvelope(unittest.TestCase):
                 body = _refused(refusal).body
                 envelope = ApiErrorEnvelope.model_validate(body)
                 self.assertEqual(envelope.as_dict(), body)
+                self.assertEqual((envelope.error, envelope.code, envelope.message),
+                                 (refusal.code, refusal.code, refusal.message))
 
     def test_a_route_failure_is_an_envelope(self) -> None:
         for exc in (AccessRefused(Refusal.LIBRARY_EPOCH_CHANGED),
@@ -49,21 +51,24 @@ class RefusalBodiesMatchTheEnvelope(unittest.TestCase):
             ApiErrorEnvelope.model_validate({"error": "forbidden", "request_id": "r-1"})
 
     def test_documented_refusal_statuses_validate_against_each_family(self) -> None:
-        cases: tuple[tuple[Callable[[], dict[str, Any]], str, str, Refusal], ...] = (
-            (positions_openapi_document, "post", "/api/positions", Refusal.LIBRARY_EPOCH_REQUIRED),
-            (publishers_openapi_document, "post", "/api/publishers", Refusal.LIBRARY_EPOCH_REQUIRED),
-            (saved_views_openapi_document, "post", "/api/saved-views", Refusal.LIBRARY_EPOCH_REQUIRED),
-            (saved_views_openapi_document, "post", "/api/saved-views", Refusal.LIBRARY_EPOCH_CHANGED),
+        epoch_required = _refused(Refusal.LIBRARY_EPOCH_REQUIRED)
+        epoch_changed = route_failure(AccessRefused(Refusal.LIBRARY_EPOCH_CHANGED))
+        taken = route_failure(DatabaseError("SAVED_VIEW_NAME_TAKEN", "That name is taken.", http_status=409))
+        assert epoch_changed is not None and taken is not None
+        cases: tuple[tuple[Callable[[], dict[str, Any]], str, str, Reply], ...] = (
+            (positions_openapi_document, "post", "/api/positions", epoch_required),
+            (publishers_openapi_document, "post", "/api/publishers", epoch_required),
+            (saved_views_openapi_document, "post", "/api/saved-views", epoch_required),
+            (saved_views_openapi_document, "post", "/api/saved-views", epoch_changed),
+            (saved_views_openapi_document, "post", "/api/saved-views", taken),
         )
-        for builder, method, path, refusal in cases:
-            with self.subTest(path=path, refusal=refusal.name):
-                reply = _refused(refusal)
+        for builder, method, path, reply in cases:
+            with self.subTest(path=path, code=reply.body["code"]):
                 api = OpenAPI.from_dict(builder())
                 request = MockRequest(host_url="http://127.0.0.1", method=method, path=path)
                 response = MockResponse(data=json.dumps(reply.body).encode(), status_code=reply.status,
                                         content_type="application/json")
                 api.validate_response(request, response)
-
 
 if __name__ == "__main__":
     unittest.main()
