@@ -360,6 +360,7 @@ async function onSave(): Promise<void> {
         busy.value = false
         w.closeModals?.()
       },
+      current: () => mine === opening,
     })
   } finally {
     // A newer opening owns the button now; an older Save leaves it alone.

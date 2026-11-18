@@ -3,12 +3,13 @@ import { roleLinkFailureMessage, submitRoleLink, type RoleLinkResult } from './s
 
 const INPUT = { person_id: 'P1', work_id: 'W1', role_type: 'Editor', credit_name: '' }
 
-function deps(result: RoleLinkResult | (() => Promise<RoleLinkResult>)) {
+function deps(result: RoleLinkResult | (() => Promise<RoleLinkResult>), current = true) {
   return {
     link: vi.fn(typeof result === 'function' ? result : async () => result),
     duplicateAlert: vi.fn(async () => {}),
     failureAlert: vi.fn(async () => {}),
     close: vi.fn(),
+    current: vi.fn(() => current),
   }
 }
 
@@ -44,10 +45,13 @@ describe('Create Link outcome', () => {
     expect(d.close).not.toHaveBeenCalled()
   })
 
-  it('names a duplicate link by its role', async () => {
+  it('names a duplicate link by its role, only while this opening may settle', async () => {
     const d = deps({ code: 'duplicate', maySettle: () => true })
     expect(await submitRoleLink(INPUT, d)).toBe('duplicate')
     expect(d.duplicateAlert).toHaveBeenCalledWith('Editor')
+    const older = deps({ code: 'duplicate', maySettle: () => false })
+    expect(await submitRoleLink(INPUT, older)).toBe('duplicate')
+    expect(older.duplicateAlert).not.toHaveBeenCalled()
   })
 
   it('alerts a refusal only while this opening may settle', async () => {
@@ -59,12 +63,17 @@ describe('Create Link outcome', () => {
     expect(older.failureAlert).not.toHaveBeenCalled()
   })
 
-  it('a link that throws is a quiet failure', async () => {
-    const d = deps(async () => {
+  it('a link that throws says so while this opening is current, else nothing', async () => {
+    const boom = async (): Promise<RoleLinkResult> => {
       throw new Error('boom')
-    })
+    }
+    const d = deps(boom)
     expect(await submitRoleLink(INPUT, d)).toBe('failed')
-    expect(d.failureAlert).not.toHaveBeenCalled()
+    expect(d.failureAlert).toHaveBeenCalledWith('Could not create link.')
+    expect(d.close).not.toHaveBeenCalled()
+    const older = deps(boom, false)
+    expect(await submitRoleLink(INPUT, older)).toBe('failed')
+    expect(older.failureAlert).not.toHaveBeenCalled()
   })
 
   it('keeps the classic refusal wording', () => {

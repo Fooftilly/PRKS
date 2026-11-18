@@ -39,6 +39,10 @@ export interface RoleLinkSaveDeps {
   duplicateAlert: (roleType: string) => Promise<void>
   failureAlert: (message: string) => Promise<void>
   close: () => void
+  /** Whether the opening that started this Create Link is still the form's.
+   * Stands in for `maySettle` when the result does not carry one, such as a
+   * link that threw before reaching the opener checks. */
+  current: () => boolean
 }
 
 export type RoleLinkOutcome = 'invalid' | 'stale' | 'duplicate' | 'saved' | 'failed'
@@ -71,10 +75,11 @@ export async function submitRoleLink(input: RoleLinkInput, deps: RoleLinkSaveDep
   } catch {
     result = { code: 'failed' }
   }
-  const maySettle = () => (typeof result.maySettle === 'function' ? result.maySettle() === true : false)
+  const maySettle = () =>
+    typeof result.maySettle === 'function' ? result.maySettle() === true : deps.current() === true
   if (result.code === 'stale') return 'stale'
   if (result.code === 'duplicate') {
-    await deps.duplicateAlert(input.role_type)
+    if (maySettle()) await deps.duplicateAlert(input.role_type)
     return 'duplicate'
   }
   if (result.code === 'saved') {

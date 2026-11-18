@@ -66,10 +66,7 @@ require('../../frontend/js/work-notes-state.js');
 (0, eval)(fs.readFileSync(path.join(rootDir, 'frontend/js/ui.js'), 'utf8'));
 require(path.join(rootDir, 'frontend/js/work-role-editor.js'));
 
-const roleAlerts = [];
-global.prksAlertDialog = async function (opts) {
-    roleAlerts.push(String(opts && opts.message || ''));
-};
+global.prksAlertDialog = async function () {};
 global.prksAlertMessage = async function () {};
 global.updatePanelContent = function () {};
 global.prksPromptTextDialog = async function () { return null; };
@@ -115,11 +112,12 @@ function fillRole(personId, workId) {
     document.getElementById('role-work-id').value = workId;
     document.getElementById('role-type').value = 'Author';
 }
-/* Create Link is the Vue form's (#1036): it passes the picked fields to
- * prksLinkPersonFromRoleModal and, only while the result may settle, closes
- * and settles or alerts. The form's own busy and message rules are covered
- * by RoleLinkForm.test.ts; this mirrors the outcome handling so the opener
- * checks run against the real tab contexts and durable save. */
+/* Create Link is the Vue form's (#1036). Its outcome rules (messages, busy,
+ * close) live in role-link/save.ts and are covered by Vitest. This gate
+ * checks the classic half against the real tab contexts and durable save:
+ * what prksLinkPersonFromRoleModal writes, the code it returns, and whether
+ * that result may settle the opening. A result that may settle is settled
+ * here, as the form would, so mode and close stay observable. */
 async function saveClick() {
     const result = await prksLinkPersonFromRoleModal({
         person_id: document.getElementById('role-person-id').value,
@@ -127,16 +125,12 @@ async function saveClick() {
         role_type: document.getElementById('role-type').value,
         credit_name: '',
     });
-    const maySettle = typeof result.maySettle === 'function' && result.maySettle() === true;
-    if (result.code === 'saved') {
-        if (maySettle) {
-            closeModals();
-            if (result.settle) result.settle();
-        }
-    } else if (result.code !== 'stale' && result.code !== 'duplicate' && maySettle) {
-        await prksAlertDialog({ title: 'Could not link', message: result.code });
+    const settles = typeof result.maySettle === 'function' && result.maySettle() === true;
+    if (result.code === 'saved' && settles) {
+        closeModals();
+        if (result.settle) result.settle();
     }
-    return Object.assign({ settles: maySettle }, result);
+    return Object.assign({ settles: settles }, result);
 }
 async function until(pred) {
     for (let i = 0; i < 30; i += 1) {
@@ -172,7 +166,6 @@ async function openedOnAThenOwnerChangesBeforeSave() {
 
 async function differentTargetChangesDuringBaseRead() {
     writes.length = 0;
-    roleAlerts.length = 0;
     resetModal();
     focus('main');
     const main = prksMountTabContext('main', document.getElementById('main-host'));
@@ -190,14 +183,12 @@ async function differentTargetChangesDuringBaseRead() {
     ownPanel(main);
     release();
     readGate = null;
-    await pending;
+    const stale = await pending;
     assert('a deferred base read does not write after the opener changes', writes.length === 0,
         'writes=' + writes.length);
-    assert('a stale opener does not show the offline-prep alert',
-        roleAlerts.length === 0 && roleAlerts.every(function (message) {
-            return message.indexOf('Open it once') === -1;
-        }),
-        roleAlerts.join(' | '));
+    assert('a stale opener returns stale, which the form never alerts',
+        stale.code === 'stale' && stale.settles === false,
+        'code=' + stale.code + ' settles=' + stale.settles);
     prksDestroyAllTabContexts();
 }
 
@@ -322,7 +313,6 @@ async function personUnlinkDuringBaseReadDoesNotSave() {
 
 async function olderRoleModalDoesNotSettleNewerOpening() {
     writes.length = 0;
-    roleAlerts.length = 0;
     resetModal();
     focus('main');
     const main = prksMountTabContext('main', document.getElementById('main-host'));
@@ -357,8 +347,6 @@ async function olderRoleModalDoesNotSettleNewerOpening() {
     assert('an older role-modal failure may not settle the newer opening',
         first.code === 'failed' && first.settles === false,
         'code=' + first.code + ' settles=' + first.settles);
-    assert('an older role-modal failure does not alert into the newer opening',
-        roleAlerts.length === 0, roleAlerts.join(' | '));
     assert('an older role-modal failure does not close the newer opening',
         !modal.classList.contains('hidden') &&
         String(modal.dataset.prksOpenGeneration) !== String(firstGeneration),

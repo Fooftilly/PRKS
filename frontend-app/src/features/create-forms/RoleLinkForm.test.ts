@@ -258,6 +258,22 @@ describe('Link Person to Work form', () => {
     expect(settle).toHaveBeenCalledTimes(1)
   })
 
+  it('names a duplicate link by its role', async () => {
+    const duplicate = vi.fn(async () => {})
+    stubs().prksShowDuplicateRoleLinkAlert = duplicate
+    stubs().prksLinkPersonFromRoleModal = vi.fn(async () => ({ code: 'duplicate', maySettle: () => true }))
+    await form().prepare(() => true)
+    ;(document.getElementById('role-person-id') as HTMLInputElement).value = 'P1'
+    ;(document.getElementById('role-work-id') as HTMLInputElement).value = 'W1'
+    document.querySelector<HTMLButtonElement>('#role-role-seg-mount [data-value="Reviewer"]')!.click()
+    await nextTick()
+    ;(document.getElementById('save-role-btn') as HTMLButtonElement).click()
+    await flush()
+    expect(duplicate).toHaveBeenCalledWith('Reviewer')
+    expect(stubs().closeModals).not.toHaveBeenCalled()
+    expect((document.getElementById('save-role-btn') as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('an older failure neither alerts nor frees a newer opening', async () => {
     let release: (v: unknown) => void = () => {}
     stubs().prksLinkPersonFromRoleModal = vi.fn(
