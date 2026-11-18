@@ -8,7 +8,7 @@
  * refusal means for the form (which field, which message) stays with the
  * New File submit coordinator.
  */
-import { PrksApiError, prksApiRequest } from './http'
+import { PrksApiError, noteFinalPrksTransportFailure, prksApiRequest } from './http'
 
 /** One Person a new Work is born with. */
 export interface WorkCreateRole {
@@ -88,18 +88,24 @@ export function isInvalidCreateAnswer(error: unknown): boolean {
   return error instanceof PrksApiError && error.code === 'invalid_response'
 }
 
+/**
+ * One mutation outside the Query cache, so nothing retries it: a transport
+ * failure is final here and is reported to the offline runtime at once
+ * (the classic mutation coordinator did the same).
+ */
+async function postOnce(path: string, body: unknown): Promise<unknown> {
+  try {
+    return await prksApiRequest(path, { method: 'POST', body: JSON.stringify(body) })
+  } catch (error) {
+    noteFinalPrksTransportFailure(error)
+    throw error
+  }
+}
+
 export async function createPdfWork(request: PdfWorkCreateRequest): Promise<WorkCreated> {
-  const payload = await prksApiRequest('/api/works', {
-    method: 'POST',
-    body: JSON.stringify(request),
-  })
-  return parseWorkCreated(payload)
+  return parseWorkCreated(await postOnce('/api/works', request))
 }
 
 export async function attachTagToWork(workId: string, tagId: string): Promise<void> {
-  const payload = await prksApiRequest(`/api/works/${encodeURIComponent(workId)}/tags`, {
-    method: 'POST',
-    body: JSON.stringify({ tag_id: tagId }),
-  })
-  parseTagAttached(payload)
+  parseTagAttached(await postOnce(`/api/works/${encodeURIComponent(workId)}/tags`, { tag_id: tagId }))
 }

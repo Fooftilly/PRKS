@@ -94,6 +94,20 @@ describe('Work create client', () => {
     expect(isInvalidCreateAnswer(new TypeError('offline'))).toBe(false)
   })
 
+  it('reports a lost connection to the offline runtime, but not a refusal', async () => {
+    const noted = vi.fn()
+    vi.stubGlobal('prksOfflineNoteRequestFailure', noted)
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))))
+    await expect(createPdfWork(request())).rejects.toBeInstanceOf(TypeError)
+    await expect(attachTagToWork('W-1', 'T-1')).rejects.toBeInstanceOf(TypeError)
+    expect(noted).toHaveBeenCalledTimes(2)
+
+    noted.mockClear()
+    vi.stubGlobal('fetch', vi.fn(async () => answer(404, { error: 'gone', code: 'FOLDER_NOT_FOUND' })))
+    await expect(createPdfWork(request())).rejects.toBeInstanceOf(PrksApiError)
+    expect(noted).not.toHaveBeenCalled()
+  })
+
   it('attaches a tag to the encoded Work path', async () => {
     const fetchMock = vi.fn(async () => answer(200, { status: 'added' }))
     vi.stubGlobal('fetch', fetchMock)
