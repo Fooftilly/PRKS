@@ -121,7 +121,6 @@ export interface NewFileWindow {
   prksFocusedRouteRecord?: () => { name?: string; params?: Record<string, string> } | null
   prksParseRoute?: (hash: string) => { name?: string; params?: Record<string, string> } | null
   // PDF create (plain request) and its cache invalidation
-  prksRequest?: (url: string, init: RequestInit) => Promise<Response>
   prksWaitForPeopleOnServer?: (personIds: string[]) => Promise<boolean>
   prksWorkCreateFailureText?: (errText: string) => string
   prksMarkPlaylistsDomainChanged?: () => void

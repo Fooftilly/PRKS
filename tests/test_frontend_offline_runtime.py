@@ -484,7 +484,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("w.prksMarkPersonGroupsDomainChanged?.()", form[create_at : create_at + 400])
         # ... and only after the PDF create was acknowledged.
         save = _read(_NEW_FILE_SAVE)
-        self.assertLess(save.index("if (!res.ok) {"), save.index("deps.markCreated("))
+        # (a 2xx: the success path, or one whose body cannot be read).
+        self.assertLess(save.index("created = await deps.createPdfWork(payload)"), save.index("deps.markCreated("))
+        # The success-path mark follows the whole catch, so no refusal reaches it.
+        self.assertIn("\n  deps.markCreated({ people: roles.length > 0 })\n\n  const newId", save)
+        self.assertIn("if (isInvalidCreateAnswer(error)) deps.markCreated(", save)
         # Every Person mutation is durable now, so their Group coherence hooks
         # moved to the reconcilers: a deleted Person disappears from the member
         # lists embedded in cached Group details, and that happens when the
@@ -639,7 +643,7 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # Only a YouTube file can join a Playlist when it is created, and that
         # create is durable (CREATE_WORK): the PDF request never asks for one.
         save = _read(_NEW_FILE_SAVE)
-        pdf_payload = save[save.index("const payload = {") :]
+        pdf_payload = save[save.index("const payload: PdfWorkCreateRequest = {") :]
         self.assertIn("playlist_id: '',", pdf_payload[: pdf_payload.index("\n  }\n")])
         self.assertNotIn("Playlists", _read(_NEW_FILE_FORM))
         # The Playlist inline Work rename no longer invalidates anything: a
