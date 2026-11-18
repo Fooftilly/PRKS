@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { PRKS_API_FALLBACK_ERROR, PrksApiError } from '../../../api/http'
-import { parseTagAttached, parseWorkCreated } from '../../../api/works-create'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { attachTagToWork, createPdfWork } from '../../../api/works-create'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 import {
   BAD_DATE,
   BAD_PDF_READ,
@@ -76,28 +79,21 @@ function json(status: number, body: unknown): Response {
 type FakeRequest = (url: string, init: { body: string }) => Promise<Response>
 
 /**
- * The typed create and tag-attach operations over a fake HTTP answer, with
- * prksApiRequest's semantics: a rejected request is a transport TypeError,
- * a non-2xx answer a PrksApiError carrying the envelope's message and code.
+ * The real typed create and tag-attach services, each call answered by a
+ * fake `fetch` built from `request` (a rejection is a lost connection).
  */
 function over(request: FakeRequest): Pick<NewFileSaveDeps, 'createPdfWork' | 'attachTag'> {
-  const call = async (url: string, body: unknown): Promise<unknown> => {
-    let res: Response
-    try {
-      res = await request(url, { body: JSON.stringify(body) })
-    } catch {
-      throw new TypeError('PRKS API request failed.')
-    }
-    const payload = (await res.json().catch(() => null)) as { error?: string; code?: string } | null
-    if (!res.ok) {
-      throw new PrksApiError(payload?.error || PRKS_API_FALLBACK_ERROR, res.status, payload?.code ?? null)
-    }
-    return payload
-  }
+  const answerWith = () =>
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => request(url, { body: String(init.body ?? '') }))
   return {
-    createPdfWork: async (req) => parseWorkCreated(await call('/api/works', req)),
-    attachTag: async (workId, tagId) =>
-      parseTagAttached(await call(`/api/works/${encodeURIComponent(workId)}/tags`, { tag_id: tagId })),
+    createPdfWork: (req) => {
+      answerWith()
+      return createPdfWork(req)
+    },
+    attachTag: (workId, tagId) => {
+      answerWith()
+      return attachTagToWork(workId, tagId)
+    },
   }
 }
 
@@ -359,6 +355,10 @@ describe('saveNewFile', () => {
     expect(gone.status.at(-1)).toBe('Folder not found Nothing was saved.')
     expect(gone.errors).toEqual([['folder', FOLDER_GONE]])
     expect(gone.focused).toEqual(['folder'])
+
+    const bare = recorder(over(async () => new Response('', { status: 400 })))
+    await saveNewFile(bare.deps)
+    expect(bare.status.at(-1)).toBe('Could not create the file. Nothing was saved.')
 
     const unsaved = recorder(
       over(async () => json(409, { error: 'A person on this file has not finished saving yet.', code: 'PERSON_NOT_FOUND' })),

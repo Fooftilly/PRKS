@@ -74,7 +74,7 @@ function asRecord(value: unknown, message: string): Record<string, unknown> {
 
 export function parseWorkCreated(payload: unknown): WorkCreated {
   const record = asRecord(payload, CREATE_ERROR)
-  if (typeof record.id !== 'string' || !record.id) throw invalid(CREATE_ERROR)
+  if (typeof record.id !== 'string' || !record.id.trim()) throw invalid(CREATE_ERROR)
   return { id: record.id }
 }
 

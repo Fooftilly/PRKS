@@ -1,6 +1,6 @@
 import type { DurableWorkFields, RoleLink, VideoMeta } from './runtime'
 import { FOLDER_GONE, FOLDER_NOT_PICKED } from './folder'
-import { PrksApiError } from '../../../api/http'
+import { PRKS_API_FALLBACK_ERROR, PrksApiError } from '../../../api/http'
 import { isInvalidCreateAnswer, type PdfWorkCreateRequest, type WorkCreated } from '../../../api/works-create'
 
 export type SourceKind = 'pdf' | 'video'
@@ -351,7 +351,9 @@ async function createWork(deps: NewFileSaveDeps, draft: NewFileDraft): Promise<v
     if (!stillOpening()) return
     // Only a refusal (4xx) proves nothing was created; a server error may
     // come after the row was committed.
-    deps.setStatus(error.status >= 500 ? SERVER_FAILED : deps.failureText(error.message))
+    // A refusal without a PRKS error envelope keeps the form's own wording.
+    const refusal = error.message === PRKS_API_FALLBACK_ERROR ? 'Could not create the file.' : error.message
+    deps.setStatus(error.status >= 500 ? SERVER_FAILED : deps.failureText(refusal))
     if (error.code === 'PERSON_NOT_FOUND') {
       deps.setPeopleError(PERSON_NOT_ON_SERVER)
       return

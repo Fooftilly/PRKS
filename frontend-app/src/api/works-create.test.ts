@@ -53,7 +53,7 @@ function answer(status: number, body: unknown): Response {
 describe('Work create client', () => {
   it('parses the created id exactly', () => {
     expect(parseWorkCreated({ id: 'W-1' })).toEqual({ id: 'W-1' })
-    for (const bad of [null, [], {}, { id: '' }, { id: 7 }]) {
+    for (const bad of [null, [], {}, { id: '' }, { id: '   ' }, { id: 7 }]) {
       expect(() => parseWorkCreated(bad)).toThrow(PrksApiError)
     }
   })

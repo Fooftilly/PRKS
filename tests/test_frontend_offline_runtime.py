@@ -486,6 +486,8 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         save = _read(_NEW_FILE_SAVE)
         # (a 2xx: the success path, or one whose body cannot be read).
         self.assertLess(save.index("created = await deps.createPdfWork(payload)"), save.index("deps.markCreated("))
+        # The success-path mark follows the whole catch, so no refusal reaches it.
+        self.assertIn("\n  deps.markCreated({ people: roles.length > 0 })\n\n  const newId", save)
         self.assertIn("if (isInvalidCreateAnswer(error)) deps.markCreated(", save)
         # Every Person mutation is durable now, so their Group coherence hooks
         # moved to the reconcilers: a deleted Person disappears from the member
