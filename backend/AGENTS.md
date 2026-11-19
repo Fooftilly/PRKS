@@ -82,8 +82,8 @@ through it too, never through raw paths under the root.
 Backup/restore code must never operate on production storage during tests.
 
 Library backup and restore are format 2 on PostgreSQL (`backend/domain/maintenance/`,
-`docs/postgresql-architecture.md` §11.3, §11.4; see the root `AGENTS.md`
-L-B-1 entry). Do not add a library-scoped table without classifying it in
+`docs/postgresql-architecture.md` §11.3, §11.4; read the module docstrings before changing
+them). Do not add a library-scoped table without classifying it in
 `domain/maintenance/tables.py` (`tests/pg/test_backup_tables.py` fails an
 unclassified one), and do not add a persistent component under the root
 without classifying it in the storage inventory (`docs/storage-architecture.md`).
