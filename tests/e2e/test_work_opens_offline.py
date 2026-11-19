@@ -168,7 +168,7 @@ class OfflineWorkOpenTests(unittest.TestCase):
     # Max-register arrival order, never-sent coalescing, multi-Work events,
     # lost-response same-op_id replay, and ENTITY_NOT_FOUND discard are owned
     # by Node `run_work_open_sync_selftest.js` and Python `test_work_open_sync.py`
-    # (see docs/e2e-performance.md, rationalized families).
+    # (see docs/e2e-coverage-maps.md).
 
     def test_without_a_recent_snapshot_nothing_is_fabricated(self):
         """One open event is not a Recent page. The activity is still durable
