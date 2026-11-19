@@ -98,6 +98,12 @@ comparable across the two runs. The new run also reports some requests under
 the newer route families. That is a gap in the labels only; the requests
 themselves succeeded.
 
+One of the 24 `GET /api/research-graph` calls is counted as a 5xx. The server
+log shows a `BrokenPipeError` in `send_json`: the harness navigated away while
+the response was still being written, so the browser closed the connection.
+The same thing happened in a second run. The graph query did not fail. The
+server does count a client disconnect as an unhandled error, though.
+
 ## Harness fixes in this change
 
 The harness no longer ran against current master. Its write requests were
