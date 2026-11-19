@@ -10,39 +10,57 @@ The new run replaced `docs/b5-browser-baselines.md` and
 the harness leaves it alone when it regenerates those two files.
 
 Both runs used Playwright Chromium 153.0.8010.12, headless, at a 1400×900
-viewport, on the same CPU class. Each timing is the harness median of five
-samples, after it drops the warmup. These numbers come from one machine, so read
-small differences (under about 10%) as noise.
+viewport, on the same CPU class. Each run happened once, on one machine, and
+the harness takes a different number of samples for each scenario. The table
+gives each scenario's sample count, its median and its range (min to max). The
+harness drops a warmup sample before measuring where the table says so.
 
 ## Timings
 
-| Scenario | 59d65a2 (ms) | 02845f1 (ms) | Change |
-| --- | ---: | ---: | ---: |
-| `initialLoad` (duration) | 510 | 544 | +7% |
-| `largeFolderCollection` | 181.3 | 120.3 | -34% |
-| `pdfClose` | 67.9 | 57.4 | -15% |
-| `pdfColdReopenAfterFolders` | 602.3 | 508.8 | -16% |
-| `pdfOpenCold` | 736.4 | 642.9 | -13% |
-| `pdfWarmResume` | 58.8 | 43.3 | -26% |
-| `researchGraphMount` | 123.9 | 73.6 | -41% |
-| `researchNotesMount` | 639.7 | 525.0 | -18% |
-| `routeConcepts` | 37.1 | 32.5 | -12% |
-| `routeFolderDetail` | 70.5 | 71.0 | +1% |
-| `routeFolderLibrary` | 81.1 | 60.6 | -25% |
-| `routeGraphChrome` | 97.7 | 33.4 | -66% |
-| `routePeople` | 32.7 | 31.7 | -3% |
-| `routeProgress` | 105.9 | 74.0 | -30% |
-| `routeRecent` | 40.2 | 34.2 | -15% |
-| `searchBatch` | 113.1 | 97.6 | -14% |
-| `secondaryNavWhileSplit` | 52.9 | 51.3 | -3% |
-| `splitOpen` | 141.6 | 127.8 | -10% |
-| `tabSwitch` | 46.4 | 37.8 | -19% |
-| `workAToB` | 609.8 | 538.3 | -12% |
+| Scenario | Samples (warmup dropped) | 59d65a2 median (range), ms | 02845f1 median (range), ms | Change | Ranges overlap? |
+| --- | --- | ---: | ---: | ---: | --- |
+| `initialLoad` | 1 (0) | 510.2 | 544.3 | +7% | n/a (one sample) |
+| `largeFolderCollection` | 5 (1) | 181.3 (165–215) | 120.3 (104–140) | -34% | no |
+| `pdfClose` | 3 (1) | 67.9 (56–74) | 57.4 (49–65) | -15% | yes |
+| `pdfColdReopenAfterFolders` | 3 (0) | 602.3 (585–672) | 508.8 (503–518) | -16% | no |
+| `pdfOpenCold` | 1 (0) | 736.4 | 642.9 | -13% | n/a (one sample) |
+| `pdfWarmResume` | 5 (1) | 58.8 (52–83) | 43.3 (30–60) | -26% | yes |
+| `researchGraphMount` | 5 (1) | 123.9 (94–238) | 73.6 (62–86) | -41% | no |
+| `researchNotesMount` | 3 (1) | 639.7 (620–720) | 525.0 (517–531) | -18% | no |
+| `routeConcepts` | 5 (1) | 37.1 (35–42) | 32.5 (30–33) | -12% | no |
+| `routeFolderDetail` | 5 (1) | 70.5 (67–81) | 71.0 (56–79) | +1% | yes |
+| `routeFolderLibrary` | 5 (1) | 81.1 (58–92) | 60.6 (56–70) | -25% | yes |
+| `routeGraphChrome` | 5 (1) | 97.7 (90–105) | 33.4 (28–49) | -66% | no |
+| `routePeople` | 5 (1) | 32.7 (29–37) | 31.7 (28–44) | -3% | yes |
+| `routeProgress` | 5 (1) | 105.9 (89–346) | 74.0 (70–257) | -30% | yes |
+| `routeRecent` | 5 (1) | 40.2 (35–43) | 34.2 (33–43) | -15% | yes |
+| `searchBatch` | 5 (1) | 113.1 (109–144) | 97.6 (82–102) | -14% | no |
+| `secondaryNavWhileSplit` | 3 (1) | 52.9 (43–55) | 51.3 (46–56) | -3% | yes |
+| `splitOpen` | 1 (0) | 141.6 | 127.8 | -10% | n/a (one sample) |
+| `tabSwitch` | 6 (1) | 46.4 (35–54) | 37.8 (33–40) | -19% | yes |
+| `workAToB` | 6 (0) | 609.8 (550–635) | 538.2 (498–570) | -12% | yes |
 
-No measured scenario got slower beyond noise. Initial load is 34 ms slower,
-which is within run-to-run variation. The navigation transfer size fell from
-95.7 kB to 13.0 kB because `index.html` shrank from 95 kB to 13 kB as markup
-moved into Vue.
+Read the rows by their sample count:
+
+- **One sample** (`initialLoad`, `pdfOpenCold`, `splitOpen`): these are single
+  observations. One run cannot estimate their variance, so they support no
+  conclusion either way. That includes the +34 ms on `initialLoad`.
+- **Three or more samples where the two ranges do not overlap**: every sample
+  in the new run is faster than every sample in the old one. That holds for
+  `largeFolderCollection`, `pdfColdReopenAfterFolders`, `researchGraphMount`,
+  `researchNotesMount`, `routeConcepts`, `routeGraphChrome` and `searchBatch`.
+  Three samples is still thin, so treat the three-sample rows as weaker
+  evidence than the five-sample ones.
+- **Ranges that overlap**: these show no clear change.
+
+Among the scenarios with more than one sample, none shows a slowdown. The only
+higher median is `routeFolderDetail` (+1%), and its ranges overlap. These
+results do not show that the Vue migration is a speedup in general, and the
+one-sample scenarios would need repeated runs before anyone draws a conclusion
+from them.
+
+The `initialLoad` navigation transfer size fell from 95.7 kB to 13.0 kB,
+because `index.html` shrank from 95 kB to 13 kB as markup moved into Vue.
 
 ## Resource lifetimes (10 cycles: folder, Work, graph, Recent)
 
