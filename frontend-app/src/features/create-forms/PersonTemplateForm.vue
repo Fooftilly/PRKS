@@ -11,6 +11,7 @@
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksField from '../../components/PrksField.vue'
 import { focusField } from './keyboard'
 import {
   copyText,
@@ -226,14 +227,17 @@ onBeforeUnmount(() => {
         <li>Keep all values as JSON strings.</li>
         </ul>
     </div>
-    <label :for="TEXTAREA_ID">Profile template</label>
-    <textarea
-      :id="TEXTAREA_ID"
-      ref="textareaEl"
-      v-model="text"
-      class="textarea-sm"
-      placeholder="Use &quot;Reload template from profile&quot; to fill JSON from the open person’s current fields."
-    ></textarea>
+    <PrksField v-slot="{ labelledBy, describedBy }" label="Profile template" :for-id="TEXTAREA_ID">
+      <textarea
+        :id="TEXTAREA_ID"
+        ref="textareaEl"
+        v-model="text"
+        class="textarea-sm"
+        placeholder="Use &quot;Reload template from profile&quot; to fill JSON from the open person’s current fields."
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
+      ></textarea>
+    </PrksField>
     <div class="prks-form-actions prks-form-actions--split form-actions">
       <PrksButton variant="secondary" @click="reload">Reload template from profile</PrksButton>
       <PrksButton variant="primary" :busy="applying" busy-label="Applying…" @click="apply">Apply template</PrksButton>
