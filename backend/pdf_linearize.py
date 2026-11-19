@@ -10,6 +10,11 @@ from backend.performance import span as perf_span
 LOGGER = logging.getLogger("prks.pdf")
 _MISSING_QPDF_WARNED = False
 
+# Linearizing is an optimization: a qpdf that runs longer than this is killed
+# and the upload keeps the source as its working file. qpdf linearizes large
+# ordinary PDFs in seconds; only a pathological input gets near this bound.
+QPDF_TIMEOUT_SECONDS = 120
+
 
 def _env_truthy(name: str) -> bool | None:
     raw = os.environ.get(name)
@@ -56,23 +61,33 @@ def _qpdf(ctx: str) -> tuple[str | None, str]:
     return qpdf, ""
 
 
-def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> bool:
-    """Run ``qpdf --linearize src dst``; False (logged) when qpdf fails."""
-    proc = subprocess.run(
-        [qpdf, "--linearize", src_path, dst_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> str:
+    """Run ``qpdf --linearize src dst``: ``ok``, ``qpdf-failed`` or ``qpdf-timeout`` (logged)."""
+    try:
+        proc = subprocess.run(
+            [qpdf, "--linearize", src_path, dst_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=QPDF_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # subprocess.run has already killed and reaped qpdf.
+        LOGGER.warning(
+            "pdf_linearize_timeout context=%s timeout_seconds=%s",
+            ctx,
+            QPDF_TIMEOUT_SECONDS,
+        )
+        return "qpdf-timeout"
     if proc.returncode != 0:
         LOGGER.warning(
             "pdf_linearize_failed context=%s exit_code=%s",
             ctx,
             proc.returncode,
         )
-        return False
-    return True
+        return "qpdf-failed"
+    return "ok"
 
 
 def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tuple[bool, str]:
@@ -83,7 +98,9 @@ def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tupl
     under a new key through its ``StorageBackend``, which makes it durable,
     so nothing is synced here. Reasons, with (written) in front: (False)
     ``disabled`` / ``missing-qpdf`` / ``missing-file`` / ``qpdf-failed`` /
-    ``error``; (True) ``ok``.
+    ``qpdf-timeout`` / ``error``; (True) ``ok``. A timed-out qpdf is killed
+    after ``QPDF_TIMEOUT_SECONDS``; its partial output is scratch the caller
+    discards.
     """
     with perf_span("pdf_linearize"):
         ctx = safe_log_label(context, fallback="unknown")
@@ -93,8 +110,9 @@ def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tupl
         if not src_path or not os.path.exists(src_path):
             return False, "missing-file"
         try:
-            if not _run_qpdf(qpdf, src_path, dst_path, ctx):
-                return False, "qpdf-failed"
+            outcome = _run_qpdf(qpdf, src_path, dst_path, ctx)
+            if outcome != "ok":
+                return False, outcome
         except Exception as e:
             LOGGER.warning(
                 "pdf_linearize_error context=%s error_type=%s",

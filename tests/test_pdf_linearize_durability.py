@@ -90,6 +90,36 @@ class TestLinearizeToACopy(_LinearizeCase):
         self.assertNotIn(self.pdf_path, text)
         self.assertNotIn("source.pdf", text)
 
+    def test_a_qpdf_that_runs_too_long_is_killed_and_reported_as_a_timeout(self):
+        seen = {}
+
+        def hang(argv, **kwargs):
+            seen.update(kwargs)
+            raise pdf_linearize.subprocess.TimeoutExpired(argv, pdf_linearize.QPDF_TIMEOUT_SECONDS)
+
+        with self.assertLogs("prks.pdf", level=logging.WARNING) as logs:
+            written, reason = self.run_linearize(qpdf=hang)
+
+        self.assertEqual((written, reason), (False, "qpdf-timeout"))
+        self.assertEqual(seen.get("timeout"), pdf_linearize.QPDF_TIMEOUT_SECONDS)
+        self.assertEqual(self.source_bytes(), ORIGINAL)
+        text = "\n".join(logs.output)
+        self.assertIn("pdf_linearize_timeout", text)
+        self.assertIn("context=processing-ingest", text)
+        self.assertNotIn(self.pdf_path, text)
+        self.assertNotIn("/usr/bin/qpdf", text)
+
+    def test_qpdf_always_runs_with_a_timeout(self):
+        seen = {}
+        fake = _fake_qpdf()
+
+        def run(argv, **kwargs):
+            seen.update(kwargs)
+            return fake(argv, **kwargs)
+
+        self.assertEqual(self.run_linearize(qpdf=run), (True, "ok"))
+        self.assertEqual(seen.get("timeout"), pdf_linearize.QPDF_TIMEOUT_SECONDS)
+
     def test_a_qpdf_that_cannot_run_is_reported_as_error_without_a_path(self):
         def boom(argv, **kwargs):
             raise OSError(errno.ENOEXEC, "Exec format error", argv[0])
