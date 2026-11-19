@@ -42,7 +42,16 @@ def _panel_source(name: str) -> str:
 class SettingsCategoryStructureTests(unittest.TestCase):
     def test_shell_is_a_host_and_vue_owns_the_categories(self):
         html = _read(_INDEX)
-        shell = html.split('id="settings-modal"', 1)[1].split('id="prks-restore-confirm-modal"', 1)[0]
+        shell = html.split('id="settings-modal"', 1)[1].split('id="master-add-modal"', 1)[0]
+        # The restore confirmation is a Vue dialog in the modal host (#1036).
+        self.assertNotIn('id="prks-restore-confirm-modal"', html)
+        self.assertNotIn('id="prks-restore-confirm-input"', html)
+        dialogs = _read(os.path.join(_SETTINGS, "SettingsDialogs.vue"))
+        self.assertIn('<ModalDialog id="prks-restore-confirm-modal" title="Replace library?">', dialogs)
+        confirm = _read(os.path.join(_SETTINGS, "RestoreConfirmForm.vue"))
+        self.assertIn('id="prks-restore-confirm-input"', confirm)
+        self.assertIn('id="prks-restore-confirm-submit"', confirm)
+        self.assertNotIn("getElementById('prks-restore-confirm", _read(os.path.join(_SETTINGS, "SettingsBackup.vue")))
         self.assertIn('id="prks-settings-root"', shell)
         self.assertIn("requestModalClose", shell)
         self.assertNotIn('id="prks-settings-tab-general"', shell)
