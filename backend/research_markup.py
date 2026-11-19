@@ -62,10 +62,56 @@ def normalize_concept_key(raw: str) -> str:
     return canonical_concept_name(raw).casefold()
 
 
+class _NextOccurrence:
+    """The first index of ``needle`` at or after ``start``, for a scan whose
+    ``start`` never decreases: each part of the text is searched once, so a
+    note full of unclosed markers stays linear."""
+
+    __slots__ = ("_text", "_needle", "_found")
+
+    def __init__(self, text: str, needle: str) -> None:
+        self._text = text
+        self._needle = needle
+        self._found = -2
+
+    def at_or_after(self, start: int) -> int:
+        if self._found == -1 or self._found >= start:
+            return self._found
+        self._found = self._text.find(self._needle, start)
+        return self._found
+
+
+@dataclass(frozen=True)
+class _Scan:
+    text: str
+    live: str
+    close: _NextOccurrence
+    newline: _NextOccurrence
+    dead: _NextOccurrence
+
+
+def _marker_end(scan: _Scan, start: int, inner_start: int) -> Optional[int]:
+    """The end of a legacy or argument marker at ``start``: its first ``]]``,
+    with the whole span on one line and outside code. ``None`` otherwise."""
+    close = scan.close.at_or_after(inner_start)
+    if close < 0:
+        return None
+    end = close + 2
+    newline = scan.newline.at_or_after(start)
+    if 0 <= newline < end:
+        return None
+    dead = scan.dead.at_or_after(start)
+    if 0 <= dead < end:
+        return None
+    return end
+
+
 def parse_research_markup(text: str) -> ResearchMarkup:
     if not text:
         return ResearchMarkup((), ())
     live = _live_mask(text)
+    scan = _Scan(text, live, _NextOccurrence(text, "]]"), _NextOccurrence(text, "\n"),
+                 _NextOccurrence(live, "N"))
     concepts: List[ConceptRef] = []
     arguments: List[ArgumentRef] = []
     n = len(text)
@@ -84,13 +130,13 @@ def parse_research_markup(text: str) -> ResearchMarkup:
                 i = parsed.end
                 continue
         if i + 11 <= n and live[i:i + 11] == "Y" * 11 and text.startswith("[[concept:", i):
-            parsed = _try_concept_ref(text, live, i)
+            parsed = _try_concept_ref(scan, i)
             if parsed is not None:
                 concepts.append(parsed)
                 i = parsed.end
                 continue
         if i + 12 <= n and text.startswith("[[argument:", i):
-            parsed_arg = _try_argument_ref(text, live, i)
+            parsed_arg = _try_argument_ref(scan, i)
             if parsed_arg is not None:
                 arguments.append(parsed_arg)
                 i = parsed_arg.end
@@ -203,19 +249,15 @@ def _span_live(live: str, start: int, end: int) -> bool:
     return live[start:end] == "Y" * (end - start)
 
 
-def _try_concept_ref(text: str, live: str, start: int) -> Optional[ConceptRef]:
+def _try_concept_ref(scan: _Scan, start: int) -> Optional[ConceptRef]:
     # Legacy references remain completely literal. In particular a backslash
     # immediately before a bracket is part of the name, not a new escape.
+    text = scan.text
     inner_start = start + len("[[concept:")
-    close = text.find("]]", inner_start)
-    if close < 0:
+    end = _marker_end(scan, start, inner_start)
+    if end is None:
         return None
-    end = close + 2
-    if not _span_live(live, start, end):
-        return None
-    if "\n" in text[start:end]:
-        return None
-    name = canonical_concept_name(text[inner_start:close])
+    name = canonical_concept_name(text[inner_start:end - 2])
     if not name or len(name) > CONCEPT_REF_MAX:
         return None
     return ConceptRef(start=start, end=end, raw=text[start:end], name=name)
@@ -264,17 +306,13 @@ def _try_encoded_concept_ref(text: str, live: str, start: int) -> Optional[Conce
     return ConceptRef(start=start, end=end, raw=text[start:end], name=name)
 
 
-def _try_argument_ref(text: str, live: str, start: int) -> Optional[ArgumentRef]:
+def _try_argument_ref(scan: _Scan, start: int) -> Optional[ArgumentRef]:
+    text = scan.text
     inner_start = start + len("[[argument:")
-    close = text.find("]]", inner_start)
-    if close < 0:
+    end = _marker_end(scan, start, inner_start)
+    if end is None:
         return None
-    end = close + 2
-    if not _span_live(live, start, end):
-        return None
-    if "\n" in text[start:end]:
-        return None
-    inner = text[inner_start:close]
+    inner = text[inner_start:end - 2]
     pipe = inner.find("|")
     if pipe >= 0:
         id_raw = inner[:pipe].strip()

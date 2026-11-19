@@ -12,16 +12,51 @@
     const ENCODED_CONCEPT_PREFIX = '[[concept-encoded:';
     const ENCODED_CONCEPT_BODY_MAX = CONCEPT_REF_MAX * 12;
     const ENCODED_CONCEPT_BODY_RE = /^(?:[A-Za-z0-9_.!~*'()-]|%[0-9A-Fa-f]{2})+$/;
+    /* What Python's str.split()/str.strip() treat as whitespace, character for
+     * character the class in backend/domain/text_identity.py and
+     * prks.identity_key. JavaScript's \s differs: it adds U+FEFF and leaves
+     * out U+001C..U+001F. */
+    const WHITESPACE = '\t\n\u000b\f\r\u001c\u001d\u001e\u001f \u0085\u00a0\u1680' +
+        '\u2000-\u200a\u2028\u2029\u202f\u205f\u3000';
+    const WHITESPACE_RUN_RE = new RegExp('[' + WHITESPACE + ']+', 'g');
+    const WHITESPACE_EDGES_RE = new RegExp('^[' + WHITESPACE + ']+|[' + WHITESPACE + ']+$', 'g');
+
+    function stripWhitespace(text) {
+        return text.replace(WHITESPACE_EDGES_RE, '');
+    }
 
     function canonicalConceptName(raw) {
-        return String(raw == null ? '' : raw)
+        return stripWhitespace(String(raw == null ? '' : raw)
             .normalize('NFC')
-            .replace(/[\s\u0085]+/g, ' ')
-            .trim();
+            .replace(WHITESPACE_RUN_RE, ' '));
+    }
+
+    /* Two names share a key exactly when Python's str.casefold() (and
+     * prks.identity_key) folds them alike. Upper-then-lower case mapping is
+     * locale-free and matches full case folding on every assigned code point
+     * except two, mapped here: dotless i stays apart from i, and capital
+     * sharp s folds to "ss" like sharp s. tests/test_research_markup_differential.py
+     * checks the equivalence on every code point. */
+    function foldCase(text) {
+        return text.split('\u0131')
+            .map(function (part) { return part.toUpperCase().toLowerCase().replace(/\u00df/g, 'ss'); })
+            .join('\u0131');
     }
 
     function normalizeConceptKey(raw) {
-        return canonicalConceptName(raw).toLocaleLowerCase();
+        return foldCase(canonicalConceptName(raw));
+    }
+
+    /* The first index of `needle` at or after `from`, for a scan whose `from`
+     * never decreases: each part of the text is searched once, so a note of
+     * unclosed markers stays linear. */
+    function nextOccurrence(text, needle) {
+        let found = -2;
+        return function (from) {
+            if (found === -1 || found >= from) return found;
+            found = text.indexOf(needle, from);
+            return found;
+        };
     }
 
     function atLineStart(text, i) {
@@ -130,11 +165,29 @@
         return true;
     }
 
+    /* A legacy or argument marker [start, close + 2): on one line and outside
+     * code. The finders answer in constant time per marker. */
+    function markerSpan(scan, start, innerStart) {
+        const close = scan.close(innerStart);
+        if (close < 0) return null;
+        const end = close + 2;
+        const newline = scan.newline(start);
+        if (newline >= 0 && newline < end) return null;
+        const dead = scan.dead(start);
+        if (dead >= 0 && dead < end) return null;
+        return { close: close, end: end };
+    }
+
     function parseResearchMarkup(text) {
         const out = { conceptRefs: [], argumentRefs: [] };
         if (!text) return out;
         const live = liveMask(text);
         const n = text.length;
+        const scan = {
+            close: nextOccurrence(text, ']]'),
+            newline: nextOccurrence(text, '\n'),
+            dead: nextOccurrence(live, 'N'),
+        };
         let i = 0;
         while (i < n) {
             if (live.charAt(i) !== 'Y') {
@@ -145,7 +198,7 @@
                 i += 3;
                 continue;
             }
-            if (text.indexOf(ENCODED_CONCEPT_PREFIX, i) === i) {
+            if (text.startsWith(ENCODED_CONCEPT_PREFIX, i)) {
                 const parsedEncoded = tryEncodedConcept(text, live, i);
                 if (parsedEncoded) {
                     out.conceptRefs.push(parsedEncoded);
@@ -153,16 +206,16 @@
                     continue;
                 }
             }
-            if (text.indexOf('[[concept:', i) === i) {
-                const parsed = tryConcept(text, live, i);
+            if (text.startsWith('[[concept:', i)) {
+                const parsed = tryConcept(text, scan, i);
                 if (parsed) {
                     out.conceptRefs.push(parsed);
                     i = parsed.end;
                     continue;
                 }
             }
-            if (text.indexOf('[[argument:', i) === i) {
-                const parsed = tryArgument(text, live, i);
+            if (text.startsWith('[[argument:', i)) {
+                const parsed = tryArgument(text, scan, i);
                 if (parsed) {
                     out.argumentRefs.push(parsed);
                     i = parsed.end;
@@ -174,15 +227,14 @@
         return out;
     }
 
-    function tryConcept(text, live, start) {
+    function tryConcept(text, scan, start) {
         /* Legacy markers remain literal, including backslashes immediately
          * before a bracket and doubled backslashes. */
         const innerStart = start + '[[concept:'.length;
-        const close = text.indexOf(']]', innerStart);
-        if (close < 0) return null;
-        const end = close + 2;
-        if (!spanLive(live, start, end)) return null;
-        if (text.slice(start, end).indexOf('\n') >= 0) return null;
+        const span = markerSpan(scan, start, innerStart);
+        if (!span) return null;
+        const close = span.close;
+        const end = span.end;
         const name = canonicalConceptName(text.slice(innerStart, close));
         if (!name || Array.from(name).length > CONCEPT_REF_MAX) return null;
         return { start: start, end: end, raw: text.slice(start, end), name: name };
@@ -211,25 +263,25 @@
             name: name, encoded: true };
     }
 
-    function tryArgument(text, live, start) {
+    function tryArgument(text, scan, start) {
         const innerStart = start + '[[argument:'.length;
-        const close = text.indexOf(']]', innerStart);
-        if (close < 0) return null;
-        const end = close + 2;
-        if (!spanLive(live, start, end)) return null;
-        if (text.slice(start, end).indexOf('\n') >= 0) return null;
+        const span = markerSpan(scan, start, innerStart);
+        if (!span) return null;
+        const close = span.close;
+        const end = span.end;
         const inner = text.slice(innerStart, close);
         const pipe = inner.indexOf('|');
         let idRaw;
         let label = '';
         if (pipe >= 0) {
-            idRaw = inner.slice(0, pipe).trim();
-            label = inner.slice(pipe + 1).trim();
+            idRaw = stripWhitespace(inner.slice(0, pipe));
+            label = stripWhitespace(inner.slice(pipe + 1));
         } else {
-            idRaw = inner.trim();
+            idRaw = stripWhitespace(inner);
         }
         if (!ARGUMENT_ID_RE.test(idRaw)) return null;
-        if (label.length > ARGUMENT_LABEL_MAX) return null;
+        // Code points, as Python counts: an emoji is one character, not two.
+        if (Array.from(label).length > ARGUMENT_LABEL_MAX) return null;
         return {
             start: start,
             end: end,
