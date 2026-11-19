@@ -1,25 +1,13 @@
-# Storage location and Asset storage backends: design (#311)
+# Storage location and Asset storage backends (#311)
 
-**Status: Phase A (contract and foundation) implemented; Phases B–F are
-proposed.** This is the design gate for #311, under the #310 target
-architecture. It settles the storage-location and physical-object contract
-that #60's Asset work consumes. The phases in
-[§13](#13-implementation-phases) become focused implementation issues. How
-Phase A maps onto the code, and the choices it made inside this design's
-latitude, are recorded in [§18](#18-phase-a-implementation-record).
+**Status.** Phase A (root selection, validation, marker, lease) and Phase B
+(managed PDFs and portraits are immutable objects written through
+`StorageBackend`) are implemented; Phases C–F are proposed (§13). The
+Library database is PostgreSQL only and lives outside the data root (§9).
+The audit of the pre-0.8 SQLite-era code this design started from is in the
+file's git history.
 
-**Since PG-C2 (#641)** the Library database is PostgreSQL only: there is no
-`prks_data.db`, SQLite text or research index file, processing inbox or
-format-1 backup under the root any more, and managed PDFs and portraits are
-immutable objects written through `StorageBackend` (Phase B's object
-interface). Sections that describe those SQLite-era components and the
-`server.py` globals they used record the state this design audited.
-
-It follows the shape of [work-identity-model.md](work-identity-model.md): audit
-the code first, then decide. Every claim about current behavior was checked
-against `master` at `6ed603f` (schema version 17), not taken from issue text.
-
-**Ownership split, stated once:**
+**Ownership split:**
 
 - **#60 owns identity and meaning.** It owns the Work, Manifestation and Asset
   entities, Asset IDs, hashes, provenance, lifecycle state, deduplication and
@@ -62,7 +50,7 @@ Contents:
 | --- | --- | --- |
 | S1 | Identity | A physical host path is **never** domain identity. Domain records hold an Asset ID (`AS-…`, #60) and the Asset holds a **storage key**. Only a storage backend turns a key into a physical object. |
 | S2 | Storage key | A storage key is a backend-neutral, relative `(namespace, name)` pair. The name is one validated segment, issued by the storage layer and never built by callers from user input. #60's `assets.storage_locator` and `source_locator` already store the **name** of a key in the managed-object namespace. No migration is needed to adopt this. |
-| S3 | Namespaces | One namespace, `asset-objects`, holds every managed Asset slot, whatever its media type: PDFs today, and web snapshots and attachments later. A namespace is never derived from a mutable domain attribute such as `assets.role`. In layout 1, `LocalFilesystemStorage` maps `asset-objects` to the existing `pdfs/` directory. |
+| S3 | Namespaces | One namespace, `asset-objects`, holds every managed Asset slot, whatever its media type: PDFs now, and web snapshots and attachments later. A namespace is never derived from a mutable domain attribute such as `assets.role`. In layout 1, `LocalFilesystemStorage` maps `asset-objects` to the existing `pdfs/` directory. |
 | S4 | Local backend | `LocalFilesystemStorage` over a user-selected **data root** stays a permanent first-class backend. Object storage is optional and deployment-driven. |
 | S5 | Bootstrap config | The selected root is stored in a **bootstrap configuration file** outside every data root, in the platform configuration directory. It is never stored in a database row inside the library it locates. |
 | S6 | Precedence | CLI `--storage-root`, then `PRKS_STORAGE`, then the bootstrap config file, then the platform default. The first source that is set wins completely, and PRKS reports which one it used. Testing mode never reads the bootstrap file or the platform default. |
@@ -70,118 +58,21 @@ Contents:
 | S8 | Root identity | Every data root carries a small marker file, `prks-root.json`, with a `storage_root_id` and a `layout_version`. The ID identifies the library's file store: it is minted for a new root and **carried** by relocation. PRKS refuses to bind a root whose marker is missing (except when it creates or adopts a root), unreadable, retired, fenced (a relocation source), still staging (a relocation destination), or foreign, unless it can prove how that relocation ended. At most one root per ID is ever bindable. During P1 the source remains the only bindable root. From the P2 fence until the move resolves, none is. After PostgreSQL arrives, the database also records the `storage_root_id` it belongs to. |
 | S9 | Relocation | A move is **fence, copy, verify, commit, activate, retire the source, rebuild, retain**. There is exactly one commit point per move, and where it lives depends on who selects the root. For a config-file root it is the atomic replace of the bootstrap config file (§8.2 P5). For a CLI- or environment-selected root it is the atomic write of `relocation.phase: committed` into the destination marker (§8.7), because there the bootstrap file is not the selector and may be ephemeral. From the fence onward neither end of the move is bindable by any other process. The old library's data is never written; before commit only its marker changes (the fence). It is durably revoked by the fence **before** the destination becomes bindable, and it is never deleted except by a later explicit user action. The first implementation copies; it never renames destructively. |
 | S10 | Env-managed roots | When the CLI or the environment chooses the root, PRKS shows it read-only and offers no in-app move. That deployment is moved by its administrator, through an offline CLI tool. |
-| S11 | Relational store | The data root holds file-backed data. In the SQLite era the database is one canonical component inside it. With PostgreSQL, database placement is connection configuration, and choosing or moving the data root never moves the database. |
+| S11 | Relational store | The data root holds file-backed data only. Database placement is connection configuration, and choosing or moving the data root never moves the database. |
 | S12 | Backend interface | It is small and blob-shaped: exclusive create, atomic replace, open for read, stat, idempotent delete, verify, and list for maintenance only. It is not a repository framework. Absolute paths are available only through a local-only extension that filesystem-specific infrastructure uses. |
 | S13 | Multi-step invariants | The backend guarantees single-operation atomicity. A multi-step invariant, such as reference-check-then-delete or hash compare-and-set, is coordinated above the backend by the catalogue transaction and a **key-scoped lock**. That lock is process-local today and must become cross-process before PRKS runs more than one process. |
-| S14 | Files for Processing | Under PostgreSQL, Files for Processing is a managed upload queue, not a directory (§9.4). Queued PDFs are `asset-objects` keys like Asset bytes. The SQLite processing inbox, its `PRKS_FOR_PROCESSING_DIR` override and every inbox rule below are SQLite-era only. PG-C2 (#641) removed them: `StorageConfig` derives no inbox, `for_processing` is no longer a reserved name in a root, and a set `PRKS_FOR_PROCESSING_DIR` is refused at start (`retired_setting`). |
+| S14 | Files for Processing | Files for Processing is a managed upload queue, not a directory (§9.4). Queued PDFs are `asset-objects` keys like Asset bytes. `for_processing` is not a reserved name in a root, and a set `PRKS_FOR_PROCESSING_DIR` is refused at start (`retired_setting`). |
 
 ---
 
 ## 1. Current-state audit
 
-### 1.1 What exists
-
-`backend/storage/config.py::StorageConfig` is a frozen snapshot, built once by
-`StorageConfig.from_env()` in `prks_app.py`, before `recover_incomplete_restore()`
-and `bind_storage()`. Its fields are `mode`, `configured_root` (the raw
-`PRKS_STORAGE` value), `root`, `db_path`, `pdfs_dir`, `thumbs_dir`,
-`people_dir`, `index_db_path`, `research_index_db_path` and `log_file`.
-Until PG-C2 (#641) it also held `processing_dir` and
-`processing_fallback_allowed` for the SQLite inbox (S14); `from_env()` now
-refuses a set `PRKS_FOR_PROCESSING_DIR`.
-
-`backend/storage/paths.py` derives them:
-
-| Component | With `PRKS_STORAGE=R` | Unset, production | Unset, testing |
-| --- | --- | --- | --- |
-| root | `R` | `<repo>/data` | `<repo>/data_testing` |
-| database | `R/prks_data.db` | `<repo>/data/prks_data.db` | `<repo>/data_testing/prks_data_testing.db` |
-| managed PDFs | `R/pdfs` | `<repo>/data/pdfs` | `<repo>/data_testing/pdfs` |
-| thumbnails | `R/thumbs` | `<repo>/data/thumbs` | `<repo>/data_testing/thumbs` |
-| portraits | `R/people` | `<repo>/data/people` | `<repo>/data_testing/people` |
-| processing inbox (SQLite era; removed in PG-C2, S14) | was `R/for_processing`, or `PRKS_FOR_PROCESSING_DIR` | was `/data/for_processing`, falling back to `<repo>/data/for_processing` | was `<repo>/data_testing/for_processing` |
-| text index | `<root>/prks_text_index.db` | same | same |
-| research index | `<root>/prks_research_index.db` | same | same |
-| error log | `<root>/prks-errors.log`, or `PRKS_LOG_FILE` | same | same |
-| maintenance | `<root>/.prks-maintenance/` (restore staging, rollback, ready backups, restore journal) | same | same |
-
-Rebinding happens in `backend/server.py::bind_storage()`. It publishes the
-config, the DB wrapper, the text and research indexes, and the module globals
-`pdfs_dir` and `thumbs_dir` (`processing_dir` until PG-C2 removed the inbox),
-and it rolls back to the previous binding if publication fails. Restore calls it through `RebindFn` after
-replacing components (`backup_restore.apply_restore`). Tests build roots with
-`StorageConfig.for_testing(root)`.
-
-Backup already classifies every `StorageConfig` path field
-(`backup_storage_inventory()`): canonical `db_path`, `pdfs_dir`, `people_dir`;
-derived `thumbs_dir`, `index_db_path`, `research_index_db_path`; operational
-`log_file`; conditional `processing_dir` (included only when it was under the
-root; removed with the inbox in PG-C2, S14); container `root`, `configured_root`. `backend/AGENTS.md` requires every
-new persistent component to be classified there.
-
-### 1.2 Assumptions: keep, or treat as migration debt
-
-**Storage safety primitives to keep.** Phase A wraps these; it does not
-rewrite them.
-
-| Primitive | Where | Why it stays |
-| --- | --- | --- |
-| Containment with drive-qualified-segment refusal | `paths.resolved_child_path`, `managed_pdf_names.safe_pdf_path_under_dir` | This is the only thing that turns a key name into a path. It becomes the local backend's key-to-path function. |
-| Crash-durable publication | `backend/fs_durability.py`, `atomic_replace_managed_pdf_bytes`, `_exclusive_create_write_and_fsync` | These are the local backend's `replace` and `put_new`. |
-| Exclusive creation of freshly minted names | `store_new_managed_pdf_bytes`, `mint_managed_pdf_filename` | This is the mandatory `put_new` semantics (§10.2). |
-| Cleanup claims that store a **basename, never a path** | `pending_pdf_cleanup`, `work_deletion.py` | They already survive a restore into a different root, and they survive relocation unchanged. |
-| Three-valued reference check, with check and retirement in one transaction | `settle_claim_if_referenced` | This is the pattern §12 generalizes. |
-| A restore journal state machine with a single commit record | `backup_restore.py` | Relocation (§8) reuses its structure and its durability rules. |
-| Resolving the root once per destructive operation | `_resolved_storage_root` | This is the symlink rule in §7.3. |
-| Testing-safety guard | `paths.assert_safe_testing_path` | It stays and applies to every source in §5. |
-| Canonical, derived and operational classification | `backup_storage_inventory` | §4 extends it; it does not replace it. |
-
-**Stable semantics to preserve.** Bytes are durable before the row that
-references them commits. Availability is observed, never canonical: a missing
-file never deletes a row (#60 §9.2). Derived data is rebuilt, never restored.
-Machine-specific deployment settings, `PRKS_STORAGE` included, are not
-portable library state and are not in backups. The `/api/pdfs/<basename>`
-reference form is route-shaped and root-independent.
-
-**SQLite-era implementation details.** These are valid now and are not the
-target.
-
-- The database file sits inside the root, so "move the root" currently means
-  "move the database too". §9 separates the two.
-- The derived indexes are SQLite files in WAL mode (`text_index.py`,
-  `research_index.py`), which need local-filesystem shared-memory semantics.
-- Backup takes its snapshot with `sqlite3.Connection.backup`, and restore
-  replaces the database file with a rename.
-- Connections are per operation, and the process-local `concurrency` gate is
-  the only writer serialization.
-
-**Host paths leaking into state.** These must be fixed.
-
-| Leak | Where | Severity |
-| --- | --- | --- |
-| `processing_files.abs_path TEXT NOT NULL` stores an absolute host path in the **canonical** database | `db_schema.sql`, rewritten after restore by `_rewrite_processing_abs_paths` | This is the only absolute path in canonical state. Relocation would need the same rewrite. The value can be derived from `rel_path` plus the bound inbox, so Phase B makes it derived (§11). |
-| Every module receives absolute directories | the `StorageConfig` fields; the `server.py` globals `pdfs_dir`, `thumbs_dir`, `processing_dir` | This is the leakage §10 stops at the application boundary. |
-| Locks are keyed by the resolved absolute path | `managed_pdf_path_lock` (`_PDF_PATH_LOCKS`) | Rebinding to a new root silently changes lock identity. Phase B keys the lock by storage key. |
-| The text-index fingerprint uses `st_mtime_ns` of the physical file | `text_index._fingerprint` | A copy that does not preserve mtimes forces re-extraction. That is safe, because the index is derived, but relocation should know it will happen (§8.5). |
-
-No `works`, `assets`, annotation or cleanup row stores an absolute path.
-`works.file_path` holds `/api/pdfs/<basename>`, and `assets.storage_locator`
-holds a bare basename. #60 already made the right choice. #311 formalizes it.
-
-**Configuration debt.**
-
-- `parse_configured_root` does not make a relative `PRKS_STORAGE` absolute, so
-  the same setting points at different trees depending on the working
-  directory. Phase A normalizes it once, at resolution time (§7.2).
-- The production fallback is the repository checkout's `data/`. That is fine
-  for development, and wrong as the default for an installed application (§6).
-- `/data/for_processing` is preferred when `PRKS_STORAGE` is unset, and it
-  silently falls back to the repository. That is a Docker-shaped special case
-  inside a non-Docker default. Phase A **kept** it, because Phase A promised
-  identical paths. It was not migrated: the PostgreSQL cutover (PG-C2 #641)
-  removed the inbox altogether (S14, §9.4).
-- Nothing records which library a root belongs to, so nothing can detect a
-  wrong pairing of database and file root (§7.1).
+Retired. It audited the pre-0.8 SQLite-era storage code (database inside
+the root, path-keyed locks, the processing inbox); see git history. The
+primitives it chose to keep (containment, crash-durable publication,
+exclusive create, basename cleanup claims, the three-valued reference
+check, the testing-safety guard and the backup inventory) are described
+where they are used below.
 
 ---
 
@@ -242,7 +133,7 @@ where bytes live.
 | Content hashes | #60 | `ingest_sha256`, `content_sha256`, `content_generation` | These are Asset integrity metadata. The backend may *compute* a hash while writing (§10.2), and #60 decides what to store. |
 | Media type | #60 | `assets.media_type` | The backend may carry a content-type hint for HTTP serving, but it is never authoritative. |
 | Byte size | #60 records it; the backend observes it | `assets.byte_size`; `ObjectInfo.size` | A mismatch is an integrity finding, not an automatic repair. |
-| Original and display filename | #60 | provenance on the Asset (`origin_ref` or a future `original_filename`) | It is **not** derived from the storage key. Today's minted names embed a sanitized original filename for readability. That is a naming convenience, not a place to read the filename from. |
+| Original and display filename | #60 | provenance on the Asset (`origin_ref` or a future `original_filename`) | It is **not** derived from the storage key. Minted names embed a sanitized original filename for readability. That is a naming convenience, not a place to read the filename from. |
 | Provenance (`origin`, `origin_url`, `origin_ref`) | #60 | `assets.*` | |
 | Lifecycle state (`active`, `trashed`) | #60 | `assets.state` | The backend has no lifecycle beyond "the object exists or it does not". |
 | Availability (present or missing) | observed | computed by `stat`, possibly cached as derived state | Never canonical (#60 §9.2). |
@@ -254,7 +145,7 @@ where bytes live.
 
 1. Treat `storage_locator` and `source_locator` as **key names in the
    `asset-objects` namespace**, obtained only from the storage layer's name
-   minting (today `mint_managed_pdf_filename`), never composed by a feature.
+   minting, never composed by a feature.
 2. Serve Asset bytes by Asset ID in the typed API (#60 Slice G, for example
    `/api/assets/{AS-id}/content`). `/api/pdfs/<basename>` stays a legacy
    projection (#60 D10). This keeps browser and offline caches independent of
@@ -285,14 +176,12 @@ needs streaming hash computation at ingest, which `put_new` provides (§10.2).
 | Class | Contents (current and future) | Backed up | Relocated | May be deleted by PRKS |
 | --- | --- | --- | --- | --- |
 | **Canonical file-backed** | managed Asset objects (PDFs now; web snapshots and attachments later), preserved pristine originals (`source_locator`), portrait objects, future user-uploaded portraits, and, under PostgreSQL, PDFs queued in Files for Processing (§9.4) | yes | yes (copied and verified) | only through the Asset or claim lifecycle |
-| **Canonical relational (SQLite era only)** | `prks_data.db`, including `pending_pdf_cleanup`, the sync ledger and `app_settings` | yes | yes | never (except restore) |
 | **Durable operational** | root marker `prks-root.json`; restore and relocation journals under `.prks-maintenance/`; bootstrap config (**outside** the root) | no (the marker is recreated for a restore target, §7.1) | the marker is rewritten, and journals are per-operation | journals are removed only when their operation has completed |
 | **Operational logs** | `prks-errors.log*` | no | no (a new log starts in the new root) | rotation |
-| **User inbox (conditional; SQLite era only)** | `for_processing/`: files the user drops in for import, not yet managed. Removed at the PostgreSQL cutover (S14): a leftover `for_processing/` is the user's, walked like any other entry and not reserved | only when under the root (current rule) | only when under the root | never by storage code |
-| **Derived / rebuildable** | `thumbs/`, `prks_text_index.db*`, `prks_research_index.db*`, future caches and projections | no | no (rebuilt) | at any time |
+| **Derived / rebuildable** | `thumbs/`, future caches and projections | no | no (rebuilt) | at any time |
 | **Temporary / staging** | `.prks-write-*.tmp`, `.linearized_*`, thumbnail temporaries, `.prks-maintenance/restore-staging`, `rollback`, `backup`, relocation staging | no | no | by the owning operation, or by the stale sweep |
 
-**Portraits (`people/`) are canonical, but they are not Assets.** Today they
+**Portraits (`people/`) are canonical, but they are not Assets.** They
 are transcoded caches of a remote `image_url`, and the original remote bytes
 are not kept. They stay canonical for backup because the remote may disappear,
 which is the current inventory's choice. They use their own namespace,
@@ -300,31 +189,20 @@ which is the current inventory's choice. They use their own namespace,
 path-free. If #60 or a later issue turns a portrait into a user-uploaded
 Asset, it moves into `asset-objects`.
 
-**The SQLite processing inbox is not Asset storage.** A watched folder is a
-local-filesystem feature, and import copies bytes out of it through `put_new`
-without adopting an inbox path as a key. It is not carried into PostgreSQL:
-there, Files for Processing is an upload queue whose bytes are managed
-objects from the start (§9.4), so it works the same on a local root and on
-object storage.
-
 **Rule: a derived cache may never become impossible to rebuild because it
 shares a parent directory with canonical data.** Every derived component is
 deletable by name, independently, which `clear_derived_storage` already relies
 on. No canonical object may live inside a derived directory, and no derived
 artifact inside a canonical namespace directory.
 
-### 4.2 Layout 1 (today, formalized)
+### 4.2 Layout 1
 
 ```
 <data root>/
-├── prks-root.json            durable operational   NEW (Phase A): storage_root_id, layout_version
-├── prks_data.db              canonical relational  SQLite era only
+├── prks-root.json            durable operational   storage_root_id, layout_version
 ├── pdfs/                     canonical             namespace asset-objects
 ├── people/                   canonical             namespace portraits
-├── for_processing/           user inbox            SQLite era only; removed in PG-C2 (S14)
 ├── thumbs/                   derived
-├── prks_text_index.db*       derived
-├── prks_research_index.db*   derived
 ├── prks-errors.log*          operational log       may be outside via PRKS_LOG_FILE
 └── .prks-maintenance/        staging + journals    restore-staging/, rollback/, backup/, restore-journal.json,
                                                      relocation/ (NEW, Phase E)
@@ -379,8 +257,7 @@ which is outside every data root:
 
 - **Why a file, not the database.** Requirement: PRKS must be able to start,
   and report a useful error, before it opens the selected root. The database
-  lives inside the root in the SQLite era, and in a separate service with
-  PostgreSQL. Either way it cannot be the place that says where the root is.
+  is a separate service, so it cannot be the place that says where the root is.
   `app_settings` stays for library settings that travel with the library.
 - **Why outside the root.** A config inside the root cannot locate the root,
   and a restore or relocation would carry one machine's path to another.
@@ -457,7 +334,7 @@ Rules:
   choice that is silently ignored at the next start.
 - **Component overrides stay second-class.** `PRKS_LOG_FILE` keeps working as
   a deployment override for a non-canonical component; `PRKS_FOR_PROCESSING_DIR`
-  (SQLite era only) is refused since PG-C2 (S14). No override may place a **canonical** component outside the root.
+  is refused (S14). No override may place a **canonical** component outside the root.
   The existing backup check `canonical_path_outside_root` already refuses that.
 - **Containers.** The image sets `PRKS_STORAGE=/data` and mounts the volume
   there. The container's config directory is ephemeral and is never consulted
@@ -472,8 +349,7 @@ Rules:
   before it creates anything:
   1. any earlier platform-default location;
   2. for a source checkout, `<repo>/data`, which is the only prior **root**
-     default. `/data` is never probed: today it is only a preferred processing
-     *inbox*, and a `/data` library belongs to a container or another
+     default. `/data` is never probed: a `/data` library belongs to a container or another
      deployment unless an operator selects it explicitly.
 
   Each probe accepts either a marker-bearing root or an **unmarked legacy root**
@@ -507,15 +383,15 @@ production library. `run_tests.py` already sets `PRKS_STORAGE` explicitly.
   standard library (environment variables plus `os.path.expanduser`). It needs
   no new dependency, and it is not hardcoded to one OS. An unknown platform
   family uses the XDG rule.
-- **Local, not roaming, on Windows.** A library holds SQLite files and large
-  PDFs, and roaming profiles and folder redirection break both.
+- **Local, not roaming, on Windows.** A library holds large PDFs and
+  durable markers, and roaming profiles and folder redirection break both.
   `%LOCALAPPDATA%` is also where the config lives, because a roaming config
   would carry one machine's local path to another.
 - **Not in Documents or a cloud-sync folder by default.** On Windows,
   Documents is frequently redirected into OneDrive, and on macOS it may be in
-  iCloud Drive. A live SQLite database in a sync client is a known corruption
-  source. A user may still choose such a place deliberately. §7.4 warns them,
-  and in the SQLite era it refuses when detection is certain.
+  iCloud Drive. A sync client rewriting files under a live library is a known
+  corruption source. A user may still choose such a place deliberately; §7.4
+  warns them.
 - **Packaged versus source.** The distribution declares itself. A packaged
   build sets a build-time constant, for example `PRKS_DISTRIBUTION=packaged`
   in a generated module, and a source checkout lacks it. The resolver never
@@ -663,7 +539,7 @@ subset), and before relocation (the full set, against the destination).
 | V6 | **Atomic rename over an existing file within one directory**, and across directories within the root (restore and relocation rely on it). | once | ✓ | error |
 | V7 | **One filesystem.** Every PRKS component directory under the root has the root's `st_dev`, so there are no mount points inside the root. Renames between `.prks-maintenance/` and components must stay atomic. | ✓ | ✓ | error |
 | V8 | **File fsync succeeds.** Directory fsync is best-effort, consistent with `fs_durability`: an unsupported result is recorded and shown, not fatal. | once | ✓ | error for files; diagnostic for directories |
-| V9 | **SQLite-era locking.** The database's filesystem supports the byte-range locks SQLite needs. That filesystem is where the main DB lives now, and where the WAL-mode derived indexes always live. In practice: refuse a filesystem type that is known to be network or FUSE-sync when it can be detected with certainty, and otherwise warn (§7.4). | ✓ (warn) | ✓ | error when certain, else warning |
+| V9 | **Local filesystem semantics.** The root's filesystem provides the locking, exclusive create and rename semantics PRKS relies on. Refuse a filesystem type that is known to be network or FUSE-sync when it can be detected with certainty, and otherwise warn (§7.4). | ✓ (warn) | ✓ | error when certain, else warning |
 | V10 | **Free space.** Report free bytes. For a choice or relocation, require at least (canonical bytes to copy) × 1.1 + 1 GiB of headroom, and warn below a configurable floor on startup. The existing `_free_bytes` probe is reused. | warn | ✓ | error for relocation; warning otherwise |
 | V11 | **Nesting and collision.** The candidate must not equal, contain or be contained by another active PRKS root (walk parents for `prks-root.json`, and do a bounded scan for markers below), the current root (except as the relocation source), the repository checkout when the distribution is **packaged** (a source checkout's declared development default `<repo>/data` is exempt, §6; any other location inside the checkout is refused), the application install directory, a configured backup location, or the filesystem root or the user's home directory itself. It must not **contain** the bootstrap config file. It may sit inside the config directory (the §6 macOS and Windows default). It must not lie inside another root's `.prks-maintenance/`. The candidate's **own** `.prks-maintenance/` is expected, and it is exempt from every containment test here. | ✓ | ✓ | error |
 | V12 | **Testing safety.** `assert_safe_testing_path` when testing, and **the reverse in production**: production never binds `data_testing/`. | ✓ | ✓ | error |
@@ -695,22 +571,17 @@ is cached in the marker, with a re-probe after the device changes.
 "Mounted" does not mean "supported". A root is supported when it passes V4–V9
 and V14. In practice:
 
-- **SQLite era (now).** The root holds the live main database and two WAL-mode
-  derived indexes. SQLite documents that WAL does not work over a network
-  filesystem, and that rollback-journal mode depends on the network
-  filesystem's lock implementation, which is frequently broken. So: a **local
-  disk, an external disk, or a block device mounted locally** (iSCSI, a VM
-  disk) is supported. **NFS and SMB/CIFS roots are not supported for a live
-  library.** PRKS warns when it cannot tell, and refuses when the filesystem
-  type is certain (for example `nfs`, `cifs`, `smbfs` in `/proc/mounts` on
-  Linux, or `f_fstypename` on macOS). Cloud-sync folders are warned about
-  explicitly. A NAS is fine as a **backup destination**.
-- **PostgreSQL era.** The root holds only file objects and derived caches. A
-  network filesystem that passes V5, V6 and V8 (NFSv4 with `O_EXCL` and
-  consistent rename, or SMB3 with durable handles) is supportable for
-  canonical objects, **provided derived SQLite caches can be placed on local
-  disk**. That requires a separate `cache_root` option, deferred to Phase D
-  (§16).
+- The root holds file objects and derived caches only. A **local disk, an
+  external disk, or a block device mounted locally** (iSCSI, a VM disk) is
+  supported. PRKS refuses a root whose filesystem type is certainly a
+  network mount (for example `nfs`, `cifs`, `smbfs` in `/proc/mounts` on
+  Linux, or `f_fstypename` on macOS) and warns when it cannot tell (V9).
+  Cloud-sync folders are warned about explicitly. A NAS is fine as a
+  **backup destination**.
+- A network filesystem that passes V5, V6 and V8 (NFSv4 with `O_EXCL` and
+  consistent rename, or SMB3 with durable handles) could later be supported
+  for canonical objects, with derived caches on local disk through a
+  separate `cache_root` option (Phase D, §16).
 - **Container volumes.** Supported when the volume passes the same checks. A
   Docker bind mount of a local directory does. A named volume on a network
   driver is subject to the rules above.
@@ -837,13 +708,11 @@ revoked by the P2 fence. Crash tests cover each boundary in this sequence.
 | **P9 Retain** | Write config `phase: "retained"`, and keep `from` for diagnostics. Like every config write it is a guarded compare-and-set (§5.1): it expects `(local_root = to, this relocation_id, committed or source_retired)`, and it is a no-op if anything else has since been recorded. It does not wait for a P7 that could not reach the old root. | config |
 | **P10 Cleanup** (explicit, later) | Offered only after the new root has completed at least one full start, and recommended after a verified backup. It deletes only PRKS-known components of the retired root (the names in §4.2), never unknown files and never through links, and then the marker. It takes the retired root's `root.lock` and removes it with the §12 **terminal teardown** procedure (the marker is already `retired`), which closes the lock handle before removing the marker and `root.lock`, as Windows requires. **Inbox files are deleted only if an identical copy exists in the destination** (same name and SHA-256). A file that reached the old inbox after P4, or differs from its destination copy, is kept, reported in diagnostics, and offered for import into the new library. **While any such kept file remains, P10 stops short of the teardown's final steps:** it keeps the `retired` marker, `root.lock` and the kept files, releases the lock normally, and writes config `phase: "retained_residuals"` (a guarded compare-and-set expecting `(local_root = to, this relocation_id, retained)`), so diagnostics and the import action can still find the old root and its files. `retained_residuals` is an **unresolved** state: root selection and a new move refuse while it stands (§5.1), so the record cannot be overwritten. For a CLI- or environment-selected root, whose bootstrap file may be ephemeral, P10 records the same state on the destination marker as `moved_from.residuals: true`, and diagnostics and the offline commands read it from there. Only when every kept file has been imported or explicitly discarded by the user does a P10 rerun complete the teardown and clear the record. Config: `relocation = null`, guarded like every config write (§5.1): it expects `(local_root = to, this relocation_id, retained or retained_residuals)`. | config |
 
-**Inbox steps are SQLite-era only.** The inbox handling in P2 (stopping
-processing scans), P3 and P4 (copying and the stable final pass), P10 (kept
-inbox files), the `retained_residuals` phase and the marker's
-`moved_from.residuals` exist because a SQLite-era root may hold a processing
-inbox that outside writers change. A PostgreSQL root holds no inbox (S14,
-§9.4): queued uploads are ordinary `asset-objects` keys copied and verified
-like any other object, so these steps and states are removed at the cutover.
+**Written for the SQLite-era root.** Relocation (Phase E) is not
+implemented. Under PostgreSQL the root holds no database and no inbox
+(S11, S14), so the database steps of P3 and P4 and the inbox steps (P2 scan
+stop, P10 kept files, `retained_residuals`, `moved_from.residuals`) drop out
+when Phase E is built; queued uploads are ordinary `asset-objects` keys.
 
 **Pre-commit guarantee: the old library's data is never written, and the
 destination is never bindable.** The only write to the old root before commit
@@ -1217,66 +1086,46 @@ copy from its original, so the runbook tells the operator never to start both.
 
 ## 9. PostgreSQL relationship
 
-This follows #310. It does not design the PostgreSQL migration.
-
 ### 9.1 Two locations, one library
 
 ```
                  ┌──────────── one PRKS library ────────────┐
  relational ───► │ database locator (connection config)     │ ◄── deployment layer; never moved by #311
-                 │   SQLite era: <data root>/prks_data.db   │
                  │   PostgreSQL: host/db, local or remote   │
  file-backed ──► │ data root / storage backend              │ ◄── #311: choose, validate, move
                  └──────────────────────────────────────────┘
           paired by storage_root_id (marker ⇄ database record)
 ```
 
-- **SQLite era.** The database is a canonical component of the data root, and
-  moving the root moves it (§8, P3).
-- **PostgreSQL era.** The data root holds no relational data. Choosing, opening
-  or moving the root **never** touches the database. The database stores the
-  `storage_root_id` it expects, as one row of storage-binding metadata, a
-  schema decision for the PostgreSQL migration design. PRKS refuses to start
-  when the two disagree, and offers "this database belongs to root X" as the
-  diagnostic. Relocation carries the ID to the destination (§7.1, P1), so the
-  pairing survives a move without any database write.
-- **Bundled or local PostgreSQL** (desktop packaging, #46): where its data
-  directory lives is a packaging decision. It must **not** be placed inside
-  the PRKS data root by default, because §8 copies files and copying a live
-  PostgreSQL cluster directory is unsafe. A packaging design that wants "one
-  folder holds everything" must bring a PostgreSQL-aware move procedure.
-- The migration SQLite → PostgreSQL is its own design. From #311 it needs one
-  thing: the migrated database records the root's `storage_root_id`, and the
-  SQLite file becomes a retired, non-canonical leftover in the root.
+- The data root holds no relational data. Choosing, opening or moving the
+  root **never** touches the database. The database stores the
+  `storage_root_id` it expects (`docs/postgresql-architecture.md` §11.1),
+  and PRKS refuses to start when the two disagree, naming both. Relocation
+  carries the ID to the destination (§7.1, P1), so the pairing survives a
+  move without any database write.
+- **Bundled or local PostgreSQL** (desktop packaging, #46): its data
+  directory must **not** be placed inside the PRKS data root by default,
+  because §8 copies files and copying a live PostgreSQL cluster directory is
+  unsafe. A packaging design that wants "one folder holds everything" must
+  bring a PostgreSQL-aware move procedure.
 
 ### 9.2 What the user sees
 
-Settings → Storage presents **two rows under one library heading**, with
-honest verbs:
-
-| Row | SQLite era | PostgreSQL era |
-| --- | --- | --- |
-| Library files | path · free space · Open folder · Move… | same |
-| Library database | "Stored with the library files" (no separate action) | "PostgreSQL · host/db · managed by your deployment" (read-only) |
-
-"Move library…" in the PostgreSQL era says **"Moves files only. The database
-stays where it is."**
+Settings → Storage presents **two rows under one library heading**: "Library
+files" (path · free space · Open folder · Move…) and "Library database"
+("PostgreSQL · host/db · managed by your deployment", read-only). "Move
+library…" says **"Moves files only. The database stays where it is."**
 
 ### 9.3 Backup and restore
 
-A PRKS backup stays **one archive for one library**: a relational snapshot plus
-canonical objects, whatever their locations. The archive format is unchanged
-for SQLite. A PostgreSQL archive format is part of the migration design.
-Restore replaces **both halves together** and then rewrites the pairing
-record to the target root's `storage_root_id`. The UI says this plainly:
-"Restoring replaces this library's database and files." Backups continue to
-exclude deployment configuration: the root path, the database locator and the
-bootstrap file.
+A PRKS backup is **one archive for one library**: a relational snapshot plus
+canonical objects (format 2, `docs/postgresql-architecture.md` §11.4).
+Backups exclude deployment configuration: the root path, the database
+locator and the bootstrap file.
 
 ### 9.4 Files for Processing under PostgreSQL
 
-The processing inbox is not ported (S14). Files for Processing becomes a
-managed upload queue, specified in `docs/postgresql-architecture.md` §11.5:
+Files for Processing is a managed upload queue, specified in `docs/postgresql-architecture.md` §11.5:
 
 - The browser uploads each PDF as a streamed request. The bytes go through
   `put_new` into a fresh `asset-objects` key, durable before the item is
@@ -1322,7 +1171,7 @@ class StorageBackend(Protocol):
     def iter_keys(self, namespace: str) -> Iterator[StorageKey]: ...  # maintenance only
     def list_keys(self, namespace: str, *, after: str | None = None, limit: int) -> list[StorageKey]: ...  # maintenance only
 
-def mint_name(namespace: str, hint: str) -> str: ...   # backend-neutral; today's mint_managed_pdf_filename rules
+def mint_name(namespace: str, hint: str) -> str: ...   # backend-neutral
 ```
 
 That is the whole generic surface. There are no queries, transactions, metadata
@@ -1398,32 +1247,25 @@ dependency before then.
 
 ## 11. Path-sensitive systems
 
-| System | Today | Target | Depends on storage abstraction? |
-| --- | --- | --- | --- |
-| Managed PDF creation (`store_new_managed_pdf_bytes`, `_from_path`) | exclusive create in `pdfs_dir` | `put_new(asset-objects, mint_name(...))` | **Yes** (Phase B) |
-| Managed PDF replacement and COW (`work_pdf_replace`) | sibling temporary + `os.replace`; COW by copy to an exclusive name; lock keyed by absolute path | `replace`; COW = `open_read` + `put_new`; lock keyed by `StorageKey` | **Yes** (Phase B) |
-| Adoption of an existing managed name (`managed_pdf_adoption_guard`) | lock around the create commit | unchanged semantics, key-scoped lock. New features never adopt (#60 §9.3). | **Yes** (Phase B) |
-| Pending PDF cleanup (`work_deletion`) | basename claims, three-valued check, `os.remove` | same claims (key names), `delete`; the retry pass is unchanged | **Yes** (Phase B), no schema change |
-| Linearization (`pdf_linearize`) | `mkstemp` beside the source, `qpdf` on the path | `local_path(key)` for input; output written through `replace` | Uses the **local-only extension** |
-| Materialization (`pdf_materialization`, annotations) | rewrite the working PDF in place | `replace`, with #60's pending-hash order | **Yes** (Phase B, then #60 Slice D) |
-| Backup (`backup_restore`) | walks directories, SQLite backup API, `files/pdfs/*` archive paths | canonical objects enumerated through `iter_keys` per canonical namespace; archive layout **unchanged** | **Yes**, for enumeration (Phase B/C); journal and staging stay filesystem-specific |
-| Restore | stages under `.prks-maintenance`, renames components, `bind_storage` rebind | unchanged for SQLite and the local backend; object-storage restore is a Phase F design item | Stays **filesystem-specific infrastructure** |
-| Processing and import (`db_manager` processing, `for_processing/`) | inbox paths; `processing_files.abs_path` stored | SQLite era: the inbox stays a local directory (filesystem-specific); `abs_path` is derived from `rel_path` at read time, and import copies into `put_new`. PostgreSQL: an upload queue on managed keys with no inbox (§9.4) | SQLite import: **yes**, the inbox: **no**. PostgreSQL queue: **yes** |
-| Thumbnails (`thumbs/`, `derived_cache_publish`, `prune_orphan_pdf_thumbnails`) | derived files keyed by Work ID, page and Asset | stays **derived, local** infrastructure. Rendering reads its input through `local_path(key)`. It moves to `cache/` only if a layout version changes. | Input only |
-| PDF text index (`text_index`) | SQLite WAL in the root; fingerprint = `file_path` hash + size + mtime | stays derived and local. The fingerprint should move to #60's `content_sha256` + `content_generation` when Slice D lands, which removes the mtime dependency. | Input only |
-| Research index | SQLite WAL in the root | derived, local | No |
-| Profile images (`people/`, `person_image`) | cache paths from person ID + URL hash | `portraits` namespace through the backend | **Yes** (Phase B) |
-| Future Web Work snapshots | — | `asset-objects`, one object per slot (§3.3) | **Yes**, from day one |
-| #60 Asset lifecycle (fingerprint pass, Slice D) | — | uses `stat`, `verify`, `open_read`; claims by key name | **Yes** |
-| Health and diagnostics | `managed_pdfs_missing` in backup; logs | a storage status (§11.1) | Reads the resolver and marker, plus `stat` |
+| System | How it reaches bytes |
+| --- | --- |
+| Managed PDF creation, replacement, adoption | `put_new(asset-objects, mint_name(...))` into a new immutable key; the catalogue transaction adopts it under the key-scoped lock (`docs/postgresql-architecture.md` §11.2) |
+| Cleanup claims | key-name claims, three-valued check, `delete` (`backend/domain/objects/lifecycle.py`) |
+| Linearization | `local_path(key)` for input; output written to a new key. Uses the **local-only extension** |
+| Materialization (annotations) | writes a new key and switches the Asset's locator |
+| Backup | objects enumerated per canonical namespace; journal and staging stay filesystem-specific |
+| Restore | writes new immutable keys into the live root; object-storage restore is a Phase F design item |
+| Processing queue | upload into `asset-objects`; import hands the key to the Asset (§9.4) |
+| Thumbnails | derived, local; rendering reads input through `local_path(key)` |
+| PDF text, research index | derived rows in PostgreSQL (`derived` schema); input read through the backend |
+| Portraits | `portraits` namespace through the backend |
+| Future Web Work snapshots | `asset-objects`, one object per slot (§3.3) |
+| Health and diagnostics | a storage status (§11.1) |
 
-**Modules that should remain filesystem-specific infrastructure:**
-`storage/paths.py`, `storage/config.py` and the resolver, `fs_durability`, the
-restore journal and staging, the SQLite-era processing inbox scanner, derived-cache
-publishing, and the two derived SQLite indexes. **Modules that should depend on
-the abstraction:** managed-PDF services, work deletion and cleanup,
-materialization, portrait storage, import, backup enumeration, and every
-future Asset writer.
+**Filesystem-specific infrastructure:** `storage/paths.py`,
+`storage/config.py` and the resolver, `fs_durability`, restore and backup
+staging, and derived-cache publishing. **Everything that reads or writes
+managed bytes** goes through the abstraction.
 
 ### 11.1 Storage status (diagnostics contract)
 
@@ -1453,9 +1295,8 @@ a machine. The server never launches a file manager itself.
 ## 12. Multi-process semantics
 
 #310 requires that correctness not depend on process-local canonical state.
-Today's process-local pieces are the `concurrency` gate,
-`_PDF_PATH_LOCKS`, the `server.py` bound globals, and the index singletons.
-Each is valid for one process. The storage contract states what each
+Under PostgreSQL the key-scoped locks are advisory locks and row locks
+(`docs/postgresql-architecture.md` §7.4, §7.5). The storage contract states what each
 operation needs, without designing job queues or distributed locking:
 
 | Operation | Needs | Provided by |
@@ -1468,10 +1309,11 @@ operation needs, without designing job queues or distributed locking:
 | Restore | exclusive access to everything | the same maintenance mode. It is unchanged for one process. |
 | Rebind | every process sees the same root | Roots change only at restart for multi-process deployments. Hot rebind (`bind_storage`) stays a single-process capability. |
 
-**Until those locks are cross-process, PRKS supports exactly one server process
-per data root.** Phase A enforces this with the **`active_process` lease**, and
-refuses a second process that tries to bind the same root. That also catches
-two PRKS installations accidentally configured with one root.
+**One instance per data root.** Every process of the paired PostgreSQL
+instance (`migrate`, `web`, `worker`, admin commands) takes the root lock
+**shared**; relocation and the offline storage tools take it **exclusive**
+(`docs/postgresql-architecture.md` §7.5). The rest of this section
+describes the exclusive holder.
 
 **The lease is a non-expiring OS lock, not a heartbeat.** It is an exclusive
 advisory lock on `<root>/.prks-maintenance/root.lock`: `fcntl`/`flock` on
@@ -1544,8 +1386,7 @@ terminal marker, which a rerun of the same teardown finishes (`abort`,
 treats as preflight scaffold.
 
 The lock depends on the filesystem honoring advisory locks, which is one of
-the local-filesystem semantics §7.4 already requires for a live SQLite-era
-root. A root whose filesystem cannot provide it, such as a network mount, is
+the local-filesystem semantics §7.4 requires. A root whose filesystem cannot provide it, such as a network mount, is
 refused by §7.4 for the same reason. When a later multi-process deployment
 moves coordination to PostgreSQL, a fencing generation validated at each
 commit may replace the OS lock. That is a Phase F/PostgreSQL design item.
@@ -1554,34 +1395,24 @@ commit may replace the OS lock. That is a Phase F/PostgreSQL design item.
 
 ## 13. Implementation phases
 
-The frontend migration (#230/#290/#302/#303) that originally gated these
-phases has finished, and Phase A is implemented (§18). Each phase leaves `master` deployable with no change in
-behavior unless stated.
+Phases A and B are implemented (§18). Each phase leaves `master` deployable
+with no change in behavior unless stated.
 
 | Phase | Content | Schema? | API/OpenAPI? | UI? | Waits for |
 | --- | --- | --- | --- | --- | --- |
-| **A. Contract and foundation** | The root resolver with §5.2 precedence and `(root, source)`; `--storage-root`; normalization (V1); the platform-default table (§6) behind the distribution flag, so a source checkout still gets `data/`; the bootstrap config reader and its guarded compare-and-set writer (§5.1: config lock, re-read, expected-state check, atomic replace; no UI writes yet); the root marker (adopt on first bind, refuse wrong, retired or foreign roots); startup validation (§7.2, startup subset); the single-process lease; `StorageKey`, `ObjectInfo`, `StorageBackend`, `LocalFilesystemStorage` over the existing primitives, with contract tests shared by any future backend; `backup_storage_inventory` classification of the marker and config (operational, not backed up). The `/data/for_processing` special case is **kept unchanged** (§1.2). **Behavior must be identical for every existing deployment**: the same root is chosen and the same paths are derived, the processing inbox included; the only new files are the marker and the lease file `.prks-maintenance/root.lock`. | no | no | no | nothing (implemented; §18) |
+| **A. Contract and foundation** | The root resolver with §5.2 precedence and `(root, source)`; `--storage-root`; normalization (V1); the platform-default table (§6) behind the distribution flag, so a source checkout still gets `data/`; the bootstrap config reader and its guarded compare-and-set writer (§5.1: config lock, re-read, expected-state check, atomic replace; no UI writes yet); the root marker (adopt on first bind, refuse wrong, retired or foreign roots); startup validation (§7.2, startup subset); the single-process lease; `StorageKey`, `ObjectInfo`, `StorageBackend`, `LocalFilesystemStorage` over the existing primitives, with contract tests shared by any future backend; `backup_storage_inventory` classification of the marker and config (operational, not backed up). **Behavior identical for every existing deployment**: the only new files are the marker and the lease file `.prks-maintenance/root.lock`. | no | no | no | nothing (implemented; §18) |
 | **B. Route managed files through the backend** | Managed PDF create, replace, COW, adoption, cleanup and linearization; portraits; import; backup enumeration; locks keyed by `StorageKey`; `processing_files.abs_path` derived from `rel_path` (the column is left unused). Behavior is preserved and proven by the existing managed-PDF, cleanup and backup tests unchanged. | no (dropping `abs_path` is a later migration) | no | no | A |
 | **C. Asset identity coordination** | #60 Slice D lands on Phase B operations: `assets` locators are authoritative keys; the fingerprint pass uses `stat` and `verify`; the text-index fingerprint moves to `content_sha256`/`content_generation`; Slice G serves `/api/assets/{id}/content`. | #60's migrations | #60's typed API | no | **#60 Slice C/D** and B |
 | **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation, and hot-rebinding under the admission-time relocation mode and rebind barrier (§8.1), with the whole rebind held as one transaction under the config lock, a test that no in-flight read observes a mixed binding, a two-process hot-rebind race test, and a test that opening an existing library leaves its `storage_root_id` unchanged; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes** | A; #46 (packaged default and "Open folder") |
 | **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. Further offline tests cover `abort --to` after a P1-only crash and after unfencing, a P10 test with a post-P4 inbox file that proves the marker and config record survive until that file is imported or discarded, and that `open another library` and a new move are both refused while P10 is stopped on it; an offline variant sets `moved_from.residuals` on a CLI-selected root and proves `storage relocate` refuses and that no marker write drops the flag until the teardown completes, and Windows tests of the §12 terminal teardown for offline `abort`, P10 and one in-app discard path, asserting that the lock is released only after the marker is terminal and that a crash after the release leaves a state a rerun finishes. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
 | **F. Object storage (optional)** | An S3-compatible backend passing the shared contract tests; restore and backup for it; immutable-object mode (§10.4). **Only when a deployment needs it.** | possibly a `storage_backend` column (#60) | config only | no | C, and in practice the PostgreSQL migration (#310) |
 
-**Why A ships before D.** It gives no user-visible feature, but it makes
-today's behavior explicit and testable (precedence, marker, validation) before
-any UI can write the config file. It also protects existing users from the
-unmounted-mount scenario immediately.
-
-**Why E does not wait for #60.** Every canonical reference except
-`processing_files.abs_path` is already root-relative (§1.2), so relocation
-needs only Phase B's fix. It does not need Asset authority.
 
 ---
 
 ## 14. Deferred frontend and API work
 
-None of this is in Phase A. Each item belongs to the phase named in §13
-(mostly D and E); the frontend migration that first deferred them has finished.
+Each item belongs to the phase named in §13 (mostly D and E).
 
 - Every Settings UI: Storage panel, root display, choose, open another
   library, move, retained-copy cleanup, and warnings.
@@ -1589,9 +1420,6 @@ None of this is in Phase A. Each item belongs to the phase named in §13
 - Relocation progress UI and the failed or retained notices.
 - The OpenAPI entries for storage status and commands. They are designed with
   #45 when Phase D starts.
-
-Phase A touches no file under `frontend/` or `frontend-app/`, no Storybook
-story and no OpenAPI document.
 
 ---
 
@@ -1611,17 +1439,13 @@ story and no OpenAPI document.
 | A generic repository or storage framework (metadata maps, ACLs, transactions) | #310 non-goal. The seven operations cover every current and planned caller. |
 | A backend-owned reference counting or locking service | Reference truth is the catalogue. Duplicating it in the backend creates two authorities. |
 | `platformdirs` dependency | Three table rows do not justify a dependency. |
-| Support NFS/SMB for the live SQLite library "if it mounts" | SQLite WAL and locking semantics make it unsafe. It is revisited for the PostgreSQL era (§7.4). |
+| Support NFS/SMB roots "if it mounts" | Locking and rename semantics are unsafe unless proven (§7.4). |
 
 ---
 
 ## 16. Open questions
 
-None of these blocks approving the design or starting Phase A.
-
-1. **The bootstrap file name and location on Linux:** `~/.config/prks/config.json`
-   as proposed, or a PRKS-specific name such as `prks.json`. Cosmetic;
-   decide in Phase A review.
+1. *(Resolved.)* The bootstrap file is `~/.config/prks/config.json` on Linux.
 2. **The `cache_root` option** (derived data on local disk while canonical
    objects sit on a network filesystem): Phase D, or only after PostgreSQL.
 3. **A per-Asset `storage_backend` column:** only if a library ever spans
@@ -1664,29 +1488,25 @@ control through `--storage-root` and `PRKS_STORAGE` (§5.2). A NAS or another
 disk is supported wherever the filesystem provides the semantics PRKS relies
 on, and PRKS says so explicitly instead of assuming (§7.4).
 
-**What is implemented.** Phase A only (§18): runtime root selection,
-validation, marker, lease and the unrouted backend foundation, with no schema,
-API, OpenAPI, frontend, Storybook or dependency change. Phases B–F remain
-proposed.
+**What is implemented.** Phases A and B (§18, §13).
 
 ---
 
 ## 18. Phase A implementation record
 
-**Where it lives.** Phase A adapts the existing owners instead of adding a
-parallel configuration system:
+**Where it lives.**
 
-| Concern | Before Phase A | Phase A |
-| --- | --- | --- |
-| Root selection | `StorageConfig.from_env()` | still the one entry; it asks `storage/resolver.py` (§5.2, V1, §6) and records `root_source` |
-| Path derivation | `storage/paths.py` via `StorageConfig._from_parts` | unchanged |
-| CLI | `prks_app.py` | `--storage-root`; `open_storage()` runs before restore recovery and `bind_storage()` |
-| Bootstrap file | none | `storage/bootstrap_config.py` (reader, `BootstrapConfigStore` compare-and-set, `transaction()` for later multi-step writers) |
-| Marker, validation, lease | none | `storage/root_marker.py`, `storage/root_binding.py`, `storage/preflight.py`, `storage/file_lock.py` |
-| Bind | `server.bind_storage()` | unchanged, plus a guard refusing a root this process has not leased |
-| Backup inventory | `backup_storage_inventory()` | adds `operational_root_entries` (marker, `root.lock`) and `external_operational` (bootstrap file and its lock) |
-| Durability | `fs_durability` | adds `replace_file_atomically()` (sibling temporary, fsync, replace, directory sync) used by the marker and the bootstrap file |
-| Backend boundary | none | `storage/objects.py` with the shared contract suite `tests/storage_backend_contract.py`; **no production operation uses it yet** |
+| Concern | Where |
+| --- | --- |
+| Root selection | `StorageConfig.from_env()` asks `storage/resolver.py` (§5.2, V1, §6) and records `root_source` |
+| Path derivation | `storage/paths.py` |
+| CLI | `prks_app.py --storage-root`; `open_storage()` runs before `bind_storage()` |
+| Bootstrap file | `storage/bootstrap_config.py` (reader, `BootstrapConfigStore` compare-and-set, `transaction()` for multi-step writers) |
+| Marker, validation, lease | `storage/root_marker.py`, `storage/root_binding.py`, `storage/preflight.py`, `storage/file_lock.py` |
+| Bind | `server.bind_storage()`, which refuses a root this process has not leased |
+| Backup inventory | `operational_root_entries` (marker, `root.lock`) and `external_operational` (bootstrap file and its lock) are never backed up |
+| Durability | `fs_durability.replace_file_atomically()` (sibling temporary, fsync, replace, directory sync) for the marker and the bootstrap file |
+| Backend boundary | `storage/objects.py`, with the shared contract suite `tests/storage_backend_contract.py` |
 
 **Choices made inside the design's latitude.**
 
@@ -1702,7 +1522,7 @@ parallel configuration system:
   (`root_contains_link` for a link) before anything is written, so that
   directory is never marked as a library. Reserved names are the database,
   `.prks-maintenance/`, and every component the bound `StorageConfig` derives
-  directly under the root: `pdfs/`, `thumbs/`, `people/` and the inbox must be
+  directly under the root: `pdfs/`, `thumbs/` and `people/` must be
   plain directories, and the index databases and the log plain files (say
   `pdfs/` beside a file named `thumbs` is refused).
   An empty database file is neither proof nor malformed. Open question 5 stays
@@ -1738,9 +1558,7 @@ parallel configuration system:
   entry re-anchors every root-relative `StorageConfig` path beneath the leased
   `root_real` (`BoundRoot.anchor()`), so retargeting a root link afterwards
   cannot move database, PDF or index I/O to a root whose marker and lease were
-  never checked. `configured_root` keeps the configured spelling. (The
-  development default's repository inbox fallback was derived from the bound
-  root for the same reason until PG-C2 removed the inbox, S14.)
+  never checked. `configured_root` keeps the configured spelling.
 - **V11 install directory.** A packaged build refuses any root inside the
   install directory. A source checkout refuses only the checkout itself or a
   root containing it, so existing self-hosted roots inside a checkout keep
@@ -1764,9 +1582,6 @@ parallel configuration system:
   lives in it), so the V9/V10 and durability warnings raised while opening are
   held and logged, with the path-free `storage_root_bound source=…` summary,
   once logging is set up; a refusal emits them immediately.
-- **Inbox for new sources.** Until PG-C2, a `config_file` or
-  `platform_default` root used `<root>/for_processing` and the development
-  default kept `/data/for_processing` (§1.2). PG-C2 removed the inbox (S14).
 - **Relocation records.** A marker in `fenced`, `staging` or `retired` state,
   or an `active` marker with a relocation role, is refused with the relocation
   ID and peer. A bootstrap `relocation` record with a known phase is parsed and
@@ -1782,12 +1597,7 @@ parallel configuration system:
   handle). A marker replace that meets a sharing violation from a concurrent
   diagnostic reader is retried briefly.
 
-**Deliberately not in Phase A.** Routing any managed-file operation through
-`StorageBackend`, key-scoped locks, and a derived `processing_files.abs_path`
-(Phase B); storage status, choose, open another library, hot rebind,
-`unbind_storage()`, the Settings writer and the typed API (Phase D); every
-relocation step, recovery, `storage relocate/finalize/abort/verify` and terminal
-teardown (Phase E). Probing earlier default locations (§5.2) has nothing to
-probe yet: a source checkout's only earlier default is its current one, and no
-packaged build has shipped.
-
+**Not yet built.** Storage status, choose, open another library, hot
+rebind, `unbind_storage()`, the Settings writer and the typed API (Phase
+D); every relocation step, recovery, `storage relocate/finalize/abort/verify`
+and terminal teardown (Phase E).
