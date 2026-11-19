@@ -137,6 +137,41 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("window.prksCreateForms.prepareRoleLink(", ui)
         self.assertIn('id="save-role-btn"', (FORMS / "RoleLinkForm.vue").read_text(encoding="utf-8"))
 
+    def test_person_template_body_is_vue(self):
+        """Edit Profile Using Template is the Vue form's (#1036)."""
+        index = INDEX.read_text(encoding="utf-8")
+        shell = index[index.index('<div id="person-template-modal"') : index.index('<div id="role-modal"')]
+        self.assertIn('id="person-template-modal-vue"', shell)
+        for gone in (
+            "applyPersonProfileTemplateFromModal",
+            "insertPersonProfileTemplateFromCurrentData",
+            "copyPersonTemplateGuideText",
+            'id="person-template-json"',
+        ):
+            self.assertNotIn(gone, shell, gone)
+        people = (ROOT / "frontend" / "js" / "components" / "people.js").read_text(encoding="utf-8")
+        for gone in (
+            "function openPersonProfileTemplateModal",
+            "PERSON_TEMPLATE_HELP_TEXT",
+            "parsePersonStandardTemplateJson",
+            "setPersonTemplateFeedback",
+        ):
+            self.assertNotIn(gone, people, gone)
+        # The sidebar still opens it through the global the form installs.
+        self.assertIn('onclick="openPersonProfileTemplateModal()"', people)
+        form = (FORMS / "PersonTemplateForm.vue").read_text(encoding="utf-8")
+        self.assertIn("runtime().openPersonProfileTemplateModal = open", form)
+        self.assertIn('id="person-template-feedback"', form)
+        self.assertIn("fillProfileEditor(parsed.values)", form)
+        # The editor's Save is the only write: no durable call from the dialog.
+        for banned in ("prksSavePersonFieldsDurably", "savePersonProfileDraft", "prksSync"):
+            self.assertNotIn(banned, form, banned)
+        host = (FORMS / "CreateFormsHost.vue").read_text(encoding="utf-8")
+        self.assertIn('<Teleport to="#person-template-modal-vue">', host)
+        ui = UI.read_text(encoding="utf-8")
+        confirm = ui[ui.index("const PRKS_MODAL_UNSAVED_CONFIRM_IDS") : ui.index("]);", ui.index("const PRKS_MODAL_UNSAVED_CONFIRM_IDS"))]
+        self.assertNotIn("person-template-modal", confirm)
+
 
 if __name__ == "__main__":
     unittest.main()
