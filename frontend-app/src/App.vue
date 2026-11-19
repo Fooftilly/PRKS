@@ -7,6 +7,7 @@
   <CommandPalette />
   <ModalHost>
     <CreateFormsHost />
+    <SettingsDialogs />
   </ModalHost>
   <WorkspaceShell />
   <AppChrome />
@@ -15,6 +16,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import AppChrome from './app-shell/AppChrome.vue'
+import SettingsDialogs from './features/settings/SettingsDialogs.vue'
 import SettingsSurface from './features/settings/SettingsSurface.vue'
 import CreateFormsHost from './features/create-forms/CreateFormsHost.vue'
 import CommandPalette from './palette/CommandPalette.vue'
