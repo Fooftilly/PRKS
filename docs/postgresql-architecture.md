@@ -1,71 +1,39 @@
-# PostgreSQL canonical backend for PRKS 1.0: design (#613)
+# PostgreSQL canonical backend for PRKS 1.0
 
-**Implementation status (2026-11-13).** PostgreSQL is the running and only
-Library backend: PG-C1 (#640) made it the web runtime and PG-C2 (#641)
-deleted the SQLite runtime, its schema, migrations, backup format 1 and the
-processing inbox. Text below that describes SQLite code (module names such as
-`db_manager.py` or `backup_restore.py`, format 1, the inbox) records the state
-this design was written against; that code no longer exists. Whether v0.8 is
-complete is decided by the #614 gates, not by this note.
+This is the design of PRKS's relational store. PostgreSQL is the only Library
+backend: the SQLite runtime, its schema, migrations, backup format 1 and the
+processing inbox are deleted (#641). The decisions in [§0](#0-decisions) and
+[§16](#16-maintainer-decisions) are approved (#613, #619); the audit of the
+pre-0.8 SQLite code and the implementation plan this design started from are
+in the file's git history.
 
-**Status: approved design (maintainer review of #619 at `7bb9545`,
-2026-10-12).** This is the design gate that #613 requires before any
-PostgreSQL implementation starts. It adds no code, schema, migration,
-dependency or workflow. The decisions in [§0](#0-decisions) and the answers
-in [§16](#16-maintainer-decisions) are approved. The slices in
-[§15](#15-implementation-sequence) become focused implementation issues once
-this document is merged, in the order and with the ownership boundaries given
-there. Each implementation PR still needs the maintainer's explicit go before
-it starts and before it merges.
+**Release policy.**
 
-**Post-merge corrections (2026-10-13).** Three review findings that arrived
-as #619 merged are corrected in place, without changing an approved
-decision: the root claim, its serialization and the start-generation
-reconcile and token (§11.1, §9.2, §6.2), root-folder uniqueness (§6.5),
-and rebuild and fan-out concurrency for `derived` rows (§8.3, §8.4,
-§8.6). The affected slices' acceptance criteria in §15.3 and
-the tests in §13.3 carry them.
-
-It follows the shape of [work-identity-model.md](work-identity-model.md) and
-[storage-architecture.md](storage-architecture.md): audit the code first, then
-decide. Every claim about current behavior was checked against `master` at
-`71353e0` (schema version 17), not taken from issue text. File references use
-`path:line` at that commit.
-
-**Release policy this design is written against** (maintainer decision, #613,
-#614, #310, 2026-10-12):
-
-- Before **v1.0.0**, backend APIs, database schemas, the database engine and
-  internal implementations may be replaced without compatibility with
-  prerelease versions. There is no SQLite → PostgreSQL upgrade path, no
-  historical migration chain to keep, and no reversible dual-database period
-  to maintain for compatibility's sake.
-- Intended functionality and the important data-safety guarantees are kept
-  while developing. Destructive work runs only against isolated fixtures, and
-  PRKS never silently destroys unknown personal files.
+- Before **v1.0.0**, backend APIs, database schemas and internal
+  implementations may be replaced without compatibility with prerelease
+  versions. There is no SQLite → PostgreSQL upgrade path.
+- Intended functionality and the data-safety guarantees are kept while
+  developing. Destructive work runs only against isolated fixtures, and PRKS
+  never silently destroys unknown personal files.
 - From **v1.0.0**, released library data survives supported upgrades through
   tested forward migrations, and the public API and backup format follow a
   documented versioning policy.
 
-**Ownership, stated once.** This document owns the relational store, the
-persistence and transaction boundary, the PostgreSQL schema, search on
-PostgreSQL, the job/outbox mechanism, the PostgreSQL backup format and the
-Compose deployment. It does not replace the designs it builds on:
+**Ownership.** This document owns the relational store, the persistence and
+transaction boundary, the PostgreSQL schema, search on PostgreSQL, the
+job/outbox mechanism, the PostgreSQL backup format and the Compose
+deployment. It builds on, and does not replace:
 
-- **#60** ([work-identity-model.md](work-identity-model.md)) owns the meaning
-  of Work, Manifestation and Asset. This document only changes *mechanics*
-  that the #60 status note already classifies as SQLite-era implementation
-  choices (§6.4).
-- **#311** ([storage-architecture.md](storage-architecture.md)) owns the data
+- **#60** ([work-identity-model.md](work-identity-model.md)): the meaning of
+  Work, Manifestation and Asset (§6.4 lists the mechanics that differ).
+- **#311** ([storage-architecture.md](storage-architecture.md)): the data
   root, storage keys, the `StorageBackend` boundary, the root marker and
   relocation. This document fills in the PostgreSQL half of its §9 and §12.
-- **#612** owns first-run configuration and the browser onboarding flow. This
-  document supplies the server-side prerequisites it consumes (§9, §12).
-- **#45** owns the versioned API contract and its policy. This document only
-  states what the persistence change requires of it (§9.4, §13).
-- **[local-first-sync.md](local-first-sync.md)** stays the authority for the
-  durable-operation semantics. §10 says which of its server mechanics move and
-  which do not.
+- **#612**: first-run configuration and the browser onboarding flow (§9, §12
+  supply its server-side prerequisites).
+- **#45**: the versioned API contract (§9.4, §13).
+- **[local-first-sync.md](local-first-sync.md)**: durable-operation
+  semantics. §10 says which server mechanics PostgreSQL changes.
 
 Contents:
 
@@ -91,18 +59,18 @@ Contents:
 
 ## 0. Decisions
 
-Each row is an approved decision (2026-10-12). §16 records the maintainer's
-answers to the questions that needed an explicit choice.
+Each row is an approved decision. §16 records the maintainer's answers to
+the questions that needed an explicit choice.
 
 | # | Topic | Decision |
 | --- | --- | --- |
-| PG1 | Engine and version | PostgreSQL **18** is the baseline and the only supported engine from 0.8. CI also runs against 19 once it is released (19 is at Beta 4 on 2026-10-12). Nothing relies on a feature newer than 18. |
+| PG1 | Engine and version | PostgreSQL **18** is the baseline and the only supported engine from 0.8. CI also runs against 19 once it is released. Nothing relies on a feature newer than 18. |
 | PG2 | Clean start | One fresh 0.8 schema. No SQLite → PostgreSQL data migration, no import of pre-0.8 archives, and no dual canonical database at runtime. A root that still holds `prks_data.db` is refused, never modified or deleted (§11.6). |
 | PG3 | Driver | **psycopg 3** (synchronous API) with **psycopg_pool**. No ORM. SQL stays hand-written, in domain modules, with typed row results. |
 | PG4 | Migrations | A small in-repo runner over ordered plain-SQL files, guarded by an advisory lock, with checksums of applied files. Before 1.0 the schema is a directory of per-domain baseline files that may be edited in place; at 1.0 it is frozen into a numbered baseline and only forward migrations follow (§4.4). |
 | PG5 | Boundaries | Domain packages own **commands** (one transaction each, owning revision bumps and side-effect enqueueing) and **queries** (one read snapshot each). HTTP adapters and sync handlers call commands and queries and never see a connection. A static gate keeps psycopg imports inside `backend/db/` and the domain packages (§5). |
 | PG6 | Tenancy | Every library-scoped row carries `library_id`. Child-to-parent foreign keys are composite `(library_id, …)`, so the database refuses a cross-Library reference. Entity IDs stay globally unique (§6.2). |
-| PG7 | IDs | Keep today's prefixed text IDs (`W-<32 hex>` and so on) as the stored and wire identity, with a per-table `CHECK` on the format. Clients keep minting IDs for durable creates (§6.3). |
+| PG7 | IDs | Keep the prefixed text IDs (`W-<32 hex>` and so on) as the stored and wire identity, with a per-table `CHECK` on the format. Clients keep minting IDs for durable creates (§6.3). |
 | PG8 | Work–Manifestation–Asset | Born authoritative. The baseline has no legacy `works` bibliographic or file columns, no mirror views or triggers, no `legacy_inferred_video_urls`, no `migration_quarantine` and no retirement guard. The legacy JSON shape is produced by the projection module only (§6.4). |
 | PG9 | Text identity | One normalization rule (NFC, whitespace collapse, Unicode full case folding) shared by PostgreSQL, Python and TypeScript, proven by shared test vectors. Uniqueness is enforced by unique indexes on stored `*_key` columns (§8.1). |
 | PG10 | Collation | Databases are created with the **builtin** locale provider (`PG_UNICODE_FAST`), so indexes never depend on the host's glibc or ICU version. Natural-language ordering for display uses an explicit ICU collation where it matters (§8.2). |
@@ -117,232 +85,26 @@ answers to the questions that needed an explicit choice.
 | PG19 | Backup | A PRKS-owned logical archive (format 2): a consistent snapshot of the Library's canonical rows in text `COPY` with a typed interchange contract, credential-free attribution identities, and every object the rows reference, verified before publishing. Restore drains writers behind a committed maintenance flag, commits in **one PostgreSQL transaction** that also enqueues its follow-up jobs, and advances a per-Library **epoch** that fences pre-restore jobs, requests and browser outboxes (§11.4). `pg_dump` stays an operator tool for whole-cluster disaster recovery, not the library backup. |
 | PG20 | HTTP server | 0.8 keeps the stdlib HTTP adapter and connects it to a connection pool. Replacing it with a production WSGI/ASGI server is a separate research item that must finish before 1.0 (§4.5). |
 | PG21 | Deployment | Compose runs `postgres:18` (or PRKS's image built from it, only if a PRKS `unaccent` rules file is needed, §8.3), a one-shot `migrate` service, `web` and `worker`. Database data lives in its own named volume, never inside the PRKS data root (§12.3). |
-| PG22 | Transition | Build the PostgreSQL implementation beside the SQLite runtime, family by family, behind the same facade and the same parametrized tests. Switch once, then delete SQLite in the same release (§15). |
+| PG22 | Transition | The PostgreSQL implementation was built beside SQLite family by family, behind parity tests; SQLite was deleted in the release that switched (#641). |
 
 ---
 
 ## 1. Current-state inventory
 
-This section records PRKS as it was when this design was written, before 0.8. It is the baseline the design starts from, not a description of the current code. In particular, every `/api/` route except sign-in now needs a signed-in session (§9.3, `docs/login-security.md`).
+Retired. This section audited the pre-0.8 SQLite backend the design started
+from; that code is deleted. See the file's git history.
 
-### 1.1 Process and request path
-
-- **One process, one root.** `prks_app.py:75-101` runs the dependency gate,
-  parses `StorageConfig`, takes the single-process `root.lock` lease
-  (`open_storage`), recovers an interrupted restore, binds storage, sets up
-  logging and calls `run_server`. The lease is a non-expiring OS lock
-  (`backend/storage/file_lock.py:199-212`).
-- **Thread per connection.** `PRKSThreadingTCPServer(ThreadingMixIn,
-  TCPServer)` (`backend/server.py:3692`) with `daemon_threads`. The handler
-  subclasses `SimpleHTTPRequestHandler` (`server.py:726`).
-- **Routing.** `do_GET` … `do_DELETE` (`server.py:970-1455`) validate Host,
-  validate Origin on `/api/` mutations, read the JSON body, enter the access
-  gate and call one of six `handle_api_<method>` functions, each a long
-  `if/elif` chain on the path. There are roughly 130 routes. Saved Views is the
-  only family extracted into `backend/api/` so far.
-- **No authentication.** No session, cookie or Authorization handling exists.
-  Protection is the loopback default bind, the Host allow-list
-  (`server.py:302-316`, `792-810`, `PRKS_TRUSTED_HOSTS`) and same-origin checks
-  on mutations, which require `http` and reject `https` origins
-  (`server.py:350-360`, `812-827`).
-- **Startup work is synchronous** before `serve_forever`
-  (`server.py:3706-3729`): thumbnail pruning, the pending-PDF-cleanup retry,
-  text-index and research-index reconciliation, staging and backup-job
-  cleanup. There are **no background threads or workers**; processing-inbox
-  scanning is on demand (`GET /api/processing-files?rescan=1`).
-
-### 1.2 Canonical persistence
-
-- **One SQLite file per library** (`storage.db_path`). `LATEST_SCHEMA_VERSION
-  = 17`, with a pre-v10 legacy bridge and eight ordered migrations v10–v17
-  (`backend/db_migrations.py:28`, `3090-3127`). `validate_current_schema`
-  (`db_migrations.py:941-1031`) checks tables, columns, index definitions,
-  foreign keys, FTS columns and, for schema 17, the normalized stored SQL text
-  of every Work-identity object.
-- **Connections per operation, no pool.** `PRKSDatabase.get_connection()`
-  (`backend/db_manager.py:1200-1204`) is `sqlite3.connect` with `Row` rows and
-  `PRAGMA foreign_keys = ON`. The canonical database runs in the default
-  rollback-journal mode with the default 5 s busy timeout. There are about 77
-  connection call sites in `db_manager.py`, 18 in `research_network.py` and
-  single ones in seven other modules.
-- **Writers take `BEGIN IMMEDIATE`** (51 sites: 35 in `db_manager.py`, 12 in
-  `research_network.py`). Multi-statement reads use plain `BEGIN` snapshots
-  (22 sites), but only where callers opted in.
-- **Gravity well.** `db_manager.py` is 5,477 lines and owns settings, Saved
-  Views, the processing inbox, Work create/browse/search/detail, playlists,
-  annotations, wiki links, folders, bulk actions, persons, person groups,
-  roles, tags, publishers and BibTeX. `server.py` (3,742 lines) calls about 100
-  of its methods through a module-global `db` and issues seven raw
-  `execute_query` calls itself.
-- **Sync handlers write SQL directly.** Eighteen `*_sync.py` modules receive the
-  shared connection that `sync_protocol.process_operation` opened inside
-  `BEGIN IMMEDIATE` (`backend/sync_protocol.py:144-189`) and run their own
-  statements, sharing `*_on_conn` helpers with the REST endpoints.
-
-### 1.3 Schema by domain
-
-Every primary key is TEXT except two operational tables. Timestamps are
-`CURRENT_TIMESTAMP` text, and date-like bibliographic fields are free text.
-
-| Domain | Tables | Notable current mechanics |
-| --- | --- | --- |
-| Works and identity | `works`, `manifestations`, `assets`, `manifestation_relations`, `manifestation_identifiers`, `legacy_inferred_video_urls`, `work_retirement`, `work_retirement_guard`, `sync_work_lifecycle`, `migration_quarantine` | `works` is still authoritative for every field. The #60 entities are a trigger-maintained projection (`legacy_work_*_mirror` views, nine mirror triggers and two read-only guards, `backend/db_schema.sql:666-1050`). Pointer ownership is enforced by ten RAISE triggers and a transaction-scoped guard table; 24 triggers in all, three of them for FTS. Research and Private Notes are the `works.text_content` and `works.private_notes` columns. |
-| Annotations | `annotations` | `geometry_json` text. The ID comes from the PDF viewer and is a global primary key. Materialization freshness is a pair of revision columns. |
-| People | `persons`, `roles`, `person_groups`, `person_group_members`, `publishers`, `publisher_aliases` | `persons.aliases` is "JSON array string or comma separated". Role order ties break on `rowid`. |
-| Organization | `folders`, `folder_files`, `tags`, `tag_aliases`, `work_tags`, `folder_tags`, `playlists`, `playlist_items`, `saved_views` | Folder titles are unique per parent through `LOWER(TRIM(title))`. Tag, alias, publisher, group and Saved View names are unique through ASCII-only `COLLATE NOCASE`. |
-| Research network | `concepts`, `concept_aliases`, `concept_parents`, `positions`, `arguments`, `argument_verdicts`, `argument_target_positions`, `argument_target_arguments`, `argument_sources` | Concept matching is the only real Unicode normalization (NFC + `casefold`, `backend/research_markup.py:46-52`), but resolution scans every Concept in Python (`backend/research_network.py:229-245`). |
-| Processing | `processing_files`, `processing_file_roles`, `processing_file_tags` | `abs_path` is the only absolute host path in canonical state; restore rewrites it. |
-| Settings | `app_settings` | Key/value text; some values are JSON. |
-| Sync | `sync_operations`, `sync_entity_revisions`, `sync_tag_lifecycle`, `sync_work_lifecycle` | Ledger never pruned. About 25 revision scope types; composite `scope_id`s are canonical JSON array text. |
-| Operational | `pending_pdf_cleanup`, `schema_version` | Cleanup claims are canonical backup state (`backend/AGENTS.md`). |
-| Derived (same file) | `works_fts` | FTS5 external-content table over `works` with three triggers. |
-| Derived (separate files) | `prks_text_index.db`, `prks_research_index.db` | WAL-mode SQLite files, rebuilt on corruption, excluded from backup. |
-
-### 1.4 SQLite-specific constructs
-
-| Construct | Where (non-test) | PostgreSQL replacement |
-| --- | --- | --- |
-| `BEGIN IMMEDIATE` / plain `BEGIN` snapshots | 51 / 22 sites | Command and query transaction helpers (§7) |
-| `PRAGMA foreign_keys`, `table_info`, `index_xinfo`, `foreign_key_check`, `integrity_check` | migrations, backup, validation | Real constraints always on; catalog-based schema check; `amcheck` only as an operator tool |
-| FTS5 (`works_fts`, `work_text_index_fts`), `MATCH`, `rank`, external-content `'delete'`/`'rebuild'` | `db_schema.sql:251-266`, `text_index.py:415-455` | `tsvector`/`tsquery`, GIN, `ts_rank_cd` (§8.3) |
-| `COLLATE NOCASE`, `LOWER()` equality, `LIKE` (ASCII-only folding) | 23 / many / 12 sites | Stored identity keys and unique indexes; `pg_trgm` for substring (§8) |
-| JSON1 (`json_each`, `json_group_array`, `json_extract` in a trigger) | `work_projection.py:32-60`, `db_manager.py:381`, `db_schema.sql:958-982` | `= ANY(%s)` array parameters; `jsonb_agg`; no JSON in triggers |
-| `GROUP_CONCAT(… ORDER BY …)` | `db_manager.py:344`, `4242`, `4495` | `string_agg(… ORDER BY …)` |
-| `rowid` as order tiebreaker and FTS key | 51 hits | Explicit `order_index` or `created_at, id` ordering; no hidden row identity |
-| `hex(randomblob(16))` IDs in triggers | 7 | Removed with the mirror triggers; IDs come from the application |
-| Row-value `UPDATE … SET (a,b) = (SELECT …)`, `IS NOT` row comparison | mirror triggers | Removed with the mirror triggers |
-| `INSERT … ON CONFLICT DO UPDATE/NOTHING` | ~30 | Same syntax; kept |
-| `sqlite3.IntegrityError` / `OperationalError` string matching | `db_manager.py:1423`, `3415`, `5052`; `person_sync.py:85`; `work_lifecycle_sync.py:253` | SQLSTATE plus constraint name mapped to domain errors in one place (§5.4) |
-| `Connection.backup()`, file renames of `-wal`/`-shm`/`-journal` sidecars | `backup_restore.py:1494-1509`, `2705` | Logical archive and one-transaction restore (§11.4) |
-| Root adoption by SQLite file header | `storage/root_binding.py:497-514` | Database ↔ root pairing record (§11.1) |
-| Seed templates by WAL checkpoint and `copytree` | `tests/e2e/harness.py:333-443` | `CREATE DATABASE … TEMPLATE` (§13.1) |
-
-No custom SQL functions, collations or aggregates are registered, and the code
-never uses `RETURNING`, `lastrowid`, `AUTOINCREMENT`, `ATTACH`, `VACUUM` or
-`user_version`. That keeps the dialect port mechanical everywhere except the
-mirror triggers (which disappear) and FTS (which is redesigned).
-
-### 1.5 Concurrency and process-local state
-
-- **`LibraryAccessGate`** (`backend/concurrency.py:60-186`), a process-local
-  `threading.Condition`, lets reads overlap, **serializes every canonical
-  mutation in the process**, lets backup block mutations but not reads, and
-  makes restore exclusive. Some GETs are classified as mutations because they
-  write caches (`concurrency.py:32-57`).
-- **No retry on `SQLITE_BUSY`.** A lock error becomes a generic 500.
-- **Process-local state that correctness depends on:**
-  - save-confirm tokens `_PRKS_LAST_PDF_SAVE_TOKEN_BY_WORK` and
-    `_PRKS_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK` (`server.py:665-667`), read by
-    `GET /api/works/:id/save-confirm`;
-  - per-Work `_PDF_MATERIALIZATION_LOCKS` (`server.py:668-679`) and per-name
-    `_PDF_PATH_LOCKS` (`backend/services/work_pdf_replace.py:60-77`);
-  - backup staging tokens `_ready_backups` (`backend/backup_restore.py:221-222`);
-  - the bound root and the index singletons (`storage/root_binding.py:208`,
-    `text_index.py:1079`, `research_index.py:532`).
-- `performance.py` is process-local by design and never needed for
-  correctness; it stays per process (§12.4).
-
-### 1.6 Search and derived indexes
-
-- **Library search** (`db_manager.py:2688-2771`) is a union, in order of first
-  appearance with no combined score, of: FTS5 prefix-AND over
-  title/abstract/notes/author text; a LIKE on the primary Manifestation title
-  and abstract; a per-token `LOWER(…) LIKE` fallback; and a substring match on
-  linked people. Author and publisher filters use `LOWER(…) LIKE`.
-- **Case folding is inconsistent.** Python lower-cases the query with Unicode
-  rules, SQLite `LOWER()` and `LIKE` fold ASCII only, and FTS5 uses its
-  default `unicode61` tokenizer (Unicode case folding; diacritics removed only
-  from Latin script). No `tokenize=` option is set anywhere.
-  `tests/test_publisher_catalog_queries.py:95-109` pins the ASCII-only
-  behavior. **No test contains Greek or Cyrillic text.**
-- **PDF text** lives in `prks_text_index.db` (`backend/text_index.py`):
-  PyMuPDF page text capped at 2,000,000 characters, fingerprinted by path
-  hash, size, mtime and extractor version, reconciled at startup and kept in
-  sync inline in request threads (`server.py:1215`, `2820`, `3006`;
-  `work_pdf_replace.py:788`).
-- **Research index** (`prks_research_index.db`) stores Concept and Argument
-  mentions parsed from Research Notes; it is rebuilt when its table set
-  differs.
-
-### 1.7 Backup, restore and storage
-
-- **Archive format 1** (`backup_restore.py:63-127`): a ZIP with
-  `data/prks_data.db` (from `Connection.backup()`), `files/pdfs/`,
-  `files/people/`, optionally `files/for_processing/`, and a manifest with
-  per-file SHA-256. Creation snapshots, checks integrity and foreign keys,
-  archives, self-verifies and only then publishes.
-- **Restore** validates fully before touching live state, then moves
-  components through a durable journal (`prepared → moving_old →
-  installing_new → canonical_installed → committed`) using
-  `backend/fs_durability.py`, rebinds, rebuilds derived state and retries
-  cleanup claims. Crash before `committed` restores the previous library.
-- **Storage Phase A** (#311) is implemented: one resolver, the
-  `prks-root.json` marker with `storage_root_id`, root validation, the
-  single-process lease and an unrouted `StorageBackend` /
-  `LocalFilesystemStorage`. Phase B (routing managed files through the
-  backend) has not started.
-
-### 1.8 Deployment
-
-`Dockerfile` (python:3.12-slim + qpdf) and a one-service
-`docker-compose.yml` with `./data:/data`, loopback publish by default and no
-database service. Runtime dependencies are `PyMuPDF`, `Pillow` and `pydantic`;
-there is no database driver because `sqlite3` is in the standard library.
-`dependency-inventory.json` and the startup dependency gate pin them.
-
-### 1.9 Tests and gates
-
-- 180 top-level unit/API test modules plus 37 E2E modules. 64 construct
-  `PRKSDatabase` directly, 20 import `sqlite3`, 24 apply `db_schema.sql`, 20
-  exercise migrations. Each module builds its own temporary database; there is
-  no shared fixture.
-- Large SQLite-specific suites: `test_db_migrations.py` (1,632 lines),
-  `test_backup_restore.py` (3,604), `test_restore_durability.py` (781),
-  `test_text_index.py` (774), `test_sqlite_connection_lifetime.py`,
-  `test_work_identity.py`.
-- Static gates tied to SQLite: `scripts/check_schema_change.py` (runs the
-  schema in `sqlite3.connect(":memory:")`, SCHEMA-GATE-001…009),
-  `scripts/check_correlated_catalog_counts.py` (motivated by SQLite's
-  per-row subquery execution), and parts of `scripts/check_invariants.py`
-  that parse SQLite identifier quoting.
-- No workflow defines a database service.
-
----
 
 ## 2. Technical limitations of the current backend
 
-These are the reasons for the change. Each one is answered by a section below.
-
-1. **One writer per process, one process per root.** All canonical mutations
-   are serialized by an in-memory gate, and the lease forbids a second
-   process. A worker process, a second API process or a CLI writing while the
-   server runs is impossible by construction (§7, §12).
-2. **Correctness depends on process memory.** Save-confirm tokens, path and
-   materialization locks and backup tokens vanish on restart and cannot be
-   shared (§7.5).
-3. **No users, Libraries or authentication.** The only boundary is "who can
-   reach the loopback port". Ownership and authorization have nowhere to live
-   (§9).
-4. **Unicode identity and search are ASCII-correct only.** Uniqueness of tags,
-   aliases, publishers and groups, and every LIKE path, fold ASCII only. Greek
-   and Cyrillic names that differ only by case are distinct, and searches miss
-   them on the LIKE paths (§8).
-5. **Persistence leaks everywhere.** SQL lives in a 5,477-line manager, in 18
-   sync modules and in the HTTP adapter. Revision bumps and read snapshots are
-   conventions that individual paths forget (discussion #583) (§5, §7).
-6. **The #60 model is a projection, not the authority.** Mirror triggers,
-   guard tables and quarantine exist only to evolve a SQLite schema in place.
-   A clean start can make Manifestations and Assets authoritative at once
-   (§6.4).
-7. **Heavy work runs inline.** PDF text extraction, linearization and
-   reconciliation run in request threads or block startup (§12.1).
-8. **Backup and restore are file-format specific.** They depend on the SQLite
-   backup API, PRAGMA checks and renaming the database file and its sidecars
-   (§11).
-9. **No server deployment story.** No database service, health probes,
-   secrets handling or graceful restart (§12.3).
+Retired with §1. In short: one writer per process, correctness held in
+process memory, no accounts, ASCII-only identity and search, SQL spread
+across the HTTP and sync layers, the #60 model as a trigger projection,
+heavy work inline in requests, file-format-specific backup, and no server
+deployment. Each is answered by a section below.
 
 ---
+
 
 ## 3. Target architecture
 
@@ -386,10 +148,9 @@ thread inside `web` (§12.2). There is no microservice, broker or cache tier.
 
 ### 4.1 PostgreSQL 18
 
-As of 2026-10-12 the supported major versions are 14–18 (18.6 is current,
-end of life November 2030); 19 is at Beta 4. 18 is the baseline because it is
-the newest stable release with the longest support window, and because it
-brings features this design uses directly:
+18 is the baseline because it was the newest stable release with the longest
+support window (end of life November 2030), and because it brings features
+this design uses directly:
 
 | Feature (new in 18 unless noted) | Used for |
 | --- | --- |
@@ -408,8 +169,8 @@ those indexes. The search indexes live in the rebuildable `derived` schema, so
 "rebuild derived" is the supported answer after any major upgrade (§8.6).
 
 Alternatives considered: **17** (no `casefold()`/`PG_UNICODE_FAST`; identity
-keys would need ICU or Python-only folding), and **staying on SQLite** (keeps
-every limitation in §2; #310 already rejected it as the long-term store).
+keys would need ICU or Python-only folding), and **SQLite** (#310 rejected
+it as the long-term store; §2).
 
 ### 4.2 Driver and data access
 
@@ -471,8 +232,8 @@ are specific:
 
 - **Layout.** `backend/db/schema/` holds ordered files. Before 1.0 they are
   per-domain *baseline* files (`010_instance.sql`, `020_identity.sql`,
-  `100_works.sql`, `110_people.sql`, …), each owned by one implementation lane
-  (§15), applied in order to an empty database. They may be edited in place,
+  `100_works.sql`, `110_people.sql`, …), each owned by one family
+  (§15.2), applied in order to an empty database. They may be edited in place,
   and every fresh test database is rebuilt from them.
 - **At v1.0.0** the baseline is frozen: the files are concatenated into
   `0001_baseline_v1.sql`, the runner records it as applied, and from then on
@@ -496,8 +257,7 @@ are specific:
   catalog (tables, columns, types, constraints, indexes, functions, extensions)
   against a checked-in normalized snapshot `backend/db/schema/snapshot.json`.
   After 1.0 the same test also compares a *migrated* old baseline with a fresh
-  one. This replaces `validate_current_schema`'s SQL-text comparison and the
-  SQLite parts of `check_schema_change.py`.
+  one.
 - **Startup validation** checks only `schema_migrations` and the
   instance/storage pairing; it never introspects every index on every start.
 
@@ -558,7 +318,7 @@ A PRKS-owned PostgreSQL job table (§12.1). Alternatives:
 | Persistence plumbing | `backend/db/` | psycopg, psycopg_pool | pool, transaction helpers, error mapping, migrations, test provisioning |
 | Storage | `backend/storage/` (#311) | stdlib | roots, markers, keys, backends |
 
-Families map to today's modules: `works` (Work, Manifestation, Asset,
+Families: `works` (Work, Manifestation, Asset,
 lifecycle, metadata, source, open state, bulk, BibTeX), `people` (persons,
 roles, groups, publishers), `organization` (tags, folders, playlists),
 `research` (Concepts, Positions, Arguments, notes, graph, wiki links),
@@ -590,8 +350,7 @@ def add_work_tag(ctx: RequestContext, work_id: str, tag_id: str,
   validates, decides against the current revision, writes, advances the
   revisions it touched, enqueues jobs and returns a result. The REST endpoint
   and the durable-operation handler for the same action call **the same
-  command** (direct-endpoint parity, `local-first-sync.md`), which is today's
-  `*_on_conn` sharing made structural.
+  command** (direct-endpoint parity, `local-first-sync.md`).
 - **A query is one snapshot.** `ctx.db.query(ctx)` opens `REPEATABLE READ
   READ ONLY`, so a projection made from several statements can never mix
   pre- and post-write state (discussion #583, class 2).
@@ -602,8 +361,7 @@ def add_work_tag(ctx: RequestContext, work_id: str, tag_id: str,
   RESTRICT`/`NO ACTION`, so the owning command must delete children
   explicitly and advance or tombstone their scopes.
 - **Post-commit side effects** (file deletion, re-extraction, research
-  reindex) are never run inline after commit by the adapter, as
-  `server.py:2645-2681` does today. They are jobs enqueued inside the
+  reindex) are never run inline after commit by the adapter. They are jobs enqueued inside the
   transaction (§12.1), so a crash between commit and side effect cannot lose
   them.
 
@@ -634,30 +392,14 @@ snapshot test.
 
 ### 5.5 Transition facade
 
-During the build-out (§15) the server keeps calling one object, as it calls
-`db` today. A `PostgresLibrary` facade exposes the subset of `PRKSDatabase`
-methods that `server.py` uses, with the same signatures and return shapes,
-and delegates each to domain commands and queries. Each lane adds the methods
-for its family in its own mixin file, so lanes do not edit a shared file. The
-facade is the strangler seam, not the target: after cutover, route families
-move to calling the domain directly under #67, and the facade shrinks to
-nothing.
-
-**Status (PG-C3, #642).** Done. Every route family is a module in
-`backend/api/<family>.py` calling domain commands and queries with the
-served Library's database and the admitted `RequestContext`, which
-`library_command` and `library_query` authorize inside each transaction; no
-actor is bound beside the call. The `backend/pg_facade` package is deleted:
-`backend/library.py` keeps `PostgresLibrary` as the database-plus-storage
-handle the routes hold, and `NotPortedError` (answered 501). A Work's
-Research refs and the Research Graph are
-`backend/domain/research/index_commands.py`; the PDF text rebuild route is
-`search_commands.queue_text_rebuild`. Tests keep the facade's old method
-names, and the old index objects' names, over the same commands
-(`tests/library_adapter.py`, `tests/research_index_adapter.py`,
-`tests/text_index_adapter.py`, with the actor bound by
-`tests/acting_context.py`), so the recorded SQLite parity answers still
-replay.
+Retired (#642). Every route family is a module in `backend/api/<family>.py`
+that calls domain commands and queries with the served Library's database
+and the admitted `RequestContext`; `library_command` and `library_query`
+authorize inside each transaction. `backend/library.py` keeps
+`PostgresLibrary` (the database-plus-storage handle the routes hold) and
+`NotPortedError` (answered 501). Tests keep the old facade method names over
+the same commands (`tests/library_adapter.py`) so recorded parity answers
+still replay.
 
 ---
 
@@ -728,7 +470,7 @@ CREATE TABLE prks.library_memberships (
 );
 
 CREATE TABLE prks.devices (            -- client/sync identity, never authentication
-  id           uuid PRIMARY KEY,       -- today's device_id
+  id           uuid PRIMARY KEY,       -- the browser's device_id
   user_id      text NOT NULL REFERENCES prks.users ON DELETE CASCADE,
   label        text,
   first_seen   timestamptz NOT NULL DEFAULT now(),
@@ -749,7 +491,7 @@ CREATE TABLE prks.sessions (
 );
 ```
 
-The ID prefixes `U`, `LIB`, `IN` are new and unused today. `entity_ids` warns
+The ID prefixes are `U`, `LIB` and `IN`. `entity_ids` warns
 that prefixes are not types, and APIs keep pairing an ID with its type.
 
 **Library scoping rule (PG6).** Every library-scoped table has `library_id
@@ -767,7 +509,7 @@ unaffected.
 
 ### 6.3 IDs (PG7)
 
-The current IDs are 32 upper-case hex characters from a UUID with a type
+IDs are 32 upper-case hex characters from a UUID with a type
 prefix (`backend/entity_ids.py`), minted by the server or by the browser for
 durable creates. They appear in URLs, workspace tabs, IndexedDB rows,
 revision scopes and fixtures.
@@ -787,15 +529,14 @@ revision scopes and fixtures.
 ### 6.4 Work, Manifestation, Asset (PG8)
 
 The #60 model is the schema, with these mechanical changes, all permitted by
-its 2026-09-29 compatibility note and by the clean start:
+its compatibility note and by the clean start:
 
 1. **Authority from the first row.** Bibliographic fields live on
    `manifestations`, file/source fields and annotation revisions on `assets`.
    `works` keeps only Work-owned state (canonical title, abstract, status,
    last opened, citation and primary pointers). There are no legacy columns to
-   mirror. #60 slices C–F collapse into the baseline; the legacy JSON shape is
-   produced by `backend/domain/works/projection.py` (today's
-   `work_projection.py`), which is #60 D10's "maintained compatibility
+   mirror. The legacy JSON shape is produced by
+   `backend/domain/works/projection.py`, #60 D10's "maintained compatibility
    projection" moved out of the schema.
 2. **Pointers are deferred composite foreign keys**, replacing the ten
    pointer, origin and retirement triggers, the retirement marker and its
@@ -856,15 +597,15 @@ is not in the 0.8 schema, and Slice K adds it with its own migration.
 
 `L` = library-scoped (has `library_id` and composite parent FKs).
 
-| Family | Tables | Changes from today |
+| Family | Tables | Notes |
 | --- | --- | --- |
 | Instance and identity | `instance`, `users`, `libraries`, `library_memberships`, `devices`, `sessions`, `bootstrap_tokens`, `login_attempts`, `login_device_tokens` | New |
 | Works | `works` L, `manifestations` L, `assets` L, `manifestation_relations` L, `manifestation_identifiers` L, `work_notes` L, `sync_work_lifecycle` L, `duplicate_decisions` L | §6.4; `manifestation_credit_overrides` arrives with #60 Slice K, after 0.8 |
 | Annotations | `annotations` L | `geometry jsonb`; primary key `(asset_id, id)` because the viewer mints the ID (global uniqueness of a client-minted viewer ID is not something PRKS controls) |
 | People | `persons` L, `person_aliases` L, `roles` L, `person_groups` L, `person_group_members` L, `publishers` L, `publisher_aliases` L | Aliases become rows with keys; `roles` replaces the `rowid` tiebreak with an explicit identity `seq` (`ORDER BY order_index, seq`); publisher names and aliases share one `UNIQUE (library_id, key)` namespace through a `publisher_keys` table (§8.1); group names unique by identity key |
-| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders` identity is `UNIQUE NULLS NOT DISTINCT (library_id, parent_id, title_key)`, so root folders (`parent_id IS NULL`) share one scope as today's `COALESCE(parent_id, '')` index makes them; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) that only code enforces today is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
+| Organization | `tags` L, `tag_aliases` L, `work_tags` L, `folders` L, `folder_files` L, `folder_tags` L, `playlists` L, `playlist_items` L, `saved_views` L, `sync_tag_lifecycle` L | `folders` identity is `UNIQUE NULLS NOT DISTINCT (library_id, parent_id, title_key)`, so root folders (`parent_id IS NULL`) share one scope; `folder_files` stays the scalar Work-to-folder membership table (`work-folder` in `docs/work-identity-model.md`), now with `UNIQUE (library_id, work_id)` so the one-folder-per-Work rule (I8) is a constraint; `playlist_items` keeps one playlist per Work; tag names and aliases share one `UNIQUE (library_id, key)` namespace through a `tag_keys` table (§8.1) |
 | Research | `concepts` L, `concept_aliases` L, `concept_parents` L, `positions` L, `arguments` L, `argument_verdicts` (global seed), `argument_target_positions` L, `argument_target_arguments` L, `argument_sources` L | Concept name and alias keys share one `UNIQUE (library_id, key)` namespace through a `concept_keys` table, replacing the full Python scan |
-| Processing | `processing_items` L, `processing_item_drafts` L, `processing_item_roles` L, `processing_item_tags` L | §11.5: a managed upload queue, not the SQLite inbox. No path column: an item references one `asset-objects` key; the draft, its roles and tags are deleted at import, and the item stays as a lightweight imported marker |
+| Processing | `processing_items` L, `processing_item_drafts` L, `processing_item_roles` L, `processing_item_tags` L | §11.5: a managed upload queue. No path column: an item references one `asset-objects` key; the draft, its roles and tags are deleted at import, and the item stays as a lightweight imported marker |
 | Settings | `library_settings` L, `instance_settings` | Split by scope (#612): which keys are Library-, instance- or account-scoped is decided with #612's configuration inventory |
 | Sync | `entity_revisions` L, `sync_operations` L | §6.6 |
 | Operations | `object_cleanup_claims`, `jobs`, `backup_runs`, `restore_runs`, `restore_run_objects`, `schema_migrations` | §11.3, §11.4, §12.1 |
@@ -977,9 +718,9 @@ UPDATE prks.entity_revisions SET revision = revision + 1, updated_at = now()
  WHERE … RETURNING revision;
 ```
 
-This keeps today's decision table exactly (current/stale/future base, same or
-different value) and the per-scope conflict units. It replaces the global
-`BEGIN IMMEDIATE` serialization with per-scope row locks.
+This keeps the decision table (current/stale/future base, same or
+different value) and the per-scope conflict units. Writers of different scopes
+do not serialize.
 
 ### 7.3 Idempotent operations
 
@@ -993,13 +734,12 @@ RETURNING op_id;
 - If the insert returns a row, this transaction owns the operation. It runs
   the command's body on the same connection and updates the ledger row with
   the terminal result before COMMIT. A rollback removes the claim, so an
-  exception is never ledgered, which is today's rule.
+  exception is never ledgered.
 - If it returns nothing, another transaction owns or owned the `op_id`. The
   unique index makes a concurrent duplicate **wait** until the first commits
   or rolls back. Then the handler reads the stored row: same request hash →
   replay the stored status and body; different hash → 409 `OP_ID_REUSE`.
-- Dependencies (`depends_on`) are checked inside the same transaction, as
-  today.
+- Dependencies (`depends_on`) are checked inside the same transaction.
 - **Ledger before epoch.** An `op_id` already in the ledger replays its stored
   result whatever epoch it carries, because the restored state already
   contains its effect. Only an operation that would be *applied* now is
@@ -1011,15 +751,15 @@ RETURNING op_id;
 
 ### 7.4 Locks
 
-| Need | Today | PostgreSQL |
-| --- | --- | --- |
-| Serialize all mutations | `LibraryAccessGate` | Not needed. Row locks and constraints serialize what conflicts. |
-| Backup must not interleave with deletions of objects it is copying | gate "backup" mode | Shared advisory lock `(library, 'objects')` held by backup; object cleanup takes it exclusively per batch (§11.3). DB consistency comes from the snapshot. |
-| Restore exclusive | gate "restore" mode | Committed `libraries.maintenance = 'restore'` plus the Library maintenance lock: every command takes it shared (try-lock) and re-reads the flag; restore takes it exclusive to drain in-flight writers before its one-transaction commit, which advances `libraries.epoch` to fence everything that started earlier (§11.4) |
-| Reference check + delete of an object | `_PDF_PATH_LOCKS` + one transaction | `pg_advisory_xact_lock(hashtextextended('obj:'||name, 0))` + the same single transaction (`settle_claim_if_referenced`) |
-| Materialization validate → replace → mark | per-Work `threading.Lock` | `SELECT … FROM assets WHERE id = … FOR UPDATE` |
-| Cleanup retry single runner | implicit (one process) | It is an instance job (`objects.cleanup`); one claimed at a time via a unique `singleton_key`, each claim settled under its Library's objects lock |
-| Migrations single runner | implicit | `pg_advisory_lock` (§4.4) |
+| Need | PostgreSQL |
+| --- | --- |
+| Serialize all mutations | Not needed. Row locks and constraints serialize what conflicts. |
+| Backup must not interleave with deletions of objects it is copying | Shared advisory lock `(library, 'objects')` held by backup; object cleanup takes it exclusively per batch (§11.3). DB consistency comes from the snapshot. |
+| Restore exclusive | Committed `libraries.maintenance = 'restore'` plus the Library maintenance lock: every command takes it shared (try-lock) and re-reads the flag; restore takes it exclusive to drain in-flight writers before its one-transaction commit, which advances `libraries.epoch` to fence everything that started earlier (§11.4) |
+| Reference check + delete of an object | `pg_advisory_xact_lock(hashtextextended('obj:'||name, 0))` + the same single transaction (`settle_claim_if_referenced`) |
+| Materialization validate → replace → mark | `SELECT … FROM assets WHERE id = … FOR UPDATE` |
+| Cleanup retry single runner | It is an instance job (`objects.cleanup`); one claimed at a time via a unique `singleton_key`, each claim settled under its Library's objects lock |
+| Migrations single runner | `pg_advisory_lock` (§4.4) |
 
 ### 7.5 Process-local state, item by item (PG13)
 
@@ -1030,7 +770,7 @@ RETURNING op_id;
 | `_PDF_MATERIALIZATION_LOCKS`, `_PDF_PATH_LOCKS` | Row lock and advisory lock (§7.4) |
 | `_ready_backups` tokens | `backup_runs` rows with an opaque download token hash and expiry |
 | Bound root, index singletons | Bound once per process at startup; the database pairing record decides validity (§11.1); no hot rebind across processes (#311 §12) |
-| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The only marker writes made under the shared lock are bootstrap's one-time root claim (serialized by a separate, briefly held exclusive `root.claim` lock) and the start-generation bump and reconcile (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. Interim, until PG-C1 (L-D-1 #630): the Library's content is still the SQLite store under the root, so the `web` process also holds `.prks-maintenance/content.lock` exclusive for its whole run (one `web` per root), never rewrites the marker outside the start check, and binds a new root under the exclusive lease, which it then turns shared. A lone `content.lock` is scaffold, like `root.lock`. |
+| `root.lock` lease | Kept, but its meaning changes from "one process per root" to "one instance per root". Every process of the paired instance (`migrate`, `web`, `worker`, admin commands) takes the OS lock **shared**; relocation and the offline storage tools take it **exclusive**. The only marker writes made under the shared lock are bootstrap's one-time root claim (serialized by a separate, briefly held exclusive `root.claim` lock) and the start-generation bump and reconcile (§11.1). Format-2 restore does not: it writes new immutable keys into the live root while the application runs (§11.4). A process whose database names a different `storage_root_id` is refused before it touches the lock (§11.1). This is the PostgreSQL-era fencing that #311 §12 anticipates. The shared lock cannot tell two databases apart: a copy of the database carries the same `storage_root_id`, so a second instance started from a copy against the same root would pass the pairing check and share the lock. So at most one database ever runs against a root: once a copy (an upgraded cluster, a reloaded dump, a moved volume) has started against it, the database it came from is retired from that root, and the start generation refuses it if it is started there again (§11.1, §12.3, risk R20). Hot rebind stays a single-process capability and is unavailable while another process holds the shared lock. |
 | Performance registry | Stays per process by design, labelled with process role (§12.4) |
 
 ### 7.6 Concurrency tests
@@ -1064,8 +804,7 @@ One function defines when two names are "the same name" for uniqueness:
 identity_key(s) = casefold( collapse_whitespace( trim( NFC(s) ) ) )
 ```
 
-- It matches today's Concept rule (`research_markup.py:46-52`), which is the
-  only place PRKS already handles Unicode, and extends it to tags, tag
+- It is the Concept matching rule, extended to tags, tag
   aliases, publishers and their aliases, person groups, folders (per parent),
   Saved Views, Concepts and their aliases, and login names.
 - It does **not** strip diacritics: "Résumé" and "Resume", or Serbian "ћ" and
@@ -1084,7 +823,7 @@ identity_key(s) = casefold( collapse_whitespace( trim( NFC(s) ) ) )
   Turkish dotted/dotless i, combining sequences, astral characters) is run
   against all three implementations; any difference fails CI. This settles
   discussion #583's third class (normalized-identity drift).
-- **One namespace, one index.** Where today's code treats a name and its
+- **One namespace, one index.** Where PRKS treats a name and its
   aliases as one namespace (a tag alias may not equal another tag's name,
   and the same for publishers and Concepts), separate unique indexes on
   `tags` and `tag_aliases` cannot keep that rule: under READ COMMITTED a
@@ -1094,7 +833,7 @@ identity_key(s) = casefold( collapse_whitespace( trim( NFC(s) ) ) )
   the owning row's ID. Creating, renaming, aliasing or merging writes the
   key rows in the same transaction, and a collision on that index is
   `NAME_TAKEN`.
-- **Immutability check.** Slice PG-2 must prove the function can be
+- **Immutability check.** The schema must keep the function
   `IMMUTABLE` under the database's builtin locale (the 18 docs make
   `casefold` depend on the collation; pinning `pg_unicode_fast` inside the
   function makes it independent of the column's collation). If it cannot, the
@@ -1147,8 +886,8 @@ would otherwise fail the command that saved it. The full text stays in
   the folding check (§8.6) covers both sides.
 - **No stemming.** The library is multilingual (English, Greek, Serbian
   Cyrillic and Latin, German, French, …), Works rarely declare a language,
-  and today's FTS5 does not stem. Prefix matching (`'term':*`) reproduces
-  today's `"tok"*` behavior and covers most inflection needs. Per-language
+  and PRKS never stemmed. Prefix matching (`'term':*`) covers most
+  inflection needs. Per-language
   stemming can be evaluated later per Manifestation `language`.
 - **`unaccent`** folds diacritics in *search only*, so "cevapi" finds
   "ćevapi" and "Σωκράτης" is found by "σωκρατης". The default `unaccent`
@@ -1169,10 +908,9 @@ would otherwise fail the command that saved it. The full text stays in
   dictionary's first use loudly instead of folding with other rules.
 - **Python only splits the query.** It splits on whitespace, `-` and `_`,
   drops empty pieces, and does nothing else: no `.lower()`, no NFC, no
-  `\w` filter. Today's `_prks_search_tokens` lowercases and strips
-  non-word characters in Python before any NFC, and Python's `\w` does not
-  match combining marks, so a decomposed (NFD) "й" became "и" before SQL
-  could recompose it. The tokens are bound as a `text[]` parameter, and
+  `\w` filter (Python's `\w` does not match combining marks, so filtering
+  in Python turned a decomposed "й" into "и" before SQL could recompose
+  it). The tokens are bound as a `text[]` parameter, and
   every Unicode step happens in SQL. The FTS query is
   `to_tsquery('prks.prks_search', (SELECT string_agg(prks.tsquery_prefix(
   casefold(normalize(t, NFC) COLLATE pg_unicode_fast)), ' & ')
@@ -1194,7 +932,7 @@ CREATE TABLE derived.work_search (
   doc        tsvector NOT NULL,      -- title A, people/author text B, abstract C, notes D
   title_norm text NOT NULL,          -- search_norm(title) for trigram matching
   people_norm text NOT NULL,
-  text_norm  text NOT NULL,          -- search_norm(title, author text, abstract, notes): today's LIKE blob
+  text_norm  text NOT NULL,          -- search_norm(title, author text, abstract, notes)
   updated_at timestamptz NOT NULL
 );
 CREATE INDEX work_search_doc  ON derived.work_search USING gin (doc);
@@ -1205,11 +943,11 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
 - Every command that changes an input of a Work's row (its title, author
   text, abstract or notes, or the name of a person linked to it) refreshes
   that row **in the same transaction**, so metadata search is never stale,
-  exactly as the FTS5 triggers behave today. This is the one place where a
+  This is the one place where a
   command writes `derived`. The row is still derived: `prks admin
   rebuild-derived` recomputes it, and restore does not carry it.
 - **One refresh path.** Commands, the rebuild and the repair job all write
-  `work_search` only through `refresh_work_search(work_ids)` (L-S-1), which
+  `work_search` only through `refresh_work_search(work_ids)`, which
   runs these steps in the caller's transaction:
   1. `SELECT … FROM works … FOR KEY SHARE` locks the given Works that
      still exist, in `id` order, and deletes the `work_search` rows of
@@ -1220,8 +958,7 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   4. one `UPDATE … FROM` recomputes them from the canonical tables.
 
   `DELETE_WORK` deletes the `works` row and then that Work's `work_search`
-  row in its transaction (L-S-1 adds this to the delete command, which
-  L-W-1 writes before `work_search` exists). The key-share lock orders
+  row in its transaction. The key-share lock orders
   the two: a delete that starts first makes step 1 wait and then skip
   the Work, and a refresh that locks first makes the delete wait until
   the refresh has committed its row, which the delete then removes. So a refresh whose id list still
@@ -1256,16 +993,15 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   current `content_sha256` is no longer the one it extracted. In the same
   transaction that changes the Asset row, an Asset delete then removes
   that Asset's `asset_text` rows, and a content replace removes its rows
-  for any other `content_sha256` (L-S-1 adds both to L-A-1's paths).
+  for any other `content_sha256`.
   The share lock orders them as in `refresh_work_search` (§8.3): a delete or
   replace that starts first makes the extraction wait and then write
   nothing, and an extraction that locks first commits its row before the
   delete or replace removes it. So a stale extraction never leaves a row
   behind.
-- **Ranking.** Phase 1 (L-S-1) reproduced the SQLite union order for parity
-  (FTS hits, then title/abstract substring, then the per-token fallback,
-  then people). Phase 2 (L-S-2, #638) keeps the same set of found Works and
-  orders them by one score. Each token weighs the best field it matches in,
+- **Ranking** (#638). The found set is the union of FTS hits, the
+  title/abstract substring, the per-token fallback and people; it is ordered
+  by one score. Each token weighs the best field it matches in,
   counted once however often it repeats there, from a title prefix (1.0)
   down to a substring in the infix text (0.15). The score is the mean over
   the tokens, plus a trigram similarity boost of the displayed title
@@ -1277,9 +1013,8 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   They are measured on the synthetic multilingual corpus in
   `tests/pg/search_corpus.py` with `python -m tests.pg.search_ranking`,
   and the order on that corpus is pinned in
-  `tests/pg/search_ranking_baseline.json`. Keyword order is no longer
-  compared with SQLite. Parity covers the found set, and SQLite keeps its
-  own order until PG-C2 removes it.
+  `tests/pg/search_ranking_baseline.json`. Parity with the recorded SQLite
+  answers covers the found set only.
 - **Substring and fuzzy** (`pg_trgm`) replace every `LOWER(…) LIKE` path,
   including author and publisher filters, with Unicode-correct folding via
   `prks.search_norm(s) = ext.unaccent('prks.search_unaccent'::regdictionary,
@@ -1291,11 +1026,11 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   dictionary removes the `search_path` lookup, but both forms of `unaccent`
   are `STABLE`, and the result still depends on the rules files the server
   reads from disk. So `IMMUTABLE` here is a promise PRKS makes, not
-  something PG-2 can derive from the functions it calls. The promise is
+  something the schema can derive from the functions it calls. The promise is
   safe for two reasons. First, the rules are fixed per image. Second,
   nothing indexes the function's output: the `*_norm` columns are plain
   columns that commands and `rebuild-derived` write by calling the same
-  function, never generated columns or expression indexes. PG-2's schema
+  function, never generated columns or expression indexes. The schema
   snapshot test asserts the second point through `pg_depend`: no index
   expression or column default depends on `prks.search_norm`. When the
   rules do change, the folding check in §8.6 rebuilds everything that was
@@ -1303,18 +1038,16 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
 - **Both sides of a substring match are normalized in SQL.** Python never
   folds the query, and every predicate is `<column> LIKE '%' ||
   prks.like_escape(<needle>) || '%' ESCAPE '\'` with the query bound as a
-  parameter. The needle keeps today's two shapes:
+  parameter. The needle has two shapes:
   - **Free-text tokens** (the infix fallback on `text_norm` and the
     primary-Manifestation title and abstract match) use
     `prks.search_token($tok) = regexp_replace(prks.search_norm($tok),
-    '[[:punct:]]+', '', 'g')`, which drops punctuation after folding as
-    today's token cleanup does. A token left empty is skipped. A token
+    '[[:punct:]]+', '', 'g')`, which drops punctuation after folding. A token left empty is skipped. A token
     with punctuation, such as "O'Reilly", is still found through FTS,
     whose parser splits it the same way on both sides.
   - **Whole-string filters** (author and publisher filters, and the linked
     people substring on `people_norm`) use `prks.search_norm` of the whole
-    trimmed string, which keeps punctuation as today's `LOWER(…) LIKE`
-    does. The stored `*_norm` columns keep punctuation too, so "O'Reilly"
+    trimmed string, which keeps punctuation. The stored `*_norm` columns keep punctuation too, so "O'Reilly"
     matches "O'Reilly Media". These paths have no FTS fallback, so
     stripping punctuation on the query side alone would drop such Works.
 
@@ -1322,8 +1055,7 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
   character that folds into one of them stays literal. Python never
   reproduces `unaccent`, so the stored and queried sides cannot drift.
 - **Infix fallback kept.** `doc` matches prefixes only, so it cannot find
-  "state" inside "understatement". Today's per-token fallback
-  (`_search_works_like_tokens`, `backend/db_manager.py:2521`) matches any
+  "state" inside "understatement". The per-token fallback matches any
   infix across the displayed title, author text, abstract (the primary
   Manifestation's when present) and notes. `text_norm` is `search_norm` of
   that same text, and the fallback is the substring predicate above, per
@@ -1335,8 +1067,7 @@ CREATE INDEX work_search_text_trgm ON derived.work_search USING gin (text_norm e
 `derived.concept_mentions`, `derived.argument_mentions` and
 `derived.work_note_state(work_id, content_hash)` move into PostgreSQL
 unchanged in meaning. A Research Note command enqueues `research.reindex_work`
-in its transaction; the ACK no longer waits for the reindex (today it runs
-after commit in the request, `server.py:2645-2681`). The client already treats
+in its transaction; the ACK does not wait for the reindex. The client already treats
 the Research-ACK fence as "Concept/Argument/Graph views may refresh", so it
 waits for the job through the existing `research_refs`/state endpoints, which
 now report `pending` until the job completes. `research.reindex_work`
@@ -1353,8 +1084,7 @@ last reads the latest note, whatever order duplicate jobs run in; the
 until that reindex commits. After the lock it also reads the Work row; if
 the Work no longer exists, it deletes that Work's mention and
 `work_note_state` rows and writes nothing. A Work delete enqueues
-`research.reindex_work` for the Work in its transaction (L-R-1 adds this to
-the delete command), so a reindex always runs after the delete commits and
+`research.reindex_work` for the Work in its transaction, so a reindex always runs after the delete commits and
 removes whatever an earlier reindex of that Work wrote, and any stale job
 that runs later finds the Work gone and writes nothing. The rule "the derived index is never
 authority for destructive mutation" is unchanged.
@@ -1392,7 +1122,7 @@ write:
   its hash changed), storing its last `asset_id` in the job's payload; it
   completes only after those extractions finish. A PDF that cannot be
   extracted (corrupt, encrypted, unreadable) is an outcome, not a failure:
-  its row is written with a failed `status`, as today, and the cursor moves
+  its row is written with a failed `status`, and the cursor moves
   past it. Only a transaction or infrastructure error (a lock timeout, a
   lost connection, an unavailable extractor) fails the rebuild, which
   resumes from the stored cursor. A final transaction deletes `asset_text` rows whose Asset no
@@ -1613,7 +1343,7 @@ authenticated owner of a `ready` instance (§11.4).
   (§6.2), so removing a membership deletes that user's sessions for the
   Library.
 - Every query filters by `ctx.library_id`; composite FKs make it impossible
-  to reach another Library through a join. A test lane creates two Libraries
+  to reach another Library through a join. A test creates two Libraries
   and asserts that no API route returns or mutates the other's data (§13.3).
 - **Row-level security** is not enabled in 0.8. It would duplicate the
   explicit checks, complicate pooling (the Library would have to be set per
@@ -1651,13 +1381,15 @@ authenticated owner of a `ready` instance (§11.4).
 
 ### 10.2 What moves on the server
 
-| Today | PostgreSQL |
-| --- | --- |
-| One `BEGIN IMMEDIATE` around ledger lookup, handler and ledger insert | One command transaction with the `op_id` claim (§7.3) and per-scope row locks (§7.2) |
-| Handlers run raw SQL on a shared SQLite connection | Thin handlers in `backend/sync/handlers/` call the same domain command as the REST route |
-| Post-commit reindex and delete cleanup run in the request after commit | Enqueued jobs in the same transaction (§12.1) |
-| `sqlite3.IntegrityError` string matching | §5.4 mapping |
-| Device IDs unverified | Device bound to the authenticated user; ledger rows carry user and Library |
+- One command transaction with the `op_id` claim (§7.3) and per-scope row
+  locks (§7.2).
+- Thin handlers in `backend/sync/handlers/` call the same domain command as
+  the REST route.
+- Reindex and delete cleanup are jobs enqueued in the same transaction
+  (§12.1).
+- Database errors map through §5.4.
+- A device is bound to the authenticated user; ledger rows carry user and
+  Library.
 
 ### 10.3 Browser store scoping (discussion #551)
 
@@ -1682,7 +1414,7 @@ account's queued intents or recovered drafts to another. Recommendation:
   it for its life; without a confirmed scope recovery stores nothing (fail
   closed). On sign-out, expiry or an account switch, nothing is deleted.
 - **Pre-0.8 data in the browser.** Pre-1.0 PRKS keeps no compatibility with
-  unscoped browser data (#629, decided 2026-10-30): the 0.8 client never
+  unscoped browser data (#629): the 0.8 client never
   reads `prks-local-v1`, `prks-offline-v1`, `prks-pdf-v1` or
   `prks-editor-recovery-v1` and their localStorage keys, never replays or
   migrates them, and never deletes them.
@@ -1690,9 +1422,8 @@ account's queued intents or recovered drafts to another. Recommendation:
 ### 10.4 New client rules under authentication
 
 - **401/403 are not terminal.** An expired session must pause the sync
-  runtime and keep every row and draft, then resume after sign-in. Today an
-  unknown 4xx might be classified as a terminal refusal and retire an intent;
-  the transport classifies `401`, `403` with `code: "AUTH_REQUIRED"`, `503`
+  runtime and keep every row and draft, then resume after sign-in. The
+  transport classifies `401`, `403` with `code: "AUTH_REQUIRED"`, `503`
   and network errors as "hold".
 - **Library mismatch** (an operation whose ledger Library differs from the
   session's) is answered `409 LIBRARY_MISMATCH` and held, never applied to the
@@ -1715,8 +1446,8 @@ account's queued intents or recovered drafts to another. Recommendation:
   the old epoch never validates against the new one. A revision number alone
   is never taken as proof of a base across epochs, because a restored older
   snapshot can reach the same number again with different content.
-- The service worker never caches authenticated API responses beyond what it
-  caches today, and the scoped PDF cache is cleared from the scope's
+- The service worker caches no more authenticated API responses than before
+  accounts existed, and the scoped PDF cache is cleared from the scope's
   perspective on sign-out only if the user asks (sign-out on a shared device
   offers "remove this account's offline data").
 
@@ -1733,7 +1464,7 @@ then allows.
 
 ### 10.6 Cutover rule for in-flight browser state
 
-Because pre-0.8 data is not carried (PG2), the cutover release bumps the sync
+Because pre-0.8 data is not carried (PG2), the switch to PostgreSQL bumped the sync
 protocol's server identity (instance ID). A browser holding operations for a
 different instance never sends them; §10.3 handles their text. This is what
 lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
@@ -1762,7 +1493,7 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
 - A database that is `ready` with a root that has no marker is refused; a
   root is never adopted by a non-empty database.
 - Testing databases (`instance.testing = true`) are refused by a non-testing
-  process and vice versa, mirroring today's storage testing containment.
+  process and vice versa, like storage testing containment.
 - **Start generation.** `instance.start_generation` and a
   `start_generation` field in the root marker (absent counts as 0) count
   the starts of the database that runs against the root. The marker also
@@ -1812,7 +1543,7 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
     step 3. The cost is one marker write per process start. The runner's
     schema work never reads or writes the root: the check and the bump
     run after it, from the identity code
-    (`backend/domain/identity/root_pairing.py`, L-ID-1). A process that
+    (`backend/domain/identity/root_pairing.py`). A process that
     started while setup was `unconfigured` or `bootstrapping` does no work
     until it sees setup become `ready` (a `worker` checks on its idle
     poll, and claims no job before then), and then runs the start check
@@ -1923,7 +1654,7 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
   in between without the marker recording it, and such a copy started
   later passes. Start-generation fencing therefore does **not** guarantee
   that every stale database copy is detected. That is the accepted copy
-  limitation (risk R20, confirmed by the maintainer on 2026-10-13 for
+  limitation (risk R20, covering
   sequential use of stale copies as well as concurrent copies), not a gap
   in the reconcile: the next start of the real database reconciles or
   bumps the marker, and PRKS adds no running-process recheck, heartbeat
@@ -1940,8 +1671,7 @@ lets the schema drop `origin_work_id` and legacy operation mappings (§6.4).
 
 ### 11.2 Object lifecycle (PG14)
 
-Routing every managed file through `StorageBackend` (#311 Phase B) happens as
-part of the Assets lane, against the new schema, not against SQLite.
+Every managed file goes through `StorageBackend` (#311 Phase B).
 
 - **Ingest**: stream to a freshly minted key with exclusive create, hash while
   writing (`ingest_sha256` of the raw stream), fsync per `fs_durability`, then
@@ -2004,9 +1734,7 @@ part of the Assets lane, against the new schema, not against SQLite.
   a page of names. The week counts from the last completed cycle, the
   succeeded pass that reached the end of the listing; a cycle cut short by
   a failed pass starts again at the next idle tick. It never deletes directly, it only records claims, and claims are
-  settled by the usual three-valued check. It runs only on a root that
-  holds no SQLite catalogue: until the cutover, a root that also serves
-  SQLite keeps files the PostgreSQL catalogue does not name.
+  settled by the usual three-valued check.
 - **Cleanup scheduling**: the releasing command enqueues `objects.cleanup`
   (deduplicated); each worker's idle tick enqueues it when a claim is due
   (never attempted, or attempted at least 10 minutes ago) and no cleanup
@@ -2018,8 +1746,7 @@ part of the Assets lane, against the new schema, not against SQLite.
   (#311 Phase F) needs no special mode; and #60 §9.4's generation protocol and
   its crash cases disappear. The cost is extra writes per annotation save
   (one new PDF object per materialization), bounded by the cleanup job.
-  Measure it with large PDFs before the Assets lane closes; if write
-  amplification is unacceptable, materialization can be coalesced per Asset
+  If write amplification proves unacceptable, materialization can be coalesced per Asset
   by a debounced job without changing the model.
 
 ### 11.3 Backup and cleanup coordination
@@ -2060,9 +1787,7 @@ they reference are in `objects` like Asset keys. Restore needs no special
 step for them: no inbox payload, path rewrite, collision handling or held
 rows.
 
-**Archive member and path checks.** R0 applies format 1's checks
-(`_normalize_zip_name`, `_zip_entry_kind` and the duplicate checks of
-`_verify_backup_inner` in `backend/backup_restore.py`) to format 2:
+**Archive member and path checks.** R0 checks:
 
 - Every member name is a normalized relative POSIX path: no absolute or
   drive path, no `.` or `..` component, no backslash, NUL or empty
@@ -2117,8 +1842,7 @@ the older version.
   "every table with `library_id`". The same list drives export, staging, the
   R4 delete and the R4 insert, so access, identity and operational rows are
   never exported, deleted or replaced by a restore. It includes the domain
-  tables, cleanup claims (they travel with the objects they describe, as
-  today), revisions and the sync ledger. A schema test fails when a
+  tables, cleanup claims (they travel with the objects they describe), revisions and the sync ledger. A schema test fails when a
   library-scoped table is on neither this list nor the excluded list below,
   so a new table cannot silently join or miss backups. The ledger and revisions are operational, but they
   travel with the data they describe so exact replay stays correct (§7.3).
@@ -2140,7 +1864,7 @@ the older version.
   (`pg_export_snapshot()`), so the table copies, the identity lists and the
   object list agree. Objects are copied while the shared objects lock is held
   (§11.3).
-- Verify before publishing, as today: re-read the archive, check every hash,
+- Verify before publishing: re-read the archive, check every hash,
   then load it into a scratch schema exactly as restore stages it (below),
   including identity mapping and constraint checks. Only a verified archive
   is offered for download.
@@ -2246,7 +1970,7 @@ Restore runs these phases, recorded in a `restore_runs` row with a lease
 | R0 Validate | Hashes, manifest, schema and format version (newer refused; after 1.0 older accepted); before 1.0, `schema_fingerprint` and the `interchange` column lists must match the live database (see "Staging schema"); archive members pass the containment checks of "Archive member and path checks" | Nothing |
 | R1 Stage | Create `restore_<id>` without the migration runner: for each table in `BACKUP_CONTENT_TABLES`, `CREATE TABLE restore_<id>.<t> (LIKE prks.<t> INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING GENERATED)`, plus the mapping tables; `COPY … FROM` with interchange casts, map identities, then check every foreign key of the live tables with generated anti-joins whose parent side is redirected (staged content tables, live plus newly mapped devices, live Libraries and users; see "Staging schema"); for each archive object, under the per-object lock `pg_advisory_xact_lock(hashtextextended('obj:'||key, 0))` that cleanup's settle also takes (§7.4), insert `restore_run_objects(run, key)` and commit; only then look at the file: missing → write it from the archive with exclusive create; present with the archive's hash → reuse; present with another hash → abort (a live object is never overwritten) | Nothing; reads and writes continue normally |
 | R2 Enter | One committed transaction: `UPDATE libraries SET maintenance = 'restore', maintenance_run = <run> WHERE id = L AND maintenance IS NULL` (refused if another maintenance is active, or if a backup run is active) | From here every new command refuses with `MAINTENANCE` |
-| R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then the two locks in this order, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch. The recheck covers the one race PRKS can cause, cleanup unlinking a reused key, so it checks existence and size and does not rehash: same-size bytes changed outside PRKS or by bit rot could equally change a minute after R4, and detecting that is a data-root integrity check, not part of restore (maintainer decision, 2026-10-13). | Commands that slipped in before R2 finish first |
+| R3 Drain | On the restore connection, in one explicit short transaction (`BEGIN; SET LOCAL lock_timeout = <drain timeout>`, then the two locks in this order, then `COMMIT` before R4's SERIALIZABLE transaction begins; §4.3), take `pg_advisory_lock(lib_key(L))` **exclusive** (waits for every in-flight command, which holds the shared lock, to commit or roll back) and `pg_advisory_lock((L,'objects'))` exclusive (waits for a running backup copy, bounded by a timeout that aborts the restore). Then re-check ownership: `libraries.maintenance_run` must still be this run; otherwise the run lost its lease, so release and abort. With cleanup now excluded by the objects lock, re-verify that every key in `restore_run_objects` exists with the archive's size; rewrite a missing one from the archive, abort on a mismatch. The recheck covers the one race PRKS can cause, cleanup unlinking a reused key, so it checks existence and size and does not rehash: same-size bytes changed outside PRKS or by bit rot could equally change a minute after R4, and detecting that is a data-root integrity check, not part of restore (maintainer decision). | Commands that slipped in before R2 finish first |
 | R4 Commit | One SERIALIZABLE transaction that first locks the `libraries` row `FOR UPDATE` and aborts unless `maintenance = 'restore' AND maintenance_run = <run>` and the `restore_runs` row is still this run's live lease; then: delete the Library's rows of the content tables (the allowlist, never memberships, sessions or operational rows) and its `derived` rows, and set `search_folding = NULL` (§8.6); insert the devices the identity mapping marked as new, then the staged, mapped rows; record a `hold` cleanup claim for every object the old catalogue referenced and the new one does not, keeping every existing `hold` claim (the archive's claims are merged by key, `hold` wins), so a second restore of an older archive never frees what an earlier restore set aside; cancel the Library's queued and running jobs (`state = 'cancelled'`, `lease_id = NULL`, `last_error = 'restore_superseded'`); set `epoch = epoch + 1` and `maintenance = NULL`; **enqueue** `derived.rebuild`, a cleanup retry, and the orphan sweep at the new epoch; mark the run committed | Atomically: the old Library before COMMIT, the restored one (with its follow-up jobs already queued) after |
 | R5 Release | On an abort after R2, finalize the failure (see "Abort finalization"): clear the flag in one owner-fenced transaction. Then release both locks and drop the staging schema, in a `finally` that runs on success and on every abort (`pg_advisory_unlock_all()`, and the dedicated restore connection is closed, never returned to a pool) | Normal operation, immediately after an abort as after a commit |
 
@@ -2282,8 +2006,7 @@ expires, startup or the maintenance reaper clears `maintenance` for that
 staging filesystem only. The application cannot see free space on the
 PostgreSQL volume, and R1 and R4 each need room there for about one more
 copy of the Library's rows. 0.8 adds no privileged disk-space probe and no
-operator-set restore headroom; the maintainer accepted the residual risk
-(2026-10-13). The design commits to these expectations instead:
+operator-set restore headroom; the maintainer accepted the residual risk. The design commits to these expectations instead:
 
 1. **No partial commit.** R1 writes only into `restore_<id>`, and R4 is
    one transaction. A failed R1 or R4 statement, a disk-full error
@@ -2370,8 +2093,7 @@ So every Library has a monotonic `epoch` (§6.2), and R4 advances it.
 - **API requests.** The browser sends the epoch it loaded in a
   `PRKS-Library-Epoch` header on every authenticated, Library-scoped
   mutation and in every durable operation envelope. Such a mutation without
-  it is refused with 400, so no client can bypass the fence (enforced from
-  the cutover, once L-F-1 sends it). Identity and instance routes act on no
+  it is refused with 400, so no client can bypass the fence. Identity and instance routes act on no
   Library and are exempt: bootstrap, login, sign-out and session renewal,
   which a browser must be able to call before it has loaded an epoch. Responses carry the current
   epoch.
@@ -2395,16 +2117,15 @@ differs, so browsers never send those queues (§10.6).
 
 **Old objects** stay under `hold` claims, never deleted automatically, until
 the user confirms "discard the replaced library's files" or a documented
-retention elapses. This keeps today's rule that rollback material is not
-destroyed implicitly.
+retention elapses: rollback material is never destroyed implicitly.
 
 Entity IDs are global (§6.2), so 0.8 restores an archive **in place of** a
 Library's contents, never as an additional copy beside the original in the
 same instance. "Restore as a new Library" needs ID remapping and is left to
 the multi-Library work after 1.0.
 
-**Format 1 archives** (SQLite) are refused with a clear message in 0.8
-(PG2). The maintainer has no production library; a converter is not built.
+**Format 1 archives** (SQLite) are refused with a clear message (PG2); no
+converter exists.
 
 **From 1.0**, a golden archive of every released format and schema version is
 checked into `tests/fixtures/backups/`, and CI restores each one on every
@@ -2417,9 +2138,8 @@ user-facing backup and restoring it does not go through PRKS.
 
 ### 11.5 Processing queue
 
-Files for Processing is a **managed upload queue** (decision 12, §16). The
-SQLite processing inbox, a directory PRKS scans, is not ported: PostgreSQL
-has no inbox directory, scanner, watcher, stored path, claim or recovery
+Files for Processing is a **managed upload queue** (decision 12, §16).
+There is no inbox directory, scanner, watcher, stored path, claim or recovery
 state, inbox lock or inbox backup payload. The browser uploads PDFs into
 managed objects, the user edits a draft of each Work, and import turns an
 item into a Work in one transaction.
@@ -2441,7 +2161,7 @@ item into a Work in one transaction.
   `imported_work_id` references the Work `ON DELETE SET NULL`, and Work
   merge re-points it (§7.1).
 - `processing_item_drafts`: one row per `ready` item, with every Work field
-  the SQLite inbox stages and import carries into the Work: `title`,
+  import carries into the Work: `title`,
   `status_draft`, `published_date`, `abstract`, `source_url`, `author_text`,
   `year`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
   `pages`, `isbn`, `doi`, `doc_type`, `private_notes` and `thumb_page`, plus
@@ -2571,10 +2291,7 @@ progressive loading and the queue does not linearize. If a later viewer
 loads progressively, optimizing an imported PDF is an Asset rewrite
 (§11.2), not a queue state.
 
-**Frontend.** The queue page (#40) uses only this API and targets
-PostgreSQL server mode. It lands with the cutover (§15.3, PG-C1), so the
-PostgreSQL server never shows the legacy page against an API it does not
-have; PG-C2 deletes the legacy page with SQLite.
+**Frontend.** The queue page (#40) uses only this API.
 
 ### 11.6 Pre-0.8 data roots
 
@@ -2710,11 +2427,10 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
   diagnostics.
 - **Retention**: succeeded rows older than 7 days are deleted by a
   maintenance job; failed rows are kept until dismissed.
-- **0.8 job kinds** (only workloads that exist today): `text.extract`,
+- **0.8 job kinds**: `text.extract`,
   `research.reindex_work`, `objects.cleanup`, `objects.sweep`,
   `search.repair`, `derived.rebuild`, `backup.create`,
-  `pdf.materialize` (if the Assets lane moves materialization off the request
-  path), `sessions.prune`, `jobs.prune`. Thumbnails stay on-demand and cached
+  `pdf.materialize` (if materialization moves off the request path), `sessions.prune`, `jobs.prune`. Thumbnails stay on-demand and cached
   as derived files.
 - A separate `domain_events` table for external subscribers (#314 connectors,
   automation #62) is **not** created until one exists.
@@ -2781,7 +2497,7 @@ secrets:
   prks_database_url: {file: ./secrets/database_url}
 ```
 
-(Illustrative; the deployment lane owns the final file.) Rules:
+(Illustrative; `docker-compose.yml` is the final file.) Rules:
 
 - **Database volume.** From PostgreSQL 18 the official image keeps `PGDATA`
   at `/var/lib/postgresql/<major>/docker` and declares its volume at
@@ -2860,10 +2576,10 @@ secrets:
 Performance diagnostics stay process-local and privacy-safe, now labelled by
 process role. New aggregate counters: pool wait time and exhaustion count,
 job queue depth and age by kind, failed jobs, migration version. No SQL
-parameters, search terms or library metadata are recorded, as today.
+parameters, search terms or library metadata are recorded.
 
 The job counters and queue depth are served to the Library owner at
-`GET /api/diagnostics/jobs` (L-J-1 #627; contract
+`GET /api/diagnostics/jobs` (contract
 `docs/api/openapi-job-diagnostics.json`, operator notes in
 `docs/job-worker.md`).
 
@@ -2884,25 +2600,22 @@ The job counters and queue depth are served to the Library owner at
   files once; each test class gets `CREATE DATABASE … TEMPLATE
   prks_test_template` (tens of milliseconds) and drops it afterwards. Tests
   that only read may share one database; tests use a fresh temporary data
-  root as today.
+  root.
 - **E2E**: seeded templates become seeded template databases plus a copied
   data root; each `AppServer` gets its own database cloned from the seed
-  template. The WAL-checkpoint seeding code in `tests/e2e/harness.py` is
-  removed.
+  template.
 - **CI**: `test-gate.yml` and `e2e-gate.yml` add a `services: postgres:18`
   container with the builtin locale; a nightly or label-triggered matrix adds
   PostgreSQL 19 once it is released.
-- **Backend-parametrized parity** during build-out (§15): selected existing
-  unit, API and sync test modules run against both `PRKSDatabase` (SQLite)
-  and the PostgreSQL facade. A family is "ported" when its parametrized tests
-  pass on PostgreSQL. After cutover the parametrization and the SQLite leg
-  are deleted.
+- **Parity**: parity modules replay the recorded SQLite answers
+  (`tests/parity_reference/`) against PostgreSQL; the SQLite Library is
+  deleted, so a changed call needs a PostgreSQL-only assertion.
 
 ### 13.2 New gates
 
 | Gate | Replaces | Checks |
 | --- | --- | --- |
-| Schema snapshot (`check_pg_schema.py` + test) | `check_schema_change.py` SQLite parts, `validate_current_schema` | fresh schema equals snapshot; after 1.0, migrated equals fresh, migrations append-only and unedited |
+| Schema snapshot (`check_pg_schema.py` + test) | (new) | fresh schema equals snapshot; after 1.0, migrated equals fresh, migrations append-only and unedited |
 | Persistence boundary | (new) | `psycopg` imported only in `backend/db/` and `backend/domain/`; no SQL strings in `server.py`/`backend/api/`/`backend/sync/` |
 | Revision ownership | discussion #583 option (a) | DML on revisioned tables only in `backend/domain/`; FKs into revision-owning rows are not `ON DELETE CASCADE` unless listed with the command that tombstones them |
 | Isolation declared | (new) | every command declares its isolation level; no command that adds rows to a listed peer table declares READ COMMITTED (§7.1); a tag added to the source during a tag merge either lands on the target or makes the merge retry |
@@ -2910,8 +2623,6 @@ The job counters and queue depth are served to the Library owner at
 | Library isolation | (new) | two-Library API sweep (§13.3) |
 | Correlated catalogue counts | kept, re-justified | PostgreSQL often decorrelates, but not always; keep the ratchet and re-baseline its allowlist with `EXPLAIN` evidence during the family ports |
 
-`scripts/check_invariants.py` rules that parse SQLite quoting are updated by
-the lane that ports the relevant module.
 
 ### 13.3 New test classes
 
@@ -2984,7 +2695,7 @@ the lane that ports the relevant module.
   holds no advisory lock after its transaction ends, and the next command on
   that Library takes its shared lock at once.
 - Restore exclusion interleavings: a write in flight at R2 finishes before
-  R4; a write after R2 gets `MAINTENANCE` (that the browser holds it is part of PG-C1's restore scenario); a cleanup
+  R4; a write after R2 gets `MAINTENANCE`; a cleanup
   batch and an orphan sweep during restore are skipped; a running backup
   makes restore wait or abort cleanly; a backup during maintenance is refused;
   a restore that aborts after R3 holds none of its three locks, and an
@@ -3073,20 +2784,12 @@ the lane that ports the relevant module.
 - Pool exhaustion and database restart (connection loss mid-request returns
   503 and is not ledgered).
 
-### 13.4 Retirement checklist (all in the cutover release)
+### 13.4 Retirement checklist
 
-| Retired | Why it can go |
-| --- | --- |
-| `backend/db_manager.py`, `backend/db_schema.sql`, `backend/db_migrations.py` (legacy bridge and v10–v17) | Clean start (PG2); replaced by domain packages and schema files |
-| `backend/work_identity.py` mirror and drift checks, `legacy_work_*` views, mirror triggers, `legacy_inferred_video_urls`, `migration_quarantine`, `work_retirement(_guard)` | §6.4 |
-| `works_fts`, `backend/text_index.py` SQLite store, `prks_text_index.db`, `backend/research_index.py` SQLite store, `prks_research_index.db` | §8 (logic for extraction and mention parsing is kept and moved) |
-| `backend/concurrency.py` gate, save-token dicts, materialization and path lock dicts, `_ready_backups` | §7.5 |
-| Backup format 1 code paths: `Connection.backup`, PRAGMA checks, sidecar renames, file-rename journal for the DB half | §11.4 |
-| Root adoption by SQLite header | §11.1, §11.6 |
-| The SQLite processing inbox: `processing_files` and its scan, `PRKS_FOR_PROCESSING_DIR` and the `/data/for_processing` default, format 1's `files/for_processing/`, the legacy Files for Processing page and API, and the relocation inbox rules of `docs/storage-architecture.md` (§8.2 P3, P4 and P10, `retained_residuals`) | §11.5 |
-| `test_db_migrations.py`, `test_sqlite_connection_lifetime.py`, SQLite parts of `test_backup_restore.py`, `test_restore_durability.py`, `test_text_index.py`, `test_work_identity.py` mirror tests, `test_publisher_catalog_queries.py` ASCII pins | Replaced by §13.2–13.3 tests, not deleted without a replacement for each guarantee they cover |
-| `INV-TESTS-001` schema-version literal rule | Rewritten for migration versions |
-| README/wiki SQLite statements (README, wiki Architecture, Storage-Backup-and-Restore, Configuration-and-Operations, Getting-Started, PDFs-and-Annotations, Research-Network, Offline-and-Sync, Developer-Reference), `backend/AGENTS.md` SQLite rules | Updated in the cutover PR and the docs PR that follows it |
+Done (#641). Every retired SQLite test module is listed in
+`tests/sqlite_retirement/<module>.json` with the PostgreSQL tests that
+replace it or the reason none does; `tests/test_sqlite_retirement.py`
+checks the listing.
 
 **Rule for deleting a test**: a SQLite-specific test is deleted only in the
 PR that adds the PostgreSQL test covering the same guarantee, and the PR
@@ -3099,29 +2802,24 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 
 | # | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- | --- |
-| R1 | Behavior drift while porting ~50 sync families and ~130 routes | High | High | Backend-parametrized tests per family (§13.1); full E2E on the PostgreSQL leg before cutover; one family per PR |
 | R2 | Acknowledged-save or recovery guarantee broken by the auth/session change (an expired session drops queued intents) | Medium | Critical | §10.4 rule, E2E for session expiry mid-queue, #465/#466 suites unchanged and required |
-| R3 | Unicode identity changes merge names users consider different (or vice versa) | Medium | Medium | Shared vectors reviewed by the maintainer (§16, decision 3), no diacritic folding in identity, NAME_TAKEN instead of silent merge |
+| R3 | Unicode identity changes merge names users consider different (or vice versa) | Medium | Medium | Shared vectors (§16, decision 3), no diacritic folding in identity, NAME_TAKEN instead of silent merge |
 | R4 | `casefold` cannot be used in an IMMUTABLE generated column | Low | Low | Fallback in §8.1 |
-| R5 | Write amplification from immutable objects on frequent annotation saves | Medium | Medium | Measure in the Assets lane; debounce materialization per Asset |
+| R5 | Write amplification from immutable objects on frequent annotation saves | Medium | Medium | Measure with large PDFs; debounce materialization per Asset |
 | R6 | Restore of a large Library holds a long SERIALIZABLE transaction | Medium | Low | Restore already runs in maintenance mode; staging happens before the transaction; measure on a synthetic large Library |
 | R7 | Pool exhaustion under the thread-per-connection server | Medium | Medium | 503 with Retry-After, pool metrics, configurable size; server replacement study (R9) |
-| R8 | Parallel lanes collide in shared files (`server.py`, facade, schema, sync registry) | High | Medium | §15 ownership table, mixin files, per-lane schema files, single-line registrations |
 | R9 | stdlib HTTP server unsuitable for an exposed 1.0 deployment | Medium | High | Pre-1.0 research issue (§4.5); reverse-proxy-only exposure documented meanwhile |
-| R10 | Tests become slow or flaky with a database service | Medium | Medium | Template databases, per-class databases, no shared mutable fixtures; measure in PG-1 |
+| R10 | Tests become slow or flaky with a database service | Medium | Medium | Template databases, per-class databases, no shared mutable fixtures |
 | R11 | Agents run tests against a real database | Low | Critical | Harness-created databases only, `instance.testing` flag, refusal on mismatch (§13.1) |
 | R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16, decision 4); the folding check rebuilds search data when the rules or the server release change (§8.6) |
-| R13 | Dual-run period lingers and SQLite stays half-alive | Medium | High | Cutover and deletion in the same release (PG22), tracked as a release gate in #614 |
 | R14 | Browser data from pre-0.8 lost at cutover | Low | High | §10.3: pre-1.0, the old stores are never read and never deleted |
-| R15 | #60 Version/merge features designed against the old mirror model | Low | Medium | §6.4 states the mechanics change; #60 slices G–L consume the new schema |
 | R16 | An archive becomes unreadable after a PostgreSQL major or column-type change | Medium | Critical after 1.0 | Text `COPY` with interchange types (§11.4); golden archives restored in CI on every supported major |
 | R17 | A restore races ordinary writers, jobs or cleanup | Medium | High | Committed maintenance flag, maintenance lock drain, objects lock (§11.4); interleaving tests (§13.3) |
 | R18 | Work begun before a restore (a running job, an open tab, a browser outbox) is applied to the restored Library | Medium | High | Library `epoch` checked by every command, job claim and job transaction; older-epoch browser rows go to review-only recovery (§10.4, §11.4); restore-fencing tests (§13.3) |
-| R19 | The PostgreSQL volume fills during restore staging | Low | Medium | Accepted by the maintainer (2026-10-13): no disk-space probe or headroom setting in 0.8; R1/R4 roll back, the failure is reported, cleanup is idempotent, and deployment docs cover monitoring and headroom (§11.4, §12.3) |
-| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer (2026-10-13) as a documented deployment limitation of 0.8, covering both concurrent database copies and sequential use of stale copies the start generation cannot distinguish: one canonical database per root, such copies unsupported and not technically prevented, no continuous marker recheck, heartbeat, write-time or cross-database fencing. The pairing check refuses any database paired with another root, the root claim, serialized by the claim lock, refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation and token refuse a database started after a newer copy has run against the root, including one whose generation another database reached separately (§11.1); copies running at the same time are not detected, and neither is a copy taken after the last start whose marker write completed (the generation counts starts, not writes, §11.1); the deployment docs say at most one database ever runs against a root, a database copy taken while PRKS is serving is only ever started against its own root copy (§11.4), the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
+| R19 | The PostgreSQL volume fills during restore staging | Low | Medium | Accepted by the maintainer: no disk-space probe or headroom setting in 0.8; R1/R4 roll back, the failure is reported, cleanup is idempotent, and deployment docs cover monitoring and headroom (§11.4, §12.3) |
+| R20 | Two databases run against one data root, at once (a copy started alongside the original) or one after the other (the old cluster restarted after an upgrade or volume move), and one finds objects the other's orphan sweep deleted | Low | Critical | Accepted by the maintainer as a documented deployment limitation of 0.8, covering both concurrent database copies and sequential use of stale copies the start generation cannot distinguish: one canonical database per root, such copies unsupported and not technically prevented, no continuous marker recheck, heartbeat, write-time or cross-database fencing. The pairing check refuses any database paired with another root, the root claim, serialized by the claim lock, refuses an independently bootstrapped database (the marker names another `instance_id`), and the start generation and token refuse a database started after a newer copy has run against the root, including one whose generation another database reached separately (§11.1); copies running at the same time are not detected, and neither is a copy taken after the last start whose marker write completed (the generation counts starts, not writes, §11.1); the deployment docs say at most one database ever runs against a root, a database copy taken while PRKS is serving is only ever started against its own root copy (§11.4), the old cluster's data directory is moved out or deleted once a copy has started, reverting the image tag is not a rollback, and rollback uses a root copy taken with the old data directory or a format-2 backup restored into a fresh instance (§12.3); the shared `root.lock` fences only exclusive tools (§7.5) |
 
-Dependencies: #60 (model, unchanged in meaning), #311 (Phase B is absorbed
-into the Assets lane; D–E later), #612 (bootstrap and configuration
+Dependencies: #60 (model, unchanged in meaning), #311 (Phase B done; D–E later), #612 (bootstrap and configuration
 inventory), #45 (contract versioning, auth scheme in OpenAPI), #46 (packaging
 of a bundled PostgreSQL for desktop, after 1.0), #57 (history builds on actor
 attribution), #66 (ledger retention), #67 (route extraction), #476 (cross-tab
@@ -3133,137 +2831,57 @@ ack coherence stays its own decision).
 
 ### 15.1 Strategy
 
-Build the PostgreSQL implementation **beside** the running SQLite backend,
-family by family, behind the facade (§5.5) and the parametrized tests
-(§13.1). `master` keeps running on SQLite and stays releasable until the
-cutover PR switches the default and deletes SQLite in the same release. No
-PR migrates data, because there is none to migrate.
+Done. PostgreSQL was built beside SQLite family by family, behind a facade
+and parity tests, then switched and SQLite deleted in one release (PG22).
+The slice plan, dependencies and acceptance criteria are in git history.
 
-Each PR states its slice ID, carries `Refs #613` and the slice's issue, and
-stops for maintainer review. No PR is merged without explicit approval.
+### 15.2 Ownership by family
 
-### 15.2 Ownership boundaries for parallel agents
+Each family owns its domain package, its schema file and its route module,
+so concurrent changes to different families do not touch the same files:
 
-| Lane | Owns (may create and edit) | Must not edit |
-| --- | --- | --- |
-| Foundation (PG-1, PG-2, PG-3) | `backend/db/**`, `backend/db/schema/000_*.sql`–`020_*.sql`, `tests/pg/**` harness, CI workflow DB service, `requirements*.txt`, `dependency-inventory.json`, `backend/pg_facade/__init__.py` | domain packages |
-| Identity (L-ID) | `backend/domain/identity/**` (including `root_pairing.py`, §11.1), `020_identity.sql` (after PG-2 hands it over), `backend/api/session.py`, auth admission hook in `server.py` (one function), `claim_root` and `bump_start_generation` in `backend/storage/root_marker.py`, and in `backend/storage/**` only the pairing-field carry in relocation's destination marker and the `root.claim` entries in the inventory, scaffold and teardown rules (§11.1) | other domain packages |
-| Works (L-W) | `backend/domain/works/**`, `100_works.sql`, `api/works.py`, `backend/sync/handlers/work_*.py` | people/organization/research files |
-| People (L-P) | `backend/domain/people/**`, `110_people.sql`, `api/persons.py`, `api/person_groups.py`, `api/work_roles.py`, `api/publishers.py`, `sync/handlers/person*.py`, `work_role` handler | works schema (references only) |
-| Organization (L-O) | `backend/domain/organization/**`, `120_organization.sql`, `api/tags.py`, `api/folders.py`, `api/playlists.py`, tag/folder/playlist handlers, `domain/saved_views`, `domain/settings` | |
-| Research (L-R) | `backend/domain/research/**`, `130_research.sql`, `derived` mention tables, `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py`, concept/position/argument/note handlers | |
-| Annotations and objects (L-A) | `backend/domain/annotations/**`, `backend/domain/objects/**`, `140_annotations.sql`, `150_objects.sql`, Phase B routing in `backend/storage/**`, `api/annotations.py` | works projection (calls it) |
-| Processing (L-PR) | `backend/domain/processing/**`, `160_processing.sql`, the Processing API routes, the Processing clause of the reference checks in `backend/domain/objects/lifecycle.py` (§11.5; L-A-1 is closed) | |
-| Search (L-S) | `backend/domain/search/**`, `200_derived_search.sql`, `api/search.py`, `pg_facade/text_index.py`, text extraction job | |
-| Jobs (L-J) | `backend/jobs/**`, `030_jobs.sql`, `prks worker` entry point | job handlers (owned by their lanes) |
-| Backup (L-B) | `backend/domain/maintenance/backup*`, `restore*`, `backup_runs` table | |
-| Deployment (L-D) | `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh`, `scripts/test-postgres`, README deployment section, health endpoints | |
-| Browser scoping (L-F) | `frontend/js/local-store.js`, `offline-store.js`, `frontend-app/src/lifecycle/editor-recovery/**` scope fields, sync-runtime auth hold | backend |
+| Family | Domain package | Schema | Routes |
+| --- | --- | --- | --- |
+| Foundation | `backend/db/**` | `000_*`–`010_*` | |
+| Identity | `backend/domain/identity/**` (incl. `root_pairing.py`, §11.1); `claim_root`, `bump_start_generation` in `backend/storage/root_marker.py` | `020_identity.sql` | `api/session.py` |
+| Jobs | `backend/jobs/**` (handlers belong to their families) | `030_jobs.sql` | |
+| Works | `backend/domain/works/**` | `100_works.sql` | `api/works.py` |
+| People | `backend/domain/people/**` | `110_people.sql` | `api/persons.py`, `api/person_groups.py`, `api/work_roles.py`, `api/publishers.py` |
+| Organization | `backend/domain/organization/**`, `domain/saved_views`, `domain/settings` | `120_organization.sql` | `api/tags.py`, `api/folders.py`, `api/playlists.py`, `api/saved_views.py`, `api/settings.py` |
+| Research | `backend/domain/research/**` | `130_research.sql` | `api/concepts.py`, `api/positions.py`, `api/arguments.py`, `api/research_notes.py` |
+| Annotations, objects | `backend/domain/annotations/**`, `backend/domain/objects/**` | `140_annotations.sql`, `150_objects.sql` | `api/annotations.py` |
+| Processing | `backend/domain/processing/**` | `160_processing.sql` | Processing routes |
+| Search | `backend/domain/search/**` | `200_derived_search.sql` | `api/search.py` |
+| Maintenance | `backend/domain/maintenance/**` | | backup and restore routes |
 
-`server.py` is edited by at most one open PR at a time. Lanes that need a
-route change add it through the facade method they own, so most lanes never
-touch `server.py` at all.
+Sync handlers live in `backend/sync/handlers/` with their family. Shared
+one-line registrations (schema snapshot, sync registry) are the only common
+edits.
 
 ### 15.3 Slices, dependencies and acceptance criteria
 
-**Stage 0. Design (this PR).** Approved 2026-10-12 (§16). After this
-document is merged, each slice below becomes one engineering-task issue under
-the v0.8.0 milestone, linked from #614 (L-S-2 and PG-C3 under v0.9.0, linked
-from #615, §16 decision 10), with native issue dependencies
-matching the "Depends on" column. No slice starts without the maintainer's
-explicit go, and PG-1 comes first.
-
-**Stage 1. Foundation (sequential).**
-
-| Slice | Content | Acceptance criteria |
-| --- | --- | --- |
-| **PG-1** Database plumbing and test harness | psycopg + psycopg_pool pins; `backend/db/` config (`PRKS_DATABASE_URL`, `*_FILE`), pool, `command()`/`query()` helpers with isolation, error mapping table; harness-created test databases with template cloning and refusal of foreign databases (ownership marked with a `COMMENT ON DATABASE` until PG-2 adds `instance.testing`); `scripts/test-postgres`; CI service container in `test-gate.yml`. No domain tables. | Unit tests for helpers (commit, rollback on exception, SERIALIZABLE retry on injected `40001`, READ ONLY query refuses writes); error-mapping tests per SQLSTATE; pool exhaustion → typed error; harness refuses a pre-existing database; CI green with the service; existing SQLite suites untouched and green. |
-| **PG-2** Migration runner, schema layout and core tables | Runner with advisory lock and checksums; `000_extensions.sql`, `010_instance.sql`, `020_identity.sql`, `030_jobs.sql`, `040_sync.sql` (`entity_revisions`, `sync_operations`, `devices`); `prks.instance` with `start_token` and `prev_start_token` (§6.2, §11.1); `prks.identity_key` with the immutability proof (§8.1); `prks.search_norm` with the snapshot assertion that no index expression or column default depends on it (§8.3); text identity vectors and Python implementation; schema snapshot test and `check_pg_schema.py`. | Fresh database matches the snapshot; concurrent `migrate` runs apply once; a newer-schema database is refused; a database whose applied baseline file has since changed is refused with the recreate message; identity vectors pass in SQL and Python; `IMMUTABLE` generated column works under the builtin locale (or the fallback is chosen and documented); the runner itself never reads or writes the data root (the root claim and the start-generation check and bump run after it, L-ID-1, §11.1). |
-| **PG-3** Parity harness and facade skeleton | `PostgresLibrary` facade composed of empty mixins; a test fixture parametrizing selected modules over `sqlite` and `postgres`, with a registry marking which methods are ported (unported ones skip on `postgres`, not fail); a dual-run CI job. | Running `python run_tests.py` unchanged still runs SQLite only; the `postgres` leg runs and reports ported/unported counts; no lane needs to edit the fixture to register its family (one line in its mixin). |
-
-**Stage 2. Parallel lanes** (each may start once its dependencies are
-merged; several run at the same time).
-
-| Slice | Depends on | Content | Acceptance criteria |
-| --- | --- | --- | --- |
-| **L-ID-1** Identity, bootstrap and sessions | PG-2 | Users, Libraries (with `epoch`), memberships, bootstrap tokens and command, Argon2id login with the attempt limiter, login-device tokens and `prks admin unlock-login`, sessions, `GET /api/session` (returns the epoch), `RequestContext` carrying the acted-on epoch and the command-helper epoch check, `authorize()`, loopback-owner mode for `--testing`; CSRF hardening | §13.3 bootstrap and session tests; a command with a stale or missing epoch is refused before writing; login throttling: without a login-device cookie, the sixth attempt for an account and the 21st for an address within the window get 429 with `Retry-After` without a password check, and window expiry or a successful login resets the account row; 20 simultaneous wrong-password requests for one account run at most 5 password checks; with the account limit tripped, the correct password from a browser holding a valid login-device cookie still signs in, and that cookie is limited on its own; `prks admin unlock-login` clears the account limit; two IPv6 addresses in one `/64` share an address key; a spoofed `X-Forwarded-For` from an untrusted peer does not change the address key; takeover after `ready` refused; secrets, the bootstrap token included, never in responses or logs (log-privacy test), and the token file is created `0600` outside the data root; removing a membership refuses the next read and write of that user's existing session for the Library, and demoting an editor to reader refuses the next write; `--testing` E2E unaffected; the root claim and start check of §11.1 (`root_pairing.py`, `claim_root`, `bump_start_generation`) with the §13.3 root-claim fault-injection tests: interrupted bootstrap resumes, interrupted bump is reconciled before serving, a second empty database is refused after the claim, two simultaneous claims leave exactly one `ready` database, a bootstrap retried with a different root is refused before claiming it, a bootstrapping copy retried after the root moved on is refused, a copy whose generation the original reached separately is refused (equal generations, different tokens), including when the original came back through a plain `worker` restart without `migrate`; every serving process start bumps once, and a `worker` started before bootstrap checks and bumps when it sees setup become `ready`, before its first job, holding the start key on a dedicated connection that releases it on every path (a failed marker write in `web` does not block the next `worker`); relocation carries the pairing fields into the destination marker and teardown removes `root.claim` with `root.lock` |
-| **L-J-1** Jobs runtime | PG-2 | `jobs` claim/run/retry/lease, NOTIFY wakeup, embedded worker thread, `prks worker`, prune job, diagnostics counters | Kill-after-claim → lease expiry → exactly one reclaim → idempotent completion; stale-worker completion and heartbeat update nothing; repeated-crash job ends `failed` and frees its singleton key; dedupe tests, including a handled failure while a queued twin exists (A cancelled, B runs once); a handled failure on the last attempt ends `failed`, never `queued`, and frees its dedupe key; two concurrent workers with several queued jobs of one singleton key never run two and never surface `23505`; jobs of a Library in maintenance or of an older epoch are not claimed; worker graceful stop |
-| **L-W-1** Works core | PG-3, L-ID-1 | Every Works-family table of §6.5 (`works`, `manifestations`, `assets` (catalogue only), `manifestation_relations`, `manifestation_identifiers`, `work_notes`, `sync_work_lifecycle`, `duplicate_decisions`), so later 0.8 Works slices add no canonical table (`manifestation_credit_overrides` comes with #60 Slice K, §6.4); projection module producing today's JSON; create/get/browse/recent/open/metadata/source/delete commands; facade methods; `CREATE_WORK`, `DELETE_WORK`, `MARK_WORK_OPENED`, `SET_WORK_METADATA_FIELD`, `SET_WORK_SOURCE`, note handlers | Parametrized Work and sync-family tests pass on PostgreSQL; JSON parity tests against SQLite fixtures; the #60 §4.1 negative tests as schema tests; deferred pointer FKs proven |
-| **L-W-2** Bulk, BibTeX, wiki links, Work merge scaffolding | L-W-1 | Bulk actions (SERIALIZABLE), BibTeX via citation record, wiki-link resolution, on the tables L-W-1 created (no new canonical table, so L-B-1 does not wait for it) | Byte-identical BibTeX tests; bulk atomicity tests |
-| **L-P-1** People | L-W-1 | Persons, aliases as rows, roles (no `rowid`), person groups, publishers; their sync families | Parametrized tests; Greek/Cyrillic identity for publishers and groups; a publisher name and another publisher's alias never share a key under concurrency (`publisher_keys`); role order stable without `rowid`; role link and unlink take `FOR SHARE`, and rename and merge take `FOR UPDATE`, on the person rows before they refresh `work_search` (§8.3, fan-out inputs) |
-| **L-O-1** Organization | L-W-1 | Tags (aliases, merge), folders, folder tags, playlists, Saved Views, settings split; their sync families | Parametrized tests; tag merge concurrency test; a tag name and another tag's alias never share a key under concurrency (`tag_keys`); per-parent folder identity, with tests that two root folders of the same title key are refused (`NULLS NOT DISTINCT`), the same title under two different parents is allowed, and two concurrent creates of one root folder leave one row; one-playlist-per-Work |
-| **L-R-1** Research | L-W-1, L-J-1 | Concepts with `concept_keys`, Positions, Arguments, sources/targets, notes integration, derived mentions via `research.reindex_work`, graph projection | Parametrized tests; Research-ACK fence still observed by E2E; no Python full scan for concept resolution; `research.reindex_work` takes the per-Work reindex lock and holds the note `FOR SHARE` while it writes mentions, tested by a note edit committed while a reindex of the old note is paused (the final mentions match the new note) and by a first note created for a Work while a reindex that found no note is paused (the final mentions match the new note); a Work deleted while a reindex of it (a job's or a rebuild's) is paused, and one deleted before a stale reindex runs, leave no research rows for that Work |
-| **L-A-1** Objects and annotations | L-W-1, L-J-1, L-P-1 | #311 Phase B on PostgreSQL: all managed-file paths through `StorageBackend`; immutable objects; cleanup claims, orphan sweep, and the `restore_run_objects` table counted by the reference check (§11.2); annotations, materialization, PDF replace, save-confirm from durable state; person portraits | Object lifecycle tests (§13.3), including a stalled ingest and a stalled rewrite whose new key the sweep settles failing cleanly at the adoption check; write-amplification measurement recorded in the PR; no `os.remove` outside the storage backend; parametrized annotation and sync tests pass |
-| **L-PR-1** Processing queue | L-A-1, L-P-1, L-O-1 | §11.5: `processing_items`, drafts, roles and tags; Processing references in the object lifecycle (§11.2); streamed upload with idempotency keys, revisioned edit, single and batch import that hands the key to the Asset, delete with release, `Range` preview; the HTTP API and OpenAPI; `processing_items` replaces the `processing_files` entry in the Work merge registry (`DEFERRED` in `backend/domain/works/merge.py` becomes a moved peer relationship on `imported_work_id`). The queue frontend (#40) lands with PG-C1 | The §13.3 Processing queue tests; no stored path and no filesystem scan; imported and deleted markers survive indefinitely and reserve their upload key, so a retry never creates a second Work or recreates a deleted item; a failed import keeps its item, draft and object; duplicates warn and never merge |
-| **L-S-1** Search | L-W-1, L-J-1, L-P-1, L-O-1, L-A-1 | `derived.work_search` maintained by commands, `asset_text` via `text.extract`, trigram filters, parity ordering, Saved View execution, `rebuild-derived`, the folding check (§8.6); `backend/AGENTS.md` extracted-text rule amended for the `derived` schema (§16, decision 5) | §8.7 parity tests; search parametrized tests pass with the documented Unicode improvements replacing ASCII pins; an infix token ("state" in "understatement") still finds a Work through its abstract and through its notes, and a diacritic infix ("šnja" in notes containing "Trešnja") finds it too, the §8.7 substring vectors; a changed folding, at start or seen on a worker's idle tick after the database restarts on a new release, enqueues the folding rebuild once even when two processes start together, and still enqueues it (a new job row, not a dedupe no-op) when only a search-only rebuild is queued, a failed or cancelled folding rebuild leaves `libraries.search_folding` unchanged and is enqueued again on the next start, and `--only text` recomputes `doc` without extracting again; rebuild concurrency (§8.6), with deterministic pause points: a metadata or note command committed while a rebuild batch holds its locks, and one committed after the batch read began, both leave the command's projection; a Work created during a rebuild keeps its row; a rebuild killed mid-run and run again leaves every row equal to a fresh recompute; running it twice changes nothing; a person rename committed while a role add linking that person to another Work is paused (and the reverse order) leaves both Works' rows with the new name; a Work deleted while a refresh naming it is paused, and a refresh naming a Work after its delete and after a rebuild's final delete, leave no `work_search` row for that Work; an Asset deleted or replaced while a `text.extract` of it is paused, and a rebuild with an `asset_text` row whose Asset is gone or replaced, leave no such row; a text rebuild over a Library with one corrupt PDF completes, records that Asset with a failed `status` and indexes the Assets after it; `--only research` completes only after every Work is reindexed, and a Work whose reindex fails fails the rebuild, which resumes from its stored `work_id` |
-| **L-S-2** Ranking (v0.9.0) | L-S-1 | Single weighted score | Before/after results on a synthetic multilingual corpus approved in review |
-| **L-B-1** Backup and restore format 2 | L-W-1, L-P-1, L-O-1, L-R-1, L-A-1, L-PR-1, L-S-1 | §11.4 | Round-trip test over a fixture covering every canonical table and object kind; text `COPY` with the interchange contract (no binary `COPY`); restore into the same and into a new instance with real sync operations, the archive Library mapped to the target Library and all library/user/device references resolving; a restore over a different Library whose IDs still exist is refused; R1 reuse of an existing object is lock-coupled to cleanup settle and re-verified in R3, so R4 never commits a locator to a missing object; new devices are inserted only by R4; a restore that outlives its lease aborts and never replaces writes accepted after recovery; export, staging and the R4 delete/insert use only the content-table allowlist, and a schema test classifies every library-scoped table; staging builds `restore_<id>` with `LIKE` from the live tables, never with the migration runner, checks foreign keys with redirected generated anti-joins, and refuses an archive of another schema fingerprint (§13.3 staging isolation); the round trip covers a table with a generated `*_key` column, which is not exported and is recomputed on restore; queued, imported and deleted Processing items round-trip, queued ones with their objects and markers still reserving their upload keys, and an import that commits during a backup leaves the archive with either the queued item and its object or the imported marker and the Asset referencing that object; staged objects of a live run survive an orphan sweep (L-B-1 only writes `restore_run_objects` rows; the table and its term in the reference check belong to L-A-1); verification refuses tampered archives, and archive members stay contained (§13.3 archive containment); fault injection at R0–R5, including a kill immediately after the R4 commit that still rebuilds search after restart; the exclusion interleavings of §13.3; restoring an older snapshot while a long job runs never lets the job write to the replacement state, and an API mutation or operation envelope carrying the pre-restore epoch is refused with 409 `LIBRARY_EPOCH_CHANGED`; backup concurrent with writes and cleanup; format 1 refused with a clear message; an R3 lock timeout and an R4 rollback each leave the old data intact, clear the flag through abort finalization, and accept a new ordinary command at once without waiting for lease expiry; a disk-full error (`53100`) injected in R1 and in R4 leaves the live Library unchanged, reports the restore as failed with that error, and a later cleanup pass drops the staging schema |
-| **L-D-1** Compose and health | PG-1, L-ID-1, L-J-1 | Dockerfile with psycopg, Compose of §12.3, `/healthz`, `/readyz`, graceful stop, `.env.example`, README deployment section (including PostgreSQL-volume capacity monitoring and headroom, and the one-database-per-root rule: a database copy taken while PRKS is serving is never started against this root, only against its own root copy (the §11.4 disaster-recovery pair), retiring the old cluster's data directory after an upgrade or move, reverting the image tag is not a rollback, and rollback is a root copy taken with the old data directory or a format-2 backup restored into a fresh instance, §12.3), #612 configuration entries | Clean `docker compose up` smoke test in CI reaches `/readyz` and bootstrap; the database volume is mounted at `/var/lib/postgresql`; `web` and `worker` each list the `prks_database_url` secret and read it at start; data survives `down`/`up` and container recreation with the volume kept; wrong root/database pairing refused at start; the start generation (§11.1) is bumped database-first by every starting `migrate`, `web` and `worker` under the shared `root.lock`, including an upgrade run while the previous `web` and `worker` still hold it, and an older cluster started after a newer one is refused by `migrate`, `web` and `worker`; a clean `docker compose up` (schema applied, no bump) → bootstrap → restart leaves the database and marker generations equal, and a copy of the database taken before the restart is refused against the root afterwards; `migrate` killed between its database bump and its marker write leaves `web` not ready until the marker is reconciled; after bootstrap and a start, recreating the database volume and running `up` again makes bootstrap refuse the used root with its objects untouched; the README states that two databases running against one root at the same time can permanently delete files and that PRKS cannot detect it, and that the start generation counts starts, not writes, so it does not detect every stale database copy (R20) |
-| **L-F-1** Browser store scoping, auth hold and restore epoch | L-ID-1 | §10.3–10.4 on the client | E2E: two accounts in one browser never see each other's drafts or queue; session expiry mid-queue holds and later delivers; pre-0.8 queue offered review-only, never auto-deleted; after the Library epoch changes, a pending edit is not applied, its text is offered in review-only recovery, and older-epoch drafts are never auto-restored; every Library-scoped mutation carries `PRKS-Library-Epoch` and login and bootstrap work without it; the client's epoch handling is proven against a 409 `LIBRARY_EPOCH_CHANGED` and a changed epoch from `/api/session` without a real restore (a real restore belongs to L-B-1, and the combined scenario to PG-C1); #465/#466 suites green |
-
-**Stage 3. Cutover (sequential).**
-
-| Slice | Depends on | Content | Acceptance criteria |
-| --- | --- | --- | --- |
-| **PG-C1** Full PostgreSQL E2E leg | all Stage 2 lanes except L-S-2 | Run the full E2E gate with the facade as the backend in CI (not yet default); the combined restore and browser scenario; the Processing queue frontend (#40, §11.5), which replaces the legacy page in PostgreSQL server mode | Full E2E Gate green on PostgreSQL; facade method registry reports 100 % ported or retired, where `retired` is allowed only for the legacy processing inbox methods that §11.5 replaces; E2E: upload by picker and by drop, preview, draft edit, single and batch import and remove in the Processing queue; E2E: a real restore to an older snapshot while the browser holds a pending edit, the edit is not applied and its text is offered in review-only recovery |
-| **PG-C2** Switch and delete | PG-C1 | PostgreSQL becomes the only backend; §13.4 retirement in one PR (or a short stack); docs and `AGENTS.md` updated; `--testing` uses the harness database | No `import sqlite3` anywhere in `backend/`; full E2E, Test Gate and static analysis green; README quick start works from a clean machine; #614 release gates checked by the maintainer |
-| **PG-C3** Route extraction follow-up (v0.9.0) | PG-C2 | Move route families from facade to direct domain calls under #67, one family per PR | Facade shrinks; no behavior change |
-
-**Pre-1.0 items started after 0.8**: HTTP server decision (§4.5), schema
-freeze into `0001_baseline_v1.sql` and the forward-migration policy, API
-versioning policy (#45), backup format versioning policy, offline
-reassessment (§10.5).
-
-### 15.4 Parallelism at a glance
-
-```text
-Stage 1  PG-1 → PG-2 → PG-3
-Stage 2  after PG-2 ............................... L-ID-1, L-J-1
-         after PG-3 + L-ID-1 ...................... L-W-1
-         after L-ID-1 ............................. L-F-1
-         after PG-1 + L-ID-1 + L-J-1 .............. L-D-1
-         after L-W-1 .............................. L-W-2, L-P-1, L-O-1
-         after L-W-1 + L-J-1 ...................... L-R-1
-         after L-P-1 + L-J-1 ...................... L-A-1
-         after L-P-1 + L-O-1 + L-A-1 .............. L-PR-1, L-S-1
-         after L-S-1 .............................. L-S-2
-         after L-P-1, L-O-1, L-R-1, L-PR-1, L-S-1 . L-B-1
-Stage 3  PG-C1 (after every Stage 2 lane except L-S-2) → PG-C2 → PG-C3
-```
-
-Up to six lanes can run at once after L-W-1 (Works bulk and links, People,
-Organization, Research, Objects, Browser scoping), each in its own files.
-Search starts once People, Organization and Objects have merged, because
-its search documents, Saved View execution and `text.extract` read their
-tables and the storage backend. Backup comes last among the domain lanes,
-because its round trip covers every canonical table (Processing included)
-and its post-restore rebuild runs the Search lane's `derived.rebuild`.
+Done; see git history.
 
 ---
 
+
 ## 16. Maintainer decisions
 
-Recorded from the maintainer's approval of #619 at `7bb9545` on 2026-10-12.
-Each decision is the recommendation this section proposed; none was changed.
-Decision 11 and the last two sentences of decision 10 were added on
-2026-10-13.
+Approved with #619. Numbers are stable; other sections cite them.
 
 1. **Clean start (PG2).** No importer for pre-0.8 SQLite libraries and no
    format 1 archive import before 1.0.
-2. **Immutable objects (PG14).** Approved. L-A-1 measures write amplification
-   (large PDFs, repeated annotation saves) and records it in its PR; a
-   debounced per-Asset materialization job is the fallback if it is too high.
+2. **Immutable objects (PG14).** Approved; a debounced per-Asset
+   materialization job is the fallback if write amplification is too high.
 3. **Text identity (PG9).** NFC, whitespace collapse and full case folding.
    No NFKC and no diacritic folding for identity.
 4. **Search folding.** `unaccent` for search, verified against the Greek and
    Cyrillic parity vectors (§8.7), with a PRKS rules file only if the
    defaults are wrong. Serbian Cyrillic↔Latin transliteration is deferred
    beyond 0.8.
-5. **Derived data (PG11).** Rebuildable indexes and extracted text live in the
-   separate `derived` schema of the same database, never backed up and always
-   rebuildable. The `backend/AGENTS.md` rule "do not write extracted PDF text
-   into the canonical main DB" becomes "only into the `derived` schema"; L-S-1
-   amends it.
+5. **Derived data (PG11).** Rebuildable indexes and extracted text live only
+   in the separate `derived` schema of the same database, never backed up
+   and always rebuildable.
 6. **Authentication.** Password-based owner authentication with server-side
    sessions. No passwordless mode for normal deployments; the loopback-owner
    mode exists only for `--testing`.
@@ -3271,41 +2889,24 @@ Decision 11 and the last two sentences of decision 10 were added on
    explicit request context; #45 decides any versioned path shape.
 8. **Entity IDs (PG7).** Prefixed text IDs are kept.
 9. **HTTP server (PG20).** A production server is evaluated before 1.0 as a
-   separate item, not part of the initial PostgreSQL migration.
-10. **Implementation planning.** Approved. After this document is merged,
-    the slices of §15.3 become focused implementation issues under v0.8.0,
-    linked from #614 and the relevant roadmap issues, with native
-    dependencies. PG-1 is the first coding task, and each slice starts only
-    on the maintainer's explicit authorization. Two slices move to v0.9.0
-    (2026-10-13): L-S-2 (ranking) and PG-C3 (route extraction, given that
-    PG-C2 leaves a working, maintainable facade). PG-C2 is the last
-    mandatory cutover slice of 0.8.
-11. **Concurrent or sequential stale database copies (R20).** Accepted as a documented
-    deployment limitation for 0.8 (2026-10-13). A data root is supported by
-    one canonical PostgreSQL database at a time; independent copies running
-    against one root at once are unsupported and are not technically
-    prevented. The `storage_root_id` pairing and the start generation
-    (§11.1) stay; upgrades, moves and rollbacks follow §12.3; no heartbeat
-    or cross-database fencing is added. Confirmed on #647 (2026-10-13): the
-    limitation also covers sequential use of a stale copy that the start
-    generation cannot distinguish, because the generation counts starts,
-    not writes; no continuous marker recheck or write-time fencing is added
-    in 0.8.
-
-12. **Files for Processing is a managed upload queue** (2026-10-30). It
-    supersedes the path-based processing inbox this document first
-    specified for L-PR-1 (inbox lock, scan job, `imported` source removal,
-    inbox backup payload, restore holds), which is not ported. Browser
-    upload only; queued PDFs are immutable `asset-objects` keys referenced
-    by `processing_items` and counted by the object lifecycle; import is one
+   separate item.
+10. **Implementation planning.** Done (§15).
+11. **Stale database copies (R20).** Accepted as a documented deployment
+    limitation for 0.8. A data root is supported by one canonical
+    PostgreSQL database at a time; copies running against one root, at once
+    or one after the other in a way the start generation cannot
+    distinguish, are unsupported and not technically prevented. The
+    `storage_root_id` pairing and the start generation (§11.1) stay;
+    upgrades, moves and rollbacks follow §12.3; no heartbeat, continuous
+    marker recheck or write-time fencing is added.
+12. **Files for Processing is a managed upload queue.** Browser upload only;
+    queued PDFs are immutable `asset-objects` keys referenced by
+    `processing_items` and counted by the object lifecycle; import is one
     database transaction that hands the key to the new Asset. Uploads are
-    not linearized, because the bundled viewer loads whole files; any later
-    optimization is an Asset rewrite after verifying a need. Imported
-    and deleted items stay as markers indefinitely with no pruning, so a
-    retry never creates a duplicate Work, reports a deleted one, and never
-    recreates a deleted item. The queue frontend targets
-    PostgreSQL server mode with no SQLite implementation, and the legacy
-    inbox is removed at cutover with no parallel implementation (§11.5).
+    not linearized, because the bundled viewer loads whole files. Imported
+    and deleted items stay as markers indefinitely, so a retry never creates
+    a duplicate Work, reports a deleted one, or recreates a deleted item
+    (§11.5).
 
 The compatibility boundary stays **v1.0.0**: before it, backend APIs,
 schemas and implementations may be replaced without prerelease
