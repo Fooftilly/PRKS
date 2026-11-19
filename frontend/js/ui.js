@@ -538,6 +538,11 @@ function openModal(id, options) {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
+    // The create-form dialogs exist once the Vue modal host has mounted
+    // (#1036). Before that there is nothing to show, so the opening is a
+    // no-op rather than a backdrop over no dialog.
+    const modalEl = document.getElementById(id);
+    if (!modalEl) return;
     prksHideModalUnsavedConfirm({ restoreFocus: false });
     const backdrop = document.getElementById('modal-backdrop');
     if (backdrop && backdrop.classList.contains('hidden')) {
@@ -549,7 +554,6 @@ function openModal(id, options) {
     }
     document.getElementById('modal-backdrop').classList.remove('hidden');
     prksHideAllModalShells();
-    const modalEl = document.getElementById(id);
     // A close-and-reopen can settle an older init after the new one is visible.
     // That callback must not drop inert or capture the newer form as pristine.
     let openGeneration;

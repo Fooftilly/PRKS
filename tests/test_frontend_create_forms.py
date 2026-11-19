@@ -119,6 +119,11 @@ class CreateFormVueContractTests(unittest.TestCase):
             open_modal.index("window.prksCreateForms.focusInitial(id);"),
         )
         self.assertIn("window.prksCreateForms.owns(id)", open_modal)
+        # Before the host mounts there is no dialog: no backdrop over nothing.
+        self.assertLess(
+            open_modal.index("if (!modalEl) return;"),
+            open_modal.index("document.getElementById('modal-backdrop').classList.remove('hidden');"),
+        )
         close = ui[ui.index("function closeModals() {") :]
         close = close[: close.index("\n}\n")]
         self.assertLess(
