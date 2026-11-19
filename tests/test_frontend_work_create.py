@@ -25,7 +25,7 @@ _WORK_DIALOG = """<ModalDialog
     body-class="modal-body--scroll"
     with-footer
   >
-    <NewFileForm ref="newFileRef" />
+    <NewFileForm />
   </ModalDialog>"""
 
 def _nf(name: str) -> str:
@@ -263,12 +263,10 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn("markComboboxRendered(inputId, nextTick())", combobox)
         self.assertIn("if (seq !== renderSeq) return", _nf("NewFileTags.vue"))
         # An open list is Escape's inner layer, before the dialog.
-        ui = _read(_UI)
-        escape = ui.split("function prksDismissModalInnerEscapeLayer", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("dismissInnerLayer(modal.id)", escape)
-        host = _read(os.path.join(_CREATE_FORMS, "CreateFormsHost.vue"))
-        self.assertIn("if (modalId === 'work-modal') return newFileRef.value?.closeOpenList() ?? false", host)
+        modal_host = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "modal", "ModalHost.vue"))
+        self.assertIn("dismissDialogInnerLayer(openDialog)", modal_host)
         form = _read(_NEW_FILE_FORM)
+        self.assertIn("dismissInnerLayer: closeOpenList", form)
         self.assertIn("createSubmitKeyHandler(['work-title']", form)
         keyboard = _read(os.path.join(_CREATE_FORMS, "keyboard.ts"))
         self.assertIn("event.ctrlKey || event.metaKey", keyboard)
@@ -429,19 +427,21 @@ class FrontendWorkCreateTests(unittest.TestCase):
             self.assertNotIn(retired, app, retired)
 
     def test_work_modal_open_settles_after_exactly_once(self):
-        """The work-modal open path must run its `after` continuation once."""
-        ui = _read(_UI)
-        chunk = ui.split("} else if (id === 'work-modal') {", 1)[1].split("} else if (id ===", 1)[0]
+        """A dialog opening runs its settle step once (#1036)."""
+        dialogs = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "modal", "dialogs.ts"))
+        chunk = dialogs.split("export function beginOpening(id: string): void {", 1)[1].split("\n}\n", 1)[0]
         # Two-argument then: one of the two handlers runs, never both.
-        self.assertIn("prepared.then(after, after);", chunk)
-        self.assertIn("window.prksCreateForms.prepareNewFile(isCurrentOpening)", chunk)
+        self.assertIn("pending.then(settle, settle)", chunk)
         # Negative checks look at code only -- the source comment right above
         # the call names the rejected form in order to explain it.
         code = re.sub(r"//[^\n]*", "", chunk)
-        # .then(after).catch(after) would re-run `after` when the fulfilment
-        # call itself throws, re-focusing the modal and re-capturing its
+        # .then(settle).catch(settle) would re-run settle when the fulfilment
+        # call itself throws, re-focusing the dialog and re-capturing its
         # baseline over the state the first run already established.
-        self.assertNotIn(".catch(after)", code)
+        self.assertNotIn(".catch(settle)", code)
+        # New File hands its prepare the opening's own currency check.
+        self.assertIn("opened: (opening) => prepare(opening.isCurrent)", _read(_NEW_FILE_FORM))
+        self.assertNotIn("prepareNewFile", _read(_UI))
         # The Vue form drops a load that finished after a newer opening.
         form = _read(_NEW_FILE_FORM)
         prepare = form.split("async function prepare(", 1)[1].split("\n}\n", 1)[0]

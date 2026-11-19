@@ -502,24 +502,8 @@ function prksTakePlaylistIndexCreateTabId() {
     return String(ctx.tabId);
 }
 
-function prksResetPlaylistCreateFields() {
-    if (window.prksCreateForms && typeof window.prksCreateForms.resetPlaylistFields === 'function') {
-        window.prksCreateForms.resetPlaylistFields();
-        return;
-    }
-    const titleEl = document.getElementById('playlist-title');
-    const descEl = document.getElementById('playlist-description');
-    const errEl = document.getElementById('playlist-error');
-    if (titleEl) titleEl.value = '';
-    if (descEl) descEl.value = '';
-    if (errEl) {
-        errEl.textContent = '';
-        errEl.classList.add('hidden');
-    }
-}
-
 function prksOpenNewPlaylistModalFromPlaylistsPage(owner) {
-    prksResetPlaylistCreateFields();
+    // The New playlist form starts blank on every opening (#1036).
     window.__prksPendingPlaylistAttach = null;
     prksRememberPlaylistIndexCreate(owner);
     if (typeof openModal === 'function') openModal('playlist-modal');
@@ -902,7 +886,6 @@ async function mountPlaylistAttachControls(work, ownerCtx) {
     };
 
     newBtn.onclick = async () => {
-        if (typeof prksResetPlaylistCreateFields === 'function') prksResetPlaylistCreateFields();
         window.__prksPendingPlaylistAttach = {
             workId: wid,
             tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
+import { useDialogLifecycle } from '../../modal/dialogs'
 import { fieldValue, setFieldValue } from './dom'
 import { createPlaylistSaveGate } from './playlist-save'
 import {
@@ -107,7 +108,8 @@ function focusInitial(): void {
   focusField('playlist-title')
 }
 
-defineExpose({ resetFields, focusInitial })
+// Every opening starts blank; the opener sets any pending attach itself.
+useDialogLifecycle({ opened: resetFields, focusInitial })
 </script>
 
 <template>

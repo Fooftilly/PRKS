@@ -99,16 +99,17 @@ class ModalLifecycleContractTests(unittest.TestCase):
         self.assertIn("prksSerializeModalFormState(modalId) === baseline", schedule)
 
     def test_person_create_reset_does_not_touch_profile_edit(self):
-        open_modal = _between(self.ui, "function openModal(id, options)", "const PRKS_LS_HINTS")
-        person_branch = open_modal.split("id === 'person-modal'", 1)[1].split("} else if", 1)[0]
-        self.assertIn("resetPersonCreateForm()", person_branch)
-        self.assertIn("prksOpenGeneration", open_modal)
-        self.assertEqual(open_modal.count("if (!isCurrentOpening()) return;"), 2)
-        reset = _between(self.ui, "function resetPersonCreateForm()", "function syncPersonAliasesFromNames()")
-        self.assertNotIn("pd-first-name", reset)
+        # The New Person form resets itself on every opening (#1036).
+        self.assertNotIn("resetPersonCreateForm", self.ui)
+        form = (ROOT / "frontend-app" / "src" / "features" / "create-forms" / "PersonCreateForm.vue").read_text(
+            encoding="utf-8"
+        )
+        reset = _between(form, "const FIELD_IDS = [", "const onKeydown")
+        self.assertIn("useDialogLifecycle({ opened: resetForOpening", form)
         self.assertNotIn("pd-", reset)
-        self.assertIn("el.value = ''", reset)
+        self.assertIn("setFieldValue(id, '')", reset)
         self.assertIn("removeAttribute('aria-invalid')", reset)
+        self.assertIn("window._personAliasesManual = false", reset)
 
     def test_focus_restore_does_not_steal_the_modal_opener(self):
         close = _between(self.ui, "function closeModals()", "window.prksDismissModalInnerEscapeLayer")

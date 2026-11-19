@@ -1,8 +1,7 @@
 /**
- * Same field snapshot as `prksSerializeModalFormState` in `ui.js`.
- * The classic scheduler still uses its copy to decide whether a later frame
- * may recapture. This one is the view-local dirty baseline for the forms
- * this slice owns.
+ * Same field snapshot as `prksSerializeModalFormState` in `ui.js`, which
+ * keeps its copy for the classic Settings shell. This one is the dirty
+ * baseline of the dialogs ModalHost renders (`dialogs.ts`).
  */
 export function snapshotModalFields(modal: ParentNode): string {
   const fields = modal.querySelectorAll('input, textarea, select')

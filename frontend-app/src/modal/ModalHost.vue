@@ -1,7 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../components/PrksButton.vue'
-import { hideDialogs, ownsDialog, restoreDialog, setDialogInert, showDialog } from './dialogs'
+import {
+  beginOpening,
+  captureDialogBaseline,
+  dialogsClosed,
+  dialogState,
+  dismissDialogInnerLayer,
+  hideDialogs,
+  isDialogDirty,
+  ownsDialog,
+  resetDialogBaselines,
+  restoreDialog,
+  showDialog,
+} from './dialogs'
 import { restoreConfirmFocus, tabbableIn } from './focus'
 import type {
   ModalConfirmOptions,
@@ -268,6 +280,13 @@ function handleEscape(event: KeyboardEvent): void {
     hideUnsavedConfirm()
     return
   }
+  // An open list in a feature dialog (a Folder or Group parent, a New File
+  // picker) is its own layer: Escape closes it and the dialog stays.
+  const openDialog = dialogState.active
+  if (openDialog && dismissDialogInnerLayer(openDialog)) {
+    stopKey(event)
+    return
+  }
   const dismissInner = window.prksDismissModalInnerEscapeLayer
   if (typeof dismissInner === 'function' && dismissInner()) {
     stopKey(event)
@@ -299,9 +318,13 @@ const api: PrksModalHostApi = {
   handleEscape,
   ownsDialog,
   showDialog,
+  beginOpening,
   restoreDialog,
   hideDialogs,
-  setDialogInert,
+  dialogsClosed,
+  isDialogDirty,
+  captureDialogBaseline,
+  resetDialogBaselines,
 }
 
 onMounted(() => {

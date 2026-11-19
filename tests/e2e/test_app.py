@@ -12796,9 +12796,9 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         )
 
     def _wait_work_modal_folder(self, page, folder_id, folder_label):
-        """Wait for openModal's after-continuation to populate folder fields.
+        """Wait for the New File opening to populate folder fields.
 
-        `#work-modal:not(.hidden)` appears before `prepareNewFile()`
+        `#work-modal:not(.hidden)` appears before the form's `prepare()`
         finishes and writes `#work-folder-id`. A bare `input_value()` read races
         that continuation under parallel load (#64). For the Uncategorized
         default, folder_id is "" and folder_label is "Uncategorized" — waiting
@@ -13074,9 +13074,8 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.wait_for_function(
             """() => {
                 const m = document.getElementById('work-modal');
-                const ready = window.__prksModalBaselineReady;
                 return !!(m && !m.classList.contains('hidden') && !m.hasAttribute('inert')
-                    && ready && ready['work-modal'] === true);
+                    && m.dataset.prksDialogReady === 'true');
             }"""
         )
 

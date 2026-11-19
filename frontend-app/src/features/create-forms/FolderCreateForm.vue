@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksField from '../../components/PrksField.vue'
+import { useDialogLifecycle, type DialogOpening } from '../../modal/dialogs'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
 import { finishFolderCreate, type FolderDraft, type PendingAttach } from './folder-effects'
@@ -34,6 +35,10 @@ const PARENT_NOT_PICKED = 'Pick a parent folder from the list, or clear this fie
 
 function runtime(): FolderWindow {
   return window as unknown as FolderWindow
+}
+
+function attachWindow(): { __prksPendingWorkFolderAttach?: PendingAttach | null } {
+  return window as unknown as { __prksPendingWorkFolderAttach?: PendingAttach | null }
 }
 
 function readDraft(): FolderDraft {
@@ -187,8 +192,7 @@ function onSave(): void {
     guardRefusal: (error) => w.prksOfflineWasGuardRefusal?.(error) === true,
     revalidate: () => applyChrome(),
     owner: () => w.prksGetFocusedTabContext?.() ?? null,
-    pendingAttach: () => (window as unknown as { __prksPendingWorkFolderAttach?: PendingAttach | null })
-      .__prksPendingWorkFolderAttach ?? null,
+    pendingAttach: () => attachWindow().__prksPendingWorkFolderAttach ?? null,
     afterCreate: finishFolderCreate,
   })
 }
@@ -218,7 +222,40 @@ function closeParentList(): boolean {
   return true
 }
 
-defineExpose({ refreshValidation, releaseSave, focusInitial, resetFields, closeParentList })
+/**
+ * A new opening. A dismissed save may still await its durable create; this
+ * opening owns the same button, not that save's busy state. A Work's "New
+ * folder" attach belongs to the one opening it was made for: the first
+ * opening stamps it, and any later one (the Add menu after a cancel) finds a
+ * stamp that is not its own and drops it. The parent stays as that attach
+ * left it, and is blank otherwise.
+ */
+function opened(opening: DialogOpening): void {
+  releaseSave()
+  const w = attachWindow()
+  const pending = w.__prksPendingWorkFolderAttach
+  const stamp = String(opening.generation)
+  if (pending && typeof pending === 'object') {
+    if (pending.modalOpening == null) pending.modalOpening = stamp
+    else if (pending.modalOpening !== stamp) w.__prksPendingWorkFolderAttach = null
+  }
+  if (!w.__prksPendingWorkFolderAttach) {
+    setFieldValue('folder-parent-search', '')
+    setFieldValue('folder-parent-id', '')
+  }
+  void refreshValidation()
+}
+
+useDialogLifecycle({ opened, focusInitial, closed: resetFields, dismissInnerLayer: closeParentList })
+
+// Classic Folder callers refresh the title check after a Folder change.
+onMounted(() => {
+  window.prksRefreshFolderModalValidation = refreshValidation
+})
+
+onBeforeUnmount(() => {
+  if (window.prksRefreshFolderModalValidation === refreshValidation) delete window.prksRefreshFolderModalValidation
+})
 </script>
 
 <template>

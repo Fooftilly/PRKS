@@ -10,6 +10,7 @@
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import { useDialogLifecycle } from '../../modal/dialogs'
 import PrksField from '../../components/PrksField.vue'
 import { focusField } from './keyboard'
 import {
@@ -167,7 +168,9 @@ function focusInitial(): void {
   focusField(TEXTAREA_ID)
 }
 
-defineExpose({ prepare, focusInitial })
+useDialogLifecycle({ focusInitial })
+
+defineExpose({ focusInitial })
 
 onMounted(() => {
   runtime().openPersonProfileTemplateModal = open

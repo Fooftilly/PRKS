@@ -60,17 +60,14 @@ function prksSerializeModalFormState(modalId) {
 
 function prksCaptureModalBaseline(modalId) {
     if (!modalId) return;
+    // A dialog the Vue modal host renders keeps its own baseline (#1036).
+    const host = prksDialogHostFor(modalId);
+    if (host) {
+        host.captureDialogBaseline(modalId);
+        return;
+    }
     const store = prksGetModalBaselineStore();
     store[modalId] = prksSerializeModalFormState(modalId);
-    const forms = window.prksCreateForms;
-    if (
-        forms &&
-        typeof forms.owns === 'function' &&
-        forms.owns(modalId) &&
-        typeof forms.captureBaseline === 'function'
-    ) {
-        forms.captureBaseline(modalId);
-    }
 }
 
 function prksModalBaselineReadyStore() {
@@ -118,17 +115,6 @@ function prksHideAllModalShells() {
     if (host && typeof host.hideDialogs === 'function') host.hideDialogs();
 }
 
-function prksSetModalInert(modalEl, id, on) {
-    const host = prksDialogHostFor(id);
-    if (host) {
-        host.setDialogInert(id, on);
-    } else if (on) {
-        modalEl.setAttribute('inert', '');
-    } else {
-        modalEl.removeAttribute('inert');
-    }
-}
-
 function prksGetActiveModalId() {
     const modal = document.querySelector('.modal:not(.hidden)');
     return modal ? modal.id : '';
@@ -140,14 +126,11 @@ function prksModalNeedsUnsavedConfirm(modalId) {
 
 function prksModalHasUnsavedChanges(modalId) {
     if (!modalId || !prksModalNeedsUnsavedConfirm(modalId)) return false;
-    // The Vue create forms report dirty through prksCreateForms (New File
-    // and the role linker by a snapshot against the baseline taken once the
-    // opening is prepared). The store below remains for the classic shells
-    // (#1036).
-    const forms = window.prksCreateForms;
-    if (forms && typeof forms.owns === 'function' && forms.owns(modalId)) {
-        return forms.isDirty(modalId) === true;
-    }
+    // A dialog the Vue modal host renders compares its fields with the
+    // baseline its opening took once prepared (#1036). The store below is
+    // the fallback before the host has mounted.
+    const host = prksDialogHostFor(modalId);
+    if (host) return host.isDialogDirty(modalId) === true;
     const store = prksGetModalBaselineStore();
     const baseline = Object.prototype.hasOwnProperty.call(store, modalId) ? store[modalId] : null;
     if (baseline == null) return false;
@@ -158,9 +141,8 @@ function prksModalHasUnsavedChanges(modalId) {
 function prksResetModalBaselines() {
     window.__prksModalFormBaseline = {};
     window.__prksModalBaselineReady = {};
-    if (window.prksCreateForms && typeof window.prksCreateForms.resetBaselines === 'function') {
-        window.prksCreateForms.resetBaselines();
-    }
+    const host = prksReadModalHost();
+    if (host && typeof host.resetDialogBaselines === 'function') host.resetDialogBaselines();
 }
 
 // Not named prksModalHost: a classic-script function declaration is the
@@ -460,16 +442,8 @@ function prksCloseStandalonePageModal(modal) {
 function prksDismissModalInnerEscapeLayer() {
     const modal = document.querySelector('.modal:not(.hidden)');
     if (!modal) return false;
-    // The Vue create forms own their result lists' open state; an open one
-    // (a Folder or Group parent, a New File picker) is its own layer.
-    if (
-        window.prksCreateForms &&
-        window.prksCreateForms.owns(modal.id) &&
-        typeof window.prksCreateForms.dismissInnerLayer === 'function' &&
-        window.prksCreateForms.dismissInnerLayer(modal.id)
-    ) {
-        return true;
-    }
+    // A Vue dialog's own open list is dismissed by the modal host before
+    // this runs (#1036).
     const openPanel = modal.querySelector('.prks-doc-type-menu__panel:not(.hidden)');
     if (!openPanel) return false;
     if (typeof prksCloseAllDocTypeMenus === 'function') {
@@ -554,8 +528,8 @@ function openModal(id, options) {
     }
     document.getElementById('modal-backdrop').classList.remove('hidden');
     prksHideAllModalShells();
-    // A close-and-reopen can settle an older init after the new one is visible.
-    // That callback must not drop inert or capture the newer form as pristine.
+    // A close-and-reopen can settle an older prepare after the new one is
+    // visible. Each opening's generation lets it tell (`dialogs.ts`).
     let openGeneration;
     const dialogHost = prksDialogHostFor(id);
     if (dialogHost) {
@@ -565,53 +539,10 @@ function openModal(id, options) {
         openGeneration = (Number(modalEl.dataset.prksOpenGeneration) || 0) + 1;
         modalEl.dataset.prksOpenGeneration = String(openGeneration);
     }
-    if (id === 'folder-modal') {
-        // A dismissed save may still be awaiting its durable create. The new
-        // opening owns this same button, not the old opening's busy snapshot.
-        if (window.prksCreateForms && typeof window.prksCreateForms.releaseFolderSave === 'function') {
-            window.prksCreateForms.releaseFolderSave();
-        } else if (typeof prksSetButtonBusy === 'function') {
-            prksSetButtonBusy(document.getElementById('save-folder-btn'), false);
-        }
-    }
-
-    let deferBaseline = false;
-    const isCurrentOpening = () =>
-        modalEl.dataset.prksOpenGeneration === String(openGeneration)
-        && !modalEl.classList.contains('hidden');
+    // The opener's own state, which the dialog's form may read while it
+    // prepares (the role linker's Person or File, an index's create origin).
     if (id === 'role-modal') {
         prksCaptureRoleModalOrigin(openGeneration);
-        deferBaseline = true;
-        prksSetModalInert(modalEl, id, true);
-        const finishRole = () => {
-            if (!isCurrentOpening()) return;
-            prksScheduleModalBaselineCapture('role-modal');
-            prksSetModalInert(modalEl, id, false);
-            if (window.prksCreateForms) window.prksCreateForms.focusInitial('role-modal');
-        };
-        // The Vue form loads both catalogues and names the opener's Person or
-        // Work (#1036).
-        const prepared = window.prksCreateForms && typeof window.prksCreateForms.prepareRoleLink === 'function'
-            ? window.prksCreateForms.prepareRoleLink(isCurrentOpening)
-            : Promise.resolve();
-        prepared.then(finishRole, finishRole);
-    } else if (id === 'work-modal') {
-        deferBaseline = true;
-        prksSetModalInert(modalEl, id, true);
-        const after = () => {
-            if (!isCurrentOpening()) return;
-            prksScheduleModalBaselineCapture('work-modal');
-            prksSetModalInert(modalEl, id, false);
-            if (window.prksCreateForms) window.prksCreateForms.focusInitial('work-modal');
-        };
-        // The Vue form resets itself, loads People and Folders and picks the
-        // default Folder (#1036). Two-argument then, not .then(after).catch(after):
-        // the latter would run `after` again if the fulfilment call threw,
-        // re-focusing the modal and re-capturing its baseline.
-        const prepared = window.prksCreateForms && typeof window.prksCreateForms.prepareNewFile === 'function'
-            ? window.prksCreateForms.prepareNewFile(isCurrentOpening)
-            : Promise.resolve();
-        prepared.then(after, after);
     } else if (id === 'person-modal') {
         if (window.__prksPersonIndexCreateArmed) {
             window.__prksPersonIndexCreateArmed = false;
@@ -622,21 +553,6 @@ function openModal(id, options) {
                 window.__prksPersonIndexCreateOrigin = null;
             }
         }
-        resetPersonCreateForm();
-    } else if (id === 'folder-modal' && typeof window.prksRefreshFolderModalValidation === 'function') {
-        // A Work's "New folder" attach belongs to the one opening it was made
-        // for. Stamp it here; any later opening (the global Add menu after a
-        // cancel) finds a stamp that is not its own and drops it.
-        const pendingAttach = window.__prksPendingWorkFolderAttach;
-        if (pendingAttach && typeof pendingAttach === 'object') {
-            if (pendingAttach.modalOpening == null) pendingAttach.modalOpening = String(openGeneration);
-            else if (pendingAttach.modalOpening !== String(openGeneration)) window.__prksPendingWorkFolderAttach = null;
-        }
-        const parentSearch = document.getElementById('folder-parent-search');
-        const parentId = document.getElementById('folder-parent-id');
-        if (parentSearch && !window.__prksPendingWorkFolderAttach) parentSearch.value = '';
-        if (parentId && !window.__prksPendingWorkFolderAttach) parentId.value = '';
-        window.prksRefreshFolderModalValidation();
     } else if (id === 'settings-modal') {
         // Orientation has to be corrected before openModal returns. If the
         // Vue surface is not installed yet, the next close is unchanged and
@@ -654,15 +570,14 @@ function openModal(id, options) {
         } else {
             window.__prksPersonGroupIndexCreateOrigin = null;
         }
-        if (typeof window.prksInitNewGroupModal === 'function') void window.prksInitNewGroupModal();
     }
+    // A Vue dialog's form runs its own opening: a blank form and its
+    // catalogues (inert until they load), then the unsaved-changes baseline,
+    // then focus in its first field (#1036, #603, #589).
+    if (dialogHost) dialogHost.beginOpening(id);
+    else prksScheduleModalBaselineCapture(id);
     requestAnimationFrame(() => prksBindAutosizeTextareas(modalEl));
-    if (!deferBaseline) prksScheduleModalBaselineCapture(id);
     if (typeof prksRefreshIcons === 'function') prksRefreshIcons(modalEl);
-    // The Vue create forms take focus into their first field (#603, #589).
-    if (window.prksCreateForms && window.prksCreateForms.owns(id)) {
-        window.prksCreateForms.focusInitial(id);
-    }
 }
 
 // —— In-app help hints (popover + Settings toggle) ——
@@ -1055,38 +970,6 @@ function buildPersonAliasSuggestions(firstName, lastName) {
     return [...new Set(suggestions)].join(', ');
 }
 
-const PRKS_PERSON_CREATE_FIELD_IDS = [
-    'person-fname',
-    'person-lname',
-    'person-aliases',
-    'person-about',
-    'person-birth-date',
-    'person-death-date',
-    'person-image-url',
-    'person-link-wikipedia',
-    'person-link-stanford',
-    'person-link-iep',
-    'person-links-other',
-];
-
-function resetPersonAliasAutoSyncState() {
-    window._personAliasesManual = false;
-}
-
-/** Blank create model only. Profile edit lives in the right panel (`pd-*`), not here. */
-function resetPersonCreateForm() {
-    resetPersonAliasAutoSyncState();
-    PRKS_PERSON_CREATE_FIELD_IDS.forEach((fieldId) => {
-        const el = document.getElementById(fieldId);
-        if (!el) return;
-        el.value = '';
-        el.removeAttribute('aria-invalid');
-    });
-    if (window.prksCreateForms && typeof window.prksCreateForms.afterPersonReset === 'function') {
-        window.prksCreateForms.afterPersonReset();
-    }
-}
-
 function syncPersonAliasesFromNames() {
     if (window._personAliasesManual) return;
     const fname = document.getElementById('person-fname');
@@ -1108,9 +991,8 @@ function closeModals() {
     prksHideAllModalShells();
     // A closed Folder or Group dialog drops its draft (#373). An opener that
     // prefills the form writes it after this, right before openModal.
-    if (window.prksCreateForms && typeof window.prksCreateForms.resetClosed === 'function') {
-        window.prksCreateForms.resetClosed();
-    }
+    const dialogHost = prksReadModalHost();
+    if (dialogHost && typeof dialogHost.dialogsClosed === 'function') dialogHost.dialogsClosed();
 
     // If playlist modal was opened from "New File" flow, return to it.
     if (playlistWasOpen && window.__prksReturnToWorkModalAfterPlaylist === true) {

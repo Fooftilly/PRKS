@@ -39,7 +39,17 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("<ModalHost>\n    <CreateFormsHost />\n  </ModalHost>", app)
         modal_host = (ROOT / "frontend-app" / "src" / "modal" / "ModalHost.vue").read_text(encoding="utf-8")
         self.assertIn("<slot />", modal_host)
-        for name in ("ownsDialog", "showDialog", "restoreDialog", "hideDialogs", "setDialogInert"):
+        for name in (
+            "ownsDialog",
+            "showDialog",
+            "beginOpening",
+            "restoreDialog",
+            "hideDialogs",
+            "dialogsClosed",
+            "isDialogDirty",
+            "captureDialogBaseline",
+            "resetDialogBaselines",
+        ):
             self.assertIn(name, modal_host, name)
         self.assertNotIn('id="folder-title"', index)
         self.assertNotIn('id="save-folder-btn"', index)
@@ -101,6 +111,10 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("clearPendingIfSame", playlist_save)
         self.assertIn("prksOpenGeneration", playlist_save)
         self.assertIn("ModalHost renders this inside its own layer", host)
+        # Each form runs its own opening through its dialog (#1036).
+        for form in (folder, person, group, playlist):
+            self.assertIn("useDialogLifecycle(", form)
+        self.assertNotIn("prksCreateForms", host)
         self.assertNotIn("POST /api/", submit)
         self.assertNotIn("POST /api/", playlist_save)
 
@@ -108,17 +122,22 @@ class CreateFormVueContractTests(unittest.TestCase):
         """#603/#589, #373 and #467: the shell hands each moment to the Vue forms."""
         ui = UI.read_text(encoding="utf-8")
         open_modal = ui[ui.index("function openModal(id, options) {") : ui.index("// —— In-app help hints")]
-        # The host shows its dialog as a new opening before anything else
-        # reads it, and focus moves into the first field after that.
+        # The host shows its dialog as a new opening, the opener sets its own
+        # state (the role linker's opener reads the generation), and only then
+        # does the form run its opening: prepare, baseline, focus.
         self.assertLess(
             open_modal.index("openGeneration = dialogHost.showDialog(id);"),
-            open_modal.index("const isCurrentOpening"),
+            open_modal.index("prksCaptureRoleModalOrigin(openGeneration);"),
         )
         self.assertLess(
-            open_modal.index("openGeneration = dialogHost.showDialog(id);"),
-            open_modal.index("window.prksCreateForms.focusInitial(id);"),
+            open_modal.index("prksCaptureRoleModalOrigin(openGeneration);"),
+            open_modal.index("dialogHost.beginOpening(id);"),
         )
-        self.assertIn("window.prksCreateForms.owns(id)", open_modal)
+        self.assertLess(
+            open_modal.index("__prksPersonGroupIndexCreateArmed = false"),
+            open_modal.index("dialogHost.beginOpening(id);"),
+        )
+        self.assertNotIn("prksCreateForms", ui)
         # Before the host mounts there is no dialog: no backdrop over nothing.
         self.assertLess(
             open_modal.index("if (!modalEl) return;"),
@@ -128,27 +147,28 @@ class CreateFormVueContractTests(unittest.TestCase):
         close = close[: close.index("\n}\n")]
         self.assertLess(
             close.index("prksHideAllModalShells();"),
-            close.index("window.prksCreateForms.resetClosed();"),
+            close.index("dialogHost.dialogsClosed();"),
         )
-        inner = ui[ui.index("function prksDismissModalInnerEscapeLayer() {") :]
-        inner = inner[: inner.index("\n}\n")]
-        self.assertIn("window.prksCreateForms.dismissInnerLayer(modal.id)", inner)
+        # Escape closes a form's open list before ui.js's doc-type menu layer.
+        modal_host = (ROOT / "frontend-app" / "src" / "modal" / "ModalHost.vue").read_text(encoding="utf-8")
         self.assertLess(
-            inner.index("dismissInnerLayer(modal.id)"),
-            inner.index("const openPanel"),
+            modal_host.index("dismissDialogInnerLayer(openDialog)"),
+            modal_host.index("window.prksDismissModalInnerEscapeLayer"),
         )
 
     def test_classic_shell_delegates_dirty_and_does_not_bind_the_buttons(self):
         ui = UI.read_text(encoding="utf-8")
         app = APP.read_text(encoding="utf-8")
-        self.assertIn("forms.owns(modalId)", ui)
-        self.assertIn("forms.isDirty(modalId)", ui)
-        self.assertIn("releaseFolderSave", ui)
-        self.assertIn("afterPersonReset()", ui)
-        self.assertIn("el.value = ''", ui)
-        self.assertIn("if (!window.prksCreateForms)", app)
+        self.assertIn("host.isDialogDirty(modalId)", ui)
+        self.assertIn("host.captureDialogBaseline(modalId)", ui)
+        folder = (FORMS / "FolderCreateForm.vue").read_text(encoding="utf-8")
+        self.assertIn("releaseSave()", folder.split("function opened(", 1)[1].split("\n}\n", 1)[0])
+        person = (FORMS / "PersonCreateForm.vue").read_text(encoding="utf-8")
+        self.assertIn("personBusy.value = false", person.split("function resetForOpening(", 1)[1].split("\n}\n", 1)[0])
+        guard = "folderDialogHost.ownsDialog('folder-modal')"
+        self.assertIn(guard, app)
         self.assertIn("Create Link is the Vue role link form's", app)
-        fallback = app.split("if (!window.prksCreateForms)", 1)[1].split(
+        fallback = app.split(guard, 1)[1].split(
             "Create Link is the Vue role link form's", 1
         )[0]
         self.assertIn("getElementById('save-folder-btn')", fallback)
@@ -162,7 +182,10 @@ class CreateFormVueContractTests(unittest.TestCase):
         # Create Link is the Vue role link form's; no classic save handler remains.
         self.assertNotIn("getElementById('save-role-btn')", app)
         self.assertNotIn("prepareRoleModal", ui)
-        self.assertIn("window.prksCreateForms.prepareRoleLink(", ui)
+        self.assertIn(
+            "opened: (opening) => prepare(opening.isCurrent)",
+            (FORMS / "RoleLinkForm.vue").read_text(encoding="utf-8"),
+        )
         self.assertIn('id="save-role-btn"', (FORMS / "RoleLinkForm.vue").read_text(encoding="utf-8"))
 
     def test_person_template_body_is_vue(self):

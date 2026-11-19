@@ -36,7 +36,6 @@ interface Window {
    * Teleport adapter for Folder, Person, Group, and Playlist create forms.
    * Retire when those shells move into ModalHost (#1036).
    */
-  prksCreateForms?: import('./src/features/create-forms/types').PrksCreateFormsApi
   prksRefreshFolderModalValidation?: () => Promise<void>
   _personAliasesManual?: boolean
   requestModalClose?: (reason?: string) => boolean

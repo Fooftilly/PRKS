@@ -291,10 +291,10 @@ class FrontendSavedViewsTests(unittest.TestCase):
         host = _read(_CREATE_HOST)
         self.assertIn('<ModalDialog id="saved-view-modal" :title="savedViewTitle">', host)
         self.assertIn("savedViewRef.value?.title", host)
-        self.assertIn("'saved-view-modal': () => savedViewRef.value", host)
         form = _read(_SV)
         self.assertNotIn("<Teleport", form)
-        self.assertIn("defineExpose({ open: openWith, focusInitial, title })", form)
+        self.assertIn("useDialogLifecycle({ focusInitial })", form)
+        self.assertIn("defineExpose({ title })", form)
         for name in (
             "window.prksOpenSavedViewModal = openWith",
             "window.prksOpenSavedViewModalFromCurrentSearch = openFromSearch",

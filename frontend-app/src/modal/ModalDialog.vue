@@ -4,13 +4,18 @@
  * optional footer. ModalHost renders these for the create forms (#1036).
  *
  * The root keeps the classic `.modal` contract (`hidden` when closed, the
- * opening's `data-prks-open-generation`, `inert` while it prepares). Those
- * are reflected synchronously from `dialogs.ts`, so code that reads the DOM
- * right after `openModal` or `closeModals` sees the new state at once.
+ * opening's `data-prks-open-generation`, `inert` while it prepares) and adds
+ * `data-prks-dialog-ready` once the opening is prepared, its baseline taken
+ * and its first field focused. These are reflected synchronously from
+ * `dialogs.ts`, so code that reads the DOM right after `openModal` or
+ * `closeModals` sees the new state at once.
+ *
+ * The form in the body registers its own opening steps with
+ * `useDialogLifecycle`, which finds this dialog's id.
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PrksIconButton from '../components/PrksIconButton.vue'
-import { dialogState, registerDialog, unregisterDialog } from './dialogs'
+import { dialogState, provideDialogId, registerDialog, unregisterDialog } from './dialogs'
 
 const props = withDefaults(
   defineProps<{
@@ -39,12 +44,20 @@ function reflect(): void {
   if (generation != null) el.dataset.prksOpenGeneration = String(generation)
   else delete el.dataset.prksOpenGeneration
   el.toggleAttribute('inert', dialogState.inert[props.id] === true)
+  if (dialogState.ready[props.id] === true) el.dataset.prksDialogReady = 'true'
+  else delete el.dataset.prksDialogReady
 }
 
 registerDialog(props.id)
+provideDialogId(props.id)
 
 watch(
-  () => [dialogState.active === props.id, dialogState.generations[props.id], dialogState.inert[props.id]],
+  () => [
+    dialogState.active === props.id,
+    dialogState.generations[props.id],
+    dialogState.inert[props.id],
+    dialogState.ready[props.id],
+  ],
   reflect,
   { flush: 'sync' },
 )

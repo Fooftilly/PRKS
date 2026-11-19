@@ -40,9 +40,8 @@ def _wait_baseline(page, modal_id):
     page.wait_for_function(
         """(id) => {
             const modal = document.getElementById(id);
-            const ready = window.__prksModalBaselineReady;
             return !!(modal && !modal.classList.contains('hidden')
-                && ready && ready[id] === true);
+                && modal.dataset.prksDialogReady === 'true');
         }""",
         arg=modal_id,
     )
@@ -112,10 +111,9 @@ class ModalLifecycleTests(unittest.TestCase):
         page.wait_for_function(
             """() => {
                 const modal = document.getElementById('work-modal');
-                const ready = window.__prksModalBaselineReady;
                 const ae = document.activeElement;
                 return !!(modal && !modal.classList.contains('hidden')
-                    && ready && ready['work-modal'] === true
+                    && modal.dataset.prksDialogReady === 'true'
                     && ae && ae.id === 'upload-drop-zone');
             }"""
         )

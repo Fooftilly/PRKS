@@ -8,6 +8,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import { useDialogLifecycle } from '../../modal/dialogs'
 import PrksField from '../../components/PrksField.vue'
 import type { SavedViewMode } from '../../api/saved-views'
 import { focusField } from '../create-forms/keyboard'
@@ -161,7 +162,9 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ open: openWith, focusInitial, title })
+useDialogLifecycle({ focusInitial })
+
+defineExpose({ title })
 </script>
 
 <template>

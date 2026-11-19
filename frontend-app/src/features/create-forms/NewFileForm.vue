@@ -12,6 +12,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { fieldValue, setFieldValue } from './dom'
 import PrksButton from '../../components/PrksButton.vue'
+import { useDialogLifecycle } from '../../modal/dialogs'
 import { createSubmitKeyHandler } from './keyboard'
 import NewFileFolder from './new-file/NewFileFolder.vue'
 import NewFilePeople from './new-file/NewFilePeople.vue'
@@ -355,7 +356,12 @@ onBeforeUnmount(() => {
   if (countFrame) window.cancelAnimationFrame(countFrame)
 })
 
-defineExpose({ prepare, focusInitial, closeOpenList })
+// The dialog stays inert until the catalogues and the default Folder load.
+useDialogLifecycle({
+  opened: (opening) => prepare(opening.isCurrent),
+  focusInitial,
+  dismissInnerLayer: closeOpenList,
+})
 </script>
 
 <template>
