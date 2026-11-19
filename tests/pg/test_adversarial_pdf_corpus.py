@@ -30,6 +30,7 @@ import os
 import shutil
 import threading
 from typing import Any, BinaryIO, Callable, Optional, TypeVar
+from unittest import mock
 
 from backend.domain.objects import ingest
 from backend.domain.search import text as search_text
@@ -219,14 +220,22 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
         self.assertEqual([item["id"] for item in stored], [DUPLICATE_ANNOTATION_ID])
 
     def check_linearize(self, case: Case, data: bytes, linearized: bool) -> None:
+        """Pin PRKS_PDF_LINEARIZE for each store, so the host's own setting cannot decide the answer."""
         def write(handle: BinaryIO) -> None:
             handle.write(data)
 
-        stored = bounded(LINEARIZE_SECONDS,
-                         lambda: ingest.store_pdf(self.objects, f"{case.name}.pdf", write, context="corpus"))
+        def store(setting: str) -> ingest.IngestedPdf:
+            with mock.patch.dict(os.environ, {"PRKS_PDF_LINEARIZE": setting}):
+                return bounded(LINEARIZE_SECONDS,
+                               lambda: ingest.store_pdf(self.objects, f"{case.name}.pdf", write, context="corpus"))
+
+        # Switched off, the stored bytes are kept as they are, even with qpdf installed.
+        stored = store("0")
+        self.assertEqual(stored.linearize, "disabled")
+        self.assertEqual(stored.working, stored.source)
+        stored = store("1")
         if shutil.which("qpdf") is None:
-            # Without qpdf linearization is off unless forced on (PRKS_PDF_LINEARIZE).
-            self.assertIn(stored.linearize, ("disabled", "missing-qpdf"))
+            self.assertEqual(stored.linearize, "missing-qpdf")
             self.assertEqual(stored.working, stored.source)
             return
         self.assertEqual(stored.linearize == "ok", linearized, stored.linearize)
