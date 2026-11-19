@@ -83,7 +83,7 @@ the questions that needed an explicit choice.
 | PG17 | Library selection | A request's Library comes from the authenticated session in 0.8 (one Library). It travels in an explicit request context, so a later path- or header-based selector is a routing change, not a domain change (§9.4). |
 | PG18 | Sync protocol | The durable-operation protocol, its conflict units, revisions, ACK shapes and the browser stores keep their semantics. Only the server mechanics move to PostgreSQL. Browser databases become scoped to instance, Library and user (§10). |
 | PG19 | Backup | A PRKS-owned logical archive (format 2): a consistent snapshot of the Library's canonical rows in text `COPY` with a typed interchange contract, credential-free attribution identities, and every object the rows reference, verified before publishing. Restore drains writers behind a committed maintenance flag, commits in **one PostgreSQL transaction** that also enqueues its follow-up jobs, and advances a per-Library **epoch** that fences pre-restore jobs, requests and browser outboxes (§11.4). `pg_dump` stays an operator tool for whole-cluster disaster recovery, not the library backup. |
-| PG20 | HTTP server | 0.8 keeps the stdlib HTTP adapter and connects it to a connection pool. Before 1.0 it is replaced by a production server (maintainer decision 2026-11-19, #1329); the proposed stack is a PRKS-owned WSGI adapter under Cheroot, one process with a bounded thread pool (§4.5, `docs/http-server.md`). |
+| PG20 | HTTP server | 0.8 keeps the stdlib HTTP adapter and connects it to a connection pool. Before 1.0 it is replaced by a production server (maintainer decision 2026-11-19, #1329); the proposed stack is Uvicorn with a thin Starlette layer, synchronous PRKS code on a bounded thread pool, one process (§4.5, `docs/http-server.md`). |
 | PG21 | Deployment | Compose runs `postgres:18` (or PRKS's image built from it, only if a PRKS `unaccent` rules file is needed, §8.3), a one-shot `migrate` service, `web` and `worker`. Database data lives in its own named volume, never inside the PRKS data root (§12.3). |
 | PG22 | Transition | The PostgreSQL implementation was built beside SQLite family by family, behind parity tests; SQLite was deleted in the release that switched (#641). |
 
@@ -282,11 +282,11 @@ framework migration for aesthetics alone. Therefore:
   The maintainer chose this on 2026-11-19 over keeping a hardened stdlib
   adapter behind a reverse proxy (#1329). Its prerequisite, the route-family
   extraction (#67, PG-C3 #642), is done. The proposed stack
-  (`docs/http-server.md`) is WSGI under Cheroot, with no web framework: one
-  web process with a bounded thread pool, socket timeouts, request size
-  limits and a draining stop. It is one process because the access gate and
-  save-confirm tokens are still process-local (§7.5). ASGI (Starlette with
-  uvicorn), Gunicorn and Waitress were evaluated and rejected there. It is
+  (`docs/http-server.md`) is Uvicorn with a thin Starlette layer. PRKS code
+  stays synchronous on a bounded thread pool, in one web process, with
+  graceful drain and no full web framework. It is one process because the
+  access gate and save-confirm tokens are still process-local (§7.5, #1331).
+  Gunicorn, Cheroot and Waitress were evaluated and rejected there. It is
   listed as a risk (§14, R9).
 
 ### 4.6 Jobs
@@ -2812,7 +2812,7 @@ checkpointing, rowid preservation) are listed as retired with the reason.
 | R5 | Write amplification from immutable objects on frequent annotation saves | Medium | Medium | Measure with large PDFs; debounce materialization per Asset |
 | R6 | Restore of a large Library holds a long SERIALIZABLE transaction | Medium | Low | Restore already runs in maintenance mode; staging happens before the transaction; measure on a synthetic large Library |
 | R7 | Pool exhaustion under the thread-per-connection server | Medium | Medium | 503 with Retry-After, pool metrics, configurable size; the replacement server's bounded thread pool is sized against the pool (R9, #1329) |
-| R9 | stdlib HTTP server unsuitable for an exposed 1.0 deployment | Medium | High | Replaced before 1.0 by a WSGI adapter under Cheroot (#1329, `docs/http-server.md`); reverse-proxy-only exposure documented meanwhile and kept after |
+| R9 | stdlib HTTP server unsuitable for an exposed 1.0 deployment | Medium | High | Replaced before 1.0 by Uvicorn with a thin Starlette layer (#1329, `docs/http-server.md`); reverse-proxy-only exposure documented meanwhile and kept after |
 | R10 | Tests become slow or flaky with a database service | Medium | Medium | Template databases, per-class databases, no shared mutable fixtures |
 | R11 | Agents run tests against a real database | Low | Critical | Harness-created databases only, `instance.testing` flag, refusal on mismatch (§13.1) |
 | R12 | `unaccent` rules wrong for Greek/Serbian | Medium | Low | Parity vectors; optional PRKS rules file (§16, decision 4); the folding check rebuilds search data when the rules or the server release change (§8.6) |
