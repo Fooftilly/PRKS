@@ -9,6 +9,7 @@ import http.client
 import logging
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -57,6 +58,7 @@ class HttpSettingsTests(unittest.TestCase):
             {ENV_THREADS: "-1"},
             {ENV_THREADS: "4.5"},
             {ENV_THREADS: "99999"},
+            {ENV_THREADS: "\u00b2"},  # str.isdigit() is True; int() refuses it
         ):
             with self.subTest(env=env), self.assertRaises(HttpSettingsError) as caught:
                 HttpServerSettings.from_env(env)
@@ -66,6 +68,18 @@ class HttpSettingsTests(unittest.TestCase):
         httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
         httpd.server_close()
         self.assertIsInstance(httpd, server_module.PRKSThreadingTCPServer)
+        # This module imports Uvicorn, so check the import in a fresh process.
+        probe = (
+            "import sys\n"
+            "from run_tests import apply_isolated_test_env\n"
+            f"apply_isolated_test_env({_PROJECT!r})\n"
+            "from backend import server\n"
+            "from backend.web.settings import HttpServerSettings\n"
+            "server.make_server(('127.0.0.1', 0), HttpServerSettings()).server_close()\n"
+            "sys.exit(1 if 'uvicorn' in sys.modules or 'backend.web.asgi' in sys.modules else 0)\n"
+        )
+        result = subprocess.run([sys.executable, "-c", probe], cwd=_PROJECT, timeout=60, check=False)
+        self.assertEqual(result.returncode, 0, "the stdlib transport imported Uvicorn")
 
 
 class UvicornTransportTests(unittest.TestCase):

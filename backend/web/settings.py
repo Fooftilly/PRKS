@@ -47,7 +47,7 @@ class HttpServerSettings:
         raw_threads = env.get(ENV_THREADS, "").strip()
         threads = DEFAULT_THREADS
         if raw_threads:
-            if not raw_threads.isdigit() or len(raw_threads) > 4:
+            if not (raw_threads.isascii() and raw_threads.isdigit()) or len(raw_threads) > 4:
                 raise HttpSettingsError(
                     f"{ENV_THREADS} must be a whole number from {MIN_THREADS} to {MAX_THREADS}."
                 )
