@@ -49,7 +49,7 @@ contract and prove the replacement covers it. For durable sync families, prefer
 testing local queue mechanics in Node and server semantics in Python; retain E2E for
 the real UI/offline/service-worker boundary.
 
-Per-family KEEP / SPLIT / MOVE maps live in `docs/e2e-performance.md`. Never
+Per-family KEEP / SPLIT / MOVE maps live in `docs/e2e-coverage-maps.md`. Never
 add retries to hide flakes, a fake E2E backend, weaker assertions for speed, or
 shared browser/server state without proven isolation.
 
