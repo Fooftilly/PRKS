@@ -1,14 +1,8 @@
 {
   "complete": true,
-  "count": 6,
-  "generated_at": "2026-11-19T13:00:30Z",
+  "count": 4,
+  "generated_at": "2026-11-19T21:31:01Z",
   "issues": [
-    {
-      "agent": "Claude Code",
-      "execution": "Agent",
-      "number": 641,
-      "status": "Inbox"
-    },
     {
       "agent": "ChatGPT/Codex",
       "execution": "Mixed",
@@ -32,12 +26,6 @@
       "execution": "Agent",
       "number": 1033,
       "status": "Ready"
-    },
-    {
-      "agent": "Cursor Cloud",
-      "execution": "Agent",
-      "number": 1036,
-      "status": "Ready"
     }
   ],
   "project": {
@@ -48,6 +36,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 44529155146,
-  "stale_after": "2026-11-20T01:00:30Z"
+  "source_run_id": 44619379122,
+  "stale_after": "2026-11-20T09:31:01Z"
 }
