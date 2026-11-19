@@ -164,8 +164,18 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn('id="person-template-feedback"', form)
         self.assertIn("fillProfileEditor(parsed.values)", form)
         # The editor's Save is the only write: no durable call from the dialog.
-        for banned in ("prksSavePersonFieldsDurably", "savePersonProfileDraft", "prksSync"):
+        template = (FORMS / "person-template" / "template.ts").read_text(encoding="utf-8")
+        for banned in (
+            "prksSavePersonFieldsDurably",
+            "savePersonProfileDraft",
+            "prksSync",
+            "fetch(",
+            "/api/",
+            "prksDurable",
+            "XMLHttpRequest",
+        ):
             self.assertNotIn(banned, form, banned)
+            self.assertNotIn(banned, template, banned)
         host = (FORMS / "CreateFormsHost.vue").read_text(encoding="utf-8")
         self.assertIn('<Teleport to="#person-template-modal-vue">', host)
         ui = UI.read_text(encoding="utf-8")

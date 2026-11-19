@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   copyText,
   fillProfileEditor,
@@ -73,7 +73,9 @@ describe('person template', () => {
       f.key === 'about' || f.key === 'links_other' ? `<textarea id="${f.id}"></textarea>` : `<input id="${f.id}">`,
     ).join('')
     const seen: string[] = []
-    document.body.addEventListener('input', (e) => seen.push((e.target as HTMLElement).id))
+    const record = (e: Event) => seen.push((e.target as HTMLElement).id)
+    document.body.addEventListener('input', record)
+    onTestFinished(() => document.body.removeEventListener('input', record))
     const values = templateFromPerson({ last_name: 'Weil', about: 'Philosopher.' })
     expect(fillProfileEditor(values)).toEqual({ ok: true })
     expect((document.getElementById('pd-last-name') as HTMLInputElement).value).toBe('Weil')
