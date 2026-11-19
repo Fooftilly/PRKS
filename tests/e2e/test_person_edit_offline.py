@@ -515,6 +515,10 @@ class OfflinePersonEditTests(unittest.TestCase):
                     page,
                     "() => prksSync.store.listOperations().then(rows => rows.some("
                     "  o => o.operation === 'ADD_WORK_PERSON_ROLE'))")
+                # The op is queued before the modal closes. Navigating on the
+                # queue signal leaves the modal open over the Person page (a
+                # save that outlives its opener must not close it).
+                page.locator('#role-modal').wait_for(state='hidden')
 
         with profile_e2e_phase("person_edit_profile_edit"):
             o._open_person(page, person)
