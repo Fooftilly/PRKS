@@ -69,6 +69,35 @@ The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg
 
 Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the existing runtime and unit/test dependency pins. These are **pure mapper tests**, not evidence that PostgreSQL, session authorization, or HTTP translation passed: `tests/pg/test_db_errors.py` remains the real disposable-PostgreSQL integration authority. No extra runner or package is installed.
 
+## Adversarial PDF corpus (#1287)
+
+`tests/pdf_corpus.py` generates a small synthetic corpus at test time. It is built from PyMuPDF and hand-written PDF syntax, with fixed metadata so each build of an unencrypted case gives the same bytes (AES-256 draws a random key, so the encrypted case differs), and no third-party document is committed. The cases are:
+
+- a valid control file;
+- a truncated file;
+- a damaged xref table;
+- an AES-256 password file;
+- zero pages;
+- 400 tiny pages;
+- rotated pages;
+- a page with no text;
+- a font whose ToUnicode map sends codes to control, private-use and non-BMP characters;
+- three annotations sharing one `/NM`;
+- a `%PDF-` header followed by garbage;
+- PNG bytes under a `.pdf` name.
+
+`tests/pg/test_adversarial_pdf_corpus.py` sends each case through the real HTTP routes. The stages are upload into the Processing queue, import, the `text.extract` job, any-mode search, the thumbnail, the reader's byte stream, markup adoption for the shared-id case, and `ingest.store_pdf` linearization. Each stage has one asserted outcome per case, in `EXPECTED`:
+
+- An upload is kept, or refused with `PROCESSING_NOT_A_PDF` and leaves no item.
+- An import always creates exactly one Work and one Asset. Import does not parse the PDF.
+- Extraction ends `indexed`, `empty` or `failed`, and its job succeeds.
+- The thumbnail is an image or the documented 404.
+- The reader gets the stored bytes back unchanged.
+- A shared annotation id is adopted once.
+- Linearization is checked with `PRKS_PDF_LINEARIZE` pinned both ways. Switched off, it reports `disabled` and keeps the source, even with qpdf installed. Switched on, it writes a copy, keeps the source on a qpdf refusal, or reports `missing-qpdf` when qpdf is absent.
+
+Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). Where Linux `/proc/self/clear_refs` is available, the peak resident size is reset before the run and its growth is bounded (elsewhere that check is skipped), and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
+
 ## HTTP authorization matrix (#1286)
 
 `tests/pg/test_http_authorization_matrix.py` sends one real request per `backend/api` route family (and per route that streams a managed file) over HTTP as seven callers: owner, editor, reader, a revoked member, a signed-out browser, the owner of another Library, and no session. Each row says whether it needs read, edit or Library administration; a caller without the right gets 403 `forbidden` (a member) or 401 `not_authenticated` (everyone else), the refusal names neither the Library nor the seeded entities, and every Library content table is unchanged afterwards. Every caller with the right must get a success, so each row is a real route with a valid request, except three documented route-level refusals that still come after admission: the backup download's 404 without a ready token, the stage route's 415 for a body that is not an archive, and the sync route's 400 for an empty envelope. Where a 2xx alone would not show the route did its work, the row also checks the result: the Research Notes row must save the note it sent, and the Processing import row imports a ready item uploaded just before each request and must report it imported. A `backend/api` module without a row fails `test_every_api_module_has_a_row`, so a new family joins the matrix. Run it with `scripts/test-postgres tests.pg.test_http_authorization_matrix`.
