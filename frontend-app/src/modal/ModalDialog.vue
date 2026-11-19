@@ -9,6 +9,7 @@
  * right after `openModal` or `closeModals` sees the new state at once.
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import PrksIconButton from '../components/PrksIconButton.vue'
 import { dialogState, registerDialog, unregisterDialog } from './dialogs'
 
 const props = withDefaults(
@@ -69,7 +70,7 @@ function onClose(): void {
   >
     <div class="modal-header">
       <h3 :id="titleId">{{ title }}</h3>
-      <button type="button" class="prks-icon-btn close-btn" aria-label="Close" @click="onClose">&times;</button>
+      <PrksIconButton class="close-btn" label="Close" @click="onClose">&times;</PrksIconButton>
     </div>
     <div :class="['modal-body', bodyClass]">
       <slot />
