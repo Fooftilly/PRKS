@@ -169,5 +169,20 @@ class FrontendCISelectionTests(unittest.TestCase):
         )
 
 
+class GateConcurrencyTests(unittest.TestCase):
+    def test_a_rerun_never_shares_the_pr_group(self):
+        """A re-run of an older head must not cancel the gate for a newer head."""
+        source = WORKFLOW.read_text(encoding="utf-8")
+        block = source.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
+        group = next(line for line in block.splitlines() if line.strip().startswith("group:"))
+        self.assertIn(
+            "github.run_attempt != '1' && format('rerun-{0}-', "
+            "github.event.pull_request.head.sha || github.sha)",
+            group,
+        )
+        self.assertIn("github.event.pull_request.number || github.ref", group)
+        self.assertIn("cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}", block)
+
+
 if __name__ == "__main__":
     unittest.main()
