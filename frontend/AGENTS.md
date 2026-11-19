@@ -36,7 +36,8 @@ Route-specific rules:
 - Folder detail: layout, hierarchy nav and its refresh stay in `frontend/js/components/folders.js` (`prksCommitFolderDetailSurface`), which publishes a typed tree snapshot that Vue renders. Tree expand/collapse and the filter live on `ctx.ui.folderTree`, one per pane.
 - Tags: alias add/remove stay raw requests in `frontend/js/components/tags.js` (aliases are not part of a cached tag list); delete and merge go through `prksDeleteTagDurably` / `prksMergeTagDurably`. Each intent rechecks the owner after confirm and before the write and repaint. A failed post-write reload keeps the existing list and shows the refresh failure, never the empty state.
 - Search and Saved View detail are Main-only and share one result boundary: the coordinator runs `prksEffectiveSearchResults`; the server decides membership and results are never cached or stored with a view.
-- Main-only, online-only routes (offline shows `prksOfflineRenderUnavailable`): Search, Saved Views, File types, Publishers, Processing.
+- Main-only, online-only routes (offline shows `prksOfflineRenderUnavailable`): Search, Saved Views, Publishers, Processing.
+- File types (`#/types`, `#/types/:docType`) are Main-only and render from the cached works-browse snapshot offline; only a missing snapshot shows `prksOfflineRenderUnavailable`.
 
 Routes that own their server state through `prksApiRequest` and TanStack Query:
 
@@ -189,7 +190,7 @@ Performance diagnostics loads on first activation of the Diagnostics category an
 
 ### Server-state ownership
 
-Publishers, Saved Views and Performance Diagnostics use `prksApiRequest` and TanStack Query and must not call `prksRequest`. Every other family stays on `prksRequest` because it has an effective or durable owner: Folders, Persons, Tags, Search, PDF bytes and annotations, browse/Recent snapshots, Concepts/Positions/Arguments, Person Groups, Playlists, Settings and maintenance, BibTeX export and the online Work create. Do not add a Query family for any of them. `fetchFolders`, `fetchConcepts`, `fetchPositions` and `fetchArguments` read only the effective catalogue and must not grow a raw fallback.
+Publishers, Saved Views and Performance Diagnostics use `prksApiRequest` and TanStack Query and must not call `prksRequest`. The Processing queue uses `prksApiRequest` through its typed client (`frontend-app/src/api/processing-items.ts`) without TanStack Query. Every other family stays on `prksRequest` because it has an effective or durable owner: Folders, Persons, Tags, Search, PDF bytes and annotations, browse/Recent snapshots, Concepts/Positions/Arguments, Person Groups, Playlists, Settings and maintenance, BibTeX export and the online Work create. Do not add a Query family for any of them. `fetchFolders`, `fetchConcepts`, `fetchPositions` and `fetchArguments` read only the effective catalogue and must not grow a raw fallback.
 
 ## Offline / PWA
 

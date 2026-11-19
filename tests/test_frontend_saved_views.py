@@ -194,11 +194,18 @@ class FrontendSavedViewsTests(unittest.TestCase):
         agents = _read(_AGENTS)
         self.assertIn("window.prksSavedViewRecords", agents)
         self.assertFalse(os.path.exists(os.path.join(_PROJECT_DIR, "frontend", "js", "saved-views.js")))
+        js_root = os.path.join(_PROJECT_DIR, "frontend", "js")
+        js_files = [
+            os.path.join(dirpath, f)
+            for dirpath, _dirs, files in os.walk(js_root)
+            for f in files
+            if f.endswith(".js")
+        ]
+        self.assertTrue(js_files)
         for name in ("renderSavedViewsIndex", "bindIndexActions", "openEditById", "renderSavedViewDetail"):
-            for js in os.listdir(os.path.join(_PROJECT_DIR, "frontend", "js")):
-                if js.endswith(".js"):
-                    with self.subTest(removed=name, file=js):
-                        self.assertNotIn(name, _read(os.path.join(_PROJECT_DIR, "frontend", "js", js)))
+            for path in js_files:
+                with self.subTest(removed=name, file=os.path.relpath(path, js_root)):
+                    self.assertNotIn(name, _read(path))
 
     def test_search_query_codec_has_one_owner(self):
         """The query codec is the typed module. Legacy JS keeps one bridge."""
