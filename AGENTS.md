@@ -31,7 +31,7 @@ For test-only changes, follow `tests/AGENTS.md` and also load the production sco
 
 ## Choosing work (Project #3)
 
-Before choosing new work, check the Project #3 custom **Agent** field (not issue Assignees): `bash scripts/agent-queue.sh claude|chatgpt` (see `docs/agent-workflows/agent-queue.md`, including the hosted-agent fallback). An assigned issue is not automatically actionable: verify Status/Execution, acceptance labels, open blockers, other owners, roadmap supersession and overlapping PRs first. Never change Project fields or labels to make a task look ready. If Project data cannot be read, treat readiness as unknown.
+Before choosing new work, check the Project #3 custom **Agent** field (not issue Assignees): `bash scripts/agent-queue.sh cursor|claude|chatgpt` (see `docs/agent-workflows/agent-queue.md`, including the hosted-agent fallback). An assigned issue is not automatically actionable: verify Status/Execution, acceptance labels, open blockers, other owners, roadmap supersession and overlapping PRs first. Never change Project fields or labels to make a task look ready. If Project data cannot be read, treat readiness as unknown.
 
 ## Pull requests
 
@@ -88,10 +88,10 @@ Rules for all issues:
 
 - `prks_app.py`: the only process entry; roles `serve` (default), `migrate`, `worker`, `admin` (`backend/process_roles.py`).
 - `backend/server.py`: HTTP adapter lifecycle (host/origin checks, size limits, admission, dispatch, JSON/ETags, static files).
-- `backend/api/<family>.py`: one HTTP controller per route family. Controllers call `backend/domain/<family>/*_commands.py` with `db.database` and the admitted `handler._prks_request_context`, and import those commands inside the handler (the served app loads no PostgreSQL module at import time; `tests/test_e2e_policy.py`).
+- `backend/api/<family>.py`: one HTTP controller per route family. Controllers call the family's commands (`backend/domain/<family>/commands.py` or a family-specific `*_commands.py`) with `db.database` and the admitted `handler._prks_request_context`, and import those commands inside the handler (the served app loads no PostgreSQL module at import time; `tests/test_e2e_policy.py`).
 - `backend/api_contract/`: typed request/response DTOs and OpenAPI fragments.
 - `backend/library.py`: `PostgresLibrary`, the handle the adapter holds as `db` (`database` and `storage` only), and `NotPortedError` (answered 501, never a fallback).
-- `backend/domain/`: the PostgreSQL domain packages (`works`, `people`, `organization`, `research`, `annotations`, `objects`, `search`, `maintenance`, `identity`, `processing`, `saved_views`, `settings`). Each package docstring states its rules, lock order and design sections; read it before changing the package. Shared rules (`*/rules.py`, `managed_pdf_names.py`, `etags.py`, `pdf_text.py`, `derived_caches.py`) are imported, never re-implemented.
+- `backend/domain/`: the PostgreSQL domain packages (`works`, `people`, `organization`, `research`, `annotations`, `objects`, `search`, `maintenance`, `identity`, `processing`, `saved_views`, `settings`). Package docstrings are short overviews, not the full rules: for invariants and lock order read `backend/AGENTS.md`, the cited design sections and the implementation module docstrings before changing a package. Shared rules (`*/rules.py`, `managed_pdf_names.py`, `etags.py`, `pdf_text.py`, `derived_caches.py`) are imported, never re-implemented.
 - `backend/domain/identity/`: sign-in, sessions, `RequestContext`, `authorize()` and `library_command`/`library_query`. These enforce actor, capability and epoch, not row scope: callers own their `library_id` predicates and add a cross-Library negative test per command or query. Operator notes: `docs/admin-bootstrap.md`, `docs/login-security.md`.
 - `backend/db/`: pool, `command()`/`query()`, SQLSTATE mapping, and the schema runner over `backend/db/schema/NNN_*.sql` (see `backend/AGENTS.md` "Database schema changes"). Tests in `tests/pg/` run through `scripts/test-postgres`.
 - `backend/sync/`: the durable-operation ledger (`protocol.py`) and per-family handlers; family rules live in `backend/*_sync.py` and `backend/sync_protocol.py`.
