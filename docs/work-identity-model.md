@@ -1,41 +1,14 @@
-# Work identity, editions, versions and Assets: design (#60)
+# Work identity, editions, versions and Assets (#60)
 
-> **Implementation status (2026-11-13):** the Work → Manifestation → Asset model is implemented on PostgreSQL (`backend/db/schema/100_works.sql`, `backend/domain/works/`), the only Library backend since PG-C2 (#641). The SQLite schema-17 mirror, `migrate_v16_to_v17` and `backend/work_identity.py` described below were deleted with the SQLite runtime; read those sections as the record of that slice.
-
-
-> **Target-architecture compatibility note (2026-09-29):** this document remains the approved-in-direction Work → Manifestation → Asset domain design, but many migration/storage mechanics below are intentionally written against the **current SQLite + local-filesystem implementation**. Roadmaps #310 and #311 now define the accepted long-term direction: Library/user authorization boundaries, PostgreSQL as the expected canonical relational store, storage-backend abstraction, and a first-class user-configurable local data/library root. Treat SQLite triggers/table-rebuild details, current archive layout, and managed-basename mechanics as migration implementation choices unless a section explicitly states a domain invariant. Stable Work/Manifestation/Asset identity must not depend on a physical host path or on SQLite remaining permanent.
-
-**Status: approved design (#201). Slice A is implemented at schema 17**
-(`migrate_v16_to_v17`, `backend/work_identity.py`): entities, integrity
-layer, deterministic backfill and the `works` -> new-rows mirror. No reader,
-API or UI uses the new rows yet. One mechanism differs from the text below:
-the pinned-citation FK on `argument_sources` is `ON DELETE NO ACTION`
-(immediate) rather than `RESTRICT`, because SQLite applies RESTRICT before a
-whole-Work delete has cascaded the citation rows, which made that delete
-depend on table creation order (see the comment on `_V17_WORK_IDENTITY_SQL`).
-The behavior §4.1 specifies is unchanged: deleting a pinned Version is
-refused, and deleting a whole Work cascades.
-
-Slice A also adds one implementation table the text does not name,
-`legacy_inferred_video_urls`. §12.2 classifies a legacy inferred-video row
-(no kind, no file, a URL) by today's URL parser, which SQLite cannot run. The
-Python backfill and the `source_url`/`file_path` write boundaries store the
-parser's verdict for the exact current URL, and the mirror view reads it. A
-URL the parser refuses stays the Manifestation's citation URL, even when
-another value (for example `thumb_page`) gives the Work a placeholder Asset.
-
-The original status note follows. The three-level model has been approved in direction, and the
-maintainer decisions are recorded in [§0](#0-maintainer-decisions). This
-document does not add schema, migrations, API behavior or UI. It is the design
-gate that #60 requires before large schema changes, and it follows the
-architecture direction in #179. Once approved, the implementation slices in §17
-become separate focused issues and PRs. Slice A must not start until this
-revision is approved.
-
-It follows the shape of [work-source-identity.md](work-source-identity.md):
-audit the code first, then recommend. Every claim about current behavior
-below was checked against `master` at `0e19b86` (schema version 16), not taken
-from issue text.
+**Status.** Approved design (#201). The Work → Manifestation → Asset model
+is implemented on PostgreSQL (`backend/db/schema/100_works.sql`,
+`backend/domain/works/`), born authoritative from a clean start. Where this
+document describes mechanics for evolving the old SQLite schema in place
+(mirror triggers, backfill, `origin_work_id`, `content_generation`,
+quarantine), PostgreSQL does something simpler; the differences are listed
+in `docs/postgresql-architecture.md` §6.4. Domain invariants, ownership,
+scopes and the decisions in [§0](#0-maintainer-decisions) apply as written.
+The audit of the schema-16 code this design started from is in git history.
 
 Contents:
 
@@ -82,208 +55,15 @@ written to match them.
 
 ## 1. Current-state audit
 
-### 1.1 The `works` row
+### 1.1–1.3 The overloaded `works` row
 
-One `works` row (`backend/db_schema.sql`) currently holds every concept below.
-The table groups its 34 columns by what each one actually describes, which is
-not the same as how the schema groups them.
-
-| What it describes | Columns |
-| --- | --- |
-| Identity | `id` (`W-` + 8 or 32 hex, see `backend/entity_ids.py`) |
-| Display title | `title` (NOT NULL; also FTS-indexed) |
-| User workflow | `status` (Progress groups), `last_opened_at` (Recent) |
-| Bibliographic record | `doc_type`, `year`, `published_date`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages`, `isbn`, `doi`, `urldate`, `abstract` |
-| Free-text credit | `author_text` (search, cards, video channel; loses to linked Author roles) |
-| Source identity | `source_kind`, `file_path`, `source_url`, `provider`, `provider_id`, `source_mime` |
-| Presentation | `thumb_url`, `thumb_page`, `hide_pdf_link_annotations` |
-| Research content | `text_content` (the Research Note; the schema comment says "Markdown notes or OCR text", but it is only the note) |
-| Private content | `private_notes` |
-| Annotation materialization | `canonical_annotation_set_revision`, `materialized_pdf_annotation_revision` |
-| Bookkeeping | `created_at`, `updated_at` |
-
-`works_fts` (FTS5, external content, kept current by triggers `works_ai`,
-`works_ad`, `works_au`) indexes `title`, `abstract`, `text_content` and
-`author_text`.
-
-### 1.2 Everything that holds a Work ID
-
-A redesign has to account for every one of these. The list is the reason §11
-keeps Work IDs unchanged.
-
-| Holder | Where | Kind of reference |
-| --- | --- | --- |
-| `roles.work_id` | main DB, FK CASCADE | Person↔Work credit |
-| `annotations.work_id` | main DB, FK CASCADE | PDF annotation owner |
-| `work_tags.work_id` | main DB, FK CASCADE | Tag attachment |
-| `folder_files.work_id` | main DB, FK CASCADE | Folder membership (one folder per Work, `work-folder` scalar) |
-| `playlist_items.work_id` | main DB, FK CASCADE, UNIQUE | One playlist per Work |
-| `argument_sources.work_id` (+ `pages`) | main DB, FK CASCADE | Research Argument cites a Work, optionally with a page pinpoint |
-| `processing_files.imported_work_id` | main DB, FK SET NULL | Import provenance |
-| `sync_entity_revisions.scope_id` | main DB | `work-field/[work, field]`, `work-source/work`, `work-tag`, `work-folder`, `work-playlist`, `work-person-role`, `work-research-note`, `work-private-note`, `pdf-annotation/[work, annotation]` |
-| `sync_operations.entity_id` | main DB | Durable-operation ledger (`entity_type` `work`) |
-| `concept_mentions`, `argument_mentions`, `work_note_state` | `prks_research_index.db` (derived) | Research Note mentions |
-| `work_text_index` | `prks_text_index.db` (derived) | PDF text, keyed by `work_id` + `source_ref_hash` of `file_path` |
-| `thumbs/` filenames | derived | `prks_thumb_cache_stem(work_id, page)` |
-| Research Note text | canonical text | `[[W-…]]` or `[[Title]]` wiki links (`resolve_wiki_links`) |
-| URLs / workspace tabs | browser | `#/works/W-…`, persisted workspace layout |
-| `prks.pdf.lastPage.<workId>` | browser `localStorage` | Last-read PDF page, per device |
-| `prks-local-v2:<scope>` (IndexedDB) | browser, durable | Pending operations carrying `work_id` and base revisions |
-| Offline cache entities | browser, disposable | `work:*`, `work-annotations`, `works-browse:index`, `recent:index`, `recently-added:index`, summaries |
-| Backups | archive | The main DB carries all of the above |
-
-These do **not** hold a Work ID: the managed PDF file name
-(`<unix>_<8hex>_<name>.pdf`, from `mint_managed_pdf_filename`),
-`pending_pdf_cleanup` (keyed by basename), and the service-worker PDF cache
-`prks-pdf-v3:<scope>:<epoch>` (keyed by `/api/pdfs/<basename>`).
-
-### 1.3 How the model is used, by subsystem
-
-**Schema and migrations.** `backend/db_migrations.py` runs ordered migrations
-up to `LATEST_SCHEMA_VERSION = 16`, validates the final shape
-(`validate_current_schema`, `_assert_known_table_shapes`), and never touches
-the filesystem. v15 added the two materialization revisions to `works`. v16
-added `pending_pdf_cleanup`.
-
-**`backend/db_manager.py`.** `add_work()` writes one row with every column and
-canonicalizes the source through `_canonical_new_source` and
-`effective_source_kind`. `get_work()` is a pure read (the stamp on
-`last_opened_at` was moved into `mark_work_opened`); it attaches roles, tags,
-annotations, and the one playlist and one folder. `update_work_metadata()` is
-the PATCH path. `generate_bibtex()` builds a single entry from the row plus
-roles. The summary projections (`_PRKS_WORK_SUMMARY_COLUMNS`,
-`_prks_work_browse_select`, `finish_work_summary_rows`) read `works` columns
-directly and `stat()` the managed PDF to produce `file_size_bytes`.
-
-**`*_sync.py`.** Each durable family declares a conflict unit keyed by
-`work_id`:
-
-- `work_metadata_sync`: one revision **per field** (`work-field/[work, field]`),
-  covering `SYNCED_FIELDS`: status, title, source_url (provenance only),
-  doc_type, thumb_page, author_text, abstract, year, published_date, edition,
-  journal, volume, issue, pages, isbn, doi, publisher, location.
-- `work_source_sync`: `SET_WORK_SOURCE` is **one aggregate** for video identity
-  (`source_kind` + `provider` + `provider_id` + `source_url`), because
-  `provider_id` outranks the URL in the viewer.
-- `work_role_sync`: `work-person-role/[work, person, role]`; the role types are
-  `Author, Editor, Reviewer, Mentioned, Translator, Introduction, Foreword,
-  Afterword`.
-- `work_note_sync`: Research Note (`text_content`) and Private Note
-  (`private_notes`) are separate whole-document aggregates.
-- `work_tag_sync`, `folder_sync` (`SET_WORK_FOLDER`), `playlist_sync`
-  (`SET_WORK_PLAYLIST`), `work_open_sync` (a max-register on
-  `last_opened_at`), `work_lifecycle_sync` (`CREATE_WORK` for video only, and
-  `DELETE_WORK`).
-- `pdf_annotation_sync`: one revisioned aggregate per annotation, scope
-  `pdf-annotation/[work, annotation]`.
-
-**HTTP.** `backend/server.py` handles `/api/works` (create, with upload or
-adoption of an existing `/api/pdfs/<name>`), `/api/works/:id` (GET/PATCH/
-DELETE), `/api/works/:id/pdf` (replace bytes, used by annotation
-materialization), `/annotations*`, `*-state` endpoints for each sync family,
-`/opened`, `/thumbnail`, `/api/bibtex/:id`, `/api/pdfs/:name`,
-`/api/processing-files/*`, `/api/works/bulk`, and the backup endpoints. Only
-Positions has typed DTOs so far (`backend/api_contract/`).
-
-**Processing Files / import.** `processing_files` is a staging copy of most
-`works` bibliographic columns plus draft roles and tags. `import_processing_file`
-checks the `%PDF-` header, streams the file into managed storage, linearizes
-it, creates one Work with `add_work()`, and records `imported_work_id`. It
-does **no duplicate check**.
-
-**Managed PDFs.** Bytes live in `pdfs/` under a minted, unique basename.
-`works.file_path = "/api/pdfs/<basename>"` is the only link from the DB to the
-bytes. Several Works may point at the same basename (creation can adopt an
-existing managed name), which is why `work_pdf_replace` does
-**copy-on-write** before it overwrites shared bytes. Deletion commits the row
-and writes a `pending_pdf_cleanup` claim in the same transaction. Every write
-follows `backend/fs_durability.py`.
-
-**Annotation bytes vs metadata.** The `annotations` table is canonical. The
-managed PDF bytes are a **materialized** copy that embeds the same markup:
-`POST /api/works/:id/pdf` **overwrites the managed file in place** with the
-annotated export. `canonical_annotation_set_revision` > `materialized_…`
-means the bytes are stale. Linearization also rewrites bytes in place. So
-**PRKS does not keep the original bytes it ingested**, and the managed file's
-hash changes every time annotations are saved.
-
-**Work source.** See [work-source-identity.md](work-source-identity.md). The
-proposed invariants there (`video` ⇒ provider identity; `pdf` ⇒ identity is
-`file_path`, and `source_url` is only provenance) hold across current data.
-
-**Bibliographic metadata.** It is flat on `works`. `author_text` is a fallback
-credit. Publisher normalization (`publishers`, `publisher_aliases`) resolves
-spellings for search only. There is no `language`, `subtitle`, arXiv ID,
-generic identifier table, or provenance for any value.
-
-**People, roles and credit names.** `roles(person_id, work_id, role_type,
-order_index, credit_name)`, with UNIQUE `(person_id, work_id, role_type)`.
-`credit_name` is how that person is credited **on this Work**. `Mentioned`
-roles are also written automatically by `_sync_mentioned_roles()` from
-`[[Name]]` markup found **inside PDF bytes** on replace, so they come from an
-asset.
-
-**Tags and folders.** Both attach to the Work. A Work is in at most one folder.
-Folder and Tag vocabulary are separate entities.
-
-**Research Notes.** `works.text_content`. Concept and Argument mentions are
-indexed per Work in the derived research index. Notes can contain
-`[[pdf:<annotationId>]]` markers (`prksReplacePdfAnnotationWikiMarkers`) that
-jump to a PDF annotation, and `[[W-…]]`/`[[Title]]` Work links.
-
-**Private Notes.** `works.private_notes`. Reminders are capped at 8,000
-characters in the UI and 64 KiB on the wire. They are not indexed.
-
-**Reading and open state.** `status` is the user's reading progress (Progress
-page). `last_opened_at` is a server-side max-register (Recent). The last-read
-PDF page lives only in the browser (`localStorage prks.pdf.lastPage.<workId>`,
-behind the "remember last page" setting).
-
-**Playlists.** These are ordered Works, mainly videos. The UNIQUE index on
-`playlist_items(work_id)` limits each Work to one playlist.
-
-**Citation and export.** `generate_bibtex()` is the only exporter. The cite
-key is **computed, never stored**: first linked Author family name + year,
-or a name derived from `author_text` when no Author is linked. Author credits
-prefer linked roles; without them BibTeX falls back to free-text `author_text`
-(semicolon-delimited persons, or one braced corporate channel for videos).
-A Work is a video here only when its citation Manifestation's primary Asset
-is an external stream; a PDF's `source_url` is provenance and never makes it
-one. Cite-key parts keep only Unicode word characters, `-`, `.` and `:`
-(`Unknown` / `UnknownYear` when nothing remains), and a brace without its
-partner is exported as `{\textbraceleft}` / `{\textbraceright}` so no field
-can end the entry early.
-Editors, translators, and introduction/foreword/afterword come from roles. The
-entry type is `doc_type`, or, when that is empty, guessed from journal or
-publisher. `url` is `source_url`. `urldate` is taken from **`updated_at`**, not
-from the `urldate` column. A server-wide profile selects which fields are
-exported.
-
-**Duplicates and source identity.** Nothing detects duplicates today. Video
-identity is canonicalized, so two spellings of one YouTube ID are recognized
-as the same **within one Work**, but not across Works.
-
-**Offline and durable operation.** Durable intent in `prks-local-v2:<scope>` is kept
-apart from the disposable acknowledged cache. Server revisions are
-per-scope. PDF binary ingestion and replacement require a connection.
-Annotation metadata can be edited offline when the PDF bytes are cached
-(`docs/local-first-sync.md`, "PDF annotations (V2 local-first boundary)").
-
-**Backup and restore.** A backup is the main DB plus `files/pdfs/*` plus
-person images, with a manifest (`FORMAT_VERSION = 1`, `db_schema_version`).
-Restore refuses a backup with a newer schema. `audit_managed_pdfs` counts
-referenced-but-missing PDFs by scanning `works.file_path`. Thumbnails and both
-indexes are derived and are rebuilt, not backed up.
-
-**Frontend.** `prksInferWorkSourceKind` picks the viewer. Work cards, browse
-lists, Folder/Person/Playlist summaries, and the metadata/role/source/notes/
-tag editors all consume the flat Work shape. Every `work-*-state.js` module
-mirrors one backend sync family.
+Retired: the audit of the schema-16 `works` row, every table holding a Work
+ID, and how each subsystem used them is in git history. §2 summarizes what
+it found.
 
 ### 1.4 Current invariants to preserve
 
-These hold today. The replacement design must keep each one or say explicitly
-why it changes.
+The model must keep each one or say explicitly why it changes.
 
 1. **I1: Work IDs are immutable.** They are never rewritten. Legacy 8-hex IDs
    remain valid forever.
@@ -1494,6 +1274,11 @@ Clients must **never derive** these IDs themselves. The server returns them.
 
 ## 12. Migration and backfill
 
+Not run. PostgreSQL started from an empty, born-authoritative schema (PG2,
+PG8), so nothing was backfilled or mirrored. The steps below are kept
+because they define the ownership and revision scopes each family ended up
+with (§12.3, §14.2), which the schema and sync handlers follow.
+
 ### 12.1 Principles
 
 - **Additive first.** New tables and new nullable columns. No column is dropped
@@ -1699,25 +1484,7 @@ they are re-verifiable, so a restore can recompute them.
 
 ### 12.5 Rollback and recovery
 
-- **The upgrade is fail-safe by transaction, not by backup (D2).** Each
-  migration runs in one `BEGIN IMMEDIATE` transaction
-  (`_run_in_transaction`). A failed preflight, constraint, integrity query or
-  crash rolls back to the previous version with the library untouched. Slice A
-  performs no filesystem mutation, so there is nothing outside SQLite to undo.
-- **No automatic full-library backup.** Slice A does not create or require a
-  `.prks-backup`. Packing a large PDF library at startup could double storage
-  use and fail under storage pressure. An automatic upgrade snapshot that
-  copies only the DB, proportional to the change, may be evaluated separately.
-  It is not part of this design.
-- PRKS has **no down migrations**, and this design does not add any. A newer
-  schema is refused by older code and by restore (`schema_newer`). Undoing a
-  *committed* upgrade therefore means restoring a backup the user already
-  made, the same as for every existing migration.
-- Additive steps are **forward-fixable**: a bad backfill can be corrected by a
-  later migration, because the legacy columns were not removed.
-- Mirror and reverse triggers are validated by `validate_current_schema`. A
-  parity test asserts, for every Work in fixture libraries, that the legacy
-  columns equal the projection of the new entities.
+Retired with the SQLite migration (see git history).
 
 ### 12.6 Old and new code coexisting
 
@@ -2048,18 +1815,17 @@ exactly right.
 | **K. Merge / move workflow** | Command-level versions of the §4.1 transition tests, including each `empty_source` outcome. Ships `manifestation_credit_overrides` (§7.2) if it does not exist yet, and tests a credit-spelling collision. `MERGE_WORKS` (in the §10.4 transaction order), `MOVE_MANIFESTATION` and `MOVE_ASSET` with previews, `sync_work_lifecycle` read redirects, and `WORK_MERGED` refusals plus client reconciliation (§14.2). Coordinate with #57. | Yes | J |
 | **L. RapidFuzz evaluation** | A separate research/evaluation issue (dependency review, ranking quality on synthetic data). It only ranks; it never decides. | — | J |
 
-A, B and C can proceed in parallel after A's migration merges. D and E are
-the risky slices, because they move durable-operation scopes. Each should run
-the affected sync feature E2E groups before merge, and the full E2E gate once.
+Slices A–F are done: the PostgreSQL baseline gives Manifestations and
+Assets authority from the first row (`docs/postgresql-architecture.md`
+§6.4). G onward are open; the gating rule above still applies to them.
 
 ---
 
 ## 18. Remaining open questions
 
-The maintainer's earlier questions are answered in §0 (D1–D10). What remains
-is listed below. **None of it blocks approving the design or starting Slice A.**
-Items 1–3 are choices this revision made that should be confirmed during
-review.
+The maintainer's questions are answered in §0 (D1–D11). Items 2, 3 and 5
+concerned the SQLite migration and are moot under the PostgreSQL clean
+start.
 
 1. **Work-level citations may carry a locator** (§8.5). This allows
    edition-independent locators such as Stephanus or Bekker numbers, which is
