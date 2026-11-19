@@ -193,10 +193,12 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("new MutationObserver(", records)
         agents = _read(_AGENTS)
         self.assertIn("window.prksSavedViewRecords", agents)
-        self.assertIn(
-            "`renderSavedViewsIndex`, `bindIndexActions`, `openEditById`, and `confirmDelete` are removed.",
-            agents,
-        )
+        self.assertFalse(os.path.exists(os.path.join(_PROJECT_DIR, "frontend", "js", "saved-views.js")))
+        for name in ("renderSavedViewsIndex", "bindIndexActions", "openEditById", "renderSavedViewDetail"):
+            for js in os.listdir(os.path.join(_PROJECT_DIR, "frontend", "js")):
+                if js.endswith(".js"):
+                    with self.subTest(removed=name, file=js):
+                        self.assertNotIn(name, _read(os.path.join(_PROJECT_DIR, "frontend", "js", js)))
 
     def test_search_query_codec_has_one_owner(self):
         """The query codec is the typed module. Legacy JS keeps one bridge."""
