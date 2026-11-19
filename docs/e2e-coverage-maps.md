@@ -1,30 +1,30 @@
 # E2E coverage maps
 
-Per-family KEEP / SPLIT / MOVE decisions (rule in `tests/e2e/AGENTS.md`): which contract left Chromium, what proves it now, and what browser boundary stays. Before removing or weakening a browser scenario in one of these families, check its row here; add a row when you move a contract.
+Per-family KEEP / SPLIT / MOVE decisions (rule in `tests/e2e/AGENTS.md`): which contract left Chromium, what proves it now, and what browser boundary stays. Before removing or weakening a browser scenario in one of these families, check its row here; add a row when you move a contract. Rows cite current tests; SQLite-era tests named in older records map to their replacements in `tests/sqlite_retirement/`.
 
 ## Work Source family
 
 | Removed E2E | Replacement |
 | --- | --- |
 | four-column pending identity | Node `effectiveSourceOverlay` in `run_work_source_sync_selftest.js` |
-| respelling same video not a conflict | Python `test_a_stale_but_convergent_choice_is_not_a_conflict` |
+| respelling same video not a conflict | `tests/pg/test_works_sync.py` `SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row`; `test_works_sync_parity.py` `test_sources` |
 
 ## Work-Tag
 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
 | Coalescing across reload and repeated intent | `tests/browser/run_local_store_selftest.js` owns repeated intent and opposite cancel across a reopened store; `test_post_reload_opposite_edit_cancels_pending` keeps the thin remount → Manage tags boundary for both opposite UI directions (chip remove and picker re-add) | SPLIT |
-| Lost response replays once with the same operation identity | `tests/browser/run_work_tag_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_tag_sync.py` proves server replay of an existing `op_id` is exact/idempotent | SPLIT → fast layers |
+| Lost response replays once with the same operation identity | `tests/browser/run_work_tag_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/pg/test_tags_sync.py` `ReplayTests` proves server replay of an existing `op_id` is exact/idempotent | SPLIT → fast layers |
 
 ## Work-Open
 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
-| Lost response applies the event once | `tests/browser/run_work_open_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_open_sync.py` proves server replay of an existing `op_id` is exact/idempotent | SPLIT → fast layers |
-| Older event never overwrites a newer one (both arrival orders) | `tests/test_work_open_sync.py` `test_max_register_over_event_time` and `test_arrival_order_does_not_decide` | MOVE |
+| Lost response applies the event once | `tests/browser/run_work_open_sync_selftest.js` proves a transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/pg/test_works_sync.py` `OpenSyncTests.test_the_ack_carries_the_recent_row_and_a_replay_answers_from_the_ledger` proves server replay is exact/idempotent | SPLIT → fast layers |
+| Older event never overwrites a newer one (both arrival orders) | `tests/pg/test_works_sync.py` `OpenSyncTests.test_the_latest_event_wins_whatever_the_arrival_order_or_zone` and `ConcurrentOperationTests.test_opens_from_many_devices_keep_the_latest` | MOVE |
 | Repeated opens of one Work are one event | Node `recording()` in `run_work_open_sync_selftest.js` | MOVE |
 | Different Works keep their own events | Node `recording()` + `overlay()` | MOVE |
-| Open event for a deleted Work is consumed, not parked | Node `terminal()` ENTITY_NOT_FOUND discard; Python `test_missing_work_is_terminal` | MOVE |
+| Open event for a deleted Work is consumed, not parked | Node `terminal()` ENTITY_NOT_FOUND discard; `tests/pg/test_works_sync.py` `OpenSyncTests.test_malformed_envelopes_are_refused_unledgered_and_a_missing_work_is_terminal` | MOVE |
 
 ## Concepts durable — definition cancel + parent-set
 
@@ -39,7 +39,7 @@ Per-family KEEP / SPLIT / MOVE decisions (rule in `tests/e2e/AGENTS.md`): which 
 | --- | --- | --- |
 | Editing back to the acknowledged body cancels the pending op | Node `coalescingFor(RESEARCH)` A→B→A plus `mutationTestAtoBtoA`; editor-path coverage via `durableSaveThroughObservedBaseCancels` and production `enqueuePathAtoBtoACancels` (`prksEnqueueWorkResearchNotesSave` with editor context → pending returns to zero); static enqueue/flush pins in `run_work_note_sync_selftest.js` / `test_frontend_work_note_sync.py` | MOVE |
 | Private ACK does not fence Concepts | Node `reconciliation()` dispatches Private ACK through `prksNoteSyncHandler.reconcile` → `prksOfflineReconcilePrivateNote` (must not advance Concepts/Arguments/Graph generations; patches only `private_notes`) | MOVE |
-| Stale research revision is a conflict (compact body privacy) | Node `handlerContract` rejects body-carrying conflicts; Python `test_a_stale_research_base_against_a_different_value_conflicts` and `test_compact_conflict_results_omit_note_bodies` | SPLIT → fast layers for shape; thin Chromium retains reconnect park |
+| Stale research revision is a conflict (compact body privacy) | Node `handlerContract` rejects body-carrying conflicts; `tests/pg/test_works_mutations.py` `NoteDecisionTests.test_each_row_of_the_decision_table` and `tests/pg/test_works_sync.py` `NoteSyncTests.test_acknowledgements_and_conflicts_carry_sizes_never_prose` | SPLIT → fast layers for shape; thin Chromium retains reconnect park |
 
 ## Work-People
 
@@ -52,7 +52,7 @@ Per-family KEEP / SPLIT / MOVE decisions (rule in `tests/e2e/AGENTS.md`): which 
 | Former browser scenario | Replacement fast coverage | Decision |
 | --- | --- | --- |
 | Repeated edits coalesce and returning to base cancels | Store `coalescing()` owns A→B→C / repeat-noop / edit-back-to-base; `editorCoalescing()` drives the real `prksSaveWorkMetadataFields` bib Save (DOM harness) so a never-sent pending field stays editable and subsequent Saves dirty against the displayed pending value | SPLIT |
-| Lost response applies the edit once | Selftest `lostResponse()` proves transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/test_work_metadata_sync.py` `test_idempotency_normalization_and_reuse` plus the exact-replay matrix prove ledger idempotency / `OP_ID_REUSE`; `tests/test_server_api.py` `test_work_metadata_sync_http_lost_response_replay` covers `/api/sync/operations` commit-then-lost-response replay with DOI revision staying 1 | SPLIT → fast layers |
+| Lost response applies the edit once | Selftest `lostResponse()` proves transport loss leaves the original envelope pending and replays the exact same `op_id`/envelope; `tests/pg/test_works_metadata_sync.py` `ConflictRuleTests.test_a_reused_op_id_is_refused_and_changes_nothing` proves ledger idempotency / `OP_ID_REUSE`; `tests/pg/test_server_api_work_writes.py` `SyncReplayTests.test_a_metadata_operation_whose_response_was_lost_replays_at_revision_1` covers `/api/sync/operations` commit-then-lost-response replay with DOI revision staying 1 | SPLIT → fast layers |
 
 ## Work metadata — Slice B (abstract oversize refuse)
 
