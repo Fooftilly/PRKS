@@ -1,4 +1,3 @@
-import re
 import unittest
 from pathlib import Path
 
@@ -18,8 +17,8 @@ class AgentContextBudgetTests(unittest.TestCase):
             "Root AGENTS.md is ambient context; move specialized rules into scoped AGENTS.md files.",
         )
 
-    def test_root_documents_cursor_nested_precedence(self):
-        """Cursor nested AGENTS.md takes precedence over parent when both apply.
+    def test_root_documents_nested_precedence(self):
+        """Nested AGENTS.md takes precedence over parent when both apply.
 
         Do not reintroduce \"root remains authoritative when scopes overlap\".
         """
@@ -80,31 +79,3 @@ class AgentContextBudgetTests(unittest.TestCase):
             "Split oversized offline agent-rule leaves so agents can load only "
             "the relevant synchronization domain: " + ", ".join(oversized),
         )
-
-    def test_cursor_rules_are_bounded(self):
-        rules_dir = ROOT / ".cursor" / "rules"
-        oversized = []
-        always_apply_lines = 0
-
-        for path in sorted(rules_dir.rglob("*.mdc")):
-            text = path.read_text(encoding="utf-8")
-            lines = len(text.splitlines())
-            if lines > 500:
-                oversized.append(f"{path.relative_to(ROOT)}: {lines} lines")
-            if re.search(r"(?m)^alwaysApply:\s*true\s*$", text):
-                always_apply_lines += lines
-
-        self.assertEqual(
-            oversized,
-            [],
-            "Split oversized Cursor rules: " + ", ".join(oversized),
-        )
-        self.assertLessEqual(
-            always_apply_lines,
-            200,
-            "Always-applied Cursor rules exceeded the ambient-context budget; scope new rules by path.",
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()

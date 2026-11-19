@@ -887,7 +887,6 @@ AFFECTED_RULES = (
             "**/AGENTS.md",
             "README.md",
             "docs/**",
-            ".cursor/**",
             "DESIGN.md",
         ),
         "features": (),
