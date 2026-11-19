@@ -11,11 +11,15 @@ from pathlib import Path
 
 from scripts.ci.check_docs_only import _anchors, check_markdown
 from scripts.ci.docs_only import (
+    AUDITED_CONFIG_FILES,
     POSTGRES_SCOPE,
     changed_documentation,
     is_approved_markdown,
+    is_audited_config,
     is_postgres_irrelevant_markdown,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _git(root: Path, *args: str) -> str:
@@ -45,6 +49,8 @@ def _repo(root: Path) -> str:
     _write(root, "docs/wiki/Offline-and-Sync.md", "# Offline and Sync\n")
     _write(root, "backend/app.py", "print('ok')\n")
     _write(root, "AGENTS.md", "Rules\n")
+    _write(root, ".codacy.yml", "---\n")
+    _write(root, ".mergify.yml", "rules: []\n")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "baseline")
     return _git(root, "rev-parse", "HEAD")
@@ -111,6 +117,86 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 result = changed_documentation(root, base)
                 self.assertEqual(result is not None, expected)
                 self.assertIsNone(changed_documentation(root, "not-a-valid-sha"))
+
+    def test_audited_config_files_are_exact_root_paths(self):
+        for path in (".codacy.yml", ".pr_agent.toml"):
+            with self.subTest(approved=path):
+                self.assertTrue(is_audited_config(path))
+        for path in (
+            ".mergify.yml", ".coderabbit.yaml", ".greptile/config.json",
+            ".codacy.yaml", "docs/.codacy.yml", "./.codacy.yml", "/.codacy.yml",
+            ".github/workflows/test-gate.yml", "eslint.config.mjs", "ruff.toml",
+            "setup.cfg", "pyrightconfig.json", ".bandit",
+        ):
+            with self.subTest(rejected=path):
+                self.assertFalse(is_audited_config(path))
+
+    def test_audited_config_files_are_read_by_no_suite_or_runtime(self):
+        # The skip is only sound while nothing in the repository reads these
+        # files. A new reader must remove the file from AUDITED_CONFIG_FILES.
+        readers = ("backend", "frontend", "frontend-app", "scripts", "tests", "tools")
+        allowed = {
+            ROOT / "scripts/ci/docs_only.py",
+            Path(__file__).resolve(),
+        }
+        for name in sorted(AUDITED_CONFIG_FILES):
+            with self.subTest(config=name):
+                hits = []
+                for top in readers:
+                    for path in (ROOT / top).rglob("*"):
+                        if (
+                            not path.is_file() or path in allowed
+                            or "node_modules" in path.parts
+                            or path.suffix not in {".py", ".js", ".mjs", ".ts", ".vue", ".sh", ".json", ".toml", ".cfg", ".yml", ".yaml"}
+                        ):
+                            continue
+                        try:
+                            if name in path.read_text(encoding="utf-8"):
+                                hits.append(str(path.relative_to(ROOT)))
+                        except (OSError, UnicodeError):
+                            continue
+                for script in ("run_tests.py", "prks_app.py", "Dockerfile", ".dockerignore"):
+                    if name in (ROOT / script).read_text(encoding="utf-8"):
+                        hits.append(script)
+                self.assertEqual(hits, [])
+
+    def test_audited_config_git_changes_fail_closed(self):
+        cases = (
+            ("codacy only", {".codacy.yml": "---\nexclude_paths: []\n"}, True),
+            ("codacy and audited wiki", {
+                ".codacy.yml": "---\n# changed\n",
+                "docs/wiki/Glossary.md": "# Updated\n",
+            }, True),
+            ("new pr agent config", {".pr_agent.toml": "[config]\n"}, True),
+            ("codacy with code", {
+                ".codacy.yml": "---\n# changed\n",
+                "backend/app.py": "print('changed')\n",
+            }, False),
+            ("mergify read by tests", {".mergify.yml": "rules: [1]\n"}, False),
+        )
+        for scope in (None, POSTGRES_SCOPE):
+            for label, changes, expected in cases:
+                with self.subTest(scope=scope, label=label), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    base = _repo(root)
+                    for path, body in changes.items():
+                        _write(root, path, body)
+                    _git(root, "add", ".")
+                    _git(root, "commit", "-qm", "change")
+                    if scope is None:
+                        result = changed_documentation(root, base)
+                    else:
+                        result = changed_documentation(root, base, scope)
+                    self.assertEqual(result is not None, expected)
+
+    def test_deleted_audited_config_runs_full_ci(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = _repo(root)
+            _git(root, "rm", "-q", ".codacy.yml")
+            _git(root, "commit", "-qm", "delete")
+            self.assertIsNone(changed_documentation(root, base))
+            self.assertIsNone(changed_documentation(root, base, POSTGRES_SCOPE))
 
     def test_postgres_scope_accepts_only_plain_markdown(self):
         approved = (
