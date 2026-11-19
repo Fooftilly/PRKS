@@ -2,7 +2,7 @@
 
 This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by the `Fooftilly` account) is configured and automated, and of the rules automation must keep (#441). Project-side settings live in GitHub's UI, not in this repository, so this document is the reference for reasoning about them together with the checked-in workflows.
 
-> **Status of this document.** Section 1 records the configuration verified read-only on 2026-10-10. Lifecycle Status (§2), Roadmap Stage and Execution (§3) are approved designs; everything marked **Proposed** still needs the maintainer's approval of the exact configuration. Nothing in §5, §7 or §13 is applied by this document, and no automation may change Project #3 fields, options, items, workflows or views until the maintainer approves the specific step.
+> **Status.** Lifecycle Status (§2), Roadmap Stage and Execution (§3) are approved. Everything marked **Proposed** still needs the maintainer's approval of the exact configuration; nothing in §5, §7 or §13 is applied by this document, and no automation may change Project #3 fields, options, items, workflows or views until the maintainer approves the specific step.
 
 ## Governance (always applies)
 
@@ -14,27 +14,17 @@ This is the checked-in record of how GitHub Project #3 ("PRKS Roadmap", owned by
 - Where automation cannot know intent, a manually set Status wins. Automation never moves an item out of **Blocked** or **Done** without an explicitly approved policy. The only such policies are the native closing and reopening rules in §5, approved with that configuration: closing an issue or PR, or merging a PR, sets Done from any Status (closing is a person's or a merge's own act), and reopening an issue moves it from Done to Ready. `project-sync` has no exception.
 - AI triage output never changes Status, fields or dependencies by itself.
 
-## 1. Existing configuration (verified 2026-10-10, read-only)
+## 1. Existing configuration
 
-Sources: the maintainer's baseline export (44 items, `hasNextPage: false`, taken before the 2026-10-10 manual changes) and a live read-only GraphQL snapshot. Workflow filters, target values and When selectors are not exposed by the API; those rows are as reported by the maintainer.
+Workflow filters, target values and When selectors are not exposed by the API; those rows are as reported by the maintainer.
 
-**Items.** 44, all issues from `Fooftilly/PRKS`, none archived, no PRs or draft issues. **35 have Work Type = Epic** (the Roadmap view). The others: #472 (Feature, sub-issue of #314) and eight findings/sub-issues (#35, #75, #81, #82, #85, #87, #91, #102). An earlier draft of the inventory said "26 epics"; that was a miscount of the `[Roadmap]` titles, not a pagination gap. A recount of all 44 baseline nodes and of the live items gives 35.
+**Custom fields.** Status; Horizon {Now, Next, Later, Long-term, Exploratory}; Work Type {Epic, Feature, Research, Bug, Infrastructure, Documentation}; Priority {P0, P1, P2, P3}; Commitment {Committed, Research-first, Exploratory}; Agent {Unassigned, Cursor Cloud, Claude Code, ChatGPT/Codex, Manual}; Effort {XS, S, M, L, XL}; Roadmap Order (number); Start date, Target date (date); Roadmap Stage and Execution (§3). No iteration field. `scripts/agent-queue.sh` accepts both `chatgpt` and `codex` aliases and tolerates legacy `Codex` values in old exports. Project assignment does not imply implementation approval or readiness.
 
-**Custom fields (all preserved).** Status; Horizon {Now, Next, Later, Long-term, Exploratory}; Work Type {Epic, Feature, Research, Bug, Infrastructure, Documentation}; Priority {P0, P1, P2, P3}; Commitment {Committed, Research-first, Exploratory}; Agent {Unassigned, Cursor Cloud, Claude Code, Codex, Manual}; Effort {XS, S, M, L, XL}; Roadmap Order (number); Start date, Target date (date). No iteration field. No item has Agent, Effort, dates or assignees set.
+**Status options.** Idea, Research / Design, **Ready** (`cff9bdb9`, the renamed Planned), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked, Inbox, Changes requested, Blocked, Backlog. Renaming Planned to Ready kept the option ID, so 23 epics that were Planned now read Ready; the maintainer's pre-rename export (kept outside the repository) is the only record of which, and the reviewed migration plan (§13) carries them to Roadmap Stage = Planned with Status Backlog.
 
-**Agent field update (2026-10-29):** The maintainer renamed the existing `Codex` single-select option to `ChatGPT/Codex` and assigned agent ownership for active issues. The line above is a historical 2026-10-10 configuration snapshot, not the current option list. Current Agent choices are `Unassigned`, `Cursor Cloud`, `Claude Code`, `ChatGPT/Codex`, and `Manual`. The read-only queue in `scripts/agent-queue.sh` accepts both `chatgpt` and `codex` command aliases and tolerates legacy `Codex` values in old exports. Project assignment does not imply implementation approval or readiness.
+**Native workflows** (as reported by the maintainer): Auto-add sub-issues on, Auto-close issue off, Item added to project per §5, Item closed on, Item reopened = Issues only → Ready, Pull request linked to issue off, Pull request merged on.
 
-**Status options.**
-
-| Baseline | Live |
-|---|---|
-| Idea, Research / Design, **Planned** (`cff9bdb9`), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked | Idea, Research / Design, **Ready** (`cff9bdb9`, the renamed Planned), Ready for Agent, In Progress, Review, Ready to Merge, Done, Parked, Inbox, Changes requested, Blocked, Backlog |
-
-Renaming Planned to Ready kept the option ID, so the 23 epics that were Planned now read Ready, and the live option cannot tell them apart from items that are really Ready. The maintainer's pre-rename baseline export is the only record of which they were. It is kept outside the repository, and the reviewed migration plan (§13) carries those 23 assignments, which become Roadmap Stage = Planned with Status Backlog.
-
-**Native workflows.** Baseline (API): Auto-add sub-issues **on**, Auto-close issue on, Item added to project **off**, Item closed on, Item reopened on, Pull request linked to issue on, Pull request merged on. "Auto-add to project", "Auto-archive items", "Code changes requested" and "Code review approved" were not returned by the API. As reported by the maintainer since then (not verifiable via the API): Auto-close issue **off**, Pull request linked to issue **off**, Item reopened = Issues only → Ready.
-
-**Views (baseline = live).**
+**Views.**
 
 | # | View | Layout | Filter | Group / columns by | Sort |
 |---|---|---|---|---|---|
@@ -51,14 +41,14 @@ Renaming Planned to Ready kept the option ID, so the 23 epics that were Planned 
 | Other custom fields | as above, all kept | add Roadmap Stage and Execution (§3) | yes (field creation) |
 | Native workflows | as above | §5 | yes |
 | Views | as above | §7 | yes |
-| Membership | 44 items | backfill (§13) | yes |
+| Membership | current items | backfill (§13) | yes |
 
 ## 2. Lifecycle Status (approved)
 
 | Status | Meaning |
 |---|---|
 | Inbox | Added, not triaged. |
-| Backlog | Triaged and accepted or planned, but not actionable yet (approved 2026-10-10). |
+| Backlog | Triaged and accepted or planned, but not actionable yet. |
 | Ready | Triaged and actionable; can start now. |
 | In Progress | Being worked on, including draft PRs. |
 | Review | Waiting for a human review. |
@@ -70,7 +60,7 @@ Legacy planning options (Idea, Research / Design, Ready for Agent, Ready to Merg
 
 `project-sync` treats any Status it has no key for, Backlog and the legacy options included, as `unknown:<name>`. Such a value matches no "allowed from" list, so a PR in Backlog is never moved by `project-sync` (covered by `tests/test_project3_migrate.py`). No change to `project-sync` was needed.
 
-## 3. Roadmap Stage and Execution fields (approved; created by the maintainer 2026-10-11)
+## 3. Roadmap Stage and Execution fields (approved)
 
 **Roadmap Stage**, single select {Idea, Research / Design, Planned, Parked}: the planning stage of roadmap items, previously carried by Status. It is separate from Commitment (how firmly PRKS commits: Committed, Research-first, Exploratory) and Horizon (when). These are three different questions. Today Stage and Commitment mostly line up (#472 is Idea + Research-first), but they evolve independently, and Parked has no other home.
 
@@ -90,7 +80,6 @@ No **new** classification fields. The existing Work Type and Priority Project fi
 | Parent / progress | native sub-issues, Parent issue and Sub-issue progress fields |
 | Linked PRs, reviewers, milestone | native fields |
 
-Research backfill: the only `[Research]` issues, #181, #234 and #246 (all closed as completed), received the `research` label on 2026-10-10 with the maintainer's approval. Their state and content were not changed. No other issue is relabelled.
 
 ## 5. Native Project workflows (Proposed)
 
@@ -99,7 +88,7 @@ Every setting is checked against its current configuration (§1) before it is ch
 | Workflow | Proposed setting | Why |
 |---|---|---|
 | Auto-add to project | On. Repository `Fooftilly/PRKS`, filter `is:issue,pr` (all issues and PRs, including dependency PRs). GitHub Free allows one auto-add workflow, which is enough. Supported auto-add qualifiers: `is` (open, closed, merged, draft, issue, pr), `label`, `reason`, `assignee`, `no` | Everything enters without manual adding. Dependency PRs are kept out of the ordinary views by their filters (§7), not by auto-add. |
-| Item added to project | **When:** Issues only (Pull requests unchecked). **Set:** Status Inbox. Approved 2026-10-10 | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
+| Item added to project | **When:** Issues only (Pull requests unchecked). **Set:** Status Inbox. | Default entry state for issues. PR items get their first Status from `project-sync` instead (§10.1), so a delayed native run cannot reset a classified PR. |
 | Item closed | Status: Done, for issues and PRs | The item itself is complete. A PR closed without merging is finished too. If a merged PR's closing keyword closes an issue, GitHub closes it and this rule moves it to Done; that is why slice PRs reference controller and roadmap issues with `Refs #N`, never a closing keyword. |
 | Pull request merged | Status: Done | Applies to the PR item only. |
 | Item reopened | **When:** Issues only, if the workflow offers the selector (checked against the screenshots). **Set:** Status Ready | Reopened work is actionable again. Whether an explicitly set state should be preserved is checked against the native workflow's behavior first. A reopened PR keeps Done: `project-sync` never moves an item out of Done, so a person resets a reopened PR's Status by hand. |
@@ -129,7 +118,7 @@ The settings live under Project #3 → ⋯ → **Workflows**. Each built-in work
 | Triaged as actionable | issue | Ready | person | Inbox |
 | Work starts | issue | In Progress | person | Ready |
 | Draft PR opened | PR | In Progress (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox |
-| PR opened ready for review (approved 2026-10-10) | PR | Review (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox |
+| PR opened ready for review | PR | Review (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox |
 | PR marked ready for review | PR | Review (Changes requested if a changes-requested review is unanswered) | `project-sync` | empty, Inbox, Ready, In Progress |
 | PR converted back to draft | PR | In Progress | `project-sync` | Review, Changes requested, and only if the latest conversion to draft is newer than both the latest changes-requested review and the current Status (so a delayed run never undoes a Status set after it) |
 | Changes requested in a review | PR | Changes requested | `project-sync` | empty, In Progress, Review, and only while a changes-requested review is unanswered. Bot reviews count like any other review. |
@@ -175,15 +164,11 @@ Only documented Projects filter qualifiers are used (`is:`, `label:`, `-label:`,
 
 ### ChatGPT-compatible comment-free assignment requests
 
-The protected `project3-assignment-request-processor.yml` listens for a successful unprivileged push signal on the dedicated `project3-assignment-requests` branch. ChatGPT can use its existing GitHub plugin to update the single JSON request file on that branch; only the trusted master processor, after independently verifying GitHub's actor, workflow, branch/commit/file and current ref, reads the Project secret and runs the existing triage guard. No issue comments are used, and the public queue remains read-only. See `docs/agent-workflows/project3-assignment-request.md` for the exact protocol and live acceptance gate. The ChatGPT-originated check and live apply acceptance tests passed on 2026-10-30, including one verified Project field change and complete queue publication.
+The protected `project3-assignment-request-processor.yml` listens for a successful unprivileged push signal on the dedicated `project3-assignment-requests` branch. ChatGPT can use its existing GitHub plugin to update the single JSON request file on that branch; only the trusted master processor, after independently verifying GitHub's actor, workflow, branch/commit/file and current ref, reads the Project secret and runs the existing triage guard. No issue comments are used, and the public queue remains read-only. See `docs/agent-workflows/project3-assignment-request.md` for the exact protocol and live acceptance gate.
 
 ### Authenticated assignment dispatch (comment-free)
 
 The protected `project3-assignment-dispatch.yml` workflow accepts an explicitly owner-dispatched versioned JSON command with a complete expected-before snapshot, then reuses the reviewed triage guards to modify Project V2 fields directly. It records verified results in GitHub Actions run logs/summary, and refreshes the read-only agent queue on successful writes. It defaults to no-write unless `PROJECT3_ASSIGN_DISPATCH_MODE=apply`; the `project-automation` Environment must admit only `master`. See `docs/agent-workflows/project3-assignment-dispatch.md` for activation, guardrails, command format, and bridge retirement criteria. The ChatGPT GitHub connector uses the protected request-branch relay described above instead of workflow dispatch or issue comments.
-
-### Retired issue-comment assignment transport
-
-The issue-comment listener on #982 was removed after the request-branch route passed both check-only and live-apply acceptance with verified Project values and queue publication. #982 remains a historical audit record; use the request branch for ChatGPT and the manual dispatch or reviewed local triage paths for fallback. Assignment does not start agents.
 
 ### Reviewed issue triage batches
 
@@ -208,7 +193,7 @@ A checked-in workflow, `.github/workflows/project-sync.yml`, covering only the s
 
 - **Events:** `pull_request_target` (`opened`, `ready_for_review`, `converted_to_draft`, `review_requested`), and a relayed review event: a submitted changes-requested or approving review, or a dismissed review. A review has no `pull_request_target` action, so `.github/workflows/project-sync-review.yml` relays it: a `pull_request_review` workflow with no permissions, no secrets and no checkout, whose successful completion starts `project-sync` through `workflow_run`. A `workflow_run` run always uses the default branch's copy of `project-sync.yml` and takes the PR number from GitHub's record of the relay run, never from its output. The job checks out only the default branch and never runs pull-request code. The PR's number is the only input; the PR's draft and open state and its review history are re-read from the API, so a stale event changes nothing.
 - **Merged or closed PRs:** an event for a PR that is already merged or closed when the run reads it changes nothing: no item is added and no Status is written. A run never writes In Progress, Review or Changes requested to a merged or closed PR. Its only write for one is Done, and only for a PR that was merged or closed after the run had read it open (during the item add or the Status write); then the run sets Done on an item that has no Status yet, or on the Status the run itself just wrote, and leaves any other Status alone.
-- **Fork PRs (known limitation, kept 2026-10-10):** reviews on fork PRs are not relayed. A fork PR's `pull_request_review` run gets no PR number in `workflow_run`, and the job condition requires the head repository to be this one. A relay that took the number from fork-controlled text, such as a `run-name`, would add a privileged trust path that this design does not take. If fork contributions become common, a separately reviewed and strictly validated relay can be added. The table lists every PR transition for a fork PR.
+- **Fork PRs (known limitation):** reviews on fork PRs are not relayed. A fork PR's `pull_request_review` run gets no PR number in `workflow_run`, and the job condition requires the head repository to be this one. A relay that took the number from fork-controlled text, such as a `run-name`, would add a privileged trust path that this design does not take. If fork contributions become common, a separately reviewed and strictly validated relay can be added. The table lists every PR transition for a fork PR.
 
   | Transition (§6) | Owner | Fork PR |
   |---|---|---|
@@ -245,7 +230,7 @@ The PR is now wrongly back in Inbox. GitHub does not document whether "Item adde
 | Merged or closed → Done | native |
 | The seven `project-sync` PR rows in §6 (five events), Changes requested included | `project-sync` |
 
-This division was approved on 2026-10-10. With "Item added" limited to issues through its **When** selector, nothing native ever writes Inbox to a PR, so no delay can reset one.
+With "Item added" limited to issues through its **When** selector, nothing native ever writes Inbox to a PR, so no delay can reset one.
 
 Remaining races and how `project-sync` handles them:
 
@@ -343,7 +328,7 @@ Both plans use the same schema:
 - A write cannot be atomic with the check before it, so each item is re-read right after every write as well. If its issue or PR changed state (for example it closed and "Item closed" set Done) or it was archived or removed in that moment, the item is reported as `drift`, which fails the apply, and is not marked completed. A rerun leaves it alone, so a person checks it by hand. The read after the last write must also still show every planned field at its target; a field a person changed in the meantime is reported the same way (a late native Inbox on an added item is left to the settle check).
 - An `--apply` that skipped any item as `drift` did not apply the whole reviewed plan, so its report has `ok: false` and the command exits 1, even though the other items were written. `held`, `unchanged`, `checkpointed` and `not-in-plan` are intended and do not fail a run. A dry-run reports drift without failing.
 
-**Reviewed decisions for the existing items (2026-10-10):**
+**Reviewed decisions for the existing items:**
 
 | Group | Status → | Roadmap Stage → |
 |---|---|---|
@@ -357,7 +342,7 @@ Both plans use the same schema:
 | #39 | **held**: nothing is written | – |
 | Items already Done | keep Done | – |
 
-#39 was closed by `cursor[bot]` on 2026-10-01 with no closing commit or comment and all 9 scope boxes unchecked, and the `Fooftilly` account reopened it on 2026-10-10. It stays held, and no current Status is assumed, because the native "Item reopened" rule may have changed it. The maintainer chooses its Status and Roadmap Stage before approving it.
+#39 was closed without a closing commit and later reopened. It stays held, and no current Status is assumed, because the native "Item reopened" rule may have changed it. The maintainer chooses its Status and Roadmap Stage before approving it.
 
 **Commands** (run by the maintainer only after approval, with a classic token that has the `project` scope, exported as `PROJECT3_MIGRATION_TOKEN`; never committed or printed). Keep the plan files somewhere outside the repository, such as `~/prks-project3/`:
 
@@ -390,7 +375,7 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 
 **Credentials.** The existing `PROJECT_SYNC_TOKEN` (classic, `project` scope only) from the `project-automation` environment, passed as `PROJECT3_READINESS_TOKEN` to the one step that reads. No new secret. It is never printed. Without it, or when GitHub rejects it (HTTP 401 or 403: expired, revoked or lacking a scope; a 403 can also be a rate limit), the run fails as `not-configured` and publishes nothing. The job has `contents: read` and no other permission.
 
-**Confidentiality.** This repository is public, so its Actions logs, job summaries and artifacts are readable by anyone (artifacts by any signed-in GitHub user). Project #3 field values are public data only when the project is public. The run therefore reads the project's `public` flag first and **refuses (exit 3) when Project #3 is private**, before it reads any item, and again after the last read, and publishes nothing: no artifact, no summary, no field values in the log. There is no override. The maintainer confirmed on 2026-10-11 that Project #3 is public (`gh project view 3 --owner Fooftilly` returned `public: true`, `closed: false`); the guard stays for future changes. Items from other repositories, PRs, draft issues and items the token cannot see are skipped and only counted. If Project #3 is private, the options are: make Project #3 public (every field on it becomes world-readable; the maintainer decides), or run the same script somewhere private, such as a private repository's workflow with its own copy of the token or the maintainer's machine, and give the triage access only there.
+**Confidentiality.** This repository is public, so its Actions logs, job summaries and artifacts are readable by anyone (artifacts by any signed-in GitHub user). Project #3 field values are public data only when the project is public. The run therefore reads the project's `public` flag first and **refuses (exit 3) when Project #3 is private**, before it reads any item, and again after the last read, and publishes nothing: no artifact, no summary, no field values in the log. There is no override. Project #3 is public; the guard stays for future changes. Items from other repositories, PRs, draft issues and items the token cannot see are skipped and only counted. If Project #3 is private, the options are: make Project #3 public (every field on it becomes world-readable; the maintainer decides), or run the same script somewhere private, such as a private repository's workflow with its own copy of the token or the maintainer's machine, and give the triage access only there.
 
 **Fail closed.** The run fails, and publishes nothing, when any page is missing (`hasNextPage` without an `endCursor`, a repeated cursor, fewer nodes than `totalCount`), when `totalCount` changes between pages (rerun), when the project's id, number or owner differ from `PVT_kwHOAsc2_s4BkAo3`, 3, `Fooftilly`, when Status, Execution or Agent is missing or not single select, when one issue has two items or one item appears twice, when an issue has more than 20 assignees, or when any node has an unexpected shape. The file is written atomically, and only after every read succeeded.
 
@@ -427,12 +412,11 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 
 **Retrieving it (ChatGPT GitHub connector).** Use the connector's dedicated artifact actions, not its general UTF-8 `fetch` against the download URL, which answers with a `302` redirect to blob storage.
 
-1. Latest successful run. The connector's general `fetch` refuses the per-workflow endpoint (`/actions/workflows/project3-readiness.yml/runs`; verified by the maintainer 2026-10-11), so read the repository-wide collection, which it does allow: `GET /repos/Fooftilly/PRKS/actions/runs?per_page=100&page=N`, starting at page 1. Runs come newest first. Keep a run only when `path` is `.github/workflows/project3-readiness.yml`, `head_branch` is `master`, `event` is `schedule` or `workflow_dispatch`, `status` is `completed` and `conclusion` is `success`. Take the first such run. Read further pages until one is found or a page's oldest run was created more than 31 hours ago (the 30-hour limit plus queueing margin; the snapshot's own `generated_at` is still checked below). If a page fails, is cut short, or no matching run is found, readiness is unknown.
+1. Latest successful run. The connector's general `fetch` refuses the per-workflow endpoint (`/actions/workflows/project3-readiness.yml/runs`), so read the repository-wide collection, which it does allow: `GET /repos/Fooftilly/PRKS/actions/runs?per_page=100&page=N`, starting at page 1. Runs come newest first. Keep a run only when `path` is `.github/workflows/project3-readiness.yml`, `head_branch` is `master`, `event` is `schedule` or `workflow_dispatch`, `status` is `completed` and `conclusion` is `success`. Take the first such run. Read further pages until one is found or a page's oldest run was created more than 31 hours ago (the 30-hour limit plus queueing margin; the snapshot's own `generated_at` is still checked below). If a page fails, is cut short, or no matching run is found, readiness is unknown.
 2. Its artifact: the dedicated `fetch_workflow_run_artifacts` action for that run ID (REST: `GET /repos/Fooftilly/PRKS/actions/runs/{run_id}/artifacts`). Take the artifact named `project3-readiness.json` with `expired: false`.
 3. Download: `download_workflow_artifact` with that artifact ID. It follows the redirect and returns a file reference.
 4. Decode by **content**, not by name or stated type: bytes starting with `PK` are a ZIP that must hold exactly `project3-readiness.json`; anything else must be that JSON file itself (`archive: false`). `python scripts/project3_readiness.py check --snapshot - < <downloaded file>` does this decoding and every check below. Standard input works wherever the file is (for example under `/mnt/data`); a path given directly must be under the home or temp directory.
 
-Evidence so far (2026-10-11, maintainer): with the connected ChatGPT GitHub integration, `fetch_workflow_run_artifacts` listed an existing ordinary (zipped) PRKS artifact, `download_workflow_artifact` followed the redirect and returned a file, and the JSON inside the ZIP was read in the triage's working container. That proves the route for zipped artifacts. First run after merge (2026-10-11, workflow run 38176670057 on `master` at `1f96c96`): artifact 11716530295, 71,333 bytes; the REST download (`GET /repos/Fooftilly/PRKS/actions/artifacts/{id}/zip`) returned the JSON file itself, and `check --snapshot -` reported it complete and fresh (273 issues, all 266 open issues on Project #3). Retrieval of the `archive: false` file **through the ChatGPT connector is not yet verified** by the maintainer. Until then, and whenever any step fails, the triage treats readiness as unknown.
 
 **Freshness and use (consumer rules).**
 
