@@ -107,4 +107,22 @@ describe('person template', () => {
     exec.mockReturnValue(false)
     expect(await copyText('c')).toBe(false)
   })
+
+  it('falls back to the selection copy when the clipboard rejects, and fails closed when it throws', async () => {
+    const writeText = vi.fn(async () => {
+      throw new Error('denied')
+    })
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const exec = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { value: exec, configurable: true })
+    expect(await copyText('d')).toBe(true)
+    expect(writeText).toHaveBeenCalledWith('d')
+    expect(exec).toHaveBeenCalledWith('copy')
+
+    exec.mockImplementation(() => {
+      throw new Error('unsupported')
+    })
+    expect(await copyText('e')).toBe(false)
+    expect(document.querySelector('textarea')).toBeNull()
+  })
 })
