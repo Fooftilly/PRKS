@@ -104,9 +104,9 @@ Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the exis
 - The thumbnail is an image or the documented 404.
 - The reader gets the stored bytes back unchanged.
 - A shared annotation id is adopted once.
-- Linearization is checked with `PRKS_PDF_LINEARIZE` pinned both ways. Switched off, it reports `disabled` and keeps the source, even with qpdf installed. Switched on, it writes a copy, keeps the source on a qpdf refusal, or reports `missing-qpdf` when qpdf is absent.
+- Linearization is checked with `PRKS_PDF_LINEARIZE` pinned both ways. Switched off, it reports `disabled` and keeps the source, even with qpdf installed. Switched on, it writes a copy, keeps the source on a qpdf refusal, or reports `missing-qpdf` when qpdf is absent. A qpdf that finishes with warnings (exit 3, as on `damaged_xref`) gives `ok-repaired` when PyMuPDF reads the same page count and page text from its repaired copy, and `qpdf-warnings` with the source kept otherwise (#1322).
 
-Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). Where Linux `/proc/self/clear_refs` is available, the peak resident size is reset before the run and its growth is bounded (elsewhere that check is skipped), and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
+Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (PRKS bounds them itself too: qpdf after 120 seconds, extraction after 300 seconds in a child process, #1321). Where Linux `/proc/self/clear_refs` is available, the peak resident size is reset before the run and its growth is bounded (elsewhere that check is skipped), and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
 
 ## HTTP authorization matrix (#1286)
 

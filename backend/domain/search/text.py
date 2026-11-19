@@ -36,7 +36,10 @@ and one that locks second writes nothing: no stale row survives.
 **Outcomes.** A PDF PyMuPDF cannot read is an outcome, not an empty
 document: its row has status ``failed`` and no text, and it is not retried
 (the bytes will not change under the same hash). A document with no text
-is ``empty``. An extractor that is not installed fails the job, which the
+is ``empty``. An extraction that runs past ``EXTRACT_TIMEOUT_SECONDS`` or
+whose child process dies is ``failed`` too (logged as
+``extraction_timeout`` / ``extractor_crashed``), so a pathological PDF is
+not retried forever. An extractor that is not installed fails the job, which the
 queue retries, so a missing dependency never records an outcome.
 
 **The document.** ``doc`` is ``strip(to_tsvector(...))`` of the folded
@@ -148,8 +151,8 @@ def write_text(scope: LibraryScope, asset_id: str, sha256: str, status: str, tex
 
 
 def extract_pdf(path: str) -> tuple[str, bool]:
-    """``(text, truncated)`` of the PDF at ``path`` (``backend.pdf_text.extract_pdf``)."""
-    from backend.pdf_text import extract_pdf as extract
+    """``(text, truncated)`` of the PDF at ``path`` (``backend.pdf_text.extract_pdf_bounded``)."""
+    from backend.pdf_text import extract_pdf_bounded as extract
 
     found = extract(path, MAX_CHARS)
     return ("" if found.empty else found.text), found.truncated

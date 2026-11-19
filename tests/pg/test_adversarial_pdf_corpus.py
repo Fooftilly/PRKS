@@ -47,7 +47,7 @@ from tests.pg.test_http_processing import ProcessingHttpTestCase
 EXPECTED: dict[str, Optional[tuple[str, int, bool]]] = {
     "valid": ("indexed", 200, True),
     "truncated": ("empty", 200, False),  # MuPDF repairs it to one blank page; qpdf refuses it
-    "damaged_xref": ("indexed", 200, False),  # MuPDF repairs it; qpdf exits 3 (warnings), kept as is
+    "damaged_xref": ("indexed", 200, True),  # qpdf exits 3 (warnings); its repaired copy keeps pages and text
     "encrypted": ("failed", 404, False),
     "zero_pages": ("empty", 404, False),
     "many_pages": ("indexed", 200, True),
@@ -238,9 +238,9 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
             self.assertEqual(stored.linearize, "missing-qpdf")
             self.assertEqual(stored.working, stored.source)
             return
-        self.assertEqual(stored.linearize == "ok", linearized, stored.linearize)
+        self.assertEqual(stored.linearize in ("ok", "ok-repaired"), linearized, stored.linearize)
         self.assertEqual(stored.working != stored.source, linearized)
         if not linearized:
-            self.assertIn(stored.linearize, ("qpdf-failed", "already"))
+            self.assertIn(stored.linearize, ("qpdf-failed", "qpdf-warnings", "already"))
         with self.objects.local_path(stored.working.key) as path:
             self.assertGreater(os.path.getsize(path), 0)
