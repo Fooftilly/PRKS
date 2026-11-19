@@ -33,7 +33,7 @@ def _child_writing(result: Any):
     """A stand-in for ``subprocess.run`` whose child writes ``result`` (None: writes nothing)."""
     def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if result is not None:
-            with open(argv[-1], "w", encoding="utf-8") as handle:
+            with open(os.path.join(kwargs["cwd"], "result.json"), "w", encoding="utf-8") as handle:
                 json.dump(result, handle)
         return subprocess.CompletedProcess(argv, 0 if result is not None else -11)
     return run
@@ -80,7 +80,7 @@ class BoundedExtractionTests(unittest.TestCase):
                 {"text": "", "empty": True, "truncated": False})) as run:
             extract_pdf_bounded(self.pdf, max_chars=7)
         argv = run.call_args.args[0]
-        self.assertEqual(argv[1:5], ["-m", "backend.pdf_text", self.pdf, "7"])
+        self.assertEqual(argv[1:], ["-m", "backend.pdf_text", self.pdf, "7"])
         self.assertNotIn("shell", run.call_args.kwargs)
 
 

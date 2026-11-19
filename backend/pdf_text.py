@@ -31,6 +31,7 @@ _MAX_EXTRACTED_CHARS = 2_000_000
 # a pathological file gets near this.
 EXTRACT_TIMEOUT_SECONDS = 300
 _PACKAGE_ROOT = str(Path(__file__).resolve().parents[1])
+_RESULT_NAME = "result.json"
 
 
 class PDFTextExtractorUnavailable(Exception):
@@ -115,16 +116,18 @@ def extract_pdf_bounded(
     because MuPDF writes its own messages to stdout.
     """
     with tempfile.TemporaryDirectory(prefix="prks-pdf-text-") as scratch:
-        out = os.path.join(scratch, "result.json")
+        out = os.path.join(scratch, _RESULT_NAME)
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (_PACKAGE_ROOT, env.get("PYTHONPATH")) if p)
         try:
             subprocess.run(  # nosec B603 - fixed argv, no shell
-                [sys.executable, "-m", "backend.pdf_text", pdf_path, str(int(max_chars)), out],
+                [sys.executable, "-m", "backend.pdf_text", os.path.abspath(pdf_path), str(int(max_chars))],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                cwd=_PACKAGE_ROOT,
+                # The child writes its result into its working directory, this
+                # fresh scratch, and imports backend through PYTHONPATH.
+                cwd=scratch,
                 env=env,
                 check=False,
                 timeout=timeout,
@@ -147,8 +150,11 @@ def extract_pdf_bounded(
 
 
 def _child_main(argv: List[str]) -> int:
-    """``python -m backend.pdf_text PDF MAX_CHARS OUT``: one extraction, written to OUT as JSON."""
-    pdf_path, max_chars, out = argv[0], int(argv[1]), argv[2]
+    """``python -m backend.pdf_text PDF MAX_CHARS``: one extraction, written as JSON to ``_RESULT_NAME``
+
+    in the working directory (the parent's scratch), never to a path from argv.
+    """
+    pdf_path, max_chars = argv[0], int(argv[1])
     result: Dict[str, Any]
     try:
         found = extract_pdf(pdf_path, max_chars)
@@ -159,7 +165,7 @@ def _child_main(argv: List[str]) -> int:
         result = {"error": exc.reason}
     # Scratch read once by the parent after this process exits; a write cut
     # short is not valid JSON, which the parent reads as ``extractor_crashed``.
-    with open(out, "w", encoding="utf-8") as handle:
+    with open(_RESULT_NAME, "w", encoding="utf-8") as handle:
         json.dump(result, handle)
     return 0
 
