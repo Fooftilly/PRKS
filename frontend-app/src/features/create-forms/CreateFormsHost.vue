@@ -5,6 +5,7 @@ import GroupCreateForm from './GroupCreateForm.vue'
 import NewFileForm from './NewFileForm.vue'
 import PersonCreateForm from './PersonCreateForm.vue'
 import PlaylistCreateForm from './PlaylistCreateForm.vue'
+import SavedViewForm from '../saved-views/SavedViewForm.vue'
 import { snapshotModalFields } from './snapshot'
 import { CREATE_FORM_MODAL_IDS, type PrksCreateFormsApi } from './types'
 
@@ -15,6 +16,8 @@ const folderRef = ref<InstanceType<typeof FolderCreateForm> | null>(null)
 const personRef = ref<InstanceType<typeof PersonCreateForm> | null>(null)
 const groupRef = ref<InstanceType<typeof GroupCreateForm> | null>(null)
 const playlistRef = ref<InstanceType<typeof PlaylistCreateForm> | null>(null)
+const newFileRef = ref<InstanceType<typeof NewFileForm> | null>(null)
+const savedViewRef = ref<InstanceType<typeof SavedViewForm> | null>(null)
 
 function modalRoot(modalId: string): HTMLElement | null {
   const el = document.getElementById(modalId)
@@ -57,15 +60,21 @@ const api: PrksCreateFormsApi = {
   afterPersonReset() {
     personRef.value?.afterReset()
   },
+  prepareNewFile(stillOpening) {
+    return newFileRef.value?.prepare(stillOpening) ?? Promise.resolve()
+  },
   focusInitial(modalId) {
     if (modalId === 'folder-modal') folderRef.value?.focusInitial()
     else if (modalId === 'person-modal') personRef.value?.focusInitial()
     else if (modalId === 'group-modal') groupRef.value?.focusInitial()
     else if (modalId === 'playlist-modal') playlistRef.value?.focusInitial()
+    else if (modalId === 'work-modal') newFileRef.value?.focusInitial()
+    else if (modalId === 'saved-view-modal') savedViewRef.value?.focusInitial()
   },
   dismissInnerLayer(modalId) {
     if (modalId === 'folder-modal') return folderRef.value?.closeParentList() ?? false
     if (modalId === 'group-modal') return groupRef.value?.closeParentList() ?? false
+    if (modalId === 'work-modal') return newFileRef.value?.closeOpenList() ?? false
     return false
   },
   resetClosed() {
@@ -92,9 +101,9 @@ onBeforeUnmount(() => {
   <!--
     Temporary adapter (#1036). ModalHost does not mount feature forms yet,
     so these bodies teleport into the classic shells. Retire the teleport
-    when the host grows a feature-form slot. The New File body is markup
-    only for now (its behavior is still classic). Saved View, role link,
-    the person template, and Settings stay on their shells.
+    when the host grows a feature-form slot. New File also teleports its
+    footer into the shell, and Saved View its title. Role link, the person
+    template, and Settings stay on their shells.
   -->
   <Teleport to="#folder-modal-vue">
     <FolderCreateForm ref="folderRef" />
@@ -109,6 +118,9 @@ onBeforeUnmount(() => {
     <PlaylistCreateForm ref="playlistRef" />
   </Teleport>
   <Teleport to="#work-modal-vue">
-    <NewFileForm />
+    <NewFileForm ref="newFileRef" />
+  </Teleport>
+  <Teleport to="#saved-view-modal-vue">
+    <SavedViewForm ref="savedViewRef" />
   </Teleport>
 </template>

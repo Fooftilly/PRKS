@@ -328,7 +328,7 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         for marker in ("case 'search': {", "case 'saved-view-detail': {"):
             at = app.index(marker)   # missing marker is a failure, not a skip
             self.assertIn('prksEffectiveSearchResults(', app[at: at + 2400], marker)
-        surfaces = [FRONTEND / 'saved-views.js']
+        surfaces = []
         for feature in ('search', 'saved-views'):
             surfaces.extend(sorted((ROOT / 'frontend-app' / 'src' / 'features' / feature).glob('*.[tv][su]*')))
         for path in surfaces:

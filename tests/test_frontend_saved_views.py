@@ -1,8 +1,6 @@
 """Structural + Node regressions for Saved Views."""
 import os
 import re
-import shutil
-import subprocess
 import unittest
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,7 +8,9 @@ _FRONTEND = os.path.join(_PROJECT_DIR, "frontend")
 _INDEX = os.path.join(_FRONTEND, "index.html")
 _APP = os.path.join(_FRONTEND, "js", "app.js")
 _ROUTE_MODEL = os.path.join(_PROJECT_DIR, "frontend-app", "src", "routing", "route-model.ts")
-_SV = os.path.join(_FRONTEND, "js", "saved-views.js")
+_SV = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewForm.vue")
+_SV_EDITOR = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "editor.ts")
+_CREATE_HOST = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "create-forms", "CreateFormsHost.vue")
 _SEARCH = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "SearchRoute.vue")
 _SEARCH_INTENTS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "search", "intents.ts")
 _SV_DETAIL = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "saved-views", "SavedViewDetailRoute.vue")
@@ -26,7 +26,6 @@ _TAB_CONTEXT = os.path.join(_FRONTEND, "js", "tab-context.js")
 _API = os.path.join(_FRONTEND, "js", "api.js")
 _WIKI_USER = os.path.join(_PROJECT_DIR, "docs", "wiki", "User-Guide.md")
 _AGENTS = os.path.join(_PROJECT_DIR, "frontend", "AGENTS.md")
-_RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_saved_views_selftest.js")
 
 
 def _read(path: str) -> str:
@@ -39,7 +38,8 @@ class FrontendSavedViewsTests(unittest.TestCase):
         html = _read(_INDEX)
         catalog = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "catalog.ts"))
         sidebar = _read(os.path.join(_PROJECT_DIR, "frontend-app", "src", "app-shell", "SidebarNav.vue"))
-        self.assertIn('src="/js/saved-views.js"', html)
+        self.assertNotIn('/js/saved-views.js', html)
+        self.assertFalse(os.path.exists(os.path.join(_FRONTEND, "js", "saved-views.js")))
         self.assertIn("href: '#/views'", catalog)
         self.assertIn("label: 'Saved Views'", catalog)
         self.assertIn("LIBRARY_LINKS", sidebar)
@@ -62,8 +62,8 @@ class FrontendSavedViewsTests(unittest.TestCase):
         for name in ("fetchSavedViews", "fetchSavedView", "createSavedView", "updateSavedView",
                      "deleteSavedView", "prksGuardSavedViewMutation", "saved-views.fetch", "/api/saved-views"):
             self.assertNotIn(name, api)
-        src = _read(_SV)
-        self.assertIn("prksSearchQueryCodec", src)
+        src = _read(_SV) + _read(_SV_EDITOR)
+        self.assertIn("definitionFromRoute(parseRoute(hash))", src)
         self.assertNotIn("function prksSearchDefinitionFromRoute", src)
         self.assertNotIn("function prksSearchHashFromDefinition", src)
         self.assertNotIn("saved_view_works", src)
@@ -87,7 +87,7 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertNotIn("currentSavedView", _read(_TAB_CONTEXT))
         for name in ("renderSearch(", "renderSavedViewDetail", "renderSavedViewNotFound"):
             self.assertNotIn(name, app)
-        src = _read(_SV)
+        src = _read(_SV) + _read(_SV_EDITOR)
         for name in ("function renderSavedViewDetail", "function renderSavedViewNotFound",
                      "prksSearchResultCardsHtml", "__prksCurrentSavedView"):
             self.assertNotIn(name, src)
@@ -140,7 +140,7 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("prksRenderTabRoute(ctx, route.canonicalHash)", helper)
         self.assertNotIn("leaveApproved", helper)
         self.assertNotIn("renderSavedViewsIndex", app)
-        src = _read(_SV)
+        src = _read(_SV) + _read(_SV_EDITOR)
         for name in (
             "function renderSavedViewsIndex",
             "function bindIndexActions",
@@ -151,10 +151,10 @@ class FrontendSavedViewsTests(unittest.TestCase):
             self.assertNotIn(name, src)
         self.assertNotIn("prksDeleteSavedViewFromIndex", src)
         self.assertNotIn("prksCurrentCanonicalHash", src)
-        self.assertIn("root.prksSavedViewRecords", src)
+        self.assertIn("window.prksSavedViewRecords", src)
         self.assertIn("records.create(", src)
         self.assertIn("records.update(", src)
-        for name in ("root.createSavedView", "root.updateSavedView", "root.deleteSavedView"):
+        for name in ("window.createSavedView", "window.updateSavedView", "window.deleteSavedView"):
             self.assertNotIn(name, src)
         palette = _read(_PALETTE)
         self.assertIn("root.prksSavedViewRecords", palette)
@@ -202,17 +202,16 @@ class FrontendSavedViewsTests(unittest.TestCase):
         """The query codec is the typed module. Legacy JS keeps one bridge."""
         html = _read(_INDEX)
         codec_at = html.find('src="/js/search-query-codec.js"')
-        sv_at = html.find('src="/js/saved-views.js"')
         pal_at = html.find('src="/js/command-palette.js"')
         app_at = html.find('src="/js/app.js"')
         vue_at = html.find('src="/vue/prks-vue.js"')
         self.assertGreater(codec_at, 0)
-        self.assertLess(codec_at, sv_at)
-        self.assertLess(sv_at, pal_at)
+        self.assertLess(codec_at, pal_at)
         self.assertLess(pal_at, app_at)
         self.assertLess(app_at, vue_at)
         sw = _read(_SW)
-        self.assertLess(sw.find("'/js/search-query-codec.js'"), sw.find("'/js/saved-views.js'"))
+        self.assertIn("'/js/search-query-codec.js'", sw)
+        self.assertNotIn("'/js/saved-views.js'", sw)
         codec = _read(_CODEC)
         self.assertIn("This search combination cannot be saved as a view.", codec)
         self.assertIn("function definitionFromRoute", codec)
@@ -220,7 +219,7 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("function optionsFromDefinition", codec)
         self.assertIn("function summaryText", codec)
         self.assertNotIn("prksParseRoute(", codec)
-        saved = _read(_SV)
+        saved = _read(_SV) + _read(_SV_EDITOR)
         app = _read(_APP)
         palette = _read(_PALETTE)
         intents = _read(_SEARCH_INTENTS)
@@ -237,7 +236,7 @@ class FrontendSavedViewsTests(unittest.TestCase):
             "window.prksSearchSummaryText",
         ):
             for label, text in (
-                ("saved-views.js", saved),
+                ("SavedViewForm.vue", saved),
                 ("app.js", app),
                 ("command-palette.js", palette),
                 ("intents.ts", intents),
@@ -245,8 +244,9 @@ class FrontendSavedViewsTests(unittest.TestCase):
                 ("main.ts", main),
             ):
                 self.assertNotIn(name, text, label)
-        self.assertIn("root.prksSearchQueryCodec", saved)
-        self.assertIn("codec.definitionFromRoute", saved)
+        self.assertNotIn("prksSearchQueryCodec", saved)
+        self.assertIn("from '../search/codec'", saved)
+        self.assertIn("from '../../routing/route-model'", saved)
         self.assertNotIn("prksSearchDefinitionFromRoute:", saved)
         self.assertIn("prksSearchQueryCodec.optionsFromDefinition", app)
         self.assertIn("prksSearchQueryCodec.hashFromDefinition", app)
@@ -271,21 +271,30 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("Saved Views store search definitions", agents)
         self.assertIn("never cached work membership", agents)
 
-    def test_node_selftest(self):
-        node = shutil.which("node")
-        assert node is not None, "node is required for Saved Views tests"
-        proc = subprocess.run(
-            [node, _RUNNER],
-            cwd=_PROJECT_DIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stdout + "\n" + proc.stderr)
-        self.assertIn("passed", proc.stdout)
-        self.assertIn(", 0 failed", proc.stdout)
-        self.assertNotIn("FAIL  ", proc.stdout)
+    def test_dialog_is_the_vue_form(self):
+        """The Saved View dialog body and title are Vue, teleported into the
+        classic shell. The form installs the openers (#1036)."""
+        html = _read(_INDEX)
+        at = html.index('id="saved-view-modal"')
+        shell = html[at: html.index("</div>\n\n", at)]
+        self.assertIn('id="saved-view-modal-vue"', shell)
+        self.assertIn('id="saved-view-modal-title"', shell)
+        self.assertNotIn('id="saved-view-name"', shell)
+        host = _read(_CREATE_HOST)
+        self.assertIn('<Teleport to="#saved-view-modal-vue">', host)
+        self.assertIn("savedViewRef.value?.focusInitial()", host)
+        form = _read(_SV)
+        self.assertIn('<Teleport to="#saved-view-modal-title">', form)
+        for name in (
+            "window.prksOpenSavedViewModal = openWith",
+            "window.prksOpenSavedViewModalFromCurrentSearch = openFromSearch",
+            "window.prksOpenSavedViewModalForCurrentView = openForCurrentView",
+            "SAVED_VIEW_OFFLINE_MESSAGE",
+            "prksAlertDialog",
+        ):
+            self.assertIn(name, form)
+        self.assertNotIn("prksInitSavedViews", _read(_APP))
+        self.assertFalse(os.path.exists(os.path.join(_PROJECT_DIR, "tests", "browser", "run_saved_views_selftest.js")))
 
 
 if __name__ == "__main__":

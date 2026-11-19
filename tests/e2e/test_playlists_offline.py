@@ -163,7 +163,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
                 if req.method in methods and fragment in urlparse(req.url).path else None)
         return seen
 
-    def create_video_work_through_the_modal(self, page, title, playlist_id=None):
+    def create_video_work_through_the_modal(self, page, title, playlist_title=None):
         """Drives the real New File modal, so the create handler's own hooks are
         what is under test -- not a helper called by the test itself."""
         # YouTube oEmbed is a real outbound request the handler makes for title/
@@ -180,11 +180,13 @@ class PlaylistsOfflineTests(unittest.TestCase):
         page.wait_for_selector('#work-video-url-row:not(.hidden)')
         page.locator('#work-video-url').fill('https://www.youtube.com/watch?v=e2e0000009')
         page.locator('#work-title').fill(title)
-        if playlist_id:
-            page.evaluate(
-                """id => { document.getElementById('work-video-playlist-id').value = id; }""",
-                playlist_id,
-            )
+        if playlist_title:
+            # Picked through the Playlist combobox like a user.
+            page.locator('#work-upload-more-details > summary').click()
+            page.wait_for_selector('#work-upload-more-details .work-upload-meta__details-body:not([inert])')
+            page.fill('#work-video-playlist-search', playlist_title)
+            page.locator('#work-video-playlist-results .result-item:not(.result-item--create)',
+                         has_text=playlist_title).first.click()
         page.locator('#save-work-btn').click()
         page.wait_for_function("() => location.hash.indexOf('#/works/') === 0", timeout=20000)
         # Navigation follows local CREATE_WORK enqueue; coherence publishes on ACK.
@@ -1024,7 +1026,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.cache(page, ids)
         before = self.generations(page)
         self.create_video_work_through_the_modal(
-            page, 'Attached Video Work', playlist_id=ids['playlist_a']
+            page, 'Attached Video Work', playlist_title=PLAYLIST_A_TITLE
         )
         self.changed(page, before, {'playlists'})
         # The attach really happened, so the invalidation was not vacuous.

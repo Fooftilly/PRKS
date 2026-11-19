@@ -59,6 +59,10 @@ PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_e
 
 When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
 
+## PostgreSQL model-based Work lifecycle sequences (#1285)
+
+`tests/pg/test_work_lifecycle_model.py` draws seeded random sequences (10 seeds × 14 steps) of Work–Tag links, Work Folder moves, title edits, Work and Tag deletes and replays of earlier operations, sends each through the sync protocol, and compares PostgreSQL with a small reference model after every step: live Works/Tags, links, Folders, titles and every edited scope's revision as the shared decision table predicts (future base → `FUTURE_REVISION`, stale disagreeing base → `REVISION_CONFLICT`, else acknowledged and advanced only on a real change). It also checks that no link or filing dangles, no `entity_revisions` row moves backwards, a Work delete tombstones each of its scopes exactly once, and a replay answers as the first time and leaves every `entity_revisions` row as it was, deleted targets' tombstones included. Revisions are predicted by the model, never copied from the server's answer. The PostgreSQL job has no Hypothesis, so sequences come from a seeded `random.Random`; the generator picks fixtures by creation order and the trace names them `W0`, `T1`, `F0`, so a failure's seed and printed steps replay it exactly; keep a significant counterexample as a named regression test.
+
 ## PostgreSQL error-mapping property checks (#391)
 
 The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg_error_mapping`. It uses **synthetic psycopg error objects, not a database** to generate SQLSTATEs, constraint-name near misses and check-field names. The invariants detect accidental retries outside `40001`/`40P01`, 503-vs-500 misclassification, acceptance of unregistered or prefix/suffix-spoofed constraints, and leakage of database driver messages. The fixtures use bounded deterministic test setup with a Hypothesis example limit and no saved example database; on failure, record the minimized case in a permanent regression test.
@@ -90,9 +94,21 @@ Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the exis
 - The thumbnail is an image or the documented 404.
 - The reader gets the stored bytes back unchanged.
 - A shared annotation id is adopted once.
-- Linearization writes a copy, keeps the source on a qpdf refusal, or reports `disabled` or `missing-qpdf` when qpdf is absent.
+- Linearization is checked with `PRKS_PDF_LINEARIZE` pinned both ways. Switched off, it reports `disabled` and keeps the source, even with qpdf installed. Switched on, it writes a copy, keeps the source on a qpdf refusal, or reports `missing-qpdf` when qpdf is absent.
 
 Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). Where Linux `/proc/self/clear_refs` is available, the peak resident size is reset before the run and its growth is bounded (elsewhere that check is skipped), and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
+
+## HTTP authorization matrix (#1286)
+
+`tests/pg/test_http_authorization_matrix.py` sends one real request per `backend/api` route family (and per route that streams a managed file) over HTTP as seven callers: owner, editor, reader, a revoked member, a signed-out browser, the owner of another Library, and no session. Each row says whether it needs read, edit or Library administration; a caller without the right gets 403 `forbidden` (a member) or 401 `not_authenticated` (everyone else), the refusal names neither the Library nor the seeded entities, and every Library content table is unchanged afterwards. Every caller with the right must get a success, so each row is a real route with a valid request, except three documented route-level refusals that still come after admission: the backup download's 404 without a ready token, the stage route's 415 for a body that is not an archive, and the sync route's 400 for an empty envelope. Where a 2xx alone would not show the route did its work, the row also checks the result: the Research Notes row must save the note it sent, and the Processing import row imports a ready item uploaded just before each request and must report it imported. A `backend/api` module without a row fails `test_every_api_module_has_a_row`, so a new family joins the matrix. Run it with `scripts/test-postgres tests.pg.test_http_authorization_matrix`.
+
+## PostgreSQL crash-point matrix (#1284)
+
+`tests/pg/test_crash_points.py` runs whole write workflows in a child process (`tests/pg/crash_point_child.py`) that `os._exit`s at a named point, so no `finally`, rollback or cleanup of the killed process runs. The parent then restarts as a new process does (backup/restore recovery, the orphan sweep, cleanup claims settled) and checks one shared set of invariants: every key a row names is stored, every stored object is named, no write temporary or leftover claim remains, and imported/ready Processing items are complete. The matrix covers Processing upload (mid-write, after the store, after the commit), Processing import (mid-transaction, after the commit), managed-PDF replacement (after the store, inside the command, after the commit), the cleanup settle (after the unlink) and a backup killed mid-archive. A separate in-process case ends a sync write's connection from the server side (`pg_terminate_backend`) and checks only its own outcome: nothing committed, and the retry applies once. A retry of an acknowledged-but-unanswered request must return the first answer and apply nothing twice. The tests run in the ordinary PostgreSQL helper job on disposable databases and data roots:
+
+```bash
+scripts/test-postgres tests.pg.test_crash_points
+```
 
 ## TypeScript property-based workspace tests (#854)
 
@@ -237,12 +253,59 @@ The committed JSON stores a small 48×30 RGB sampling fingerprint per scene (zli
 
 PRKS's `/api/openapi.json` is **Positions-only**, not an application-wide contract. The opt-in [Schemathesis workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-readonly-pilot.yml) instead verifies `docs/api/openapi-publishers.json` against its Pydantic-generated builder and live `GET /api/openapi/publishers.json`. The test creates a **second, one-operation copy** containing only `GET /api/publishers` (`listPublishersInUse`); the published fragment's POST and DELETE routes are never passed to the scanner.
 
-The scanner runs on an existing fresh, isolated, loopback `AppServer --testing` with synthetic seeded Works and a populated Publisher catalog. It verifies the actual successful response DTO, a malformed Host refusal (HTTP 421), and then lets pinned **Schemathesis 4.32.5** generate bounded GET query variations. Defaults: seed 855, 25 generated fuzz examples per operation, examples/fuzzing phases only, 75-second process timeout, single worker and 10 requests/sec. It checks server errors, documented status codes, JSON content type and response schemas; no stateful sequences or mutations. Schemathesis generates a small built-in examples phase in addition to the 25-case fuzz bound. The coverage phase is excluded because it generates unexpected-method probes such as TRACE even with a GET filter; this pilot must never send non-GET operations. The process timeout and rate limit are additional safety limits.
+The scanner runs on an existing fresh, isolated, loopback `AppServer --testing` with synthetic seeded Works and a populated Publisher catalog. It verifies the actual successful response DTO, a malformed Host refusal (HTTP 421), and then lets pinned **Schemathesis 4.32.5** generate bounded GET query variations. Defaults: seed 855, 25 generated fuzz examples per operation, examples/fuzzing phases only, 75-second process timeout, single worker and 10 requests/sec. It checks server errors, documented status codes, JSON content type and response schemas; no stateful sequences or mutations. NUL is not generated, because the server refuses it in the request target before routing, with a 400 the fragment does not document. Schemathesis generates a small built-in examples phase in addition to the 25-case fuzz bound. The coverage phase is excluded because it generates unexpected-method probes such as TRACE even with a GET filter; this pilot must never send non-GET operations. The process timeout and rate limit are additional safety limits.
 
 Locally, install the existing exact pins with `python scripts/ci/install_pinned_python.py schemathesis`, then run `python scripts/ci/schemathesis_pilot.py` from the repository root. The command itself creates/deletes a **temporary** test server and reads no PRKS production data. Do not run it in a shell with `PRKS_AUTH` configured: the pilot refuses that setting because **it does not have a disposable PostgreSQL-backed session or authority**. This first read-only pass does **not** claim to test PG authentication, capability boundaries, mutation Origin/CSRF checks or app-wide OpenAPI conformance. The 421 Host check is only a host-admission probe, not a replacement for auth testing. Those require separate safe identities/fixtures and a future approved extension of #855.
 
 The workflow runs manually or for changes to the pilot/Publishers schema/dependency pins. Its only reported outcome is a small sanitized route/method/seed/elapsed/exit summary. On failure, reproduce from a new disposable test server with the fixed seed; use `python scripts/ci/schemathesis_pilot.py --debug-local` for full raw Schemathesis details **only on a private local machine**. The flag is rejected in GitHub Actions, and logs are sanitized by default. No generated payloads, raw request/response bodies, cookies, secrets, research documents, database paths or dynamic query strings are uploaded to CI artifacts. Before expanding API coverage, verify the real HTTP contract for the new family and require explicit allowlisting of every method/path. Existing deterministic Pydantic/openapi-core tests remain the primary contract gate.
 
+
+## Locust — bounded read-only load pilot (#859, #765 T08)
+
+The manual [Locust workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/locust-readonly-pilot.yml) measures throughput and latency of the routes a browser uses while reading the library: `GET /api/works`, `GET /api/works/:id`, `GET /api/search`, `GET /api/tags` and `GET /api/research-graph`. It complements the single-user E2E suite; it is not a PR gate. Gating it on paths would need separate stability evidence and maintainer approval.
+
+`scripts/ci/locust_pilot.py` starts its own disposable `AppServer --testing` on loopback (its own database on the `PRKS_TEST_DATABASE_URL` server, loopback-owner session, the UX-tour synthetic library plus 8 (`small`) or 64 (`medium`) synthetic Works), checks each of the five routes once before any load, then runs `scripts/ci/locustfile_readonly.py` headless with 5 users, spawn rate 5, for 30 seconds. It refuses any target but `http://127.0.0.1:<its port>` and refuses an inherited `PRKS_AUTH` or `PRKS_DATABASE_URL`. Every answer is checked for its meaning (status 200, JSON, a catalog of exactly the seeded Works, the UX-tour fixtures included, the requested Work, the seeded search hits, exactly the seeded non-empty tag list, a non-empty graph), so a fast 4xx/5xx or an empty answer counts as a failure, never as a fast success.
+
+The JSON summary holds the tier, users/spawn/duration, PRKS and PostgreSQL versions, the library size, and per route the request and failure counts, p50, p95, max and requests per second. It also holds the load generator's own CPU share, so a saturated generator (above 0.8 of one CPU) is flagged instead of read as a slow server, and the `pg_stat_database` counters of the pilot's database over the run (commits, rollbacks, blocks hit/read, tuples returned/fetched). A run with a route never exercised, any failed request or a saturated generator exits 1 and lists why under `problems`. No titles, ids, bodies or URLs with values are recorded.
+
+Locally, the pilot needs a disposable PostgreSQL 18 server that keeps running between the two commands. `scripts/test-postgres` is not suitable here: it picks a random port and removes its server when its command exits. Start one separately instead, for example:
+
+```bash
+docker run -d --rm --name prks-locust-pg -p 127.0.0.1:55432:5432 \
+  -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18.6
+python scripts/ci/install_pinned_python.py locust
+export PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1
+python scripts/ci/locust_pilot.py --tier small --out baseline.json
+# later, after a change, compare per-route p95 and throughput ratios:
+python scripts/ci/locust_pilot.py --tier small --compare baseline.json
+docker stop prks-locust-pg
+```
+
+`--compare` accepts only a summary of the same tier. Ratios within run-to-run noise (about ±20% on a laptop for these short runs) are not a regression; repeat both runs before drawing a conclusion. Write and contention workloads (an authenticated edit under CSRF) stay a separate, later experiment so the read-only baseline remains comparable.
+
+## Schemathesis — bounded mutation scan of allowlisted families (fuzzing slice 2)
+
+The [mutation scan workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-mutations.yml) runs `scripts/ci/schemathesis_mutations.py`. Unlike the read-only pilot above, it sends writes, so it is held tighter, not looser:
+
+- It targets only a fresh `AppServer --testing` on loopback, on its own disposable PostgreSQL database seeded with synthetic data. It refuses `PRKS_AUTH` in the calling shell.
+- It scans three families: Positions, Saved Views and Publishers. Each has an exact operation allowlist in the script. Before the first request, every family's checked-in fragment (`docs/api/openapi-*.json`) is compared with its Pydantic builder, its operations with the allowlist, and then with the live `/api/openapi/<family>.json`. Any difference stops the scan before any write.
+- Every request carries the instance's own `Origin` and `PRKS-Library-Epoch`, so generated input reaches the route rather than the admission refusal.
+- Limits: fixed seed 855, 50 examples per operation, examples and fuzzing phases only (no stateful sequences, no coverage phase), one worker, 50 requests per second, and a 120-second timeout per family.
+- It checks for server errors and for status codes, content types and response bodies the fragment does not document.
+- NUL is not generated. The server refuses NUL in the request target before routing with a 400, and several of the families' read and delete operations do not document a 400.
+
+Its first run found five ways a request got a 500 or no answer at all:
+
+- a body that is not UTF-8;
+- JSON nested past the decoder's recursion limit;
+- a `\ud800` escape that reached psycopg;
+- `%00` in a query or path, which reached a PostgreSQL bind. The Publisher and Tag alias routes decoded their value twice, so `%2500` did too; they now decode once, like every other query value.
+
+`backend/server.py` now answers all of these with 400. They are pinned in `tests/pg/test_http_request_fuzz_regressions.py`, and the scan's own safeguards are in `tests/test_schemathesis_mutations.py`.
+
+To run it locally, start a disposable PostgreSQL server and install the pins with `./.venv/bin/python scripts/ci/install_pinned_python.py schemathesis`. Then run `PATH="$PWD/.venv/bin:$PATH" PRKS_TESTING=1 PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/postgres ./.venv/bin/python scripts/ci/schemathesis_mutations.py` (the script finds the pinned `st` on `PATH`).
+
+Output is sanitized the same way as the pilot's, and `--debug-local` is likewise refused in GitHub Actions. The workflow is advisory. It runs manually, or when a pull request changes the scanned families, the server, the harness or the pins.
 
 ## Disposable PostgreSQL application-read readiness baseline (#765, T06)
 

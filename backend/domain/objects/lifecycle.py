@@ -71,6 +71,7 @@ from backend.storage.objects import (
     ObjectIntegrityError,
     StorageBackend,
     StorageKey,
+    StaleTemporaryPruning,
     StorageObjectError,
 )
 
@@ -87,6 +88,8 @@ _TRY_OBJECTS_LOCK_SQL: LiteralString = (
 )
 
 DEFAULT_SWEEP_GRACE = timedelta(hours=24)
+# Stale write temporaries removed per namespace per sweep (``remove_stale_temporaries``).
+DEFAULT_TEMPORARY_LIMIT = 1000
 DEFAULT_RETRY_LIMIT = 100
 # The instance job that settles due claims; one runs at a time (§7.4).
 CLEANUP_KIND = "objects.cleanup"
@@ -451,7 +454,9 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
           namespaces: Iterable[str] = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS)) -> int:
     """Claim every object older than ``grace`` that nothing names; returns how many were claimed.
 
-    Never deletes: the claims are settled by :func:`settle` like any other.
+    Never deletes an object: the claims are settled by :func:`settle` like any
+    other. Write temporaries older than ``grace`` are removed
+    (:func:`remove_stale_temporaries`).
     A write still in progress is younger than the grace period; one that
     stalls past it is caught by its own :func:`adopt`.
     """
@@ -468,7 +473,49 @@ def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_S
                 continue
             if db.command(lambda tx, key=key: claim_orphan(tx, key)):
                 claimed += 1
+        remove_stale_temporaries(storage, namespace, cutoff)
     return claimed
+
+
+def stale_temporaries(storage: StorageBackend, namespace: str, cutoff: float, *,
+                      limit: int = DEFAULT_TEMPORARY_LIMIT) -> list[str]:
+    """Up to ``limit`` write temporaries older than ``cutoff``, by name; none for a backend without them.
+
+    Reads only, so a job scans outside its fenced transaction and removes the
+    names with :func:`remove_temporaries` inside it.
+    """
+    if not isinstance(storage, StaleTemporaryPruning):
+        return []
+    try:
+        return storage.stale_temporaries(namespace, older_than=cutoff, limit=limit)
+    except OSError as exc:
+        LOGGER.warning("stale_temporaries_failed namespace=%s error=%s", namespace, type(exc).__name__)
+        return []
+
+
+def remove_temporaries(storage: StorageBackend, namespace: str, names: list[str], cutoff: float) -> int:
+    """Remove those of ``names`` that are still write temporaries older than ``cutoff``; how many.
+
+    A temporary is never a key: no row names it and nothing can adopt it, so
+    it needs no claim. Only a process killed mid-write leaves one, so a
+    bounded pass per sweep cycle keeps up; what is left goes in the next cycle.
+    """
+    if not names or not isinstance(storage, StaleTemporaryPruning):
+        return 0
+    try:
+        removed = storage.remove_temporaries(namespace, names, older_than=cutoff)
+    except OSError as exc:
+        LOGGER.warning("stale_temporaries_failed namespace=%s error=%s", namespace, type(exc).__name__)
+        return 0
+    if removed:
+        LOGGER.info("stale_temporaries_removed namespace=%s count=%d", namespace, removed)
+    return removed
+
+
+def remove_stale_temporaries(storage: StorageBackend, namespace: str, cutoff: float, *,
+                             limit: int = DEFAULT_TEMPORARY_LIMIT) -> int:
+    """:func:`stale_temporaries` then :func:`remove_temporaries`, for a caller with no job lease to fence."""
+    return remove_temporaries(storage, namespace, stale_temporaries(storage, namespace, cutoff, limit=limit), cutoff)
 
 
 def claim_orphan(tx: Transaction, key: StorageKey) -> bool:

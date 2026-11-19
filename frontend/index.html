@@ -152,13 +152,9 @@
             <h3 id="work-modal-title">New File</h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')" aria-label="Close">&times;</button>
         </div>
-        <!-- Vue create form (#1036). Shell and footer stay until ModalHost mounts feature forms. -->
+        <!-- Vue create form and its footer (#1036). The shell stays until ModalHost mounts feature forms. -->
         <div id="work-modal-vue" class="modal-body modal-body--scroll"></div>
-        <div class="modal-footer modal-footer--sticky prks-form-actions">
-            <p id="upload-status-msg" class="upload-status hidden" role="status"></p>
-            <button type="button" class="prks-btn prks-btn--secondary" id="work-modal-cancel">Cancel</button>
-            <button type="button" id="save-work-btn" class="prks-btn prks-btn--primary" title="Create File (Ctrl+Enter)" aria-keyshortcuts="Control+Enter Meta+Enter">Create File</button>
-        </div>
+        <div id="work-modal-footer-vue" class="modal-footer modal-footer--sticky prks-form-actions"></div>
     </div>
 
     <div id="folder-modal" class="modal hidden">
@@ -181,40 +177,11 @@
 
     <div id="saved-view-modal" class="modal hidden">
         <div class="modal-header">
-            <h3 id="saved-view-modal-title">Save View</h3>
+            <h3 id="saved-view-modal-title"></h3>
             <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="form-pane">
-                <p class="modal-helper" id="saved-view-modal-helper">Name this search to open it later from Saved Views.</p>
-                <p id="saved-view-modal-error" class="folder-field-error hidden" role="alert" aria-live="polite"></p>
-                <label for="saved-view-name">Name</label>
-                <input type="text" id="saved-view-name" placeholder="e.g. Adorno — culture industry" maxlength="80" autocomplete="off">
-                <fieldset class="saved-view-modal__mode">
-                    <legend>Search mode</legend>
-                    <label class="saved-view-modal__mode-opt"><input type="radio" name="saved-view-mode" value="all"> All</label>
-                    <label class="saved-view-modal__mode-opt"><input type="radio" name="saved-view-mode" value="advanced"> Advanced</label>
-                    <label class="saved-view-modal__mode-opt"><input type="radio" name="saved-view-mode" value="tag"> Tag</label>
-                </fieldset>
-                <div id="saved-view-field-q-wrap">
-                    <label for="saved-view-q" id="saved-view-q-label">Query</label>
-                    <input type="text" id="saved-view-q" maxlength="500" autocomplete="off">
-                </div>
-                <div id="saved-view-field-tag-wrap">
-                    <label for="saved-view-tag">Tag</label>
-                    <input type="text" id="saved-view-tag" maxlength="200" autocomplete="off">
-                </div>
-                <div id="saved-view-field-author-wrap">
-                    <label for="saved-view-author">Author</label>
-                    <input type="text" id="saved-view-author" maxlength="200" autocomplete="off">
-                </div>
-                <div id="saved-view-field-publisher-wrap">
-                    <label for="saved-view-publisher">Publisher</label>
-                    <input type="text" id="saved-view-publisher" maxlength="200" autocomplete="off">
-                </div>
-                <button type="button" id="save-saved-view-btn" class="prks-btn prks-btn--primary">Save View</button>
-            </div>
-        </div>
+        <!-- Vue Saved View form (#1036). Shell stays until ModalHost mounts feature forms. -->
+        <div id="saved-view-modal-vue" class="modal-body"></div>
     </div>
 
     <div id="group-modal" class="modal hidden">
@@ -401,7 +368,6 @@
     <script src="/js/components/types.js"></script>
     <script src="/js/work-selection.js"></script>
     <script src="/js/search-query-codec.js"></script>
-    <script src="/js/saved-views.js"></script>
     <script src="/js/command-palette.js"></script>
     <script src="/js/work-route-projection.js"></script>
     <script src="/js/app.js"></script>

@@ -14,6 +14,9 @@ _STORE = os.path.join(_FRONTEND, "js", "offline-store.js")
 _COORD = os.path.join(_FRONTEND, "js", "request-coordinator.js")
 _INDEX = os.path.join(_FRONTEND, "index.html")
 _RUNNER = os.path.join(_PROJECT_DIR, "tests", "browser", "run_offline_runtime_selftest.js")
+_CREATE_FORMS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "create-forms")
+_NEW_FILE_FORM = os.path.join(_CREATE_FORMS, "NewFileForm.vue")
+_NEW_FILE_SAVE = os.path.join(_CREATE_FORMS, "new-file", "save.ts")
 
 
 def _read(path: str) -> str:
@@ -433,8 +436,11 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         self.assertIn("/annotations", ann_body)
         self.assertNotIn("prksOfflineMarkPeopleChanged", ann_body.split("/annotations")[1])
         # Work creation can create role links in the same canonical request.
-        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        self.assertIn("Array.isArray(payload.roles) && payload.roles.length", app)
+        save = _read(_NEW_FILE_SAVE)
+        self.assertIn("deps.markCreated({ people: roles.length > 0 })", save)
+        form = _read(_NEW_FILE_FORM)
+        people_at = form.index("if (changes.people) {")
+        self.assertIn("w.prksMarkPeopleDomainChanged?.()", form[people_at : people_at + 400])
 
     def test_person_groups_domain_exclusions_and_work_side_hooks(self):
         """Person Groups inherits every Work-side dependency People has, because
@@ -473,9 +479,16 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         ann_body = pdf[ann_at:ann_end]
         self.assertNotIn("PersonGroups", ann_body.split("/annotations")[1])
         # Work creation can link roles without ever calling POST /api/roles.
-        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        create_at = app.index("if (res.ok && Array.isArray(payload.roles) && payload.roles.length) {")
-        self.assertIn("prksMarkPersonGroupsDomainChanged();", app[create_at : create_at + 600])
+        form = _read(_NEW_FILE_FORM)
+        create_at = form.index("if (changes.people) {")
+        self.assertIn("w.prksMarkPersonGroupsDomainChanged?.()", form[create_at : create_at + 400])
+        # ... and only after the PDF create was acknowledged.
+        save = _read(_NEW_FILE_SAVE)
+        # (a 2xx: the success path, or one whose body cannot be read).
+        self.assertLess(save.index("created = await deps.createPdfWork(payload)"), save.index("deps.markCreated("))
+        # The success-path mark follows the whole catch, so no refusal reaches it.
+        self.assertIn("\n  deps.markCreated({ people: roles.length > 0 })\n\n  const newId", save)
+        self.assertIn("if (isInvalidCreateAnswer(error)) deps.markCreated(", save)
         # Every Person mutation is durable now, so their Group coherence hooks
         # moved to the reconcilers: a deleted Person disappears from the member
         # lists embedded in cached Group details, and that happens when the
@@ -627,10 +640,12 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
         # The managed PDF save does not: no rendered Playlist field changes.
         pdf = _read(os.path.join(_FRONTEND, "js", "components", "works-pdf.js"))
         self.assertNotIn("Playlists", pdf)
-        # Work creation invalidates only when it actually requested an attach.
-        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        create_at = app.index("if (res.ok && String(payload.playlist_id || '').trim()) {")
-        self.assertIn("prksMarkPlaylistsDomainChanged();", app[create_at : create_at + 700])
+        # Only a YouTube file can join a Playlist when it is created, and that
+        # create is durable (CREATE_WORK): the PDF request never asks for one.
+        save = _read(_NEW_FILE_SAVE)
+        pdf_payload = save[save.index("const payload: PdfWorkCreateRequest = {") :]
+        self.assertIn("playlist_id: '',", pdf_payload[: pdf_payload.index("\n  }\n")])
+        self.assertNotIn("Playlists", _read(_NEW_FILE_FORM))
         # The Playlist inline Work rename no longer invalidates anything: a
         # Work Title is local-first, so the rename enqueues a durable
         # operation and the acknowledgement RECONCILES every cached
@@ -1463,14 +1478,15 @@ class FrontendBrowseProjectionTests(unittest.TestCase):
     def test_work_create_marks_catalog_and_recently_added_but_not_recent(self):
         """PDF create still publishes at the call site; video CREATE_WORK ACKs
         through reconcileCreatedWork with the same domains (never Recent)."""
-        app = _read(os.path.join(_FRONTEND, "js", "app.js"))
-        at = app.index("if (res.ok && typeof prksMarkWorksBrowseChanged === 'function')")
-        body = app[at: at + 600]
-        self.assertIn("prksMarkWorksBrowseChanged();", body)
-        self.assertIn("prksMarkRecentlyAddedChanged();", body)
+        form = _read(_NEW_FILE_FORM)
+        at = form.index("markCreated: (changes) => {")
+        body = form[at: at + 900]
+        self.assertIn("w.prksMarkWorksBrowseChanged?.()", body)
+        self.assertIn("w.prksMarkRecentlyAddedChanged?.()", body)
+        self.assertIn("w.prksMarkFoldersDomainChanged?.()", body)
         # A new Work has last_opened_at NULL, so it cannot be in Recent.
-        self.assertNotIn("prksMarkRecentChanged();", body)
-        self.assertIn("prksCreateWorkDurably", app)
+        self.assertNotIn("prksMarkRecentChanged", body)
+        self.assertIn("prksCreateWorkDurably", form)
         runtime = _read(os.path.join(_FRONTEND, "js", "offline-runtime.js"))
         at = runtime.index("async function reconcileCreatedWork(")
         end = runtime.index("\n        /**", at)

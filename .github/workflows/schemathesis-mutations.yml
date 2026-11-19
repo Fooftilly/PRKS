@@ -1,0 +1,97 @@
+name: Advisory Schemathesis API mutation scan
+
+# Bounded write fuzzing of allowlisted API families (scripts/ci/schemathesis_mutations.py)
+# against a disposable --testing instance on loopback. Advisory: not a required check.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/schemathesis-mutations.yml"
+      - "scripts/ci/schemathesis_mutations.py"
+      - "scripts/ci/schemathesis_pilot.py"
+      - "tests/test_schemathesis_mutations.py"
+      - "backend/api_contract/**"
+      - "backend/server.py"
+      - "backend/api/session.py"
+      - "backend/db/**"
+      - "backend/domain/identity/**"
+      - "backend/api/positions.py"
+      - "backend/api/saved_views.py"
+      - "backend/api/publishers.py"
+      - "backend/domain/research/position_commands.py"
+      - "backend/domain/research/positions.py"
+      - "backend/domain/saved_views/**"
+      - "backend/domain/people/publisher_commands.py"
+      - "tests/e2e/harness.py"
+      - "tests/e2e/postgres_identity.py"
+      - "tests/ux_tour/fixtures.py"
+      - "docs/api/openapi-positions.json"
+      - "docs/api/openapi-saved-views.json"
+      - "docs/api/openapi-publishers.json"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "scripts/ci/install_pinned_python.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schemathesis-mutations-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mutations:
+    name: Isolated API mutation Schemathesis (advisory)
+    runs-on: ubuntu-24.04
+    # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
+    # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
+    services:
+      postgres:
+        image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install isolated pinned API fuzz prerequisites
+        run: python scripts/ci/install_pinned_python.py schemathesis
+
+      - name: Scan the allowlisted families, writes included
+        env:
+          PRKS_TESTING: "1"
+        run: python scripts/ci/schemathesis_mutations.py
+
+      - name: Summarize the mutation scan scope
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Schemathesis mutation scan (advisory, isolated)
+          - Families: positions, saved views, publishers, each with an exact operation allowlist
+          - Schemas: docs/api/openapi-*.json, checked against the live fragment and Pydantic builder
+          - Synthetic disposable --testing instance on loopback, its own PostgreSQL database
+          - Requests carry the instance's Origin and Library epoch so generated input reaches the route
+          - Fixed seed 855; max 50 examples per operation, 120s CLI timeout per family, single worker, 50 requests/s
+          - No stateful sequences, no coverage phase, no NUL generation, no production data
+          - Unexpected 5xx, HTTP status, content-type and response-schema checks enabled
+          - No raw generated HTTP requests or fuzz payloads are printed or uploaded
+          EOF

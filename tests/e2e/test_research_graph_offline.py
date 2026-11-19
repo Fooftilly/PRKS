@@ -6,7 +6,7 @@ import unittest
 from urllib.parse import urlsplit
 
 from tests.e2e import test_offline as o
-from tests.e2e.fixtures import seed_arguments_library
+from tests.e2e.fixtures import PERSON_DISPLAY, seed_arguments_library
 from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, record_e2e_phase_seconds, require_chromium, wait_for_async
 from tests.e2e.policy import PROFILE_ENV, env_flag_enabled
 
@@ -878,12 +878,12 @@ class ResearchGraphOfflineTests(unittest.TestCase):
             page.set_input_files('#work-file', str(MINIMAL_PDF))
             page.locator('#upload-selected-file-name').wait_for(state='visible')
             if author:
-                page.evaluate('''pid => {
-                    document.getElementById('upload-person-id').value = pid;
-                    document.getElementById('upload-person-search').value = 'E2E Author';
-                    addRoleToUploadList('Author');
-                }''', server.ids['person'])
+                # Picked through the People combobox like a user; the first
+                # free role on a new file is Author.
+                page.fill('#upload-person-search', PERSON_DISPLAY)
+                page.locator('#person-results .result-item--person-pick', has_text=PERSON_DISPLAY).first.click()
                 page.locator('#upload-roles-list .prks-upload-person-row').first.wait_for()
+                self.assertEqual(page.locator('#upload-roles-list [data-upload-role-select="0"]').input_value(), 'Author')
             with page.expect_response(lambda r: '/api/works' in r.url and r.request.method == 'POST') as response:
                 page.locator('#save-work-btn').click()
             self.assertTrue(response.value.ok)
