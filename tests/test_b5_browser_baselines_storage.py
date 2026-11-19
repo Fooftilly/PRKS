@@ -117,8 +117,9 @@ class TestB5WriteHeaders(unittest.TestCase):
     """Writes carry Origin and the Library epoch, so seeding is admitted."""
 
     def setUp(self):
-        self.addCleanup(setattr, harness, "_LIBRARY_EPOCH", harness._LIBRARY_EPOCH)
-        harness._LIBRARY_EPOCH = None
+        epoch = mock.patch.object(harness, "_LIBRARY_EPOCH", None)
+        epoch.start()
+        self.addCleanup(epoch.stop)
         self.sent = []
 
         class _Response:
