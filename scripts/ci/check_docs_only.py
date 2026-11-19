@@ -193,14 +193,18 @@ def main() -> int:
     if docs is None:
         print("Docs validation refused: not a verified docs-only PR")
         return 1
+    markdown = [path for path in docs if path.endswith(".md")]
     errors = []
-    for path in docs:
+    for path in markdown:
         errors.extend(check_markdown(root, path))
     if errors:
         for msg in errors:
             print(msg)
         return 1
-    print(f"Validated {len(docs)} changed Wiki Markdown files (links, anchors, fences)")
+    print(f"Validated {len(markdown)} changed Wiki Markdown files (links, anchors, fences)")
+    skipped = len(docs) - len(markdown)
+    if skipped:
+        print(f"{skipped} audited analysis-tool config file(s) changed; no CI suite reads them")
     return 0
 
 

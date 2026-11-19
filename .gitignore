@@ -67,10 +67,6 @@ htmlcov/
 # --- Editor / IDE ---
 .vscode/
 .idea/
-.cursor/*.log
-/.cursor/*
-!/.cursor/rules/
-!/.cursor/rules/**
 
 # --- Agent local overrides ---
 # Claude Code personal project settings (MCP opt-in, experiments)
