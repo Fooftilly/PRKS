@@ -161,7 +161,7 @@ def extract_pdf_bounded(
 
 
 def same_pages_bounded(first_path: str, second_path: str, timeout: float) -> bool:
-    """Whether PyMuPDF reads the same page count and page text from both PDFs (#1322).
+    """Whether both PDFs show the same pages: count, size, text, rendered pixels, links, annotations (#1322).
 
     Runs in a child process killed after ``timeout`` seconds; a timeout, a
     crash, a missing PyMuPDF or an unreadable file all answer False.
@@ -171,11 +171,31 @@ def same_pages_bounded(first_path: str, second_path: str, timeout: float) -> boo
     return outcome == "ok" and result.get("same") is True
 
 
-def _page_texts(pdf_path: str) -> List[str]:
+def _page_fingerprints(pdf_path: str) -> List[Dict[str, Any]]:
+    """What a reader sees on each page: its size, text, rendered pixels, links and annotations.
+
+    Text alone misses images, vector drawings and scans (#1333 review), so
+    each page is also rendered at 72 dpi and its pixels hashed.
+    """
+    import hashlib
+
     import pymupdf
 
+    pages: List[Dict[str, Any]] = []
     with pymupdf.open(pdf_path) as doc:
-        return [raw if isinstance(raw := page.get_text("text"), str) else "" for page in doc]
+        for page in doc:
+            raw = page.get_text("text")
+            pixmap = page.get_pixmap(alpha=False)
+            pages.append({
+                "rect": str(page.rect),
+                "text": raw if isinstance(raw, str) else "",
+                "pixels": hashlib.sha256(pixmap.samples).hexdigest(),
+                "links": sorted(json.dumps({k: str(v) for k, v in link.items()}, sort_keys=True)
+                                for link in page.get_links()),
+                "annots": sorted(json.dumps([str(annot.type), str(annot.rect), annot.info.get("content", "")])
+                                 for annot in page.annots()),
+            })
+    return pages
 
 
 def _child_main(argv: List[str]) -> int:
@@ -187,7 +207,7 @@ def _child_main(argv: List[str]) -> int:
     result: Dict[str, Any]
     if argv[0] == "compare":
         try:
-            result = {"same": _page_texts(argv[1]) == _page_texts(argv[2])}
+            result = {"same": _page_fingerprints(argv[1]) == _page_fingerprints(argv[2])}
         except Exception as exc:
             result = {"same": False, "error": safe_error_type(exc)}
     else:

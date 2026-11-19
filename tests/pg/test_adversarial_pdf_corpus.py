@@ -48,7 +48,7 @@ from tests.pg.test_http_processing import ProcessingHttpTestCase
 EXPECTED: dict[str, Optional[tuple[str, int, bool]]] = {
     "valid": ("indexed", 200, True),
     "truncated": ("empty", 200, False),  # MuPDF repairs it to one blank page; qpdf refuses it
-    "damaged_xref": ("indexed", 200, True),  # qpdf exits 3 (warnings); its repaired copy keeps pages and text
+    "damaged_xref": ("indexed", 200, True),  # qpdf exits 3 (warnings); its repaired copy shows the same pages
     "encrypted": ("failed", 404, False),
     "zero_pages": ("empty", 404, False),
     "many_pages": ("indexed", 200, True),

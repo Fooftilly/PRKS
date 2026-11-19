@@ -124,6 +124,63 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
         self.assertFalse(same_pages_bounded(source, self.pdf("other.pdf", ["one", "too"]), 30))
         self.assertFalse(same_pages_bounded(source, self.write("bad.pdf", b"%PDF-1.4 junk"), 30))
 
+    def drawn(self, name: str, *, drawing: bool = False, image: bool = False,
+              annot: bool = False, link: bool = False) -> str:
+        """One page with the same text; optionally a red drawing, an image, a note or a link."""
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "same words")
+        if drawing:
+            page.draw_rect(pymupdf.Rect(100, 200, 400, 500), color=(1, 0, 0), fill=(1, 0, 0))
+        if image:
+            pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 8, 8), False)
+            pixmap.clear_with(40)
+            page.insert_image(pymupdf.Rect(100, 200, 300, 400), pixmap=pixmap)
+        if annot:
+            page.add_text_annot((300, 100), "a reader's note")
+        if link:
+            page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(72, 60, 200, 80),
+                              "uri": "https://example.invalid/"})
+        path = self.write(name, doc.tobytes())
+        doc.close()
+        return path
+
+    def test_equal_text_with_lost_visual_content_is_not_the_same_page(self) -> None:
+        bare = self.drawn("bare.pdf")
+        self.assertTrue(same_pages_bounded(bare, self.drawn("bare-again.pdf"), 30))
+        for lost in ("drawing", "image", "annot", "link"):
+            with self.subTest(lost=lost):
+                full = self.drawn(f"{lost}.pdf", **{lost: True})
+                self.assertEqual(pdf_text.extract_pdf(full).text.strip(), "same words")
+                self.assertFalse(same_pages_bounded(full, bare, 30))
+
+    def test_a_scan_that_lost_its_image_is_not_the_same_page(self) -> None:
+        import pymupdf
+
+        def scan(name: str, shade: int) -> str:
+            doc = pymupdf.open()
+            pixmap = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 8, 8), False)
+            pixmap.clear_with(shade)
+            doc.new_page().insert_image(pymupdf.Rect(0, 0, 595, 842), pixmap=pixmap)
+            path = self.write(name, doc.tobytes())
+            doc.close()
+            return path
+
+        blank = self.write("blank.pdf", self.blank_pdf())
+        self.assertTrue(pdf_text.extract_pdf(scan("scan.pdf", 30)).empty)
+        self.assertFalse(same_pages_bounded(scan("scan.pdf", 30), blank, 30))
+
+    def blank_pdf(self) -> bytes:
+        import pymupdf
+
+        doc = pymupdf.open()
+        doc.new_page()
+        data = doc.tobytes()
+        doc.close()
+        return data
+
     def test_a_page_comparison_past_its_bound_answers_false(self) -> None:
         source = self.pdf("source.pdf", ["one"])
         self.assertFalse(same_pages_bounded(source, source, 0.001))
