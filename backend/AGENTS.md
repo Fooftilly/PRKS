@@ -1,14 +1,14 @@
 # PRKS backend agent instructions
 
-These rules apply to backend work in addition to the repository-root `AGENTS.md`. The text below is scoped from the former root policy so backend workers receive the invariants they need without unrelated frontend/E2E context.
+These rules apply to backend work on top of the root `AGENTS.md`.
 
 ## Current persistence vs target architecture
 
-These rules describe the backend **implemented today**. PostgreSQL is the only Library store (PG-C2 #641: the SQLite runtime, its schema and migrations are deleted; records of the retired SQLite tests are in `tests/sqlite_retirement/`). The current storage tree and sync protocol remain correctness constraints, but they are not permanent architecture mandates. Roadmap #310 accepts PostgreSQL as the expected long-term canonical relational store and a server architecture capable of authenticated multi-user/multi-library operation; #311 accepts storage-backend abstraction with a first-class configurable local data root. Preserve current behavior unless the task is an approved migration slice, while avoiding new domain boundaries that unnecessarily encode single-owner, absolute-path, or process-local assumptions. Do not reintroduce a SQLite Library path.
+PostgreSQL is the only Library store; do not reintroduce a SQLite path. The current storage tree and sync protocol are correctness constraints, not permanent architecture: #310 targets authenticated multi-user, multi-Library operation and #311 a storage-backend abstraction with a configurable data root. Preserve current behavior unless the task is an approved migration slice, and do not add boundaries that encode single-owner, absolute-path or process-local assumptions.
 
 ## Cross-domain contracts
 
-Nested `AGENTS.md` applies only within this directory tree. Several backend modules still share load-bearing invariants whose full text currently lives under `frontend/AGENTS.md` (and the docs it routes to). **Do not omit those contracts on a backend-only change** — Cursor will not inject `frontend/AGENTS.md` automatically. Load the smallest applicable route below instead of copying the large sections here.
+Some backend invariants are written in `frontend/AGENTS.md` and the docs it routes to. **Do not skip them on a backend-only change**; load the smallest applicable route below.
 
 ### Offline / sync / local-first
 
@@ -164,10 +164,9 @@ rebuild it from canonical state instead of keeping retry records for it.
 ## Database schema changes
 
 Never ALTER/CREATE/DROP schema objects from feature/request code, and never
-swallow schema-runner failures. The SQLite schema, its migrations and the
-schema-change gate were deleted in PG-C2 (#641).
+swallow schema-runner failures.
 
-PostgreSQL schema (#624, `docs/postgresql-architecture.md` §4.4):
+PostgreSQL schema (`docs/postgresql-architecture.md` §4.4):
 `backend/db/schema/NNN_name.sql` are pre-1.0 baseline
 files applied in order by `backend/db/migrate.py`, which records each file's
 SHA-256 and refuses a database whose applied file has since changed. Each lane
@@ -179,7 +178,8 @@ the same PR. Never index, default or generate a column from
 that an index, default or generated column calls a `BEGIN ATOMIC` body: the
 check refuses stored values computed through string-bodied functions, whose
 calls the catalog does not record. The runner never reads
-or writes the data root; the root claim and start generation belong to L-ID-1.
+or writes the data root; the root claim and start generation belong to
+`backend/domain/identity/root_pairing.py`.
 
 ## Bulk work mutations
 
