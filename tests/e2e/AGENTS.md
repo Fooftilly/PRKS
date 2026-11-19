@@ -49,21 +49,9 @@ contract and prove the replacement covers it. For durable sync families, prefer
 testing local queue mechanics in Node and server semantics in Python; retain E2E for
 the real UI/offline/service-worker boundary.
 
-The first rationalized family is Work Tags. Transactional coalescing across a fresh
-store instance is owned by `tests/browser/run_local_store_selftest.js`, with one thin
-browser assertion that a remounted `work-tag-editor` still routes post-reload opposite
-clicks through coalescing in both UI directions — chip remove and search/picker
-re-add (`test_post_reload_opposite_edit_cancels_pending`). Lost-response retry
-identity is owned by `tests/browser/run_work_tag_sync_selftest.js` plus backend
-op-id replay/idempotency coverage. The Work-Tag E2Es therefore keep the user-visible
-offline/reload/reconnect, conflict-resolution UI, degraded catalog, cache-clear,
-durable-queue wiring, and Tag lifecycle flows rather than re-testing pure
-state-machine branches in Chromium.
-
-Per-family KEEP / SPLIT / MOVE maps and retained browser boundaries are recorded
-in `docs/e2e-coverage-maps.md` (Work-Tag pilot, Work-People, …). Hard constraints
-for that wave: no retries to hide flakes; no fake E2E backend; no weakened
-assertions for speed; no shared browser/server state without proven isolation.
+Per-family KEEP / SPLIT / MOVE maps live in `docs/e2e-coverage-maps.md`. Never
+add retries to hide flakes, a fake E2E backend, weaker assertions for speed, or
+shared browser/server state without proven isolation.
 
 ### During implementation
 
@@ -152,33 +140,22 @@ scripts/e2e full --jobs 4
 ### PostgreSQL server
 
 Every `AppServer` runs the authenticated PostgreSQL runtime
-(`PRKS_AUTH=loopback-owner`, #629) on its own disposable database: E2E needs
-`PRKS_TEST_DATABASE_URL` pointing at the `postgres` maintenance database of a
-disposable PostgreSQL 18 server, exactly as `scripts/test-postgres` uses it.
-There is no SQLite-only fallback; a missing server fails the test with a
-message naming the variable. `tests/e2e/postgres_identity.py` creates a clone
-of the run's migrated template, bootstraps one owner and pairs it with the
-empty storage root *before* the seed is copied in (bootstrap refuses a root
-that already holds objects), and `AppServer.stop()` drops the database.
-`server.library` names the instance, owner and Library ids for assertions.
-Every server serves its Library from that database, PostgreSQL being the only
-backend (PG-C2 #641), with its embedded worker on, and the seed runs through
-the PostgreSQL facade as the owner (`postgres_identity.seed_postgres_library`,
-through `fixtures.open_library`); there is no seed snapshot to clone. The
-harness never passes `PRKS_LIBRARY_BACKEND` on: a server that finds it refuses
-to start. Its database carries the harness's ownership mark, which is the
-testing proof `--testing` requires before it writes (`backend/db/testing_guard.py`).
-`tests.e2e.test_postgres_library_flows` is a default module: restore through
-Settings, the Processing upload queue and the Research-ACK fence. The
-path-based inbox test (`test_processing_route_surface`) belonged to the SQLite
-Library; it is deleted and its replacements are listed in
-`tests/sqlite_retirement/`.
+(`PRKS_AUTH=loopback-owner`) on its own disposable database, with its embedded
+worker on. Set `PRKS_TEST_DATABASE_URL` to the `postgres` maintenance database
+of a disposable PostgreSQL 18 server (as `scripts/test-postgres` does); without
+it the test fails with a message naming the variable.
+`tests/e2e/postgres_identity.py` clones the run's migrated template, bootstraps
+one owner, pairs it with the empty storage root before the seed is copied in,
+and seeds through `fixtures.open_library`. `AppServer.stop()` drops the
+database; `server.library` names the instance, owner and Library ids. The
+database carries the harness ownership mark that `--testing` requires
+(`backend/db/testing_guard.py`). Never pass `PRKS_LIBRARY_BACKEND`.
 
 `--jobs` wins over `PRKS_E2E_JOBS`; the default is 1 so debugging is never
 accidentally parallel. There is no Playwright retry loop in this runner;
 failed tests stay failed.
 
-The E2E performance milestone is closed. Console suppression ignores only
+Console suppression ignores only
 `blob:` resource failures containing `ERR_FILE_NOT_FOUND`; other blob errors
 remain failures. Do not broaden that teardown exception.
 
@@ -252,17 +229,10 @@ optimization is faster execution, not less verification: the full suite is
 still mandatory before declaring a milestone complete, and a failure it reports
 is never dismissed without being reproduced and classified.
 
-Worker count guidance (do not hard-code suite size here — discovery grows):
-on a 12-core development machine, `--jobs 4` was the best measured full-gate
-setting in an earlier benchmark pass (serial much slower; 2–3 better than
-serial; 4 recommended). Re-measure when the suite or machine changes rather
-than trusting a fixed case count. Discover current modules/cases via
-`tests/e2e/run.py` / unittest discovery with `PRKS_E2E=1`. **4 remains the
-recommended default gate** until a fresh benchmark says otherwise. More
-workers are not automatically better -- Chromium plus a PRKS server per test
-is memory- and CPU-hungry, and per-worker overhead was already substantial at
-4 -- so re-benchmark rather than raising it on a different machine. Drop to
-`--jobs 3` if a machine shows contention-driven flakiness.
+Workers: `--jobs 4` is the recommended full-gate default (measured on a
+12-core machine). More is not automatically better, since each test runs
+Chromium plus a PRKS server; re-benchmark on a different machine and drop to
+`--jobs 3` if contention causes flakiness. Do not hard-code suite size.
 
 Debugging. `--jobs 1` is the mode for reproducing a flake, reading one clean
 traceback, or checking that the suite still passes serially. It does not need to
@@ -357,7 +327,7 @@ on `prksGetResearchGraphDebug().cy`: **7-10 seconds per call**, enough
 allocation to crash the renderer (`Target crashed`) under `--jobs 4`, and the
 value arrives as `None` regardless.
 
-Two defects had shipped from this, in the same file:
+Two traps:
 
 - `page.evaluate('window.__x = prksGetResearchGraphDebug().cy')` is an
   assignment EXPRESSION, so it returns the instance. Use a block body:
@@ -379,10 +349,7 @@ moved into the hidden `#prks-tab-warm-parking` host and deliberately kept alive
 so returning to it is instant. The node still matches a page-wide selector.
 
 Whether it survives depends on whether the PDF finished mounting before the
-switch, so the page-wide count passed when the test ran alone and failed under
-`--jobs 4` -- which looks exactly like a render race and is not one. Measuring
-it settled the question: the two views stayed co-mounted for the whole 2.5 s
-sample window with no transition, so nothing was waiting to finish.
+switch, so a page-wide count flakes under `--jobs 4`; it is not a render race.
 
 Scope to the visible surface (`.prks-tile--main .work-detail`), assert the
 scope itself is non-empty so it cannot pass vacuously, and where a survivor is
@@ -433,12 +400,7 @@ promise for truthiness** — and a promise is always truthy. So this gate
 page.wait_for_function("() => prksSync.store.listOperations().then(r => r.length === 0)")
 ```
 
-passes on its first poll whether the queue is empty or not: it waits one round
-trip and reports success. It does not fail loudly; it silently stops being a
-gate, which is worse than either passing or failing. Verified directly:
-a predicate returning `Promise.resolve(false)` passes in 0.01 s, and one
-resolving to `false` after 3 s passes in 3.03 s — the delay comes from awaiting
-the promise, not from the answer.
+passes on its first poll whether the queue is empty or not, silently.
 
 Almost every durable-queue, IndexedDB and offline-store condition in this suite
 is asynchronous, so **use `wait_for_async(page, expression, arg=..., timeout=...)`
@@ -448,8 +410,3 @@ each predicate's resolved value (Python-like truthiness on that value), and
 raises an `AssertionError` naming the last value it saw. Do not replace it with
 `page.wait_for_function(() => promise)`. `wait_for_function` remains correct —
 and preferred — for a synchronous predicate (DOM state, a global, `location.hash`).
-
-This was found when a Title save appeared to reach an empty queue instantly
-while its operation was in fact still `syncing`. Forty gates across seven
-modules were vacuous; converting them exposed two real defects that had been
-passing.

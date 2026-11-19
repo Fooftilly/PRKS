@@ -300,7 +300,6 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertNotIn("__prksResearchGraphLiveCount = 0", graph)
         self.assertIn("owner-resource registry", agents)
         self.assertIn("not warm-suspendable", agents)
-        self.assertIn("shellHtml", agents)
 
     def test_vue_graph_host_fills_the_pane_and_refreshes_icons(self):
         css = _read(_CSS)

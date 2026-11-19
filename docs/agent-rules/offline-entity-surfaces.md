@@ -70,6 +70,48 @@ same text). A same-revision no-op does not. The browser must not parse
 the body to decide that. A Private ACK never invalidates those
 projections. Folder private notes are not this family.
 
+### Note editor sessions
+
+These rules cover the browser sessions of the Work Research Notes editor
+(`workResearchNoteSession`), the Work Reminders field (`workPrivateNoteSession`)
+and the Folder Reminders field (`folderPrivateNoteSession`). All three live on
+the owning TabContext, so Main and Secondary never share a draft.
+
+- A save started for one Work never paints onto another. A same-Work refresh
+  still receives that save's settlement when no newer edit replaced it. A
+  later generation of the TabContext does not take the save's status.
+- Status: a finished save with nothing queued says All changes saved; a
+  queued save says it is waiting to sync, or saved locally while offline. An
+  acknowledgement reads as saved only when the acknowledged body is the
+  editor body and no newer revision is drafting, saving or blocked. A thrown
+  save stays Error saving changes; a domain result keeps its own message.
+- `scope_busy` (an earlier attempted note save still holds the aggregate)
+  keeps the body `blocked`. One owner-scoped retry re-enqueues the live body
+  once no unsettled row for that Work is left (on a sync event or a
+  backed-off timer) and stops on a newer edit, a generation change, cold
+  release, editor disposal or destroy. The retry keeps the base the body was
+  refused against unless the observed base is unchanged or advanced only to
+  this session's own last queued body from that same base.
+- A blocked body equal to a base that predates the blocking save's outcome is
+  shown as "Not saved: this note changed elsewhere", never as saved. A base
+  advanced to any other body never becomes a silent overwrite; when another
+  browser tab sent the blocking row the result may surface as
+  `REVISION_CONFLICT` in Diagnostics (cross-tab base coherence is #476).
+- The leave flush also sends a blocked or drafting session with no debounce
+  timer. A blocked body is only in memory; reload durability is the editor
+  recovery store (#466).
+- Reminders (Work and Folder, one lifecycle in `ui.js`
+  `PRKS_PRIVATE_NOTE_FAMILIES`): an 850 ms debounce; a session holds unsaved
+  text across entity switches and leaves only when the pane takes it back or
+  that exact text is saved. The text keeps the base it was typed on
+  (`session.editBase`), pinned only when the field showed that body or an
+  unsettled row queued on that revision. Only the session's own
+  acknowledgement, or one that stored exactly the text its editing began
+  from, moves the base; otherwise the save conflicts (`changed_elsewhere`)
+  instead of overwriting. A Folder session names its own queued row as the
+  only one it may replace (`saveFolderFields`' `expected` op id), so another
+  pane's or tab's unsettled row is never coalesced over.
+
 ## Concepts
 
 Concepts are **local-first**. Creating one, editing its definition, renaming it,
