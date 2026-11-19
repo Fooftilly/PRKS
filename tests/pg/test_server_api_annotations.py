@@ -123,6 +123,26 @@ class LegacyReplaceTests(AnnotationHttpTestCase):
                                          {"annotations_json": "[]", "canonical_annotation_set_revision": 0}), 404)
         self.assertEqual(refused.get("code"), "work_not_found")
 
+    def test_text_or_numbers_postgresql_cannot_store_are_refused(self) -> None:
+        """``annotations_json`` is parsed again inside the route, past the body
+        checks: a lone surrogate reached psycopg (a 500), NaN in a colour was
+        stored as "nan", and deep nesting raised RecursionError (a 500)."""
+        work_id = self.pdf_work("Ann HTTP Storable")
+        self.save(work_id, [{"id": "keep", "type": "note", "contents": "hello", "pageIndex": 0}])
+        for raw in ('[{"id":"a1","contents":"x\\ud800","pageIndex":0}]',
+                    '[{"id":"a\\ud800","contents":"x","pageIndex":0}]',
+                    '[{"id":"a2","pageIndex":0,"custom":{"\\udc00":"k"}}]',
+                    '[{"id":"a3","pageIndex":0,"color":NaN}]',
+                    '[{"id":"a4","pageIndex":0,"rect":Infinity}]',
+                    "[" * 100_000):
+            with self.subTest(raw=raw[:60]):
+                refused = self.refused(self.post_annotations(work_id, {"annotations_json": raw}), 400)
+                self.assertEqual(refused.get("code"), "malformed_annotation_payload")
+        self.assertEqual([item["id"] for item in self.annotations(work_id)], ["keep"])
+        # A surrogate pair is text: it is stored and read back.
+        self.save(work_id, [{"id": "emoji", "contents": "\U0001f600", "pageIndex": 0}])
+        self.assertEqual(self.annotations(work_id)[0]["contents"], "\U0001f600")
+
     def test_a_work_without_a_managed_pdf_stores_no_annotation(self) -> None:
         work_id = self.create_work("Ann No PDF", status="Planned")["id"]
         refused = self.refused(self.post_annotations(work_id, {"annotations_json": json.dumps([row("x", "x")])}),

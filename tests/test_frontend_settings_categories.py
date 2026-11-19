@@ -245,7 +245,7 @@ class SettingsCategoryJsTests(unittest.TestCase):
 
     def test_diagnostics_not_loaded_on_settings_open(self):
         ui = _read(_UI)
-        open_modal_fn = ui.split("function openModal(id)", 1)[1].split("\nfunction ", 1)[0]
+        open_modal_fn = ui.split("function openModal(id, options)", 1)[1].split("\nfunction ", 1)[0]
         self.assertNotIn("prksLoadPerformanceDiagnostics()", open_modal_fn)
         self.assertIn("prksOpenSettingsToLastCategory", open_modal_fn)
         self.assertNotIn("prksLoadOfflineCacheStatus", open_modal_fn)

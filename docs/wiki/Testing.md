@@ -47,7 +47,15 @@ The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in
 
 `tests/test_sync_envelope_properties.py` fuzzes everything `POST /api/sync/operations` decides before it touches the ledger (`backend.sync.protocol.validate_operation`), with no database. It feeds arbitrary JSON, a deterministic sweep of awkward JSON shapes into every value of every seed, and Hypothesis mutations of real envelopes. The seeds in `tests/fixtures/sync_envelope_seeds.json` were recorded from the `tests/pg` sync suites, one per operation and payload shape; a test fails if any seed stops validating or an operation has none. For every input the answer must be a 400 with a known code (`INVALID_ENVELOPE`, `INVALID_BASE_REVISION`) or an operation PostgreSQL can store (no NUL, lone surrogate, NaN or infinity), and normalizing must be idempotent.
 
+## Research markup differential
+
 `tests/test_research_markup_differential.py` fuzzes the two research-markup parsers against each other: `backend/research_markup.py` (the research index and graph) and `frontend/js/research-links.js` (the preview), run in one Node process through `tests/browser/research_markup_oracle.js`. Notes drawn from markers, code fences, escapes, percent-encodings and both languages' whitespace must give the same references at the same code-point offsets, with the same names and labels, and the preview's Concept key must group names exactly as `normalize_concept_key` (`prks.identity_key`) does, checked on every assigned code point.
+
+## PDF Range header fuzzing
+
+`tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.server.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
+
+## Hypothesis profiles
 
 Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
 
@@ -55,8 +63,8 @@ Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRK
 - `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
 
 ```bash
-./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_research_markup_differential -v
-PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_research_markup_differential -v
+./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties tests.test_research_markup_differential -v
+PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties tests.test_research_markup_differential -v
 ```
 
 When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
@@ -70,6 +78,35 @@ When the nightly run fails, it prints the shrunk input and a `@reproduce_failure
 The existing Unit / API / contract Test Gate also runs `tests.test_hypothesis_pg_error_mapping`. It uses **synthetic psycopg error objects, not a database** to generate SQLSTATEs, constraint-name near misses and check-field names. The invariants detect accidental retries outside `40001`/`40P01`, 503-vs-500 misclassification, acceptance of unregistered or prefix/suffix-spoofed constraints, and leakage of database driver messages. The fixtures use bounded deterministic test setup with a Hypothesis example limit and no saved example database; on failure, record the minimized case in a permanent regression test.
 
 Run `python -m unittest tests.test_hypothesis_pg_error_mapping -v` with the existing runtime and unit/test dependency pins. These are **pure mapper tests**, not evidence that PostgreSQL, session authorization, or HTTP translation passed: `tests/pg/test_db_errors.py` remains the real disposable-PostgreSQL integration authority. No extra runner or package is installed.
+
+## Adversarial PDF corpus (#1287)
+
+`tests/pdf_corpus.py` generates a small synthetic corpus at test time. It is built from PyMuPDF and hand-written PDF syntax, with fixed metadata so each build of an unencrypted case gives the same bytes (AES-256 draws a random key, so the encrypted case differs), and no third-party document is committed. The cases are:
+
+- a valid control file;
+- a truncated file;
+- a damaged xref table;
+- an AES-256 password file;
+- zero pages;
+- 400 tiny pages;
+- rotated pages;
+- a page with no text;
+- a font whose ToUnicode map sends codes to control, private-use and non-BMP characters;
+- three annotations sharing one `/NM`;
+- a `%PDF-` header followed by garbage;
+- PNG bytes under a `.pdf` name.
+
+`tests/pg/test_adversarial_pdf_corpus.py` sends each case through the real HTTP routes. The stages are upload into the Processing queue, import, the `text.extract` job, any-mode search, the thumbnail, the reader's byte stream, markup adoption for the shared-id case, and `ingest.store_pdf` linearization. Each stage has one asserted outcome per case, in `EXPECTED`:
+
+- An upload is kept, or refused with `PROCESSING_NOT_A_PDF` and leaves no item.
+- An import always creates exactly one Work and one Asset. Import does not parse the PDF.
+- Extraction ends `indexed`, `empty` or `failed`, and its job succeeds.
+- The thumbnail is an image or the documented 404.
+- The reader gets the stored bytes back unchanged.
+- A shared annotation id is adopted once.
+- Linearization is checked with `PRKS_PDF_LINEARIZE` pinned both ways. Switched off, it reports `disabled` and keeps the source, even with qpdf installed. Switched on, it writes a copy, keeps the source on a qpdf refusal, or reports `missing-qpdf` when qpdf is absent.
+
+Extraction and linearization each run on a watchdog thread, so a case that hangs fails after 10 seconds instead of blocking the suite (neither operation has a timeout of its own in PRKS). Where Linux `/proc/self/clear_refs` is available, the peak resident size is reset before the run and its growth is bounded (elsewhere that check is skipped), and the server must still list every imported Work at the end. The whole module runs in about 4 seconds. A changed outcome is a behavior change: update `EXPECTED` only when it is intended, and file any crash, hang or partial import as its own bug.
 
 ## HTTP authorization matrix (#1286)
 
@@ -222,6 +259,29 @@ The five synthetic states are Folder library, Work detail with mounted notes/PDF
 The committed JSON stores a small 48×30 RGB sampling fingerprint per scene (zlib/base64, not a full screenshot). The pilot tolerates mild font-antialias variations and is aimed at meaningful visual shifts, not single-pixel precision; the pure unit test deliberately inverts a controlled synthetic image and proves comparison fails. Incomplete scenario readiness, missing baselines in check mode and malformed metadata fail closed. When capture fails, a bounded `prks-visual-failure.json` contains only a fixed stage label, exception **type** and completed scene names (never the raw Playwright exception, URL, selector, document text or Work id); the advisory job summary identifies the interrupted stage. For completed comparisons, each scene reports the exact triggering class: dimensions, mean color change, changed-pixel fraction, both thresholds, or within tolerance. To replay locally from the PRKS checkout root with the same pinned E2E dependencies and Chromium, run `repo="$(pwd)"; temp="$(mktemp -d)"; (cd "$temp" && python "$repo/scripts/ci/visual_regression.py" --mode check)`; check CI environment/commit parity before treating a difference as a regression. Reusing a temporary directory is safe: each capture removes only its prior candidate/results/failure JSON and five known synthetic scene PNGs before starting, so a stale success cannot hide a new failure. The runner does not retry captures or accept new baselines automatically. PNGs/artifacts are fixture-only, retained seven days, not committed and never sent to Argos. Avoid GitHub log dumps containing real file names/URLs; user library content must never be captured. Evaluate Argos adoption separately under #857 after measuring actionable findings, flake rate, runner-minutes and privacy safeguards.
 
 
+## OWASP ZAP — passive security pilot (#860)
+
+The manual [ZAP workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/zap-passive-pilot.yml) looks for runtime HTTP weaknesses that source scanners miss, such as missing security headers, cookie flags and information leaks. It is **passive only**. `scripts/ci/zap_passive_pilot.py` starts a disposable `AppServer --testing` on loopback in session-auth mode (its own database on the `PRKS_TEST_DATABASE_URL` server, an owner and one editor, the UX-tour synthetic library). It also starts a ZAP 2.17.0 container, pinned by digest, in daemon mode with `-silent` and the API bound to loopback, and switches ZAP to **safe mode**, so ZAP can neither spider nor attack. The pilot itself sends a fixed allowlist of requests through ZAP's proxy: anonymous, signed in as the owner, and signed in as the editor. The only non-GET route is `POST /api/login`, sent three times: one failed anonymous login, then the owner's and the editor's logins. ZAP's passive rules only watch that traffic. The official `zap-baseline.py` and `zap-api-scan.py` recipes are not used, because they spider or scan actively by default.
+
+A run fails (exit 1, listed under `problems`) when:
+
+- a request gets a different answer than the allowlist expects, for example the editor's `GET /api/backups/download` must be 403;
+- ZAP's history of completed exchanges (those with a response) is not exactly the pilot's own requests;
+- any Library content table changed.
+
+Alerts are advisory and do not fail the run. The summary holds the ZAP and PRKS versions, the image digest, each request's route template and answer, and per passive rule its id, name, risk, confidence, count and route templates. It holds no dynamic or private URL values, evidence, cookies or bodies; the fixed synthetic search query (`/api/search?q=Graph`) stays in its route. Triage verified findings into focused issues, or into private reporting under `SECURITY.md` when sensitive, before any check blocks. The existing HTTP auth and Origin/CSRF suites stay authoritative.
+
+Locally, with Docker and a disposable PostgreSQL 18 server that stays up while the pilot runs (the pilot refuses an inherited `PRKS_AUTH`, `PRKS_DATABASE_URL` or `PRKS_PUBLIC_ORIGIN`, so the command clears them):
+
+```bash
+docker pull "$(python -c 'from scripts.ci.zap_passive_pilot import ZAP_IMAGE; print(ZAP_IMAGE)')"
+env -u PRKS_AUTH -u PRKS_DATABASE_URL -u PRKS_PUBLIC_ORIGIN \
+  PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1 \
+  python scripts/ci/zap_passive_pilot.py --out zap-summary.json
+```
+
+The image is about 3.7 GB unpacked. Active scans stay out of scope: they need explicit manual authorization, a target allowlist, operation exclusions, time limits and a disposable reset.
+
 ## Schemathesis — bounded read-only API contract pilot (#855)
 
 PRKS's `/api/openapi.json` is **Positions-only**, not an application-wide contract. The opt-in [Schemathesis workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-readonly-pilot.yml) instead verifies `docs/api/openapi-publishers.json` against its Pydantic-generated builder and live `GET /api/openapi/publishers.json`. The test creates a **second, one-operation copy** containing only `GET /api/publishers` (`listPublishersInUse`); the published fragment's POST and DELETE routes are never passed to the scanner.
@@ -232,6 +292,29 @@ Locally, install the existing exact pins with `python scripts/ci/install_pinned_
 
 The workflow runs manually or for changes to the pilot/Publishers schema/dependency pins. Its only reported outcome is a small sanitized route/method/seed/elapsed/exit summary. On failure, reproduce from a new disposable test server with the fixed seed; use `python scripts/ci/schemathesis_pilot.py --debug-local` for full raw Schemathesis details **only on a private local machine**. The flag is rejected in GitHub Actions, and logs are sanitized by default. No generated payloads, raw request/response bodies, cookies, secrets, research documents, database paths or dynamic query strings are uploaded to CI artifacts. Before expanding API coverage, verify the real HTTP contract for the new family and require explicit allowlisting of every method/path. Existing deterministic Pydantic/openapi-core tests remain the primary contract gate.
 
+
+## Locust — bounded read-only load pilot (#859, #765 T08)
+
+The manual [Locust workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/locust-readonly-pilot.yml) measures throughput and latency of the routes a browser uses while reading the library: `GET /api/works`, `GET /api/works/:id`, `GET /api/search`, `GET /api/tags` and `GET /api/research-graph`. It complements the single-user E2E suite; it is not a PR gate. Gating it on paths would need separate stability evidence and maintainer approval.
+
+`scripts/ci/locust_pilot.py` starts its own disposable `AppServer --testing` on loopback (its own database on the `PRKS_TEST_DATABASE_URL` server, loopback-owner session, the UX-tour synthetic library plus 8 (`small`) or 64 (`medium`) synthetic Works), checks each of the five routes once before any load, then runs `scripts/ci/locustfile_readonly.py` headless with 5 users, spawn rate 5, for 30 seconds. It refuses any target but `http://127.0.0.1:<its port>` and refuses an inherited `PRKS_AUTH` or `PRKS_DATABASE_URL`. Every answer is checked for its meaning (status 200, JSON, a catalog of exactly the seeded Works, the UX-tour fixtures included, the requested Work, the seeded search hits, exactly the seeded non-empty tag list, a non-empty graph), so a fast 4xx/5xx or an empty answer counts as a failure, never as a fast success.
+
+The JSON summary holds the tier, users/spawn/duration, PRKS and PostgreSQL versions, the library size, and per route the request and failure counts, p50, p95, max and requests per second. It also holds the load generator's own CPU share, so a saturated generator (above 0.8 of one CPU) is flagged instead of read as a slow server, and the `pg_stat_database` counters of the pilot's database over the run (commits, rollbacks, blocks hit/read, tuples returned/fetched). A run with a route never exercised, any failed request or a saturated generator exits 1 and lists why under `problems`. No titles, ids, bodies or URLs with values are recorded.
+
+Locally, the pilot needs a disposable PostgreSQL 18 server that keeps running between the two commands. `scripts/test-postgres` is not suitable here: it picks a random port and removes its server when its command exits. Start one separately instead, for example:
+
+```bash
+docker run -d --rm --name prks-locust-pg -p 127.0.0.1:55432:5432 \
+  -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18.6
+python scripts/ci/install_pinned_python.py locust
+export PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1
+python scripts/ci/locust_pilot.py --tier small --out baseline.json
+# later, after a change, compare per-route p95 and throughput ratios:
+python scripts/ci/locust_pilot.py --tier small --compare baseline.json
+docker stop prks-locust-pg
+```
+
+`--compare` accepts only a summary of the same tier. Ratios within run-to-run noise (about ±20% on a laptop for these short runs) are not a regression; repeat both runs before drawing a conclusion. Write and contention workloads (an authenticated edit under CSRF) stay a separate, later experiment so the read-only baseline remains comparable.
 
 ## Schemathesis — bounded mutation scan of allowlisted families (fuzzing slice 2)
 

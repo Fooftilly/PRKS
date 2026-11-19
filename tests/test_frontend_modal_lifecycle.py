@@ -99,7 +99,7 @@ class ModalLifecycleContractTests(unittest.TestCase):
         self.assertIn("prksSerializeModalFormState(modalId) === baseline", schedule)
 
     def test_person_create_reset_does_not_touch_profile_edit(self):
-        open_modal = _between(self.ui, "function openModal(id)", "const PRKS_LS_HINTS")
+        open_modal = _between(self.ui, "function openModal(id, options)", "const PRKS_LS_HINTS")
         person_branch = open_modal.split("id === 'person-modal'", 1)[1].split("} else if", 1)[0]
         self.assertIn("resetPersonCreateForm()", person_branch)
         self.assertIn("prksOpenGeneration", open_modal)
@@ -114,9 +114,12 @@ class ModalLifecycleContractTests(unittest.TestCase):
         close = _between(self.ui, "function closeModals()", "window.prksDismissModalInnerEscapeLayer")
         self.assertIn("prksHideModalUnsavedConfirm({ restoreFocus: false })", close)
         self.assertIn("__prksModalFocusRestore", close)
-        open_modal = _between(self.ui, "function openModal(id)", "const PRKS_LS_HINTS")
+        open_modal = _between(self.ui, "function openModal(id, options)", "const PRKS_LS_HINTS")
         self.assertIn("prksHideModalUnsavedConfirm({ restoreFocus: false })", open_modal)
         self.assertIn("__prksModalFocusRestore", open_modal)
+        # A busy opener has lost focus before the dialog opens; it names itself (#487).
+        self.assertIn("options && options.returnFocus", open_modal)
+        self.assertIn("document.contains(named)", open_modal)
 
 
 if __name__ == "__main__":

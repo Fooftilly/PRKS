@@ -215,10 +215,17 @@ describe('Saved Views index route', () => {
     presentSavedViewsIndex({ owner: indexOwner('other', 1), host: other, generation: 1 })
     await flush()
 
-    main.querySelector<HTMLButtonElement>('[data-sv-index-edit="SV 1"]')?.click()
+    const editButton = main.querySelector<HTMLButtonElement>('[data-sv-index-edit="SV 1"]')
+    editButton?.click()
     await flush()
     expect(server.requests).toContain('GET /api/saved-views/SV%201')
-    expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search })
+    // The row's button is named as the opener: it lost focus while busy (#487).
+    expect(open).toHaveBeenCalledWith({
+      viewId: 'SV 1',
+      name: 'Critical theory',
+      definition: VIEW.search,
+      returnFocus: editButton,
+    })
 
     main.querySelector<HTMLButtonElement>('[data-sv-index-delete="SV 1"]')?.click()
     await flush()

@@ -190,12 +190,10 @@ interface Window {
     roleType: string,
   ) => boolean
   prksTagPlusIconHtml?: () => string
+  /** Installed by the Vue Saved View form (`features/saved-views/SavedViewForm.vue`). */
   prksOpenSavedViewModalFromCurrentSearch?: (hash?: string) => void
-  prksOpenSavedViewModal?: (options: {
-    viewId?: string
-    name?: string
-    definition?: { mode: string; q: string; tag: string; author: string; publisher: string }
-  }) => void
+  prksOpenSavedViewModalForCurrentView?: () => void
+  prksOpenSavedViewModal?: (options?: import('./src/features/saved-views/editor').SavedViewOpening) => void
   /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
   prksOpenCommandPalette?: (options?: {
@@ -371,7 +369,8 @@ interface Window {
   prksHideWorkThumbPreview?: () => void
   prksReleaseWorkThumbPreview?: (root: ParentNode | null) => void
   prksReleaseLazyWorkThumbs?: (root: ParentNode | null) => void
-  openModal?: (id: string) => void
+  /** `returnFocus` names the opener when it no longer holds focus (a busy button). */
+  openModal?: (id: string, options?: { returnFocus?: HTMLElement | null }) => void
   __prksFolderDashboardState?: {
     vueOwned?: boolean
     container?: HTMLElement | null

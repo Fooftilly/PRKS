@@ -27,7 +27,10 @@ from the start, as ``lifecycle.replace_object`` does.
 
 from __future__ import annotations
 
+import itertools
 import json
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
@@ -184,25 +187,41 @@ def require_pdf(target: Target) -> str:
     return target.asset_id
 
 
-def _holds_nul(value: Any) -> bool:
-    if isinstance(value, str):
-        return "\x00" in value
-    if isinstance(value, dict):
-        return any(_holds_nul(key) or _holds_nul(item) for key, item in value.items())
-    if isinstance(value, list):
-        return any(_holds_nul(item) for item in value)
+_WALK_DONE = object()
+_UNSTORABLE_TEXT = re.compile("[\x00\ud800-\udfff]")
+
+
+def _holds_unstorable_text(value: Any) -> bool:
+    """NUL or a lone surrogate in any text, keys included.
+
+    Iterative with one iterator per open container, so any depth is walked
+    and auxiliary memory is bounded by depth, not by width.
+    """
+    stack: list[Iterator[Any]] = [iter((value,))]
+    while stack:
+        item = next(stack[-1], _WALK_DONE)
+        if item is _WALK_DONE:
+            stack.pop()
+        elif isinstance(item, str):
+            if _UNSTORABLE_TEXT.search(item):
+                return True
+        elif isinstance(item, dict):
+            stack.append(itertools.chain.from_iterable(item.items()))
+        elif isinstance(item, list):
+            stack.append(iter(item))
     return False
 
 
 def check_storable(normalized: dict[str, Any]) -> None:
     """Refuse what PostgreSQL cannot hold (SQLite stores it).
 
-    NUL in any text (``text`` and ``jsonb`` refuse it), an id over 200
+    NUL or a lone surrogate in any text (``text`` and ``jsonb`` refuse NUL;
+    psycopg cannot encode a surrogate, a 500 before), an id over 200
     characters (the sync families' bound, ``pdf_annotation_sync``), and a page
     index beyond ``integer``.
     """
     page = normalized["page_index"]
-    if (_holds_nul(normalized) or len(normalized["id"]) > _MAX_ID_CHARS
+    if (_holds_unstorable_text(normalized) or len(normalized["id"]) > _MAX_ID_CHARS
             or (page is not None and page > _MAX_PAGE_INDEX)):
         raise WorkAnnotationError(_MALFORMED, "Annotation cannot be stored.")
 

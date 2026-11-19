@@ -69,6 +69,12 @@ export interface components {
              * @description Human-readable error message.
              */
             error: string;
+            /**
+             * Message
+             * @description Human-readable explanation sent with admission and route refusals.
+             * @default null
+             */
+            message?: string | null;
         };
         /** @description One Saved View: GET list rows, GET by id, POST and PATCH bodies. */
         SavedView: {
