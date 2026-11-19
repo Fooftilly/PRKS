@@ -1,0 +1,86 @@
+---
+# Codacy configuration. Once this file exists, Codacy ignores the
+# "Ignored files" list in its web settings, so every global ignore lives here.
+#
+# Rules for editing:
+# - Global exclude_paths are only for generated or vendored code. They apply
+#   to every tool, Trivy included.
+# - Test code is excluded per tool below, never globally, so Trivy keeps
+#   scanning tests for secrets and every lockfile for vulnerable dependencies.
+# - Do not exclude backend/, frontend/ (except vendor and the built bundle),
+#   frontend-app/src or scripts/ from any tool.
+# Paths use Java glob syntax:
+# https://docs.codacy.com/repositories-configure/codacy-configuration-file/
+
+exclude_paths:
+  # Third-party code vendored into the static frontend.
+  - "frontend/vendor/**"
+  # Built Vue bundle (generated from frontend-app/ by the build).
+  - "frontend/vue/prks-vue.js"
+  # Generated OpenAPI client types.
+  - "frontend-app/src/api/generated/**"
+
+engines:
+  # Test-only excludes. Plain lists, no YAML anchors, so any parser reads them.
+  bandit:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  opengrep:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  prospector:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  pylintpython3:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  pmd:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  pmd-7:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  eslint-8:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  eslint-9:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  sqlfluff:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  SQLint:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  lizard:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+  duplication:
+    exclude_paths:
+      - "tests/**"
+      - "frontend-app/**/*.test.ts"
+      - "frontend-app/*.test.mjs"
+      # Lockfiles are generated; Trivy still scans them.
+      - "**/package-lock.json"
