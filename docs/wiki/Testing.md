@@ -47,6 +47,10 @@ The SQLite-era Hypothesis pilot (`tests/test_hypothesis_sync.py`) was retired in
 
 `tests/test_sync_envelope_properties.py` fuzzes everything `POST /api/sync/operations` decides before it touches the ledger (`backend.sync.protocol.validate_operation`), with no database. It feeds arbitrary JSON, a deterministic sweep of awkward JSON shapes into every value of every seed, and Hypothesis mutations of real envelopes. The seeds in `tests/fixtures/sync_envelope_seeds.json` were recorded from the `tests/pg` sync suites, one per operation and payload shape; a test fails if any seed stops validating or an operation has none. For every input the answer must be a 400 with a known code (`INVALID_ENVELOPE`, `INVALID_BASE_REVISION`) or an operation PostgreSQL can store (no NUL, lone surrogate, NaN or infinity), and normalizing must be idempotent.
 
+## Research markup differential
+
+`tests/test_research_markup_differential.py` fuzzes the two research-markup parsers against each other: `backend/research_markup.py` (the research index and graph) and `frontend/js/research-links.js` (the preview), run in one Node process through `tests/browser/research_markup_oracle.js`. Notes drawn from markers, code fences, escapes, percent-encodings and both languages' whitespace must give the same references at the same code-point offsets, with the same names and labels, and the preview's Concept key must group names exactly as `normalize_concept_key` (`prks.identity_key`) does, checked on every assigned code point.
+
 ## PDF Range header fuzzing
 
 `tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.server.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
@@ -59,8 +63,8 @@ Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRK
 - `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
 
 ```bash
-./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties -v
-PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties -v
+./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties tests.test_research_markup_differential -v
+PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties tests.test_research_markup_differential -v
 ```
 
 When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
