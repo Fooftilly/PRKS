@@ -134,7 +134,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
     def test_audited_config_files_are_read_by_no_suite_or_runtime(self):
         # The skip is only sound while nothing in the repository reads these
         # files. A new reader must remove the file from AUDITED_CONFIG_FILES.
-        readers = ("backend", "frontend", "frontend-app", "scripts", "tests", "tools")
+        readers = (".github", "backend", "frontend", "frontend-app", "scripts", "tests", "tools")
         allowed = {
             ROOT / "scripts/ci/docs_only.py",
             Path(__file__).resolve(),
@@ -155,7 +155,13 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                                 hits.append(str(path.relative_to(ROOT)))
                         except (OSError, UnicodeError):
                             continue
-                for script in ("run_tests.py", "prks_app.py", "Dockerfile", ".dockerignore"):
+                root_files = (
+                    "run_tests.py", "prks_app.py", "Dockerfile", ".dockerignore",
+                    "docker-compose.yml", "docker-build.sh", "docker-entrypoint.sh",
+                    "eslint.config.mjs", "ruff.toml", "setup.cfg",
+                    "pyrightconfig.json", "pyrightconfig.typed-slice.json",
+                )
+                for script in root_files:
                     if name in (ROOT / script).read_text(encoding="utf-8"):
                         hits.append(script)
                 self.assertEqual(hits, [])
