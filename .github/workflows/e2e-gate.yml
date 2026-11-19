@@ -34,8 +34,8 @@ concurrency:
   # Dispatches share a serial group; start each sample after the prior run finishes.
   # A re-run (attempt > 1) keeps the event of its original commit, so in the PR
   # group it would cancel the run for a newer head. Re-runs get a group of their
-  # own, keyed by their commit.
-  group: e2e-gate-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch-' || '' }}${{ github.run_attempt != '1' && format('rerun-{0}-', github.event.pull_request.head.sha || github.sha) || '' }}${{ github.event.pull_request.number || github.ref }}
+  # own, keyed by their commit. Dispatch re-runs stay in the serial dispatch group.
+  group: e2e-gate-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch-' || '' }}${{ github.event_name != 'workflow_dispatch' && github.run_attempt != '1' && format('rerun-{0}-', github.event.pull_request.head.sha || github.sha) || '' }}${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:

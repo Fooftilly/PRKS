@@ -176,6 +176,7 @@ class GateConcurrencyTests(unittest.TestCase):
         block = source.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
         group = next(line for line in block.splitlines() if line.strip().startswith("group:"))
         self.assertIn(
+            "github.event_name != 'workflow_dispatch' && "
             "github.run_attempt != '1' && format('rerun-{0}-', "
             "github.event.pull_request.head.sha || github.sha)",
             group,
