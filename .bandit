@@ -1,5 +1,0 @@
-[bandit]
-# Read by CodeFactor's Bandit run (CodeFactor only reads a .bandit INI file).
-# Excludes test code only; no Bandit tests are skipped, so backend/,
-# frontend/, frontend-app/ and scripts/ keep the full rule set.
-exclude = ./tests/*,tests/*,*/tests/*
