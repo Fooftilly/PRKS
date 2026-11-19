@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import shutil
 import threading
 from typing import Any, BinaryIO, Callable, Optional, TypeVar
@@ -63,6 +64,9 @@ EXTRACT_SECONDS = 10.0
 LINEARIZE_SECONDS = 10.0
 # The process's peak resident size may grow by at most this over the corpus.
 PEAK_MEMORY_GROWTH_KIB = 256 * 1024
+# Extraction and the qpdf repair check run in child processes (#1321, #1322),
+# so their memory is bounded separately: no waited-for child may peak above this.
+CHILD_PEAK_MEMORY_KIB = 512 * 1024
 
 T = TypeVar("T")
 
@@ -160,6 +164,8 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
         self.assertEqual(len(works), sum(1 for value in EXPECTED.values() if value is not None))
         if measured:
             self.assertLess(peak_rss_kib() - start, PEAK_MEMORY_GROWTH_KIB)
+            # ru_maxrss is KiB on Linux: the largest child reaped so far.
+            self.assertLess(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss, CHILD_PEAK_MEMORY_KIB)
 
     def check(self, case: Case, expected: Optional[tuple[str, int, bool]]) -> None:
         data = case.build()

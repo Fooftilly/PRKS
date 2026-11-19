@@ -102,6 +102,38 @@ def extract_pdf(
     return PDFTextExtraction(text=txt, empty=False, truncated=truncated)
 
 
+def _run_child(args: List[str], timeout: float) -> tuple[str, Dict[str, Any]]:
+    """Run ``python -m backend.pdf_text *args``: ``("ok", result)``, ``("timeout", {})`` or ``("crashed", {})``.
+
+    The child writes its JSON result as ``_RESULT_NAME`` in its working
+    directory, a fresh scratch, and imports backend through PYTHONPATH. The
+    result goes through a file, not stdout, because MuPDF writes its own
+    messages to stdout. A timed-out child is killed and reaped.
+    """
+    with tempfile.TemporaryDirectory(prefix="prks-pdf-text-") as scratch:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (_PACKAGE_ROOT, env.get("PYTHONPATH")) if p)
+        try:
+            subprocess.run(  # nosec B603 - fixed argv, no shell
+                [sys.executable, "-m", "backend.pdf_text", *args],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=scratch,
+                env=env,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return "timeout", {}
+        try:
+            with open(os.path.join(scratch, _RESULT_NAME), encoding="utf-8") as handle:
+                result = json.load(handle)
+        except (OSError, ValueError):
+            return "crashed", {}
+    return ("ok", result) if isinstance(result, dict) else ("crashed", {})
+
+
 def extract_pdf_bounded(
     pdf_path: str,
     max_chars: int = _MAX_EXTRACTED_CHARS,
@@ -112,34 +144,13 @@ def extract_pdf_bounded(
     Raises :class:`PDFTextExtractorUnavailable` when the child cannot import
     PyMuPDF and :class:`PDFTextExtractionError` for an unreadable PDF, a
     timeout (``extraction_timeout``) or a child that ends without a result
-    (``extractor_crashed``). The result goes through a file, not stdout,
-    because MuPDF writes its own messages to stdout.
+    (``extractor_crashed``).
     """
-    with tempfile.TemporaryDirectory(prefix="prks-pdf-text-") as scratch:
-        out = os.path.join(scratch, _RESULT_NAME)
-        env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join(p for p in (_PACKAGE_ROOT, env.get("PYTHONPATH")) if p)
-        try:
-            subprocess.run(  # nosec B603 - fixed argv, no shell
-                [sys.executable, "-m", "backend.pdf_text", os.path.abspath(pdf_path), str(int(max_chars))],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                # The child writes its result into its working directory, this
-                # fresh scratch, and imports backend through PYTHONPATH.
-                cwd=scratch,
-                env=env,
-                check=False,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            # subprocess.run has already killed and reaped the child.
-            raise PDFTextExtractionError("extraction_timeout") from None
-        try:
-            with open(out, encoding="utf-8") as handle:
-                result = json.load(handle)
-        except (OSError, ValueError):
-            raise PDFTextExtractionError("extractor_crashed") from None
+    outcome, result = _run_child(["extract", os.path.abspath(pdf_path), str(int(max_chars))], timeout)
+    if outcome == "timeout":
+        raise PDFTextExtractionError("extraction_timeout")
+    if outcome != "ok":
+        raise PDFTextExtractionError("extractor_crashed")
     if result.get("unavailable"):
         raise PDFTextExtractorUnavailable()
     if "error" in result:
@@ -149,22 +160,46 @@ def extract_pdf_bounded(
     )
 
 
-def _child_main(argv: List[str]) -> int:
-    """``python -m backend.pdf_text PDF MAX_CHARS``: one extraction, written as JSON to ``_RESULT_NAME``
+def same_pages_bounded(first_path: str, second_path: str, timeout: float) -> bool:
+    """Whether PyMuPDF reads the same page count and page text from both PDFs (#1322).
 
-    in the working directory (the parent's scratch), never to a path from argv.
+    Runs in a child process killed after ``timeout`` seconds; a timeout, a
+    crash, a missing PyMuPDF or an unreadable file all answer False.
     """
-    pdf_path, max_chars = argv[0], int(argv[1])
+    outcome, result = _run_child(
+        ["compare", os.path.abspath(first_path), os.path.abspath(second_path)], timeout)
+    return outcome == "ok" and result.get("same") is True
+
+
+def _page_texts(pdf_path: str) -> List[str]:
+    import pymupdf
+
+    with pymupdf.open(pdf_path) as doc:
+        return [raw if isinstance(raw := page.get_text("text"), str) else "" for page in doc]
+
+
+def _child_main(argv: List[str]) -> int:
+    """``python -m backend.pdf_text extract PDF MAX_CHARS`` or ``... compare PDF PDF``.
+
+    Writes its JSON result as ``_RESULT_NAME`` in the working directory (the
+    parent's scratch), never to a path from argv.
+    """
     result: Dict[str, Any]
-    try:
-        found = extract_pdf(pdf_path, max_chars)
-        result = {"text": found.text, "empty": found.empty, "truncated": found.truncated}
-    except PDFTextExtractorUnavailable:
-        result = {"unavailable": True}
-    except PDFTextExtractionError as exc:
-        result = {"error": exc.reason}
+    if argv[0] == "compare":
+        try:
+            result = {"same": _page_texts(argv[1]) == _page_texts(argv[2])}
+        except Exception as exc:
+            result = {"same": False, "error": safe_error_type(exc)}
+    else:
+        try:
+            found = extract_pdf(argv[1], int(argv[2]))
+            result = {"text": found.text, "empty": found.empty, "truncated": found.truncated}
+        except PDFTextExtractorUnavailable:
+            result = {"unavailable": True}
+        except PDFTextExtractionError as exc:
+            result = {"error": exc.reason}
     # Scratch read once by the parent after this process exits; a write cut
-    # short is not valid JSON, which the parent reads as ``extractor_crashed``.
+    # short is not valid JSON, which the parent reads as a crash.
     with open(_RESULT_NAME, "w", encoding="utf-8") as handle:
         json.dump(result, handle)
     return 0

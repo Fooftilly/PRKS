@@ -2,7 +2,6 @@ import logging
 import os
 import shutil
 import subprocess
-import time
 
 from backend.log_safety import safe_error_type, safe_log_label
 from backend.performance import span as perf_span
@@ -17,8 +16,8 @@ _MISSING_QPDF_WARNED = False
 QPDF_TIMEOUT_SECONDS = 120
 # qpdf exits 3 when it finished with warnings, usually after repairing a
 # damaged file (#1322). Its copy is used only when PyMuPDF reads the same
-# page count and page text from it as from the source; the comparison stops
-# after this many seconds and then keeps the source.
+# page count and page text from it as from the source; the comparison runs
+# in a child process killed after this many seconds, which keeps the source.
 QPDF_WARNINGS_EXIT = 3
 REPAIRED_CHECK_SECONDS = 30.0
 
@@ -100,38 +99,17 @@ def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> str:
     return "ok"
 
 
-def _page_texts(path: str, deadline: float) -> list[str] | None:
-    """Every page's text as PyMuPDF reads it, or None when it cannot, or not before ``deadline``."""
-    try:
-        import pymupdf
-    except ImportError:
-        return None
-    texts: list[str] = []
-    with pymupdf.open(path) as doc:
-        for page in doc:
-            if time.monotonic() > deadline:
-                return None
-            raw = page.get_text("text")
-            texts.append(raw if isinstance(raw, str) else "")
-    return texts
-
-
-def _repaired_copy_matches(src_path: str, dst_path: str, ctx: str) -> bool:
+def _repaired_copy_matches(src_path: str, dst_path: str) -> bool:
     """Whether qpdf's repaired copy is linearized and keeps the source's pages and text.
 
     qpdf repairs can drop objects, so a copy that PyMuPDF reads differently
-    (or cannot read, or reads too slowly) is refused and the source kept.
+    (or cannot read, or not within ``REPAIRED_CHECK_SECONDS``) is refused and
+    the source kept. The comparison runs in a child process killed at that
+    bound, so a slow page cannot hold the upload.
     """
-    if not is_pdf_linearized(dst_path):
-        return False
-    deadline = time.monotonic() + REPAIRED_CHECK_SECONDS
-    try:
-        source = _page_texts(src_path, deadline)
-        copy = _page_texts(dst_path, deadline) if source is not None else None
-    except Exception as e:
-        LOGGER.info("pdf_linearize_repair_check_error context=%s error_type=%s", ctx, safe_error_type(e))
-        return False
-    return source is not None and copy == source
+    from backend.pdf_text import same_pages_bounded
+
+    return is_pdf_linearized(dst_path) and same_pages_bounded(src_path, dst_path, REPAIRED_CHECK_SECONDS)
 
 
 def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tuple[bool, str]:
@@ -158,7 +136,7 @@ def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tupl
         try:
             outcome = _run_qpdf(qpdf, src_path, dst_path, ctx)
             if outcome == "qpdf-warnings" and os.path.exists(dst_path):
-                if _repaired_copy_matches(src_path, dst_path, ctx):
+                if _repaired_copy_matches(src_path, dst_path):
                     return True, "ok-repaired"
                 LOGGER.info("pdf_linearize_repair_refused context=%s", ctx)
             if outcome != "ok":

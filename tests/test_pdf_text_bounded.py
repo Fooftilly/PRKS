@@ -19,6 +19,7 @@ from backend.pdf_text import (
     PDFTextExtractionError,
     PDFTextExtractorUnavailable,
     extract_pdf_bounded,
+    same_pages_bounded,
 )
 
 try:
@@ -80,7 +81,7 @@ class BoundedExtractionTests(unittest.TestCase):
                 {"text": "", "empty": True, "truncated": False})) as run:
             extract_pdf_bounded(self.pdf, max_chars=7)
         argv = run.call_args.args[0]
-        self.assertEqual(argv[1:], ["-m", "backend.pdf_text", self.pdf, "7"])
+        self.assertEqual(argv[1:], ["-m", "backend.pdf_text", "extract", self.pdf, "7"])
         self.assertNotIn("shell", run.call_args.kwargs)
 
 
@@ -105,6 +106,27 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
         doc.close()
         self.assertEqual(extract_pdf_bounded(path), pdf_text.extract_pdf(path))
         self.assertEqual(extract_pdf_bounded(path, max_chars=3).text, "bou")
+
+    def pdf(self, name: str, pages: list[str]) -> str:
+        import pymupdf
+
+        doc = pymupdf.open()
+        for text in pages:
+            doc.new_page().insert_text((72, 72), text)
+        path = self.write(name, doc.tobytes())
+        doc.close()
+        return path
+
+    def test_the_page_comparison_needs_the_same_count_and_text(self) -> None:
+        source = self.pdf("source.pdf", ["one", "two"])
+        self.assertTrue(same_pages_bounded(source, self.pdf("same.pdf", ["one", "two"]), 30))
+        self.assertFalse(same_pages_bounded(source, self.pdf("fewer.pdf", ["one"]), 30))
+        self.assertFalse(same_pages_bounded(source, self.pdf("other.pdf", ["one", "too"]), 30))
+        self.assertFalse(same_pages_bounded(source, self.write("bad.pdf", b"%PDF-1.4 junk"), 30))
+
+    def test_a_page_comparison_past_its_bound_answers_false(self) -> None:
+        source = self.pdf("source.pdf", ["one"])
+        self.assertFalse(same_pages_bounded(source, source, 0.001))
 
     def test_an_unreadable_pdf_fails_with_the_child_reason(self) -> None:
         path = self.write("bad.pdf", b"%PDF-1.4 not a pdf")

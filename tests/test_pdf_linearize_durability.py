@@ -90,34 +90,34 @@ class TestLinearizeToACopy(_LinearizeCase):
         self.assertNotIn(self.pdf_path, text)
         self.assertNotIn("source.pdf", text)
 
-    def linearize_with_warnings(self, source_pages, copy_pages, output=LINEARIZED):
-        """qpdf exits 3 (warnings); PyMuPDF reads ``source_pages`` / ``copy_pages`` (None: cannot)."""
-        pages = {self.pdf_path: source_pages, self.out_path: copy_pages}
-        with patch.object(pdf_linearize, "_page_texts", side_effect=lambda path, _deadline: pages[path]):
-            return self.run_linearize(qpdf=_fake_qpdf(output=output, returncode=3))
+    def linearize_with_warnings(self, same, output=LINEARIZED):
+        """qpdf exits 3 (warnings); the bounded page comparison answers ``same``."""
+        seen = []
+
+        def compare(first, second, timeout):
+            seen.append((first, second, timeout))
+            return same
+
+        with patch("backend.pdf_text.same_pages_bounded", side_effect=compare):
+            answer = self.run_linearize(qpdf=_fake_qpdf(output=output, returncode=3))
+        return answer, seen
 
     def test_a_repaired_copy_with_the_same_pages_and_text_is_used(self):
-        self.assertEqual(self.linearize_with_warnings(["a", "b"], ["a", "b"]), (True, "ok-repaired"))
+        answer, seen = self.linearize_with_warnings(True)
+        self.assertEqual(answer, (True, "ok-repaired"))
+        self.assertEqual(seen, [(self.pdf_path, self.out_path, pdf_linearize.REPAIRED_CHECK_SECONDS)])
         self.assertEqual(self.source_bytes(), ORIGINAL)
 
-    def test_a_repaired_copy_that_lost_a_page_or_text_keeps_the_source(self):
-        for copy_pages in (["a"], ["a", ""], ["a", "b", "c"]):
-            with self.subTest(copy_pages=copy_pages):
-                self.assertEqual(self.linearize_with_warnings(["a", "b"], copy_pages), (False, "qpdf-warnings"))
+    def test_a_repaired_copy_that_differs_or_cannot_be_compared_keeps_the_source(self):
+        # same_pages_bounded answers False for different pages or text, a
+        # timeout, a crash, a missing PyMuPDF or an unreadable file.
+        answer, _ = self.linearize_with_warnings(False)
+        self.assertEqual(answer, (False, "qpdf-warnings"))
         self.assertEqual(self.source_bytes(), ORIGINAL)
 
-    def test_a_repaired_copy_that_cannot_be_compared_keeps_the_source(self):
-        # PyMuPDF missing, too slow, or unable to read either file.
-        for source_pages, copy_pages in ((None, ["a"]), (["a"], None)):
-            with self.subTest(source=source_pages, copy=copy_pages):
-                self.assertEqual(self.linearize_with_warnings(source_pages, copy_pages), (False, "qpdf-warnings"))
-
-    def test_a_repaired_copy_that_is_not_linearized_keeps_the_source(self):
-        self.assertEqual(self.linearize_with_warnings(["a"], ["a"], output=ORIGINAL), (False, "qpdf-warnings"))
-
-    def test_a_repair_check_that_raises_keeps_the_source(self):
-        with patch.object(pdf_linearize, "_page_texts", side_effect=RuntimeError("broken")):
-            self.assertEqual(self.run_linearize(qpdf=_fake_qpdf(returncode=3)), (False, "qpdf-warnings"))
+    def test_a_repaired_copy_that_is_not_linearized_is_never_compared(self):
+        answer, seen = self.linearize_with_warnings(True, output=ORIGINAL)
+        self.assertEqual((answer, seen), ((False, "qpdf-warnings"), []))
 
     def test_a_qpdf_that_runs_too_long_is_killed_and_reported_as_a_timeout(self):
         seen = {}
