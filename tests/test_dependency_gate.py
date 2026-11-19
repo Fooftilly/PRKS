@@ -456,16 +456,16 @@ def assert_test_gate_no_pip_inject_env(workflow: str) -> None:
 
 def assert_test_gate_pg_shards_guarded(workflow: str, pairs: list) -> bool:
     """Enforce reviewed shard layout and aggregator without changing policy."""
-    # Only the explicitly reviewed two-shard form can have an aggregator.
+    # Only the explicitly reviewed four-shard form can have an aggregator.
     # Guard the matrix cardinality, wrapper command and dependency so a
     # successful required check cannot hide a missing/failed helper shard.
     sharded = "  postgres-helpers-shards:" in workflow
     aggregator = count_test_gate_steps_named(workflow, _TEST_GATE_PG_AGG_STEP)
     if sharded:
         requirements = (
-            "    name: PostgreSQL helpers (${{ matrix.shard }}/2)",
-            "        shard: [1, 2]",
-            "          PRKS_PG_SHARD: ${{ matrix.shard }}/2",
+            "    name: PostgreSQL helpers (${{ matrix.shard }}/4)",
+            "        shard: [1, 2, 3, 4]",
+            "          PRKS_PG_SHARD: ${{ matrix.shard }}/4",
             "    name: PostgreSQL helper tests",
         )
         if "  docs-only-plan:\n" in workflow:
@@ -1472,7 +1472,7 @@ class RepoGateLiveTests(unittest.TestCase):
         # Removing any part of the fail-closed aggregator must fail the guard.
         with self.assertRaisesRegex(ValueError, "reviewed matrix"):
             assert_test_gate_run_steps_allowlisted(
-                workflow.replace("        shard: [1, 2]", "        shard: [1]")
+                workflow.replace("        shard: [1, 2, 3, 4]", "        shard: [1]")
             )
         with self.assertRaisesRegex(ValueError, "aggregator"):
             assert_test_gate_run_steps_allowlisted(
