@@ -6,12 +6,14 @@ HTTP suite over this transport when ``PRKS_TEST_HTTP_TRANSPORT=uvicorn``.
 from __future__ import annotations
 
 import http.client
+import logging
 import os
 import socket
 import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
 _PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJECT)
@@ -20,6 +22,7 @@ from run_tests import apply_isolated_test_env  # noqa: E402
 apply_isolated_test_env(_PROJECT)
 
 from backend import server as server_module  # noqa: E402
+from backend.web import asgi  # noqa: E402
 from backend.web.settings import (  # noqa: E402
     DEFAULT_THREADS,
     ENV_SERVER,
@@ -27,6 +30,15 @@ from backend.web.settings import (  # noqa: E402
     HttpServerSettings,
     HttpSettingsError,
 )
+
+
+class _Collect(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.NOTSET)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 
 class HttpSettingsTests(unittest.TestCase):
@@ -153,6 +165,69 @@ class UvicornTransportTests(unittest.TestCase):
         started = time.monotonic()
         self.assertEqual(self.request("GET", "/healthz")[0], 200)
         self.assertLess(time.monotonic() - started, 2)
+
+    def test_disconnect_ends_a_response_only_stream(self):
+        # Uvicorn's send() returns silently once the client is gone; the
+        # adapter must still raise, or a backup-progress stream keeps its
+        # thread and its Library access scope until the job ends.
+        ended = threading.Event()
+
+        def stream(handler):
+            handler.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n")
+            try:
+                for _ in range(400):  # 20 s if nothing stops it
+                    handler.wfile.write(b"tick\n")
+                    time.sleep(0.05)
+            except BrokenPipeError:
+                ended.set()
+                raise
+
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", stream):
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock.sendall(b"GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            received = b""
+            while b"tick" not in received:
+                chunk = sock.recv(4096)
+                self.assertTrue(chunk, "the stream closed before its first line")
+                received += chunk
+            sock.close()
+            self.assertTrue(ended.wait(3), "the stream kept writing after the client left")
+
+    def test_trace_logging_never_records_request_targets(self):
+        root = logging.getLogger()
+        handler = _Collect()
+        records = handler.records
+        old_level = root.level
+        root.addHandler(handler)
+        root.setLevel(logging.NOTSET)  # PRKS_LOG_LEVEL=NOTSET
+        self.addCleanup(root.setLevel, old_level)
+        self.addCleanup(root.removeHandler, handler)
+        httpd = server_module.make_server(
+            ("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn"})
+        )
+        for name in ("prks_bind_host", "prks_trusted_hosts", "prks_auth", "prks_jobs", "prks_readiness"):
+            setattr(httpd, name, getattr(self.httpd, name))
+        httpd.prks_access_gate = server_module.LibraryAccessGate()
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        port = httpd.server_address[1]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request("GET", "/healthz?secret-term=1")
+                conn.getresponse().read()
+                conn.close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        self.assertFalse(
+            [r for r in records if "secret-term" in r.getMessage()],
+            "a request target reached the logs",
+        )
 
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}

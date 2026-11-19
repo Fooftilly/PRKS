@@ -14,7 +14,14 @@ transport:
   line and headers into ``http.response.start`` and streams the rest as body
   chunks. ``Server`` is dropped (#1306); Uvicorn adds ``Date``.
 - A client that is gone surfaces as ``BrokenPipeError``, as it did on a
-  socket.
+  socket. Uvicorn's ``send`` returns silently after a disconnect, so a
+  :class:`_Receiver` (the only caller of ``receive``) watches for
+  ``http.disconnect`` and the writer refuses to send once it has come. A
+  response-only stream (backup progress) therefore ends on its next write.
+- Uvicorn's TRACE logging (connection lines and the ASGI message logger,
+  which prints paths and query strings) is kept off whatever
+  ``PRKS_LOG_LEVEL`` is, because lowering the level must never unlock raw
+  data.
 
 Signals stay with PRKS (``backend.jobs.embedded.SignalStop``): Uvicorn's own
 handlers are not installed. ``proxy_headers`` is off, because PRKS applies its
@@ -56,6 +63,15 @@ MAX_HEADERS = 100
 MAX_LINE_BYTES = 65536
 
 _DROPPED_RESPONSE_HEADERS = frozenset({b"server", b"date"})
+#: Uvicorn loggers that log request data at TRACE (below DEBUG).
+_UVICORN_TRACE_LOGGERS = ("uvicorn.error", "uvicorn.asgi")
+
+
+def _keep_uvicorn_trace_off() -> None:
+    """Hold Uvicorn's loggers at DEBUG or above, so TRACE never logs."""
+    for name in _UVICORN_TRACE_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(max(logger.getEffectiveLevel(), logging.DEBUG))
 
 
 class _Bridge:
@@ -92,12 +108,39 @@ class _Connection:
         return self._timeout
 
 
+class _Receiver:
+    """The one consumer of ASGI ``receive`` for a request, on the event loop.
+
+    Body messages pass through a one-slot queue, so Uvicorn's flow control
+    still pauses a client the handler is not reading. After the body it keeps
+    waiting, and ``gone`` is set once the client disconnects (or the request
+    task ends, as on a forced shutdown).
+    """
+
+    def __init__(self, receive: Receive) -> None:
+        self._receive = receive
+        self.messages: asyncio.Queue[Message] = asyncio.Queue(maxsize=1)
+        self.gone = threading.Event()
+
+    async def run(self) -> None:
+        try:
+            while True:
+                message = await self._receive()
+                if message.get("type") != "http.request":
+                    self.gone.set()
+                    await self.messages.put(message)
+                    return
+                await self.messages.put(message)
+        finally:
+            self.gone.set()
+
+
 class _RequestBody:
     """The request body as the file object ``rfile`` the handler reads."""
 
-    def __init__(self, bridge: _Bridge, receive: Receive, connection: _Connection) -> None:
+    def __init__(self, bridge: _Bridge, receiver: _Receiver, connection: _Connection) -> None:
         self._bridge = bridge
-        self._receive = receive
+        self._receiver = receiver
         self._connection = connection
         self._buffer = bytearray()
         self._eof = False
@@ -108,7 +151,7 @@ class _RequestBody:
             return False
         timeout = self._connection.gettimeout()
         message = self._bridge.call(
-            self._receive, DEFAULT_BODY_IDLE_SECONDS if timeout is None else timeout
+            self._receiver.messages.get, DEFAULT_BODY_IDLE_SECONDS if timeout is None else timeout
         )
         if message.get("type") != "http.request":
             self._eof = True  # http.disconnect: the client is gone
@@ -150,9 +193,10 @@ class _RequestBody:
 class _ResponseWriter:
     """``wfile``: the handler's raw HTTP/1 response, sent as ASGI messages."""
 
-    def __init__(self, bridge: _Bridge, send: Send) -> None:
+    def __init__(self, bridge: _Bridge, send: Send, gone: threading.Event) -> None:
         self._bridge = bridge
         self._send_message = send
+        self._gone = gone
         self._head = bytearray()
         self.started = False
 
@@ -197,6 +241,8 @@ class _ResponseWriter:
         self._send({"type": "http.response.body", "body": data, "more_body": more})
 
     def _send(self, message: Message) -> None:
+        if self._gone.is_set():  # Uvicorn would drop the bytes without an error
+            raise BrokenPipeError("client disconnected")
         try:
             self._bridge.call(lambda: self._send_message(message))
         except OSError as exc:  # uvicorn's ClientDisconnected is an OSError
@@ -285,29 +331,35 @@ class PrksAsgiApp:
         loop = asyncio.get_running_loop()
         async with self._slots:
             done: asyncio.Future[None] = loop.create_future()
+            receiver = _Receiver(receive)
+            watch = asyncio.ensure_future(receiver.run())
             thread = threading.Thread(
                 target=self._run,
-                args=(loop, done, scope, receive, send),
+                args=(loop, done, scope, receiver, send),
                 name="prks-http",
                 daemon=True,
             )
             thread.start()
-            await done
+            try:
+                await done
+            finally:
+                watch.cancel()
+                receiver.gone.set()
 
     def _run(
         self,
         loop: asyncio.AbstractEventLoop,
         done: "asyncio.Future[None]",
         scope: Scope,
-        receive: Receive,
+        receiver: _Receiver,
         send: Send,
     ) -> None:
         bridge = _Bridge(loop)
         connection = _Connection()
-        writer = _ResponseWriter(bridge, send)
+        writer = _ResponseWriter(bridge, send, receiver.gone)
         handler: Optional[_AsgiHandler] = None
         try:
-            handler = _AsgiHandler(scope, self._server, _RequestBody(bridge, receive, connection), writer, connection)
+            handler = _AsgiHandler(scope, self._server, _RequestBody(bridge, receiver, connection), writer, connection)
             handler.run()
             writer.finish()
         except (BrokenPipeError, ConnectionResetError):
@@ -381,6 +433,7 @@ class UvicornServing:
             if self._stop_requested:
                 self._stopped.set()
                 return
+            _keep_uvicorn_trace_off()
             self._server = _Server(self._config())
         try:
             self._server.run(sockets=[self._socket])
