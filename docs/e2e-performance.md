@@ -46,7 +46,7 @@ python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile
 
 Profiled runs (and `PRKS_E2E_ROUTE_FASTPATH=1`) never write timing or last-failed history (`policy.benchmark_modes()`), because instrumented durations would poison normal sharding. On GitHub, run **PRKS Full E2E Gate** manually with the `profile` input.
 
-Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run warm-up plus ABBA trials on one runner and publish aggregate-only summaries; they never upload test data or train history: routing A/B, classic script deferral and coalescing A/B, offline Graph navigation, offline Person profile and click trace, Argument overlay, PDF annotation rollback, and flake stress.
+Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run on one runner and never train timing history. The A/B benchmarks (routing, classic script deferral) run warm-up plus ABBA trials; the profiles (offline Graph navigation, offline Person profile, Argument overlay, PDF annotation rollback) run serial repeats; the Person click trace runs once; flake stress repeats a selection. Summaries are aggregate-only, but a failing run may upload privacy-safe diagnostics.
 
 ## Diagnostics
 
@@ -59,7 +59,7 @@ Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run 
 
 Decide by coverage, never by duration. Classify each contract as KEEP, SPLIT or MOVE (`tests/e2e/AGENTS.md`). Land the faster replacement before removing the browser scenario, and never delete an E2E only because a similarly named unit test exists.
 
-Families already rationalized, with the browser boundary each keeps:
+Families already rationalized, with the browser boundary each keeps (contract-by-contract maps: `docs/e2e-coverage-maps.md`):
 
 | Family | Kept in Chromium | Moved to |
 | --- | --- | --- |
