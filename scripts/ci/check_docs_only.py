@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 
 from markdown_it import MarkdownIt
 
-from scripts.ci.docs_only import changed_documentation
+from scripts.ci.docs_only import changed_documentation, effective_base
 
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
@@ -189,7 +189,7 @@ def main() -> int:
     parser.add_argument("--base", required=True)
     args = parser.parse_args()
     root = Path.cwd()
-    docs = changed_documentation(root, args.base)
+    docs = changed_documentation(root, effective_base(root, args.base))
     if docs is None:
         print("Docs validation refused: not a verified docs-only PR")
         return 1

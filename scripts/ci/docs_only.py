@@ -11,11 +11,23 @@ repository Markdown (tests/pg, the parity modules and scripts/test-postgres
 load Python, SQL and JSON fixtures only; the migration loader takes ``*.sql``
 only), so A/M changes to any Markdown file cannot change their outcome. The
 unit/API job, which does read Markdown as fixtures, keeps the narrow default.
+
+**Stale event base.** ``pull_request.base.sha`` is the base tip when the PR
+was last updated, but GitHub builds the ``refs/pull/N/merge`` checkout on the
+current base tip. When master moved in between, ``base..HEAD`` also shows
+master's newer commits, and a Markdown-only PR ran full CI. So when HEAD is
+GitHub's merge of the PR head (two parents, the second being the event's
+``pull_request.head.sha`` from ``GITHUB_EVENT_PATH``), the diff is anchored
+to HEAD's first parent, the base the PR was actually merged onto, fetched if
+the shallow checkout lacks it. Any other shape keeps the event base. The
+Markdown validator (``check_docs_only``) resolves the same base through
+:func:`effective_base`, so it never refuses a PR this classifier approved.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -125,12 +137,64 @@ def changed_documentation(
     return tuple(paths) if paths else None
 
 
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes] | None:
+    try:
+        return subprocess.run(  # nosec B603,B607 - fixed git argv, validated SHAs
+            ["git", *args], cwd=root, capture_output=True, check=False)
+    except OSError:
+        return None
+
+
+def _event_head_sha() -> str | None:
+    """``pull_request.head.sha`` of the Actions event, or None outside a pull_request run."""
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            event = json.load(handle)
+        head = event["pull_request"]["head"]["sha"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return head if isinstance(head, str) and _SHA.fullmatch(head) else None
+
+
+def merge_base_parent(root: Path, base: str, head_sha: str | None) -> str:
+    """The base to diff against: HEAD's first parent when HEAD is GitHub's merge of ``head_sha``.
+
+    Falls back to ``base`` for any other HEAD, and when that parent cannot
+    be read or fetched.
+    """
+    if head_sha is None or not _SHA.fullmatch(head_sha):
+        return base
+    shown = _git(root, "cat-file", "-p", "HEAD")
+    if shown is None or shown.returncode:
+        return base
+    parents = [line.split()[1].decode("ascii", "replace")
+               for line in shown.stdout.splitlines() if line.startswith(b"parent ")]
+    if len(parents) != 2 or parents[1].lower() != head_sha.lower() or not _SHA.fullmatch(parents[0]):
+        return base
+    first = parents[0]
+    present = _git(root, "cat-file", "-e", f"{first}^{{commit}}")
+    if present is None or present.returncode:
+        fetched = _git(root, "fetch", "--no-tags", "--quiet", "--depth=1", "origin", first)
+        if fetched is None or fetched.returncode:
+            return base
+    return first
+
+
+def effective_base(root: Path, base: str) -> str:
+    """The base both entrypoints diff against: :func:`merge_base_parent` for the Actions event."""
+    return merge_base_parent(root, base, _event_head_sha()) if _SHA.fullmatch(base) else base
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
     parser.add_argument("--scope", choices=SCOPES, default=DEFAULT_SCOPE)
     args = parser.parse_args()
-    paths = changed_documentation(Path.cwd(), args.base, args.scope)
+    root = Path.cwd()
+    paths = changed_documentation(root, effective_base(root, args.base), args.scope)
     print("true" if paths is not None else "false")
     return 0
 
