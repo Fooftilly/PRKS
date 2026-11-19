@@ -262,9 +262,12 @@ def run(out: Path | None) -> int:
     started = time.monotonic()
     server = AppServer(seed_fn=seed_ux_tour_library, auth="session", members=(EDITOR,))
     zap_port, api_key, name = free_port(), secrets.token_hex(16), f"prks-zap-{secrets.token_hex(4)}"
-    server.start()
     container = False
     try:
+        # Inside the try: a seed failure after provisioning still drops the
+        # database and the temporary storage root (AppServer.stop is safe on
+        # a partial start).
+        server.start()
         if server.library is None:
             raise RuntimeError("the pilot server did not start")
         require_loopback(server.origin)
