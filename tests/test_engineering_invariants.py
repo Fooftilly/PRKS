@@ -1335,6 +1335,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             checker.PYRIGHT_TYPED_SLICE_SCOPES,
             (
                 "backend/storage",
+                "backend/web",
                 "backend/entity_ids.py",
                 "backend/concurrency.py",
                 "backend/research_markup.py",

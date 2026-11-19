@@ -77,7 +77,13 @@ class TrustBoundaryTests(ProcessingHttpTestCase):
 
     def test_an_untrusted_or_repeated_host_is_refused_and_changes_nothing(self) -> None:
         self.refused(self.raw("GET", "/api/works", [], host="attacker.example"), 421, "untrusted_host")
-        self.refused(self.raw("GET", "/api/works", [("Host", "evil.example")]), 400, "invalid_host")
+        repeated = self.raw("GET", "/api/works", [("Host", "evil.example")])
+        if self.transport == "uvicorn":
+            # h11 refuses a repeated Host itself, before PRKS sees the request.
+            self.assertEqual(repeated.status, 400, repeated.raw)
+            self.assertEqual(repeated.header("Content-Type"), ["text/plain; charset=utf-8"])
+        else:
+            self.refused(repeated, 400, "invalid_host")
         res = self.raw("POST", "/api/works", [JSON], self.body("Trust Rebind"), host="attacker.example",
                        origin="http://attacker.example")
         self.refused(res, 421, "untrusted_host")

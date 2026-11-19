@@ -63,6 +63,9 @@ _SENTINEL: Any = object()
 class HttpAuthTestCase(IdentityTestCase):
     """Fresh PostgreSQL identity + a PRKS server on its Library per test."""
 
+    #: The HTTP transport serve() started: "stdlib" or "uvicorn" (#1329).
+    transport = "stdlib"
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()  # skips without PRKS_TEST_DATABASE_URL
@@ -122,7 +125,12 @@ class HttpAuthTestCase(IdentityTestCase):
         module = self.server_module
         if auth is _SENTINEL:
             auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
-        httpd = module.PRKSThreadingTCPServer(("127.0.0.1", 0), module.PRKSHandler)
+        # PRKS_TEST_HTTP_TRANSPORT=uvicorn runs this suite over Uvicorn (#1329).
+        from backend.web.settings import ENV_SERVER, HttpServerSettings
+
+        http = HttpServerSettings.from_env({ENV_SERVER: os.environ.get("PRKS_TEST_HTTP_TRANSPORT", "")})
+        self.transport = http.transport
+        httpd = module.make_server(("127.0.0.1", 0), http)
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()
         httpd.prks_access_gate = module.LibraryAccessGate()

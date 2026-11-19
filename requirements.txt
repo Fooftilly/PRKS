@@ -7,3 +7,5 @@ psycopg==3.3.8
 psycopg-binary==3.3.8
 psycopg-pool==3.3.3
 argon2-cffi==25.1.0
+# Production HTTP server (#1329, docs/http-server.md).
+uvicorn==0.54.0

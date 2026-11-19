@@ -1,0 +1,415 @@
+"""Serve PRKS under Uvicorn, running today's ``PRKSHandler`` unchanged (#1329 Phase B).
+
+This is the migration shim of ``docs/http-server.md``. Uvicorn owns the
+sockets, HTTP parsing, keep-alive and slow clients on its event loop. Each
+request runs on its own daemon thread, bounded by ``PRKS_HTTP_THREADS``, where
+an :class:`_AsgiHandler` (a ``PRKSHandler`` built without a socket) runs the
+same ``do_*`` dispatch, admission, controllers and static files as the stdlib
+transport:
+
+- ``rfile`` pulls the ASGI request body chunk by chunk. A read waits at most
+  the connection's timeout (``settimeout``, which ``TimedBody`` sets for
+  uploads) or :data:`DEFAULT_BODY_IDLE_SECONDS`, then raises ``TimeoutError``.
+- ``wfile`` takes the handler's raw HTTP/1 response bytes, turns the status
+  line and headers into ``http.response.start`` and streams the rest as body
+  chunks. ``Server`` is dropped (#1306); Uvicorn adds ``Date``.
+- A client that is gone surfaces as ``BrokenPipeError``, as it did on a
+  socket.
+
+Signals stay with PRKS (``backend.jobs.embedded.SignalStop``): Uvicorn's own
+handlers are not installed. ``proxy_headers`` is off, because PRKS applies its
+own ``PRKS_TRUSTED_PROXIES`` rules to the peer address.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import http.client
+import logging
+import socket
+import threading
+import uuid
+from types import TracebackType
+from typing import Any, Awaitable, Callable, Iterator, Optional
+
+import uvicorn
+
+from backend import server as server_module
+from backend.log_safety import safe_error_type, safe_log_id
+
+LOGGER = logging.getLogger(__name__)
+
+Scope = dict[str, Any]
+Message = dict[str, Any]
+Receive = Callable[[], Awaitable[Message]]
+Send = Callable[[Message], Awaitable[None]]
+
+#: How long one body read waits for the client when the route set no timeout.
+DEFAULT_BODY_IDLE_SECONDS = 60.0
+#: How long a stop waits for requests in flight before cancelling them.
+GRACEFUL_SHUTDOWN_SECONDS = 30
+#: Seconds an idle keep-alive connection stays open.
+KEEP_ALIVE_SECONDS = 5
+#: The stdlib server's request limits, kept: header count and line length.
+MAX_HEADERS = 100
+MAX_LINE_BYTES = 65536
+
+_DROPPED_RESPONSE_HEADERS = frozenset({b"server", b"date"})
+
+
+class _Bridge:
+    """Run a coroutine on the server's event loop from a request thread."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+
+    def call(self, make: Callable[[], Awaitable[Any]], timeout: Optional[float] = None) -> Any:
+        async def run() -> Any:
+            return await make()
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(run(), self._loop)
+        except RuntimeError as exc:  # the loop has closed
+            raise BrokenPipeError("server stopped") from exc
+        try:
+            return future.result(timeout)
+        except TimeoutError:
+            future.cancel()
+            raise
+
+
+class _Connection:
+    """The socket stand-in: only the read timeout the upload routes set."""
+
+    def __init__(self) -> None:
+        self._timeout: Optional[float] = None
+
+    def settimeout(self, value: Optional[float]) -> None:
+        self._timeout = value
+
+    def gettimeout(self) -> Optional[float]:
+        return self._timeout
+
+
+class _RequestBody:
+    """The request body as the file object ``rfile`` the handler reads."""
+
+    def __init__(self, bridge: _Bridge, receive: Receive, connection: _Connection) -> None:
+        self._bridge = bridge
+        self._receive = receive
+        self._connection = connection
+        self._buffer = bytearray()
+        self._eof = False
+
+    def _fill(self) -> bool:
+        """Append one ASGI body message; False once the body has ended."""
+        if self._eof:
+            return False
+        timeout = self._connection.gettimeout()
+        message = self._bridge.call(
+            self._receive, DEFAULT_BODY_IDLE_SECONDS if timeout is None else timeout
+        )
+        if message.get("type") != "http.request":
+            self._eof = True  # http.disconnect: the client is gone
+            return False
+        self._buffer += message.get("body", b"")
+        if not message.get("more_body", False):
+            self._eof = True
+        return True
+
+    def _take(self, size: int) -> bytes:
+        chunk = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        return chunk
+
+    def read(self, size: Optional[int] = -1) -> bytes:
+        if size is None or size < 0:
+            while self._fill():
+                pass
+            return self._take(len(self._buffer))
+        while len(self._buffer) < size and self._fill():
+            pass
+        return self._take(size)
+
+    def read1(self, size: int = -1) -> bytes:
+        while not self._buffer and self._fill():
+            pass
+        return self._take(len(self._buffer) if size is None or size < 0 else size)
+
+    def readline(self, size: int = -1) -> bytes:
+        while b"\n" not in self._buffer and self._fill():
+            pass
+        end = self._buffer.find(b"\n")
+        length = len(self._buffer) if end < 0 else end + 1
+        if size is not None and size >= 0:
+            length = min(length, size)
+        return self._take(length)
+
+
+class _ResponseWriter:
+    """``wfile``: the handler's raw HTTP/1 response, sent as ASGI messages."""
+
+    def __init__(self, bridge: _Bridge, send: Send) -> None:
+        self._bridge = bridge
+        self._send_message = send
+        self._head = bytearray()
+        self.started = False
+
+    def write(self, data: bytes | bytearray | memoryview) -> int:
+        chunk = bytes(data)
+        if self.started:
+            if chunk:
+                self._body(chunk, more=True)
+            return len(chunk)
+        self._head += chunk
+        end = self._head.find(b"\r\n\r\n")
+        if end >= 0:
+            head = bytes(self._head[:end])
+            rest = bytes(self._head[end + 4:])
+            self._head.clear()
+            self._start(head)
+            if rest:
+                self._body(rest, more=True)
+        return len(chunk)
+
+    def flush(self) -> None:
+        pass
+
+    def finish(self) -> None:
+        """End the body. Without a response, Uvicorn answers 500 itself."""
+        if self.started:
+            self._body(b"", more=False)
+
+    def _start(self, head: bytes) -> None:
+        lines = head.split(b"\r\n")
+        status = int(lines[0].split(b" ", 2)[1])
+        headers: list[tuple[bytes, bytes]] = []
+        for line in lines[1:]:
+            name, _, value = line.partition(b":")
+            key = name.strip().lower()
+            if key and key not in _DROPPED_RESPONSE_HEADERS:
+                headers.append((key, value.strip()))
+        self._send({"type": "http.response.start", "status": status, "headers": headers})
+        self.started = True
+
+    def _body(self, data: bytes, *, more: bool) -> None:
+        self._send({"type": "http.response.body", "body": data, "more_body": more})
+
+    def _send(self, message: Message) -> None:
+        try:
+            self._bridge.call(lambda: self._send_message(message))
+        except OSError as exc:  # uvicorn's ClientDisconnected is an OSError
+            raise BrokenPipeError("client disconnected") from exc
+
+
+def _headers(scope: Scope) -> http.client.HTTPMessage:
+    message = http.client.HTTPMessage()
+    for name, value in scope.get("headers", []):
+        message[name.decode("latin-1")] = value.decode("latin-1")
+    return message
+
+
+def _target(scope: Scope) -> str:
+    raw = scope.get("raw_path") or scope.get("path", "/").encode("utf-8")
+    target = raw.decode("latin-1")
+    query = scope.get("query_string", b"")
+    return f"{target}?{query.decode('latin-1')}" if query else target
+
+
+class _AsgiHandler(server_module.PRKSHandler):
+    """A ``PRKSHandler`` for one ASGI request: same dispatch, no socket."""
+
+    def __init__(  # pylint: disable=super-init-not-called
+        self,
+        scope: Scope,
+        server: "UvicornServing",
+        rfile: _RequestBody,
+        wfile: _ResponseWriter,
+        connection: _Connection,
+    ) -> None:
+        # Deliberately not BaseRequestHandler.__init__: it would read a socket.
+        self._prks_request_id = uuid.uuid4().hex[:12]
+        self.directory = server_module.frontend_dir
+        self.server = server  # type: ignore[assignment]
+        client = scope.get("client") or ("", 0)
+        self.client_address = (str(client[0]), int(client[1]))
+        self.command = str(scope.get("method", "GET")).upper()
+        self.path = _target(scope)
+        self.request_version = f"HTTP/{scope.get('http_version', '1.1')}"
+        self.requestline = f"{self.command} {self.path} {self.request_version}"
+        self.raw_requestline = self.requestline.encode("latin-1", "replace") + b"\r\n"
+        self.close_connection = True
+        self.headers = _headers(scope)
+        self.rfile = rfile  # type: ignore[assignment]
+        self.wfile = wfile  # type: ignore[assignment]
+        self.connection = connection  # type: ignore[assignment]
+        self.request = connection  # type: ignore[assignment]
+        self._prks_unread_body = False
+
+    def run(self) -> None:
+        """What ``handle_one_request`` does after the stdlib parsed the request."""
+        try:
+            if len(self.headers) > MAX_HEADERS or any(
+                len(name) + len(value) + 4 > MAX_LINE_BYTES for name, value in self.headers.items()
+            ):
+                self.send_error(431, "Request header fields too large")
+                return
+            if len(self.raw_requestline) > MAX_LINE_BYTES:
+                self.send_error(414, "Request-URI Too Long")
+                return
+            if not self._prks_after_parse():
+                return
+            method = getattr(self, "do_" + self.command, None)
+            if method is None:
+                self.send_error(501, "Unsupported method")
+                return
+            method()
+        finally:
+            self._prks_finish_request()
+
+
+class PrksAsgiApp:
+    """The ASGI application: one bounded thread per request."""
+
+    def __init__(self, server: "UvicornServing", threads: int) -> None:
+        self._server = server
+        self._threads = threads
+        self._slots: Optional[asyncio.Semaphore] = None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            return  # lifespan is off; no WebSocket routes
+        if self._slots is None:
+            self._slots = asyncio.Semaphore(self._threads)
+        loop = asyncio.get_running_loop()
+        async with self._slots:
+            done: asyncio.Future[None] = loop.create_future()
+            thread = threading.Thread(
+                target=self._run,
+                args=(loop, done, scope, receive, send),
+                name="prks-http",
+                daemon=True,
+            )
+            thread.start()
+            await done
+
+    def _run(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        done: "asyncio.Future[None]",
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        bridge = _Bridge(loop)
+        connection = _Connection()
+        writer = _ResponseWriter(bridge, send)
+        handler: Optional[_AsgiHandler] = None
+        try:
+            handler = _AsgiHandler(scope, self._server, _RequestBody(bridge, receive, connection), writer, connection)
+            handler.run()
+            writer.finish()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:  # the stdlib server printed these and closed
+            LOGGER.error(
+                "http_request_failed error_type=%s request_id=%s",
+                safe_error_type(exc),
+                safe_log_id(handler._prks_request_id if handler is not None else ""),
+            )
+        finally:
+            with contextlib.suppress(RuntimeError):  # the loop has closed
+                loop.call_soon_threadsafe(_resolve, done)
+
+
+def _resolve(done: "asyncio.Future[None]") -> None:
+    if not done.done():
+        done.set_result(None)
+
+
+class _Server(uvicorn.Server):
+    @contextlib.contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        # PRKS's SignalStop owns SIGTERM/SIGINT and calls shutdown().
+        yield
+
+
+class UvicornServing:
+    """``backend.jobs.embedded.Serving`` over Uvicorn, with the ``prks_*`` attributes.
+
+    The listening socket is bound here, so a bind failure surfaces before
+    serving, as ``TCPServer`` did, and ``server_address`` is known at once.
+    """
+
+    prks_bind_host: str
+    prks_trusted_hosts: frozenset[str]
+    prks_access_gate: Any
+    prks_auth: Any
+    prks_jobs: Any
+    prks_readiness: Any
+
+    def __init__(self, address: tuple[str, int], *, threads: int) -> None:
+        self._socket = socket.create_server(address, family=socket.AF_INET, backlog=128)
+        self.server_address: tuple[str, int] = self._socket.getsockname()[:2]
+        self._threads = threads
+        self._server: Optional[_Server] = None
+        self._lock = threading.Lock()
+        self._stop_requested = False
+        self._stopped = threading.Event()
+        self._closed = False
+
+    def _config(self) -> uvicorn.Config:
+        return uvicorn.Config(
+            PrksAsgiApp(self, self._threads),
+            http="h11",
+            loop="asyncio",
+            ws="none",
+            lifespan="off",
+            interface="asgi3",
+            log_config=None,
+            access_log=False,
+            proxy_headers=False,
+            server_header=False,
+            date_header=True,
+            timeout_keep_alive=KEEP_ALIVE_SECONDS,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
+        )
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:  # noqa: ARG002 - Serving protocol
+        with self._lock:
+            if self._stop_requested:
+                self._stopped.set()
+                return
+            self._server = _Server(self._config())
+        try:
+            self._server.run(sockets=[self._socket])
+        finally:
+            self._stopped.set()
+
+    def shutdown(self) -> None:
+        """Stop serving and wait until :meth:`serve_forever` has returned."""
+        with self._lock:
+            self._stop_requested = True
+            server = self._server
+        if server is None:
+            return
+        server.should_exit = True
+        self._stopped.wait()
+
+    def server_close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            with contextlib.suppress(OSError):
+                self._socket.close()
+
+    def __enter__(self) -> "UvicornServing":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        self.server_close()

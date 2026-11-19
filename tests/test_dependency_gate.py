@@ -1323,14 +1323,16 @@ class RepoGateLiveTests(unittest.TestCase):
         self.assertIn("Pillow==", static_install)
         self.assertIn("PyMuPDF==", static_install)
         self.assertIn("pydantic==", static_install)
-        self.assertEqual(static_install.count("requirements.txt"), 6)
+        self.assertIn("uvicorn==", static_install)
+        self.assertEqual(static_install.count("requirements.txt"), 7)
         # Every validated pin group must actually reach pip.
         pip_line = next(
             line for line in static_install.splitlines()
             if "python -m pip install" in line
         )
         for group in (
-            "pg_pins", "argon_pins", "pillow_pins", "pymupdf_pins", "pydantic_pins", "script_pins",
+            "pg_pins", "argon_pins", "pillow_pins", "pymupdf_pins", "pydantic_pins", "uvicorn_pins",
+            "script_pins",
         ):
             self.assertIn(f'"${{{group}[@]}}"', pip_line)
         # scripts/ (#1269) and tests/ (#1273) are in the typed slice: only

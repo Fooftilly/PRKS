@@ -36,6 +36,7 @@ PYRIGHT_TYPED_SLICE_CONFIG = "pyrightconfig.typed-slice.json"
 # ignore/exclude suppression. Expand only in focused follow-up PRs.
 PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/storage",
+    "backend/web",
     "backend/entity_ids.py",
     "backend/concurrency.py",
     "backend/research_markup.py",
