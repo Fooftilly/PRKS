@@ -199,13 +199,13 @@ jobs:
        needs.docs-only-plan.outputs.docs_only != 'true')
     permissions:
       contents: read
-    name: PostgreSQL helpers (${{ matrix.shard }}/2)
+    name: PostgreSQL helpers (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
 
     # Disposable PostgreSQL 18 with the builtin locale (docs/postgresql-architecture.md
     # §13.1). The harness only uses its `postgres` maintenance database to create
@@ -245,14 +245,14 @@ jobs:
       - name: Run PostgreSQL helper and harness tests
         env:
           PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
-          PRKS_PG_SHARD: ${{ matrix.shard }}/2
+          PRKS_PG_SHARD: ${{ matrix.shard }}/4
         # Keep the existing command allowlist exact. The approved wrapper
         # enumerates all modules and fail-closed partitions by PRKS_PG_SHARD.
         run: scripts/test-postgres
 
   postgres-helpers:
     # Keep the existing required check name. Verified docs-only PRs intentionally
-    # skip both shards and still publish this required gate; all other changes
+    # skip every shard and still publish this required gate; all other changes
     # require the full shard group to succeed. A missing/failed plan fails closed.
     if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}
     needs: [docs-only-plan, postgres-helpers-shards]
