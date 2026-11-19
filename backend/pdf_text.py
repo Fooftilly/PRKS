@@ -161,7 +161,7 @@ def extract_pdf_bounded(
 
 
 def same_pages_bounded(first_path: str, second_path: str, timeout: float) -> bool:
-    """Whether both PDFs show the same pages: count, size, text, rendered pixels, links, annotations (#1322).
+    """Whether both PDFs show the same content (:func:`_pdf_fingerprint`, #1322).
 
     Runs in a child process killed after ``timeout`` seconds; a timeout, a
     crash, a missing PyMuPDF or an unreadable file all answer False.
@@ -171,11 +171,21 @@ def same_pages_bounded(first_path: str, second_path: str, timeout: float) -> boo
     return outcome == "ok" and result.get("same") is True
 
 
-def _page_fingerprints(pdf_path: str) -> List[Dict[str, Any]]:
-    """What a reader sees on each page: its size, text, rendered pixels, links and annotations.
+# The semantic properties of a form field (PyMuPDF Widget), not its object number.
+_WIDGET_FIELDS = ("field_name", "field_type", "field_value", "field_flags", "field_label", "choice_values")
 
-    Text alone misses images, vector drawings and scans (#1333 review), so
-    each page is also rendered at 72 dpi and its pixels hashed.
+
+def _stable(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _pdf_fingerprint(pdf_path: str) -> Dict[str, Any]:
+    """What a reader sees and uses in a PDF, without PDF object numbers (a repair may renumber them).
+
+    Per page: size, text, pixels rendered at 72 dpi (text alone misses
+    images, drawings and scans), links, annotations and form widgets (blank
+    fields render nothing and ``annots()`` skips them). Per document: the
+    outline, page labels and embedded files.
     """
     import hashlib
 
@@ -190,14 +200,20 @@ def _page_fingerprints(pdf_path: str) -> List[Dict[str, Any]]:
                 "rect": str(page.rect),
                 "text": raw if isinstance(raw, str) else "",
                 "pixels": hashlib.sha256(pixmap.samples).hexdigest(),
-                # A link's xref/id name its PDF object, which a repair may renumber.
-                "links": sorted(json.dumps({k: str(v) for k, v in link.items() if k not in ("xref", "id")},
-                                           sort_keys=True)
+                "links": sorted(_stable({k: v for k, v in link.items() if k not in ("xref", "id")})
                                 for link in page.get_links()),
-                "annots": sorted(json.dumps([str(annot.type), str(annot.rect), annot.info.get("content", "")])
+                "annots": sorted(_stable([annot.type, str(annot.rect), annot.flags, annot.info.get("content", "")])
                                  for annot in page.annots()),
+                "widgets": sorted(_stable([str(widget.rect)] + [getattr(widget, name, None) for name in _WIDGET_FIELDS])
+                                  for widget in page.widgets()),
             })
-    return pages
+        embedded = sorted(_stable([name, doc.embfile_info(name).get("size")]) for name in doc.embfile_names())
+        return {
+            "pages": pages,
+            "outline": _stable(doc.get_toc(simple=True)),
+            "page_labels": _stable(doc.get_page_labels()),
+            "embedded": embedded,
+        }
 
 
 def _child_main(argv: List[str]) -> int:
@@ -209,7 +225,7 @@ def _child_main(argv: List[str]) -> int:
     result: Dict[str, Any]
     if argv[0] == "compare":
         try:
-            result = {"same": _page_fingerprints(argv[1]) == _page_fingerprints(argv[2])}
+            result = {"same": _pdf_fingerprint(argv[1]) == _pdf_fingerprint(argv[2])}
         except Exception as exc:
             result = {"same": False, "error": safe_error_type(exc)}
     else:

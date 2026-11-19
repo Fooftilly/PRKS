@@ -16,8 +16,10 @@ _MISSING_QPDF_WARNED = False
 QPDF_TIMEOUT_SECONDS = 120
 # qpdf exits 3 when it finished with warnings, usually after repairing a
 # damaged file (#1322). Its copy is used only when PyMuPDF shows the same
-# pages (count, size, text, rendered pixels, links, annotations) as the source; the comparison runs
-# in a child process killed after this many seconds, which keeps the source.
+# content as the source (backend.pdf_text._pdf_fingerprint: pages, text,
+# rendered pixels, links, annotations, form fields, outline, page labels,
+# attachments); the comparison runs in a child process killed after this
+# many seconds, which keeps the source.
 QPDF_WARNINGS_EXIT = 3
 REPAIRED_CHECK_SECONDS = 30.0
 
@@ -124,8 +126,8 @@ def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tupl
     ``ok-repaired``. A timed-out qpdf is killed after
     ``QPDF_TIMEOUT_SECONDS``; its partial output is scratch the caller
     discards. A qpdf that exits 3 (warnings) gives ``ok-repaired`` when its
-    copy shows the source's pages unchanged (text, rendered pixels, links and
-    annotations), else ``qpdf-warnings``.
+    copy shows the source's content unchanged (``same_pages_bounded``), else
+    ``qpdf-warnings``.
     """
     with perf_span("pdf_linearize"):
         ctx = safe_log_label(context, fallback="unknown")

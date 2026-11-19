@@ -126,7 +126,8 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
         self.assertFalse(same_pages_bounded(source, self.write("bad.pdf", b"%PDF-1.4 junk"), 30))
 
     def drawn(self, name: str, *, drawing: bool = False, image: bool = False,
-              annot: bool = False, link: bool = False, shift_objects: int = 0) -> str:
+              annot: bool = False, link: bool = False, field: bool = False,
+              outline: bool = False, attachment: bool = False, shift_objects: int = 0) -> str:
         """One page with the same text; optionally a red drawing, an image, a note or a link."""
         import pymupdf
 
@@ -146,6 +147,18 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
         if link:
             page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(72, 60, 200, 80),
                               "uri": "https://example.invalid/"})
+        if field:
+            # A blank, borderless field: it renders nothing and has no text.
+            widget = pymupdf.Widget()
+            for attribute, value in (("field_name", "approval"),
+                                     ("field_type", getattr(pymupdf, "PDF_WIDGET_TYPE_TEXT")),
+                                     ("rect", pymupdf.Rect(300, 600, 500, 620)), ("border_width", 0)):
+                setattr(widget, attribute, value)
+            page.add_widget(widget)
+        if outline:
+            doc.set_toc([[1, "Chapter", 1]])
+        if attachment:
+            doc.embfile_add("data.csv", b"a,b\n1,2\n")
         path = self.write(name, doc.tobytes())
         doc.close()
         return path
@@ -153,7 +166,7 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
     def test_equal_text_with_lost_visual_content_is_not_the_same_page(self) -> None:
         bare = self.drawn("bare.pdf")
         self.assertTrue(same_pages_bounded(bare, self.drawn("bare-again.pdf"), 30))
-        for lost in ("drawing", "image", "annot", "link"):
+        for lost in ("drawing", "image", "annot", "link", "field", "outline", "attachment"):
             with self.subTest(lost=lost):
                 full = self.drawn(f"{lost}.pdf", **{lost: True})
                 self.assertEqual(pdf_text.extract_pdf(full).text.strip(), "same words")
@@ -173,7 +186,8 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("qpdf"), "qpdf is not installed")
     def test_a_real_qpdf_linearization_of_links_and_notes_is_the_same_page(self) -> None:
-        source = self.drawn("rich.pdf", drawing=True, image=True, annot=True, link=True)
+        source = self.drawn("rich.pdf", drawing=True, image=True, annot=True, link=True, field=True,
+                            outline=True, attachment=True)
         copy = source + ".lin"
         subprocess.run(["qpdf", "--linearize", source, copy], check=True)  # nosec B603 B607 - fixture
         self.assertTrue(same_pages_bounded(source, copy, 30))
