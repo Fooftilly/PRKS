@@ -2,9 +2,8 @@
 /**
  * The Save View / Edit Saved View dialog body (#1036).
  *
- * Temporary adapter: `CreateFormsHost` teleports this body into the classic
- * `#saved-view-modal` shell, and the title into its heading, until ModalHost
- * mounts feature forms. The openers (`prksOpenSavedViewModal` and the Search
+ * ModalHost renders it as the body of the `#saved-view-modal` ModalDialog,
+ * whose heading reads the exposed `title`. The openers (`prksOpenSavedViewModal` and the Search
  * and current-view variants) are installed while this form is mounted.
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
@@ -162,11 +161,10 @@ onBeforeUnmount(() => {
   }
 })
 
-defineExpose({ open: openWith, focusInitial })
+defineExpose({ open: openWith, focusInitial, title })
 </script>
 
 <template>
-  <Teleport to="#saved-view-modal-title">{{ title }}</Teleport>
   <div class="form-pane">
     <p id="saved-view-modal-helper" class="modal-helper">{{ helper }}</p>
     <p

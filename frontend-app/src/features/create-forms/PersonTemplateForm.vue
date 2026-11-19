@@ -2,9 +2,8 @@
 /**
  * The Edit Profile Using Template dialog body (#1036).
  *
- * Temporary adapter: `CreateFormsHost` teleports this body into the classic
- * `#person-template-modal` shell until ModalHost mounts feature forms. The
- * opener (`openPersonProfileTemplateModal`, the Person sidebar's "Edit using
+ * ModalHost renders it as the body of the `#person-template-modal`
+ * ModalDialog. The opener (`openPersonProfileTemplateModal`, the Person sidebar's "Edit using
  * template") is installed while this form is mounted. Apply opens the
  * focused person's profile editor and fills it; the editor's Save is the
  * only write, so this dialog has no unsaved-changes confirm.

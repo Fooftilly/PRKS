@@ -76,7 +76,8 @@ class FrontendCommandPaletteTests(unittest.TestCase):
         self.assertIn("modalId: 'group-modal'", actions)
         self.assertIn('id="prks-mobile-nav-btn"', ribbon)
         self.assertIn('id="prks-mobile-details-btn"', ribbon)
-        self.assertIn('id="role-modal"', html)
+        self.assertIn('<ModalDialog id="role-modal" title="Link Person to Work">', _read(os.path.join(
+            _PROJECT_DIR, "frontend-app", "src", "features", "create-forms", "CreateFormsHost.vue")))
         self.assertIn("work-link-person-btn", _read(os.path.join(_FRONTEND, "js", "ui.js")))
         self.assertIn('src="/js/command-palette.js"', html)
 

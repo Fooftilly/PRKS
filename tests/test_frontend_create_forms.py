@@ -10,18 +10,37 @@ FORMS = ROOT / "frontend-app" / "src" / "features" / "create-forms"
 
 
 class CreateFormVueContractTests(unittest.TestCase):
-    def test_shells_stay_and_bodies_leave_index_html(self):
+    DIALOGS = (
+        ("work-modal", "New File"),
+        ("folder-modal", "Add New Folder"),
+        ("playlist-modal", "New playlist"),
+        ("saved-view-modal", ":title"),
+        ("group-modal", "New people group"),
+        ("person-modal", "Add New Person"),
+        ("person-template-modal", "Edit Profile Using Template"),
+        ("role-modal", "Link Person to Work"),
+    )
+
+    def test_modal_host_renders_the_dialog_shells(self):
+        """No create-form shell or teleport mount is left in index.html (#1036)."""
         index = INDEX.read_text(encoding="utf-8")
-        for modal_id, mount_id in (
-            ("folder-modal", "folder-modal-vue"),
-            ("person-modal", "person-modal-vue"),
-            ("group-modal", "group-modal-vue"),
-            ("playlist-modal", "playlist-modal-vue"),
-            ("work-modal", "work-modal-vue"),
-            ("work-modal", "work-modal-footer-vue"),
-        ):
-            self.assertIn(f'id="{modal_id}"', index)
-            self.assertIn(f'id="{mount_id}"', index)
+        host = (FORMS / "CreateFormsHost.vue").read_text(encoding="utf-8")
+        self.assertNotIn("<Teleport", host)
+        for modal_id, title in self.DIALOGS:
+            self.assertNotIn(f'id="{modal_id}"', index, modal_id)
+            self.assertNotIn(f'id="{modal_id}-vue"', index, modal_id)
+            self.assertIn(f'<ModalDialog id="{modal_id}"', host.replace("<ModalDialog\n    id=", "<ModalDialog id="), modal_id)
+            self.assertIn(title, host, modal_id)
+        self.assertNotIn("-modal-vue", index)
+        self.assertNotIn("work-modal-footer-vue", index)
+        # Settings keeps its classic shell.
+        self.assertIn('id="settings-modal"', index)
+        app = (ROOT / "frontend-app" / "src" / "App.vue").read_text(encoding="utf-8")
+        self.assertIn("<ModalHost>\n    <CreateFormsHost />\n  </ModalHost>", app)
+        modal_host = (ROOT / "frontend-app" / "src" / "modal" / "ModalHost.vue").read_text(encoding="utf-8")
+        self.assertIn("<slot />", modal_host)
+        for name in ("ownsDialog", "showDialog", "restoreDialog", "hideDialogs", "setDialogInert"):
+            self.assertIn(name, modal_host, name)
         self.assertNotIn('id="folder-title"', index)
         self.assertNotIn('id="save-folder-btn"', index)
         self.assertNotIn('id="person-fname"', index)
@@ -32,7 +51,6 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertNotIn('id="save-playlist-btn"', index)
         self.assertNotIn('id="work-title"', index)
         self.assertNotIn('id="save-work-btn"', index)
-        self.assertIn('id="saved-view-modal"', index)
 
     def test_vue_owns_the_fields_and_the_durable_writers(self):
         folder = (FORMS / "FolderCreateForm.vue").read_text(encoding="utf-8")
@@ -82,7 +100,7 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("pendingAttach()", playlist_save)
         self.assertIn("clearPendingIfSame", playlist_save)
         self.assertIn("prksOpenGeneration", playlist_save)
-        self.assertIn("Retire the teleport", host)
+        self.assertIn("ModalHost renders this inside its own layer", host)
         self.assertNotIn("POST /api/", submit)
         self.assertNotIn("POST /api/", playlist_save)
 
@@ -90,16 +108,26 @@ class CreateFormVueContractTests(unittest.TestCase):
         """#603/#589, #373 and #467: the shell hands each moment to the Vue forms."""
         ui = UI.read_text(encoding="utf-8")
         open_modal = ui[ui.index("function openModal(id, options) {") : ui.index("// —— In-app help hints")]
-        # Focus moves into the first field once the dialog is shown.
+        # The host shows its dialog as a new opening before anything else
+        # reads it, and focus moves into the first field after that.
         self.assertLess(
-            open_modal.index("modalEl.classList.remove('hidden');"),
+            open_modal.index("openGeneration = dialogHost.showDialog(id);"),
+            open_modal.index("const isCurrentOpening"),
+        )
+        self.assertLess(
+            open_modal.index("openGeneration = dialogHost.showDialog(id);"),
             open_modal.index("window.prksCreateForms.focusInitial(id);"),
         )
         self.assertIn("window.prksCreateForms.owns(id)", open_modal)
+        # Before the host mounts there is no dialog: no backdrop over nothing.
+        self.assertLess(
+            open_modal.index("if (!modalEl) return;"),
+            open_modal.index("document.getElementById('modal-backdrop').classList.remove('hidden');"),
+        )
         close = ui[ui.index("function closeModals() {") :]
         close = close[: close.index("\n}\n")]
         self.assertLess(
-            close.index("document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));"),
+            close.index("prksHideAllModalShells();"),
             close.index("window.prksCreateForms.resetClosed();"),
         )
         inner = ui[ui.index("function prksDismissModalInnerEscapeLayer() {") :]
@@ -140,8 +168,8 @@ class CreateFormVueContractTests(unittest.TestCase):
     def test_person_template_body_is_vue(self):
         """Edit Profile Using Template is the Vue form's (#1036)."""
         index = INDEX.read_text(encoding="utf-8")
-        shell = index[index.index('<div id="person-template-modal"') : index.index('<div id="role-modal"')]
-        self.assertIn('id="person-template-modal-vue"', shell)
+        shell = index
+        self.assertNotIn('id="person-template-modal"', index)
         for gone in (
             "applyPersonProfileTemplateFromModal",
             "insertPersonProfileTemplateFromCurrentData",
@@ -177,7 +205,7 @@ class CreateFormVueContractTests(unittest.TestCase):
             self.assertNotIn(banned, form, banned)
             self.assertNotIn(banned, template, banned)
         host = (FORMS / "CreateFormsHost.vue").read_text(encoding="utf-8")
-        self.assertIn('<Teleport to="#person-template-modal-vue">', host)
+        self.assertIn('<ModalDialog id="person-template-modal" title="Edit Profile Using Template">', host)
         ui = UI.read_text(encoding="utf-8")
         confirm = ui[ui.index("const PRKS_MODAL_UNSAVED_CONFIRM_IDS") : ui.index("]);", ui.index("const PRKS_MODAL_UNSAVED_CONFIRM_IDS"))]
         self.assertNotIn("person-template-modal", confirm)

@@ -37,4 +37,14 @@ export interface PrksModalHostApi {
   isConfirmOpen: () => boolean
   isUnsavedConfirmOpen: () => boolean
   handleEscape: (event: KeyboardEvent) => void
+  /** True for a feature dialog this host renders (#1036). */
+  ownsDialog: (id: string) => boolean
+  /** Shows one owned dialog as a new opening; returns its generation. */
+  showDialog: (id: string) => number
+  /** Shows an owned dialog again without starting a new opening. */
+  restoreDialog: (id: string) => void
+  /** Hides every owned dialog. */
+  hideDialogs: () => void
+  /** Keeps an owned dialog inert while its opening prepares. */
+  setDialogInert: (id: string, on: boolean) => void
 }

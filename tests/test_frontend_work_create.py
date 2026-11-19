@@ -15,10 +15,18 @@ _INDEX = os.path.join(_FRONTEND, "index.html")
 _CREATE_FORMS = os.path.join(_PROJECT_DIR, "frontend-app", "src", "features", "create-forms")
 _NEW_FILE_FORM = os.path.join(_CREATE_FORMS, "NewFileForm.vue")
 _NEW_FILE_DIR = os.path.join(_CREATE_FORMS, "new-file")
-_WORK_MODAL_MOUNT = '<div id="work-modal-vue" class="modal-body modal-body--scroll"></div>'
-_WORK_FOOTER_MOUNT = '<div id="work-modal-footer-vue" class="modal-footer modal-footer--sticky prks-form-actions"></div>'
-_FOOTER_TELEPORT = '<Teleport to="#work-modal-footer-vue">'
-
+_MODAL_DIALOG = os.path.join(_PROJECT_DIR, "frontend-app", "src", "modal", "ModalDialog.vue")
+_CREATE_HOST = os.path.join(_CREATE_FORMS, "CreateFormsHost.vue")
+_FOOTER_TELEPORT = '<Teleport defer to="#work-modal-footer">'
+_WORK_DIALOG = """<ModalDialog
+    id="work-modal"
+    title="New File"
+    dialog-class="modal-wide modal--create-file"
+    body-class="modal-body--scroll"
+    with-footer
+  >
+    <NewFileForm ref="newFileRef" />
+  </ModalDialog>"""
 
 def _nf(name: str) -> str:
     """A New File module under create-forms/new-file."""
@@ -32,26 +40,29 @@ def _template(source: str) -> str:
 def _work_modal():
     """The New File dialog as the page renders it.
 
-    The shell and header stay in index.html; the Vue form teleports its body
-    into ``#work-modal-vue`` and its footer into ``#work-modal-footer-vue``
-    (#1036). Splice the section components into the form and both into the
-    shell, so order checks (essentials before disclosures, body before
-    footer) still hold.
+    ModalHost renders it as a ModalDialog (#1036): the form is the dialog
+    body and portals its footer into the dialog's ``#work-modal-footer``.
+    Splice the section components into the form and the form into the
+    dialog template, so order checks (essentials before disclosures, body
+    before footer) still hold.
     """
-    html = _read(_INDEX)
-    shell = html.split('id="work-modal"', 1)[1].split('id="folder-modal"', 1)[0]
-    for mount in (_WORK_MODAL_MOUNT, _WORK_FOOTER_MOUNT):
-        if mount not in shell:
-            raise AssertionError("New File shell lost a Vue mount: " + mount)
+    host = _read(_CREATE_HOST)
+    if _WORK_DIALOG not in host:
+        raise AssertionError("New File is no longer a ModalDialog with a scrolling body and footer")
+    dialog = _template(_read(_MODAL_DIALOG))
     form = _template(_read(_NEW_FILE_FORM))
     for name in ("NewFileSource", "NewFileFolder", "NewFilePeople", "NewFilePlaylist", "NewFileTags"):
         tag = must_search(r"<%s\b[^>]*/>" % name, form).group(0)
         form = form.replace(tag, _template(_nf(name + ".vue")))
     body, footer = form.split(_FOOTER_TELEPORT, 1)
     footer = footer.rsplit("</Teleport>", 1)[0]
-    shell = shell.replace(_WORK_MODAL_MOUNT, _WORK_MODAL_MOUNT[:-6] + body + "</div>")
-    return shell.replace(_WORK_FOOTER_MOUNT, _WORK_FOOTER_MOUNT[:-6] + footer + "</div>")
-
+    if "<slot />" not in dialog or 'class="modal-footer modal-footer--sticky prks-form-actions"\n    ></div>' not in dialog:
+        raise AssertionError("ModalDialog lost its body slot or footer")
+    dialog = dialog.replace("<slot />", body)
+    return dialog.replace(
+        'class="modal-footer modal-footer--sticky prks-form-actions"\n    ></div>',
+        'class="modal-footer modal-footer--sticky prks-form-actions"\n    >' + footer + "</div>",
+    )
 
 _UI = os.path.join(_FRONTEND, "js", "ui.js")
 _APP = os.path.join(_FRONTEND, "js", "app.js")

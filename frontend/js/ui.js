@@ -103,6 +103,32 @@ function prksScheduleModalBaselineCapture(modalId) {
     });
 }
 
+// The create-form dialogs are rendered by the Vue modal host (#1036). It owns
+// which one is open, each opening's generation and its inert state; the
+// dialog root reflects them as `hidden`, `data-prks-open-generation` and
+// `inert`, so the readers below still query the DOM.
+function prksDialogHostFor(id) {
+    const host = window.prksModalHost;
+    return host && typeof host.ownsDialog === 'function' && host.ownsDialog(String(id || '')) ? host : null;
+}
+
+function prksHideAllModalShells() {
+    document.querySelectorAll('.modal:not([data-prks-dialog])').forEach(m => m.classList.add('hidden'));
+    const host = window.prksModalHost;
+    if (host && typeof host.hideDialogs === 'function') host.hideDialogs();
+}
+
+function prksSetModalInert(modalEl, id, on) {
+    const host = prksDialogHostFor(id);
+    if (host) {
+        host.setDialogInert(id, on);
+    } else if (on) {
+        modalEl.setAttribute('inert', '');
+    } else {
+        modalEl.removeAttribute('inert');
+    }
+}
+
 function prksGetActiveModalId() {
     const modal = document.querySelector('.modal:not(.hidden)');
     return modal ? modal.id : '';
@@ -116,8 +142,8 @@ function prksModalHasUnsavedChanges(modalId) {
     if (!modalId || !prksModalNeedsUnsavedConfirm(modalId)) return false;
     // The Vue create forms report dirty through prksCreateForms (New File
     // and the role linker by a snapshot against the baseline taken once the
-    // opening is prepared). The store below remains for the shells it does
-    // not own. Retire this branch when those shells move into ModalHost (#1036).
+    // opening is prepared). The store below remains for the classic shells
+    // (#1036).
     const forms = window.prksCreateForms;
     if (forms && typeof forms.owns === 'function' && forms.owns(modalId)) {
         return forms.isDirty(modalId) === true;
@@ -512,6 +538,11 @@ function openModal(id, options) {
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
+    // The create-form dialogs exist once the Vue modal host has mounted
+    // (#1036). Before that there is nothing to show, so the opening is a
+    // no-op rather than a backdrop over no dialog.
+    const modalEl = document.getElementById(id);
+    if (!modalEl) return;
     prksHideModalUnsavedConfirm({ restoreFocus: false });
     const backdrop = document.getElementById('modal-backdrop');
     if (backdrop && backdrop.classList.contains('hidden')) {
@@ -522,9 +553,18 @@ function openModal(id, options) {
         window.__prksModalFocusRestore = ae && ae !== document.body ? ae : window.__prksModalFocusRestore;
     }
     document.getElementById('modal-backdrop').classList.remove('hidden');
-    document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
-    const modalEl = document.getElementById(id);
-    modalEl.classList.remove('hidden');
+    prksHideAllModalShells();
+    // A close-and-reopen can settle an older init after the new one is visible.
+    // That callback must not drop inert or capture the newer form as pristine.
+    let openGeneration;
+    const dialogHost = prksDialogHostFor(id);
+    if (dialogHost) {
+        openGeneration = dialogHost.showDialog(id);
+    } else {
+        modalEl.classList.remove('hidden');
+        openGeneration = (Number(modalEl.dataset.prksOpenGeneration) || 0) + 1;
+        modalEl.dataset.prksOpenGeneration = String(openGeneration);
+    }
     if (id === 'folder-modal') {
         // A dismissed save may still be awaiting its durable create. The new
         // opening owns this same button, not the old opening's busy snapshot.
@@ -536,21 +576,17 @@ function openModal(id, options) {
     }
 
     let deferBaseline = false;
-    // A close-and-reopen can settle an older init after the new one is visible.
-    // That callback must not drop inert or capture the newer form as pristine.
-    const openGeneration = (Number(modalEl.dataset.prksOpenGeneration) || 0) + 1;
-    modalEl.dataset.prksOpenGeneration = String(openGeneration);
     const isCurrentOpening = () =>
         modalEl.dataset.prksOpenGeneration === String(openGeneration)
         && !modalEl.classList.contains('hidden');
     if (id === 'role-modal') {
         prksCaptureRoleModalOrigin(openGeneration);
         deferBaseline = true;
-        modalEl.setAttribute('inert', '');
+        prksSetModalInert(modalEl, id, true);
         const finishRole = () => {
             if (!isCurrentOpening()) return;
             prksScheduleModalBaselineCapture('role-modal');
-            modalEl.removeAttribute('inert');
+            prksSetModalInert(modalEl, id, false);
             if (window.prksCreateForms) window.prksCreateForms.focusInitial('role-modal');
         };
         // The Vue form loads both catalogues and names the opener's Person or
@@ -561,11 +597,11 @@ function openModal(id, options) {
         prepared.then(finishRole, finishRole);
     } else if (id === 'work-modal') {
         deferBaseline = true;
-        modalEl.setAttribute('inert', '');
+        prksSetModalInert(modalEl, id, true);
         const after = () => {
             if (!isCurrentOpening()) return;
             prksScheduleModalBaselineCapture('work-modal');
-            modalEl.removeAttribute('inert');
+            prksSetModalInert(modalEl, id, false);
             if (window.prksCreateForms) window.prksCreateForms.focusInitial('work-modal');
         };
         // The Vue form resets itself, loads People and Folders and picks the
@@ -1069,7 +1105,7 @@ function closeModals() {
     const playlistModal = document.getElementById('playlist-modal');
     const playlistWasOpen = playlistModal && !playlistModal.classList.contains('hidden');
     document.getElementById('modal-backdrop').classList.add('hidden');
-    document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+    prksHideAllModalShells();
     // A closed Folder or Group dialog drops its draft (#373). An opener that
     // prefills the form writes it after this, right before openModal.
     if (window.prksCreateForms && typeof window.prksCreateForms.resetClosed === 'function') {
@@ -1080,8 +1116,11 @@ function closeModals() {
     if (playlistWasOpen && window.__prksReturnToWorkModalAfterPlaylist === true) {
         window.__prksReturnToWorkModalAfterPlaylist = false;
         document.getElementById('modal-backdrop').classList.remove('hidden');
+        // The same opening of New File, so its in-flight work stays current.
+        const workHost = prksDialogHostFor('work-modal');
         const workModal = document.getElementById('work-modal');
-        if (workModal) workModal.classList.remove('hidden');
+        if (workHost) workHost.restoreDialog('work-modal');
+        else if (workModal) workModal.classList.remove('hidden');
         return;
     }
     const restore = window.__prksModalFocusRestore;

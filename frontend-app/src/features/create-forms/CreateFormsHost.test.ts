@@ -2,6 +2,8 @@ import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import CreateFormsHost from './CreateFormsHost.vue'
+import { CREATE_FORM_MODAL_IDS } from './types'
+import { hideDialogs, resetDialogsForTest, showDialog } from '../../modal/dialogs'
 
 interface StubWindow {
   fetchFolders?: () => Promise<Array<{ id?: string; title?: string; parent_id?: string | null }>>
@@ -35,17 +37,9 @@ function stubs(): StubWindow {
   return window as unknown as StubWindow
 }
 
-function installShells(): void {
-  document.body.innerHTML = [
-    '<div id="folder-modal" class="modal hidden"><div id="folder-modal-vue" class="modal-body"></div></div>',
-    '<div id="person-modal" class="modal hidden"><div id="person-modal-vue" class="modal-body"></div></div>',
-    '<div id="group-modal" class="modal hidden"><div id="group-modal-vue" class="modal-body"></div></div>',
-    '<div id="playlist-modal" class="modal hidden"><div id="playlist-modal-vue" class="modal-body"></div></div>',
-    '<div id="work-modal" class="modal hidden"><div id="work-modal-vue" class="modal-body modal-body--scroll"></div>' +
-      '<div id="work-modal-footer-vue" class="modal-footer"></div></div>',
-    '<div id="saved-view-modal" class="modal hidden"><h3 id="saved-view-modal-title"></h3>' +
-      '<div id="saved-view-modal-vue" class="modal-body"></div></div>',
-  ].join('')
+/** Opens a dialog through the host, as openModal does: a new opening. */
+function open(modal: HTMLElement | null): void {
+  if (modal) showDialog(modal.id)
 }
 
 async function flush(): Promise<void> {
@@ -60,6 +54,7 @@ describe('create form host', () => {
   afterEach(() => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
+    resetDialogsForTest()
     delete window.prksCreateForms
     delete window.prksRefreshFolderModalValidation
     const w = stubs()
@@ -90,11 +85,12 @@ describe('create form host', () => {
   })
 
   function install(): void {
-    installShells()
     mounted.push(mount(CreateFormsHost, { attachTo: document.body }))
+    // One element per dialog id: the host's own shells, no stray fixture.
+    for (const id of CREATE_FORM_MODAL_IDS) expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
   }
 
-  it('teleports the classic field ids into the shells', () => {
+  it('renders each form inside its own dialog shell with the classic field ids', () => {
     install()
     expect(document.querySelector('#folder-modal #folder-title')).not.toBeNull()
     expect(document.querySelector('#folder-modal #save-folder-btn')).not.toBeNull()
@@ -104,28 +100,28 @@ describe('create form host', () => {
     expect(document.querySelector('#group-modal #save-group-btn')).not.toBeNull()
     expect(document.querySelector('#playlist-modal #playlist-title')).not.toBeNull()
     expect(document.querySelector('#playlist-modal #save-playlist-btn')).not.toBeNull()
-    // New File: the body lands in the shell's body mount and Create File
-    // in its footer mount.
-    const workBody = document.getElementById('work-modal-vue')
+    // New File: the body lands in the dialog body and Create File in its
+    // sticky footer.
+    const workBody = document.querySelector('#work-modal > .modal-body.modal-body--scroll')
     expect(workBody?.querySelector(':scope > .upload-grid.form-pane')).not.toBeNull()
     for (const id of ['upload-drop-zone', 'work-source-kind', 'work-title', 'work-folder-search', 'work-doc-type',
       'upload-person-search', 'upload-tag-search', 'work-abstract']) {
       expect(workBody?.querySelector(`#${id}`), id).not.toBeNull()
     }
     expect(document.querySelectorAll('#save-work-btn')).toHaveLength(1)
-    expect(document.querySelector('#work-modal-footer-vue #save-work-btn')).not.toBeNull()
-    expect(document.querySelector('#work-modal-footer-vue #work-modal-cancel')).not.toBeNull()
-    expect(document.querySelector('#work-modal-footer-vue #upload-status-msg')).not.toBeNull()
+    expect(document.querySelector('#work-modal-footer #save-work-btn')).not.toBeNull()
+    expect(document.querySelector('#work-modal-footer #work-modal-cancel')).not.toBeNull()
+    expect(document.querySelector('#work-modal-footer #upload-status-msg')).not.toBeNull()
     // No error region until there is an error to describe the Title with.
     expect(document.querySelector('#playlist-modal #playlist-title-error')).toBeNull()
   })
 
-  it('owns the Saved View dialog: body and title land in its shell, focus starts on Name', async () => {
+  it('owns the Saved View dialog: body and title are its shell\'s, focus starts on Name', async () => {
     install()
     await nextTick()
     expect(window.prksCreateForms?.owns('saved-view-modal')).toBe(true)
-    expect(document.querySelector('#saved-view-modal-vue #saved-view-name')).not.toBeNull()
-    expect(document.querySelector('#saved-view-modal-vue #save-saved-view-btn')).not.toBeNull()
+    expect(document.querySelector('#saved-view-modal .modal-body #saved-view-name')).not.toBeNull()
+    expect(document.querySelector('#saved-view-modal .modal-body #save-saved-view-btn')).not.toBeNull()
     expect(document.getElementById('saved-view-modal-title')?.textContent).toBe('Save View')
     window.prksCreateForms?.focusInitial('saved-view-modal')
     expect(document.activeElement?.id).toBe('saved-view-name')
@@ -140,7 +136,7 @@ describe('create form host', () => {
     w.prksFolderRowLabel = (folder) => String(folder.title || '')
     await window.prksCreateForms?.refreshFolderValidation()
     const modal = document.getElementById('folder-modal')
-    modal?.classList.remove('hidden')
+    open(modal)
     window.prksCreateForms?.captureBaseline('folder-modal')
     expect(window.prksCreateForms?.isDirty('folder-modal')).toBe(false)
     const title = document.getElementById('folder-title') as HTMLInputElement
@@ -173,11 +169,10 @@ describe('create form host', () => {
       navigated = hash
     }
     w.closeModals = () => {
-      document.getElementById('folder-modal')?.classList.add('hidden')
+      hideDialogs()
     }
     const modal = document.getElementById('folder-modal')
-    modal?.classList.remove('hidden')
-    if (modal) modal.dataset.prksOpenGeneration = '4'
+    open(modal)
     const title = document.getElementById('folder-title') as HTMLInputElement
     title.value = 'Opening B'
     const button = document.getElementById('save-folder-btn') as HTMLButtonElement
@@ -220,8 +215,7 @@ describe('create form host', () => {
     }
     w.closeModals = () => {}
     const personModal = document.getElementById('person-modal')
-    personModal?.classList.remove('hidden')
-    if (personModal) personModal.dataset.prksOpenGeneration = '1'
+    open(personModal)
     document.getElementById('save-person-btn')?.click()
     await flush()
     expect(alerts[0]).toContain('Last name is required.')
@@ -273,8 +267,7 @@ describe('create form host', () => {
     }
     w.closeModals = () => {}
     const groupModal = document.getElementById('group-modal')
-    groupModal?.classList.remove('hidden')
-    if (groupModal) groupModal.dataset.prksOpenGeneration = '1'
+    open(groupModal)
     document.getElementById('save-group-btn')?.click()
     await flush()
     expect(alerts[0]).toContain('Group name is required.')
@@ -296,8 +289,7 @@ describe('create form host', () => {
     }
     w.prksTakePlaylistIndexCreateTabId = () => ''
     const playlistModal = document.getElementById('playlist-modal')
-    playlistModal?.classList.remove('hidden')
-    if (playlistModal) playlistModal.dataset.prksOpenGeneration = '1'
+    open(playlistModal)
     document.getElementById('save-playlist-btn')?.click()
     await flush()
     expect(document.getElementById('playlist-title-error')?.textContent).toContain('Playlist title is required.')
@@ -316,8 +308,7 @@ describe('create form host', () => {
     w.createPlaylist = async () => {
       throw new Error('Server unavailable')
     }
-    playlistModal?.classList.remove('hidden')
-    if (playlistModal) playlistModal.dataset.prksOpenGeneration = '2'
+    open(playlistModal)
     title.value = 'Seminars'
     document.getElementById('save-playlist-btn')?.click()
     await flush()
@@ -352,15 +343,14 @@ describe('create form host', () => {
     let navigated = ''
     w.closeModals = () => {
       closed += 1
-      document.getElementById('person-modal')?.classList.add('hidden')
+      hideDialogs()
     }
     w.prksNavigate = (hash) => {
       navigated = hash
     }
     w.prksTakePersonIndexCreateTabId = () => ''
     const modal = document.getElementById('person-modal')
-    modal?.classList.remove('hidden')
-    if (modal) modal.dataset.prksOpenGeneration = '1'
+    open(modal)
     ;(document.getElementById('person-lname') as HTMLInputElement).value = 'Old'
     document.getElementById('save-person-btn')?.click()
     await flush()
@@ -368,12 +358,11 @@ describe('create form host', () => {
     expect(document.getElementById('save-person-btn')?.getAttribute('aria-busy')).toBe('true')
 
     // Dismiss → reopen clears fields and busy for the new opening.
-    modal?.classList.add('hidden')
-    if (modal) modal.dataset.prksOpenGeneration = '2'
+    hideDialogs()
     window.prksCreateForms?.afterPersonReset()
     await flush()
     ;(document.getElementById('person-lname') as HTMLInputElement).value = ''
-    modal?.classList.remove('hidden')
+    open(modal)
     ;(document.getElementById('person-lname') as HTMLInputElement).value = 'New'
     expect(document.getElementById('save-person-btn')?.getAttribute('aria-busy')).not.toBe('true')
 
@@ -427,23 +416,21 @@ describe('create form host', () => {
     let closed = 0
     w.closeModals = () => {
       closed += 1
-      document.getElementById('playlist-modal')?.classList.add('hidden')
+      hideDialogs()
     }
     w.prksTakePlaylistIndexCreateTabId = () => ''
     const modal = document.getElementById('playlist-modal')
-    modal?.classList.remove('hidden')
-    if (modal) modal.dataset.prksOpenGeneration = '1'
+    open(modal)
     ;(document.getElementById('playlist-title') as HTMLInputElement).value = 'First'
     document.getElementById('save-playlist-btn')?.click()
     await flush()
     expect(creates).toBe(1)
 
-    modal?.classList.add('hidden')
+    hideDialogs()
     window.prksCreateForms?.resetPlaylistFields()
     await flush()
     w.__prksPendingPlaylistAttach = secondAttach
-    if (modal) modal.dataset.prksOpenGeneration = '2'
-    modal?.classList.remove('hidden')
+    open(modal)
     ;(document.getElementById('playlist-title') as HTMLInputElement).value = 'Second'
     document.getElementById('save-playlist-btn')?.click()
     await flush()
