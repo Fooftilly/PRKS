@@ -16,14 +16,11 @@ All of them commit to durable browser storage before the UI acts on them, surviv
 reloads and offline periods, and synchronize idempotently on reconnect. Other
 mutations still require the server.
 
-**Server storage.** This specification was written against the SQLite runtime,
-which PG-C2 (#641) deleted. The server now applies every family on PostgreSQL
-(`backend/sync/`: the ledger in `protocol.py`, one handler per family) with the
-same wire contract and the same per-family rules (`backend/*_sync.py`,
-`backend/sync_protocol.py`). Where a section below names a SQLite column,
-constraint, connection helper or function, read it as the rule the PostgreSQL
-handler keeps; `docs/postgresql-architecture.md` §7 is authoritative for how it
-is stored.
+**Server storage.** The server applies every family on PostgreSQL
+(`backend/sync/`: the ledger in `protocol.py`, one handler per family in
+`handlers/`) with the per-family rules in `backend/*_sync.py`.
+`docs/postgresql-architecture.md` §7 is authoritative for how state is stored;
+a `*_on_conn` helper named below is the rule the PostgreSQL handler keeps.
 
 The second family exists to prove the protocol is a protocol. Its semantics are
 deliberately unlike the first -- no concurrency control, no conflict UI, a
@@ -330,20 +327,18 @@ The coordinator names no family: adding one is a registration.
   The sync coordinator owns transport and retry policy, with one in-flight
   operation. Web Locks coordinate browser tabs; IDB claims arbitrate edits.
 
-## Canonical server state (schema 14)
-
-All three new tables live in `prks_data.db` and are canonical backup state:
+## Canonical server state
 
 | Table | Purpose |
 | --- | --- |
-| `sync_operations` | Durable idempotency ledger: normalized request hash, terminal result and original HTTP status |
-| `sync_entity_revisions` | Revision counters, including absent-relationship tombstones |
-| `sync_tag_lifecycle` | Active Tags, merge redirects and explicit deletion history |
+| `prks.sync_operations` | Durable idempotency ledger: normalized request hash, terminal result and original HTTP status |
+| `prks.entity_revisions` | Revision counters, including absent-relationship tombstones |
+| `prks.sync_tag_lifecycle` | Active Tags, merge redirects and explicit deletion history |
 
-Migration 13 → 14 marks existing Tags active. Existing relationships have
-revision zero until changed. Relationship scope IDs are compact JSON arrays
-`[work_id, tag_id]`, not delimiter-concatenated strings. Lifecycle history has
-no Tag foreign keys: deleting a target must not erase historical redirects.
+All are canonical backup state (`docs/postgresql-architecture.md` §6.6).
+Relationship scope IDs are compact JSON arrays `[work_id, tag_id]`, not
+delimiter-concatenated strings. Lifecycle history has no Tag foreign keys:
+deleting a target must not erase historical redirects.
 
 The ledger is **not automatically pruned**. Compaction is deferred until a
 coordinated acknowledgement horizon can prove old operation IDs cannot retry.
@@ -398,7 +393,7 @@ conflict, which silently overwrites another device. An open event requires
 null: it has no prior state to be stale against. Payload validation is the
 family's too -- `{"tag_id": ...}` for a relationship, `{}` for an open event.
 
-One `BEGIN IMMEDIATE` transaction performs ledger lookup, domain/lifecycle
+One transaction performs ledger lookup, domain/lifecycle
 validation, revision validation, relationship mutation, revision advancement
 and ledger insertion. Any failure before commit rolls everything back.
 
@@ -454,10 +449,7 @@ so a fast clock cannot pin a Work to the top of Recent.
 
 Values are stored as `YYYY-MM-DD HH:MM:SS.mmm` in UTC
 (`work_open_sync.format_moment`), which sorts lexicographically in
-chronological order. Second-resolution rows written before this milestone stay
-valid and keep sorting correctly, because `12:00:00` is a prefix of
-`12:00:00.250` -- the same rule SQLite applies, and the reason precision needed
-no destructive migration. Recent's `id ASC` tie-break is unchanged.
+chronological order. Recent's `id ASC` tie-break is unchanged.
 
 `POST /api/works/:id/opened` remains available for other canonical callers and
 shares `work_open_sync.set_opened_at()` with the sync handler -- server-now is
@@ -542,7 +534,7 @@ people typing the same DOI have converged, not collided.
 not a licence to start normalizing what PRKS never normalized: a DOI keeps its
 case, an ISBN keeps its punctuation, a page range is not parsed, and whitespace
 is not stripped. The only validation this layer adds is a per-field length
-bound. SQLite NULL (a row older than the field) and `""` (one a user cleared)
+bound. NULL (a row older than the field) and `""` (one a user cleared)
 are one logical value, so clearing an already-empty field is not a change.
 
 The ACK carries `work_id`, `field`, `value`, `server_revision` and `changed`;
@@ -674,18 +666,15 @@ code-point limits; switching those to bytes would quietly shorten each by a
 factor of three for anyone writing CJK.
 
 **The excerpt.** Progress renders `abstract_excerpt`, which the server derives
-with `SUBSTR(COALESCE(abstract, ''), 1, 100)`. SQLite counts **code points**;
+with `SUBSTR(COALESCE(abstract, ''), 1, 100)`, which counts **code points**;
 JavaScript's `slice`/`substring` count UTF-16 code units, and the two disagree
 for every astral character. `prksAbstractExcerpt()` is the canonical client
 rule — first 100 Unicode code points, matching the server, *not* grapheme
-clusters — and `tests/test_abstract_excerpt.py` pins equality against the real
-SQLite engine across ASCII, accented Latin, CJK, emoji, mixed BMP/astral,
+clusters — and `tests/test_abstract_excerpt.py` pins equality across ASCII, accented Latin, CJK, emoji, mixed BMP/astral,
 combining marks and the boundary at 100. It bounds the input slice before
 expanding, so a megabyte Abstract costs nothing per render.
 
-A pre-existing bug fell out of this: Progress re-truncated the already-bounded
-excerpt with `substring(0, 100)`, which cut it by UTF-16 units and could end
-mid-surrogate-pair — a broken glyph. That second truncation is gone.
+Progress never re-truncates the excerpt by UTF-16 units.
 
 **Storage shape.** `abstract` is in `BYTE_LIMITED_FIELDS`, and the
 `metadata-state` projection carries its **revision only**. The Work record
@@ -819,15 +808,11 @@ disagree with any other surface about pending state if it wanted to.
 | `bulk_update_works(action="set_status")` | **yes, since 2H** | see below |
 | `add_work()` (create, Processing import) | n/a | a new Work starts at revision 0; construction is not a change |
 
-**The bulk action was the dangerous one.** It used to run
-`UPDATE works SET status = ?` over the selection directly. Once Status carries
-a revision, that is not merely inconsistent, it is a silent data-loss path: the
-value changes while the counter does not, so a device holding the pre-bulk
-Status reconnects, compares equal revisions, concludes it is current and
-overwrites the newer value. It now routes each selected Work through
-`set_field_on_conn` inside the transaction it already had -- exactly as the Tag
-branch beside it already did -- so only Works whose Status actually changes
-advance, and values and revisions roll back together.
+**The bulk action routes each Work through `set_field_on_conn`** inside its
+transaction, so only Works whose Status actually changes advance, and values
+and revisions roll back together. A bulk write that changed the value without
+the revision would let a device holding the pre-bulk Status compare equal
+revisions and overwrite the newer value.
 
 ### One validation rule
 
@@ -836,7 +821,7 @@ length: a value outside `WORK_STATUSES` is not "too long", it is not a status.
 `is_valid_field_value()` answers for every field and every path -- the sync
 handler, the PATCH and the bulk action -- because a value savable by one path
 and refused by another is the split contract that moving a field to
-local-first exists to remove. The SQLite CHECK constraint remains a last line
+local-first exists to remove. The database CHECK constraint remains a last line
 of defence: it raises an IntegrityError rather than telling the client what it
 should have sent.
 
@@ -1006,7 +991,7 @@ and it needs four representations named explicitly:
 | --- | --- | --- |
 | Editor control | string | `""`, `"3"` |
 | Sync wire | canonical decimal string; `""` means "no explicit page" | `""`, `"3"` |
-| SQLite column | `INTEGER NULL` | `NULL`, `3` |
+| Database column | `INTEGER NULL` | `NULL`, `3` |
 | Work / browse row / embedded summary | `integer \| null` | `null`, `3` |
 
 **The wire stays a string.** The operation envelope is validated, hashed,
@@ -1044,10 +1029,8 @@ manufactured staleness.
 ### Refusing is not clearing
 
 `0`, `-1`, `1.5`, `abc` and `+3` are refused, visibly, with the draft intact
-and nothing enqueued. The ordinary PATCH used to *silently clear* every one of
-them — a client asking for an impossible page was told the field had been
-emptied on purpose — and that normalization was removed when the codec took
-over. It is the same conflation an uninterpretable Published Date used to have.
+and nothing enqueued. The ordinary PATCH refuses them too; it never clears the
+field, which would tell the client the value had been emptied on purpose.
 
 ### Thumbnail resource identity
 
@@ -1141,11 +1124,10 @@ reconciliation: a Title ACK patches every cached Concept, Argument and Graph
 snapshot that names the Work, generation-fenced like every other domain, and
 an unreadable cache blocks retirement rather than retiring on a guess.
 
-**Patched, never invalidated.** `prksMarkWorkTitleChanged()` used to stale
-Concepts, Arguments, People and Playlists after a Title PATCH. Destroying
-usable offline snapshots for a change whose exact shape is already known is
-the opposite of what the reconciler exists to do, so the durable ACK path
-reconciles values instead.
+**Patched, never invalidated.** A Title change reconciles values in cached
+Concepts, Arguments, People and Playlists; it never stales them, because
+destroying usable offline snapshots for a change whose exact shape is known is
+the opposite of what the reconciler exists to do.
 
 ## Every canonical mutation advances revisions
 
@@ -1529,8 +1511,8 @@ at revision 1 and discarded the importer's author order.
 ### One role vocabulary
 
 Eight roles, validated at the canonical boundary rather than in the envelope
-validator alone — `Producer` used to be refused offline and accepted online, and
-the accepted row then matched no filter, icon or BibTeX mapping. Refused, never
+validator alone, so offline and online agree, and no accepted row can match no
+filter, icon or BibTeX mapping. Refused, never
 normalized: turning an unknown role into `Author` would assert a relationship
 the user never described.
 
@@ -1580,7 +1562,7 @@ the same prefix would eventually collide. New IDs are `{prefix}-` plus the full
 32-character uppercase UUID hex (`uuid4().hex`). Existing eight-hex IDs stay
 valid forever and are never rewritten.
 
-The client generates the ID. SQLite stores that same string. There is no
+The client generates the ID. The server stores that same string. There is no
 temporary-ID → server-ID remapping. `CREATE_PERSON` requires the 32-hex form;
 `ADD_WORK_PERSON_ROLE` still accepts any existing Person id.
 
@@ -2030,7 +2012,7 @@ from the durable envelope; never written into `prks-offline-v2:<scope>`.
 Destruction of a Work identity. Empty payload, null base revision. Absence is
 convergence (`ACKNOWLEDGED` with `changed: false`) — the ordinary
 `DELETE /api/works/:id` has never refused a delete, and offline invents no
-`WORK_IN_USE` refusal. Cascade matches SQLite FK behaviour (tags/roles/folder/
+`WORK_IN_USE` refusal. Cascade covers relationships only (tags/roles/folder/
 playlist/annotations/argument_sources relationships only; Tags/Persons/Arguments
 themselves stay). Filesystem and derived-index cleanup remain post-commit
 best-effort via `work_deletion.cleanup_after_work_delete`, shared with the HTTP
@@ -2435,7 +2417,7 @@ would permit a standalone Argument that never represented the user's intent.
 The server uses a savepoint around row creation and connection validation: an
 invalid initial source or target refuses the operation and leaves no row.
 
-Targets remain one logical aggregate even though SQLite stores Position targets
+Targets remain one logical aggregate even though the database stores Position targets
 and Argument targets in two tables. `_replace_targets_on_conn()` replaces both
 halves together. Sources and targets are ordered: reordering identical entries
 is a real change. An unsent A→B→A edit cancels; after an operation may have been
