@@ -82,7 +82,10 @@ afterEach(() => {
   wrapper = null
   document.body.innerHTML = ''
   for (const key of KEYS) delete stubs()[key]
-  vi.useRealTimers()
+  vi.useRealTimers()  // The copy tests define these on the instances; drop them so the
+  // jsdom originals (none) come back for the next test.
+  delete (navigator as unknown as { clipboard?: unknown }).clipboard
+  delete (document as unknown as { execCommand?: unknown }).execCommand
 })
 
 describe('Edit Profile Using Template form', () => {

@@ -19,7 +19,10 @@ function full(over: Record<string, unknown> = {}): Record<string, unknown> {
 
 afterEach(() => {
   document.body.innerHTML = ''
-  vi.restoreAllMocks()
+  vi.restoreAllMocks()  // The copy tests define these on the instances; drop them so the
+  // jsdom originals (none) come back for the next test.
+  delete (navigator as unknown as { clipboard?: unknown }).clipboard
+  delete (document as unknown as { execCommand?: unknown }).execCommand
 })
 
 describe('person template', () => {
