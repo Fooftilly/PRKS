@@ -130,6 +130,10 @@ class OfflineWorkPeopleTests(unittest.TestCase):
             page.locator('#role-link-credit-enable').check()
             page.locator('#role-link-credit-input').fill(credit)
         page.locator('#save-role-btn').click()
+        # The durable op is queued before the editor repaints and the modal
+        # closes. A caller that navigates or reads chips on the queue signal
+        # races both; the closed modal is the user-visible end of the save.
+        page.locator('#role-modal').wait_for(state='hidden')
 
     def unlink(self, page, person_id, role='Author'):
         # After a durable link the panel may still be settling from people-mode
@@ -180,6 +184,21 @@ class OfflineWorkPeopleTests(unittest.TestCase):
             }""",
             arg=[work_id, text])
 
+    def wait_detail_people(self, page, present=(), absent=()):
+        """Wait until the people chips show `present` and not `absent`.
+
+        The panel repaints asynchronously after a durable save or unlink, so a
+        one-shot read right after the queue settles can see the old list.
+        """
+        page.wait_for_function(
+            """([present, absent]) => {
+                const names = Array.from(document.querySelectorAll(
+                    '#panel-content .work-linked-persons__chip-link')).map(el => el.textContent.trim());
+                return present.every(n => names.includes(n))
+                    && absent.every(n => !names.includes(n));
+            }""",
+            arg=[list(present), list(absent)])
+
     def detail_people(self, page):
         return page.evaluate(
             "() => Array.from(document.querySelectorAll("
@@ -217,6 +236,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.link(page, JANE_DISPLAY)
         self.pending(page, 1)
+        self.wait_detail_people(page, present=[JANE_DISPLAY])
         self.assertIn(JANE_DISPLAY, self.detail_people(page))
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
@@ -342,6 +362,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.link(page, JANE_DISPLAY, credit='Mark Twain')
         self.pending(page, 1)
+        self.wait_detail_people(page, present=['Mark Twain'])
         self.assertIn('Mark Twain', self.detail_people(page))
         self.assertNotIn(JANE_DISPLAY, self.detail_people(page))
         operations = page.evaluate(
@@ -457,9 +478,10 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.link(page, JANE_DISPLAY)
         self.pending(page, 1)
-        self.assertIn(JANE_DISPLAY, self.detail_people(page))
+        self.wait_detail_people(page, present=[JANE_DISPLAY])
         self.unlink(page, server.ids['jane'])
         self.pending(page, 0)
+        self.wait_detail_people(page, absent=[JANE_DISPLAY])
         self.assertEqual(self.detail_people(page), [])
 
         self.reconnect(page, context)
