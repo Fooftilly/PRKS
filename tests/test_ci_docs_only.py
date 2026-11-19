@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess  # nosec B404 - fixed local test fixture commands
 import sys
@@ -17,6 +19,7 @@ from scripts.ci.docs_only import (
     is_approved_markdown,
     is_audited_config,
     is_postgres_irrelevant_markdown,
+    merge_base_parent,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -282,6 +285,70 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             self.assertEqual(run().stdout.strip(), "false")
             self.assertEqual(run("--scope", "postgres").stdout.strip(), "true")
             self.assertNotEqual(run("--scope", "everything").returncode, 0)
+
+    def stale_base_merge(self, root: Path, pr_files: dict[str, str]) -> tuple[str, str]:
+        """GitHub's shape: the event base B0 is stale, master moved on with a code
+        change, and HEAD is the merge of the PR head onto the new master tip.
+        Returns (stale event base, PR head)."""
+        stale = _repo(root)
+        _git(root, "checkout", "-qb", "pr")
+        for path, content in pr_files.items():
+            _write(root, path, content)
+        _git(root, "add", ".")
+        _git(root, "commit", "-qm", "pr change")
+        head = _git(root, "rev-parse", "HEAD")
+        _git(root, "checkout", "-q", "master")
+        _write(root, "backend/moved_on.py", "VALUE = 1\n")
+        _git(root, "add", ".")
+        _git(root, "commit", "-qm", "master moved on")
+        _git(root, "checkout", "-q", "--detach")
+        _git(root, "merge", "-q", "--no-ff", "-m", "Merge pr", head)
+        return stale, head
+
+    def run_cli(self, root: Path, base: str, head_sha: str | None, scope: str = "postgres") -> str:
+        script = Path(__file__).resolve().parents[1] / "scripts/ci/docs_only.py"
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_EVENT_PATH"}
+        if head_sha is not None:
+            event = root.parent / f"{root.name}-event.json"
+            event.write_text(json.dumps({"pull_request": {"head": {"sha": head_sha}}}), encoding="utf-8")
+            env["GITHUB_EVENT_PATH"] = str(event)
+        return subprocess.run(  # nosec B603 - fixed interpreter and script
+            [sys.executable, str(script), "--base", base, "--scope", scope],
+            cwd=root, capture_output=True, text=True, check=False, env=env,
+        ).stdout.strip()
+
+    def test_a_stale_event_base_uses_the_merge_commits_first_parent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            # Against the stale base, master's own code change shows up.
+            self.assertIsNone(changed_documentation(root, stale, POSTGRES_SCOPE))
+            self.assertEqual(self.run_cli(root, stale, None), "false")
+            # Anchored to the merge's first parent, only the PR's Markdown is left.
+            self.assertEqual(self.run_cli(root, stale, head), "true")
+
+    def test_a_stale_base_merge_with_a_pr_code_change_still_runs_full_ci(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n", "backend/x.py": "X = 1\n"})
+            self.assertEqual(self.run_cli(root, stale, head), "false")
+
+    def test_the_first_parent_is_used_only_for_a_merge_of_the_event_head(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            merge = _git(root, "rev-parse", "HEAD")
+            # Another head sha, or HEAD being the PR head itself (a PR author's
+            # own merge commit), keeps the event base.
+            self.assertEqual(merge_base_parent(root, stale, "0" * 40), stale)
+            self.assertEqual(merge_base_parent(root, stale, merge), stale)
+            self.assertEqual(merge_base_parent(root, stale, None), stale)
+            self.assertEqual(merge_base_parent(root, stale, head), _git(root, "rev-parse", "HEAD^1"))
+            _git(root, "checkout", "-q", head)
+            self.assertEqual(merge_base_parent(root, stale, head), stale)
 
     def test_deleted_or_renamed_markdown_is_not_safe_skip(self):
         for page in ("Glossary", "Getting-Started", "Offline-and-Sync"):
