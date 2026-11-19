@@ -13,6 +13,9 @@ import {
   syncSettingsNavOrientation,
 } from './navigation'
 import SettingsSurface from './SettingsSurface.vue'
+import SettingsDialogs from './SettingsDialogs.vue'
+import { beginOpening, dialogState, resetDialogsForTest, showDialog } from '../../modal/dialogs'
+import { restoreSession } from './restore-session'
 
 const mounted: VueWrapper[] = []
 
@@ -21,6 +24,8 @@ afterEach(() => {
   document.body.innerHTML = ''
   resetSettingsNavigationForTests()
   resetPerformanceDiagnosticsActivationForTests()
+  resetDialogsForTest()
+  restoreSession.busy = false
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -210,12 +215,13 @@ describe('Settings surface', () => {
   it('does not restore a backup until the separate confirmation is submitted', async () => {
     installMatchMedia(false)
     window.prksLoadAppSettings = vi.fn(async () => ({}))
-    document.body.innerHTML = `
-      <input id="prks-restore-confirm-input" type="text" />
-      <button type="button" id="prks-restore-confirm-submit" disabled>Restore this backup</button>
-      <p id="prks-restore-confirm-status"></p>
-    `
-    const open = vi.fn()
+    // The confirmation is its own dialog in the modal host; openModal shows
+    // it and runs its opening.
+    mounted.push(mount(SettingsDialogs, { attachTo: document.body }))
+    const open = vi.fn((id: string) => {
+      showDialog(id)
+      beginOpening(id)
+    })
     const stage = vi.fn(async () => ({ token: 'staged-token', summary: { works: 1 }, warnings: [] }))
     const restore = vi.fn(async () => {
       throw new Error('stop before reload')
@@ -255,17 +261,36 @@ describe('Settings surface', () => {
 
     document.getElementById('prks-backup-restore-btn')?.click()
     expect(open).toHaveBeenCalledWith('prks-restore-confirm-modal')
+    expect(dialogState.active).toBe('prks-restore-confirm-modal')
     expect(restore).not.toHaveBeenCalled()
 
     const confirmInput = document.getElementById('prks-restore-confirm-input') as HTMLInputElement
     const confirmSubmit = document.getElementById('prks-restore-confirm-submit') as HTMLButtonElement
+    expect(document.activeElement).toBe(confirmInput)
+    confirmInput.value = 'restore'
+    confirmInput.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(confirmSubmit.disabled).toBe(true)
+    confirmSubmit.click()
+    expect(restore).not.toHaveBeenCalled()
     confirmInput.value = 'RESTORE'
     confirmInput.dispatchEvent(new Event('input'))
+    await nextTick()
     expect(confirmSubmit.disabled).toBe(false)
     confirmSubmit.click()
     await nextTick()
     await Promise.resolve()
     await nextTick()
     expect(restore).toHaveBeenCalledWith('staged-token')
+    // A failed restore says so in the dialog and in the panel, and frees both.
+    expect(document.getElementById('prks-restore-confirm-status')?.textContent).toBe('stop before reload')
+    expect(document.getElementById('prks-backup-restore-status')?.textContent).toBe('stop before reload')
+    expect(confirmInput.disabled).toBe(false)
+
+    // A new opening starts blank.
+    document.getElementById('prks-backup-restore-btn')?.click()
+    await nextTick()
+    expect(confirmInput.value).toBe('')
+    expect(document.getElementById('prks-restore-confirm-status')?.textContent).toBe('')
   })
 })

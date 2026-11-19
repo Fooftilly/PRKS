@@ -36,7 +36,7 @@ class CreateFormVueContractTests(unittest.TestCase):
         # Settings keeps its classic shell.
         self.assertIn('id="settings-modal"', index)
         app = (ROOT / "frontend-app" / "src" / "App.vue").read_text(encoding="utf-8")
-        self.assertIn("<ModalHost>\n    <CreateFormsHost />\n  </ModalHost>", app)
+        self.assertIn("<ModalHost>\n    <CreateFormsHost />\n    <SettingsDialogs />\n  </ModalHost>", app)
         modal_host = (ROOT / "frontend-app" / "src" / "modal" / "ModalHost.vue").read_text(encoding="utf-8")
         self.assertIn("<slot />", modal_host)
         for name in (

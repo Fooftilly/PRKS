@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
 import {
@@ -7,6 +7,7 @@ import {
   backupSummaryRows,
   type BackupProgressEvent,
 } from './backup-format'
+import { RESTORE_CONFIRM_WORD, restoreSession, setRestoreHandler } from './restore-session'
 
 const downloadBusy = ref(false)
 const progressVisible = ref(false)
@@ -15,16 +16,14 @@ const progressLabel = ref('')
 const progressBusy = ref(false)
 const downloadStatus = ref('')
 const fileLabel = ref('No file selected')
-const restoreBusy = ref(false)
+/** Shared with the restore confirmation dialog, which ModalHost renders. */
+const restoreBusy = computed(() => restoreSession.busy)
 const restoreStatus = ref('')
 const verified = ref(false)
 const summaryRows = ref<Array<{ label: string; value: string }>>([])
 
 let stagedToken = ''
 let backupAbort: AbortController | null = null
-let confirmInput: HTMLInputElement | null = null
-let confirmSubmit: HTMLButtonElement | null = null
-let confirmStatus: HTMLElement | null = null
 
 function setBackupProgress(event: BackupProgressEvent): void {
   progressPercent.value = Math.max(0, Math.min(100, Number(event.percent) || 0))
@@ -46,15 +45,8 @@ function hideVerified(): void {
   summaryRows.value = []
 }
 
-function syncConfirm(): void {
-  if (!confirmSubmit || !confirmInput) return
-  confirmSubmit.disabled = restoreBusy.value || confirmInput.value.trim() !== 'RESTORE'
-}
-
 function setRestoreBusy(busy: boolean): void {
-  restoreBusy.value = busy
-  if (confirmInput) confirmInput.disabled = busy
-  syncConfirm()
+  restoreSession.busy = busy
 }
 
 function startBackupDownload(token: string, filename: string | undefined): void {
@@ -192,57 +184,41 @@ async function verifyBackup(): Promise<void> {
   }
 }
 
+/** The dialog starts blank on every opening and asks for the typed word. */
 function openRestoreConfirm(): void {
   if (!stagedToken || restoreBusy.value) return
-  if (confirmInput) confirmInput.value = ''
-  if (confirmStatus) confirmStatus.textContent = ''
-  syncConfirm()
   window.openModal?.('prks-restore-confirm-modal')
 }
 
+function reportRestore(message: string): void {
+  restoreSession.confirmStatus = message
+  restoreStatus.value = message
+}
+
 async function submitRestore(): Promise<void> {
-  if (!confirmInput || confirmInput.value.trim() !== 'RESTORE' || !stagedToken || restoreBusy.value) return
+  if (restoreSession.confirmText.trim() !== RESTORE_CONFIRM_WORD || !stagedToken || restoreBusy.value) return
   setRestoreBusy(true)
-  const running = 'Restoring library… Rebuilding search index…'
-  if (confirmStatus) confirmStatus.textContent = running
-  restoreStatus.value = running
+  reportRestore('Restoring library… Rebuilding search index…')
   try {
     if (typeof window.prksRestoreBackup !== 'function') throw new Error('Backup API unavailable.')
     const out = await window.prksRestoreBackup(stagedToken)
     stagedToken = ''
     const extra = Array.isArray(out.warnings) && out.warnings.length ? ` ${out.warnings.join(' ')}` : ''
-    const done = 'Restore complete — reloading…' + extra
-    if (confirmStatus) confirmStatus.textContent = done
-    restoreStatus.value = done
+    reportRestore('Restore complete — reloading…' + extra)
     window.location.reload()
   } catch (error) {
     const message = error instanceof Error ? error.message : ''
-    const failed = message || 'Restore failed. Current PRKS data was not changed.'
-    if (confirmStatus) confirmStatus.textContent = failed
-    restoreStatus.value = failed
+    reportRestore(message || 'Restore failed. Current PRKS data was not changed.')
     setRestoreBusy(false)
   }
 }
 
-function onConfirmInput(): void {
-  syncConfirm()
-}
-
-function onConfirmClick(): void {
-  void submitRestore()
-}
-
 onMounted(() => {
-  confirmInput = document.getElementById('prks-restore-confirm-input') as HTMLInputElement | null
-  confirmSubmit = document.getElementById('prks-restore-confirm-submit') as HTMLButtonElement | null
-  confirmStatus = document.getElementById('prks-restore-confirm-status')
-  confirmInput?.addEventListener('input', onConfirmInput)
-  confirmSubmit?.addEventListener('click', onConfirmClick)
+  setRestoreHandler(submitRestore)
 })
 
 onBeforeUnmount(() => {
-  confirmInput?.removeEventListener('input', onConfirmInput)
-  confirmSubmit?.removeEventListener('click', onConfirmClick)
+  setRestoreHandler(null)
 })
 </script>
 
