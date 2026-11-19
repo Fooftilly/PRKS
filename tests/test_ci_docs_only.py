@@ -328,6 +328,23 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             # Anchored to the merge's first parent, only the PR's Markdown is left.
             self.assertEqual(self.run_cli(root, stale, head), "true")
 
+    def test_the_markdown_validator_uses_the_same_base_as_the_classifier(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/wiki/Glossary.md": "# Glossary\n\nChanged.\n"})
+            self.assertEqual(self.run_cli(root, stale, head, scope="docs"), "true")
+            event = root.parent / "validator-event.json"
+            event.write_text(json.dumps({"pull_request": {"head": {"sha": head}}}), encoding="utf-8")
+            env = {k: v for k, v in os.environ.items() if k != "GITHUB_EVENT_PATH"}
+            env["GITHUB_EVENT_PATH"] = str(event)
+            env["PYTHONPATH"] = os.pathsep.join(p for p in (str(ROOT), env.get("PYTHONPATH")) if p)
+            validate = subprocess.run(  # nosec B603 - fixed interpreter and module
+                [sys.executable, "-m", "scripts.ci.check_docs_only", "--base", stale],
+                cwd=root, capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(validate.returncode, 0, validate.stdout + validate.stderr)
+
     def test_a_stale_base_merge_with_a_pr_code_change_still_runs_full_ci(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "repo"

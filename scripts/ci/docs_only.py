@@ -19,7 +19,9 @@ master's newer commits, and a Markdown-only PR ran full CI. So when HEAD is
 GitHub's merge of the PR head (two parents, the second being the event's
 ``pull_request.head.sha`` from ``GITHUB_EVENT_PATH``), the diff is anchored
 to HEAD's first parent, the base the PR was actually merged onto, fetched if
-the shallow checkout lacks it. Any other shape keeps the event base.
+the shallow checkout lacks it. Any other shape keeps the event base. The
+Markdown validator (``check_docs_only``) resolves the same base through
+:func:`effective_base`, so it never refuses a PR this classifier approved.
 """
 
 from __future__ import annotations
@@ -181,14 +183,18 @@ def merge_base_parent(root: Path, base: str, head_sha: str | None) -> str:
     return first
 
 
+def effective_base(root: Path, base: str) -> str:
+    """The base both entrypoints diff against: :func:`merge_base_parent` for the Actions event."""
+    return merge_base_parent(root, base, _event_head_sha()) if _SHA.fullmatch(base) else base
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", required=True)
     parser.add_argument("--scope", choices=SCOPES, default=DEFAULT_SCOPE)
     args = parser.parse_args()
     root = Path.cwd()
-    base = merge_base_parent(root, args.base, _event_head_sha()) if _SHA.fullmatch(args.base) else args.base
-    paths = changed_documentation(root, base, args.scope)
+    paths = changed_documentation(root, effective_base(root, args.base), args.scope)
     print("true" if paths is not None else "false")
     return 0
 
