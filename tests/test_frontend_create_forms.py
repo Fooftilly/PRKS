@@ -119,8 +119,9 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertIn("afterPersonReset()", ui)
         self.assertIn("el.value = ''", ui)
         self.assertIn("if (!window.prksCreateForms)", app)
+        self.assertIn("Create Link is the Vue role link form's", app)
         fallback = app.split("if (!window.prksCreateForms)", 1)[1].split(
-            "const saveRoleBtn", 1
+            "Create Link is the Vue role link form's", 1
         )[0]
         self.assertIn("getElementById('save-folder-btn')", fallback)
         self.assertIn("getElementById('save-playlist-btn')", fallback)
@@ -130,6 +131,11 @@ class CreateFormVueContractTests(unittest.TestCase):
         self.assertNotIn("getElementById('save-work-btn')", app)
         self.assertNotIn("initUploadDragAndDrop", app)
         self.assertIn('id="save-work-btn"', (FORMS / "NewFileForm.vue").read_text(encoding="utf-8"))
+        # Create Link is the Vue role link form's; no classic save handler remains.
+        self.assertNotIn("getElementById('save-role-btn')", app)
+        self.assertNotIn("prepareRoleModal", ui)
+        self.assertIn("window.prksCreateForms.prepareRoleLink(", ui)
+        self.assertIn('id="save-role-btn"', (FORMS / "RoleLinkForm.vue").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

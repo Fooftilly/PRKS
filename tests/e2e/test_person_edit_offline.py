@@ -502,7 +502,8 @@ class OfflinePersonEditTests(unittest.TestCase):
                 page.locator('.work-link-person-btn').click()
                 page.wait_for_selector('#role-modal:not(.hidden)')
                 page.wait_for_function(
-                    "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+                    "() => { const m = document.getElementById('role-modal');"
+                    "        return !m.classList.contains('hidden') && !m.hasAttribute('inert'); }")
             with profile_e2e_phase("person_edit_link_search"):
                 page.locator('#role-person-search').fill('Grace Chained')
                 result = page.locator('#role-person-results .result-item--person-pick').first

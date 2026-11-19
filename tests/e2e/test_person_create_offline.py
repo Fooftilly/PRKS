@@ -109,7 +109,8 @@ class OfflinePersonCreateTests(unittest.TestCase):
             page.locator('.work-link-person-btn').click()
             page.wait_for_selector('#role-modal:not(.hidden)')
             page.wait_for_function(
-                "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+                "() => { const m = document.getElementById('role-modal');"
+                "        return !m.classList.contains('hidden') && !m.hasAttribute('inert'); }")
         with profile_e2e_phase("person_create_link_search"):
             page.locator('#role-person-search').fill(person_display)
             result = page.locator('#role-person-results .result-item--person-pick').first
@@ -221,7 +222,8 @@ class OfflinePersonCreateTests(unittest.TestCase):
         page.locator('.work-link-person-btn').click()
         page.wait_for_selector('#role-modal:not(.hidden)')
         page.wait_for_function(
-            "() => typeof document.getElementById('role-person-search').oninput === 'function'")
+            "() => { const m = document.getElementById('role-modal');"
+            "        return !m.classList.contains('hidden') && !m.hasAttribute('inert'); }")
         page.locator('#role-person-search').fill('Quick Created')
         create = page.locator('#role-person-results .result-item--create').first
         create.wait_for(state='visible')
