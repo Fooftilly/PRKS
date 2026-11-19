@@ -2,6 +2,8 @@ import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import CreateFormsHost from './CreateFormsHost.vue'
+import { CREATE_FORM_MODAL_IDS } from './types'
+import { hideDialogs, resetDialogsForTest, showDialog } from '../../modal/dialogs'
 
 interface StubWindow {
   fetchFolders?: () => Promise<Array<{ id?: string; title?: string; parent_id?: string | null }>>
@@ -43,17 +45,6 @@ function stubs(): StubWindow {
   return window as unknown as StubWindow
 }
 
-function installShells(): void {
-  document.body.innerHTML = [
-    '<div id="folder-modal" class="modal hidden"><div id="folder-modal-vue" class="modal-body"></div></div>',
-    '<div id="person-modal" class="modal hidden"><div id="person-modal-vue" class="modal-body"></div></div>',
-    '<div id="group-modal" class="modal hidden"><div id="group-modal-vue" class="modal-body"></div></div>',
-    '<div id="playlist-modal" class="modal hidden"><div id="playlist-modal-vue" class="modal-body"></div></div>',
-    '<div id="work-modal" class="modal hidden"><div id="work-modal-vue" class="modal-body modal-body--scroll"></div>' +
-      '<div class="modal-footer"><button id="save-work-btn" type="button">Create File</button></div></div>',
-  ].join('')
-}
-
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
     await nextTick()
@@ -61,15 +52,16 @@ async function flush(): Promise<void> {
   }
 }
 
+/** Opens a dialog through the host, as openModal does. */
 function show(modalId: string): HTMLElement {
+  showDialog(modalId)
   const modal = document.getElementById(modalId) as HTMLElement
-  modal.classList.remove('hidden')
-  modal.dataset.prksOpenGeneration = String((Number(modal.dataset.prksOpenGeneration) || 0) + 1)
+  expect(modal.classList.contains('hidden')).toBe(false)
   return modal
 }
 
 function hideAll(): void {
-  document.querySelectorAll('.modal').forEach((modal) => modal.classList.add('hidden'))
+  hideDialogs()
   window.prksCreateForms?.resetClosed()
 }
 
@@ -104,6 +96,7 @@ describe('create form keyboard completion', () => {
   afterEach(() => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
+    resetDialogsForTest()
     delete window.prksCreateForms
     delete window.prksRefreshFolderModalValidation
     const w = stubs()
@@ -111,8 +104,9 @@ describe('create form keyboard completion', () => {
   })
 
   function install(): void {
-    installShells()
     mounted.push(mount(CreateFormsHost, { attachTo: document.body }))
+    // One element per dialog id: the host's own shells, no stray fixture.
+    for (const id of CREATE_FORM_MODAL_IDS) expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
   }
 
   it('focuses the first field of each dialog when it opens (#603, #589)', () => {
