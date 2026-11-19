@@ -10,6 +10,7 @@ exercise them through the PostgreSQL boundary.
 from __future__ import annotations
 
 import json
+import tracemalloc
 import unittest
 
 from backend import pdf_annotation_adopt
@@ -65,6 +66,48 @@ class TestAnnotationNormalizer(unittest.TestCase):
         with self.assertRaises(WorkAnnotationError) as ctx2:
             parse_annotations_json([{"id": "a"}])
         self.assertEqual(ctx2.exception.http_status, 400)
+
+    def test_parse_refuses_what_json_does_not_allow(self):
+        """json.loads accepts NaN and Infinity, and raises RecursionError when
+        nested deep; each was a stored "nan" or a 500 before."""
+        for raw in ('[{"id":"a","color":NaN}]', '[{"id":"a","rect":Infinity}]',
+                    '[{"id":"a","pageIndex":-Infinity}]', "[" * 100_000):
+            with self.subTest(raw=raw[:40]):
+                with self.assertRaises(WorkAnnotationError) as ctx:
+                    parse_annotations_json(raw)
+                self.assertEqual(ctx.exception.code, "malformed_annotation_payload")
+
+    def test_normalize_refuses_a_non_finite_number_anywhere(self):
+        """The id, type and colour are kept as text, where NaN became "nan"."""
+        for key in ("id", "type", "color", "contents"):
+            for value in (float("nan"), float("inf")):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaises(WorkAnnotationError):
+                        normalize_annotation({"id": "a", "pageIndex": 0, key: value})
+        with self.assertRaises(WorkAnnotationError):
+            normalize_annotation({"id": "a", "custom": {"deep": [1.0, float("nan")]}})
+
+    def test_the_storage_walks_use_memory_bounded_by_depth_not_width(self):
+        """A wide geometry list is allowed by the body limit; the walks must not copy it."""
+        from backend.domain.annotations.store import _holds_unstorable_text
+        from backend.pdf_annotations import _holds_non_finite
+
+        wide = {"id": "a", "geometry": {"points": list(range(1_000_000)), "label": "x"}}
+        for walk in (_holds_non_finite, _holds_unstorable_text):
+            with self.subTest(walk=walk.__name__):
+                tracemalloc.start()
+                try:
+                    self.assertFalse(walk(wide))
+                    _, peak = tracemalloc.get_traced_memory()
+                finally:
+                    tracemalloc.stop()
+                self.assertLess(peak, 64 * 1024, f"{walk.__name__} peaked at {peak} bytes")
+        deep: list = [float("nan")]
+        for _ in range(100_000):
+            deep = [deep]
+        self.assertTrue(_holds_non_finite(deep))
+        self.assertTrue(_holds_unstorable_text({"k": [[["\ud800"]]]}))
+        self.assertTrue(_holds_unstorable_text({"\x00": 1}))
 
     def test_normalize_strips_aliases_into_geometry(self):
         n = normalize_annotation(
