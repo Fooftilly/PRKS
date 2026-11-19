@@ -4711,10 +4711,12 @@ function initForms() {
 
     // New File's Create is the Vue form's (#1036).
 
-    // Vue owns these submits when prksCreateForms is installed (before
-    // DOMContentLoaded). This fallback is only for the Node membership
-    // harness, which drives onclick without the Vue bundle.
-    if (!window.prksCreateForms) {
+    // Vue owns these submits once the modal host renders the Folder dialog
+    // (mounted before DOMContentLoaded). This fallback is only for the Node
+    // membership harness, which drives onclick without the Vue bundle.
+    const folderDialogHost = window.prksModalHost;
+    if (!(folderDialogHost && typeof folderDialogHost.ownsDialog === 'function'
+        && folderDialogHost.ownsDialog('folder-modal'))) {
     const folderTitleInput = document.getElementById('folder-title');
     const folderTitleError = document.getElementById('folder-title-error');
     const folderBtn = document.getElementById('save-folder-btn');

@@ -3,7 +3,15 @@ import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import CreateFormsHost from './CreateFormsHost.vue'
 import { CREATE_FORM_MODAL_IDS } from './types'
-import { hideDialogs, resetDialogsForTest, showDialog } from '../../modal/dialogs'
+import {
+  beginOpening,
+  dismissDialogInnerLayer,
+  hideDialogs,
+  isDialogDirty,
+  ownsDialog,
+  resetDialogsForTest,
+  showDialog,
+} from '../../modal/dialogs'
 
 interface StubWindow {
   fetchFolders?: () => Promise<Array<{ id?: string; title?: string; parent_id?: string | null }>>
@@ -38,8 +46,11 @@ function stubs(): StubWindow {
 }
 
 /** Opens a dialog through the host, as openModal does: a new opening. */
+/** Shows a dialog and runs its form's opening, as openModal does. */
 function open(modal: HTMLElement | null): void {
-  if (modal) showDialog(modal.id)
+  if (!modal) return
+  showDialog(modal.id)
+  beginOpening(modal.id)
 }
 
 async function flush(): Promise<void> {
@@ -55,7 +66,6 @@ describe('create form host', () => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
     resetDialogsForTest()
-    delete window.prksCreateForms
     delete window.prksRefreshFolderModalValidation
     const w = stubs()
     delete w.fetchFolders
@@ -119,14 +129,14 @@ describe('create form host', () => {
   it('owns the Saved View dialog: body and title are its shell\'s, focus starts on Name', async () => {
     install()
     await nextTick()
-    expect(window.prksCreateForms?.owns('saved-view-modal')).toBe(true)
+    expect(ownsDialog('saved-view-modal')).toBe(true)
     expect(document.querySelector('#saved-view-modal .modal-body #saved-view-name')).not.toBeNull()
     expect(document.querySelector('#saved-view-modal .modal-body #save-saved-view-btn')).not.toBeNull()
     expect(document.getElementById('saved-view-modal-title')?.textContent).toBe('Save View')
-    window.prksCreateForms?.focusInitial('saved-view-modal')
+    open(document.getElementById('saved-view-modal'))
     expect(document.activeElement?.id).toBe('saved-view-name')
     // No unsaved-changes confirm and no inner layer, as before.
-    expect(window.prksCreateForms?.dismissInnerLayer('saved-view-modal')).toBe(false)
+    expect(dismissDialogInnerLayer('saved-view-modal')).toBe(false)
   })
 
   it('tracks a dirty folder draft from the view and blocks a duplicate title', async () => {
@@ -134,16 +144,16 @@ describe('create form host', () => {
     const w = stubs()
     w.fetchFolders = async () => [{ id: 'f1', title: 'Notes', parent_id: '' }]
     w.prksFolderRowLabel = (folder) => String(folder.title || '')
-    await window.prksCreateForms?.refreshFolderValidation()
     const modal = document.getElementById('folder-modal')
+    // The opening loads the folders and takes the baseline.
     open(modal)
-    window.prksCreateForms?.captureBaseline('folder-modal')
-    expect(window.prksCreateForms?.isDirty('folder-modal')).toBe(false)
+    await flush()
+    expect(isDialogDirty('folder-modal')).toBe(false)
     const title = document.getElementById('folder-title') as HTMLInputElement
     title.value = 'Notes'
     title.dispatchEvent(new Event('input', { bubbles: true }))
     await nextTick()
-    expect(window.prksCreateForms?.isDirty('folder-modal')).toBe(true)
+    expect(isDialogDirty('folder-modal')).toBe(true)
     expect(document.getElementById('folder-title-error')?.textContent).toContain('already exists')
     const button = document.getElementById('save-folder-btn') as HTMLButtonElement
     expect(button.disabled).toBe(true)
@@ -359,10 +369,10 @@ describe('create form host', () => {
 
     // Dismiss → reopen clears fields and busy for the new opening.
     hideDialogs()
-    window.prksCreateForms?.afterPersonReset()
     await flush()
-    ;(document.getElementById('person-lname') as HTMLInputElement).value = ''
+    // The new opening resets the fields and frees Save.
     open(modal)
+    await flush()
     ;(document.getElementById('person-lname') as HTMLInputElement).value = 'New'
     expect(document.getElementById('save-person-btn')?.getAttribute('aria-busy')).not.toBe('true')
 
@@ -427,10 +437,11 @@ describe('create form host', () => {
     expect(creates).toBe(1)
 
     hideDialogs()
-    window.prksCreateForms?.resetPlaylistFields()
     await flush()
     w.__prksPendingPlaylistAttach = secondAttach
+    // The new opening resets the fields and frees Create.
     open(modal)
+    await flush()
     ;(document.getElementById('playlist-title') as HTMLInputElement).value = 'Second'
     document.getElementById('save-playlist-btn')?.click()
     await flush()

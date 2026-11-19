@@ -2,6 +2,7 @@
 import { nextTick, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
+import { useDialogLifecycle } from '../../modal/dialogs'
 import { useComboboxPanel } from './combobox-panel'
 import { fieldValue, setFieldValue } from './dom'
 import { createGroupSaveGate } from './group-save'
@@ -220,7 +221,16 @@ function closeParentList(): boolean {
   return true
 }
 
-defineExpose({ prepare, focusInitial, resetFields, closeParentList })
+// The groups catalogue loads in the background: the dialog is usable at once,
+// and the parent list fills when it arrives.
+useDialogLifecycle({
+  opened: () => {
+    void prepare()
+  },
+  focusInitial,
+  closed: resetFields,
+  dismissInnerLayer: closeParentList,
+})
 </script>
 
 <template>

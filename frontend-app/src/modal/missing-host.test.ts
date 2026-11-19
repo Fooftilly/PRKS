@@ -22,9 +22,13 @@ interface ModalCloseSlice {
 const noDialogs = {
   ownsDialog: () => false,
   showDialog: () => 0,
+  beginOpening: () => {},
   restoreDialog: () => {},
   hideDialogs: () => {},
-  setDialogInert: () => {},
+  dialogsClosed: () => {},
+  isDialogDirty: () => false,
+  captureDialogBaseline: () => {},
+  resetDialogBaselines: () => {},
 }
 
 describe('dirty modal close before the dialog host loads', () => {

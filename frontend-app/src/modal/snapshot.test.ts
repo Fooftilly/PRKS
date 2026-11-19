@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { snapshotModalFields } from './snapshot'
 
-describe('create form snapshot', () => {
+describe('dialog field snapshot', () => {
   it('records each field as an exact key and value pair', () => {
     const modal = document.createElement('div')
     modal.innerHTML = [

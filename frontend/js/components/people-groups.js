@@ -232,31 +232,6 @@ function prksBindGroupSearchComboboxElements(input, results, hidden, excludedIds
     };
 }
 
-function prksBindGroupSearchCombobox(inputId, resultsId, hiddenId, excludedIds) {
-    prksBindGroupSearchComboboxElements(
-        document.getElementById(inputId),
-        document.getElementById(resultsId),
-        document.getElementById(hiddenId),
-        excludedIds
-    );
-}
-
-/** New group modal: load cache, clear fields, bind parent search. */
-async function prksInitNewGroupModal() {
-    if (window.prksCreateForms && typeof window.prksCreateForms.prepareGroup === 'function') {
-        await window.prksCreateForms.prepareGroup();
-        return;
-    }
-    document.getElementById('group-parent-search') &&
-        (document.getElementById('group-parent-search').value = '');
-    const hid = document.getElementById('group-parent-id');
-    if (hid) hid.value = '';
-    await prksEnsureAllGroupsCache();
-    prksBindGroupSearchCombobox('group-parent-search', 'group-parent-results', 'group-parent-id', new Set());
-}
-
-window.prksInitNewGroupModal = prksInitNewGroupModal;
-
 function prksPersonGroupRouteStill(ctx, groupId) {
     if (!ctx || ctx.destroyed) return false;
     const route = ctx.lastResolvedRoute || ctx.route;

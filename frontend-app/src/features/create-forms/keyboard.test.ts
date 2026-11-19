@@ -3,7 +3,14 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import CreateFormsHost from './CreateFormsHost.vue'
 import { CREATE_FORM_MODAL_IDS } from './types'
-import { hideDialogs, resetDialogsForTest, showDialog } from '../../modal/dialogs'
+import {
+  beginOpening,
+  dialogsClosed,
+  dismissDialogInnerLayer,
+  hideDialogs,
+  resetDialogsForTest,
+  showDialog,
+} from '../../modal/dialogs'
 
 interface StubWindow {
   fetchFolders?: () => Promise<Array<{ id?: string; title?: string; parent_id?: string | null }>>
@@ -52,9 +59,10 @@ async function flush(): Promise<void> {
   }
 }
 
-/** Opens a dialog through the host, as openModal does. */
+/** Opens a dialog through the host and runs its opening, as openModal does. */
 function show(modalId: string): HTMLElement {
   showDialog(modalId)
+  beginOpening(modalId)
   const modal = document.getElementById(modalId) as HTMLElement
   expect(modal.classList.contains('hidden')).toBe(false)
   return modal
@@ -62,7 +70,7 @@ function show(modalId: string): HTMLElement {
 
 function hideAll(): void {
   hideDialogs()
-  window.prksCreateForms?.resetClosed()
+  dialogsClosed()
 }
 
 function input(id: string): HTMLInputElement {
@@ -97,7 +105,6 @@ describe('create form keyboard completion', () => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
     resetDialogsForTest()
-    delete window.prksCreateForms
     delete window.prksRefreshFolderModalValidation
     const w = stubs()
     for (const name of STUB_KEYS) delete w[name]
@@ -119,7 +126,6 @@ describe('create form keyboard completion', () => {
     }
     for (const [modalId, fieldId] of Object.entries(first)) {
       show(modalId)
-      window.prksCreateForms?.focusInitial(modalId)
       expect(document.activeElement?.id).toBe(fieldId)
       hideAll()
     }
@@ -136,7 +142,7 @@ describe('create form keyboard completion', () => {
     }
     w.closeModals = hideAll
     w.prksNavigate = () => {}
-    await window.prksCreateForms?.refreshFolderValidation()
+    await window.prksRefreshFolderModalValidation?.()
     show('folder-modal')
     type(input('folder-title'), 'By Enter')
     expect(key(input('folder-title'), 'Enter').defaultPrevented).toBe(true)
@@ -201,7 +207,7 @@ describe('create form keyboard completion', () => {
     }
     w.closeModals = hideAll
     w.prksNavigate = () => {}
-    await window.prksCreateForms?.refreshFolderValidation()
+    await window.prksRefreshFolderModalValidation?.()
     show('folder-modal')
     input('folder-title').value = 'Child'
     const search = input('folder-parent-search')
@@ -253,7 +259,7 @@ describe('create form keyboard completion', () => {
     w.closeModals = hideAll
     w.prksNavigate = () => {}
     show('group-modal')
-    await window.prksCreateForms?.prepareGroup()
+    await flush()
     input('group-name').value = 'Child group'
     const search = input('group-parent-search')
 
@@ -278,7 +284,7 @@ describe('create form keyboard completion', () => {
     expect(bodies.at(-1)?.parent_id).toBe('G-1')
 
     show('group-modal')
-    await window.prksCreateForms?.prepareGroup()
+    await flush()
     input('group-name').value = 'Second child'
     type(input('group-parent-search'), 'Brand New')
     await flush()
@@ -332,18 +338,18 @@ describe('create form keyboard completion', () => {
     install()
     const w = stubs()
     w.fetchFolders = async () => [{ id: 'F-A', title: 'Alpha', parent_id: null }]
-    await window.prksCreateForms?.refreshFolderValidation()
+    await window.prksRefreshFolderModalValidation?.()
     show('folder-modal')
-    expect(window.prksCreateForms?.dismissInnerLayer('folder-modal')).toBe(false)
+    expect(dismissDialogInnerLayer('folder-modal')).toBe(false)
     type(input('folder-parent-search'), 'Alp')
     await flush()
     const results = document.getElementById('folder-parent-results') as HTMLElement
     expect(results.classList.contains('is-open')).toBe(true)
-    expect(window.prksCreateForms?.dismissInnerLayer('folder-modal')).toBe(true)
+    expect(dismissDialogInnerLayer('folder-modal')).toBe(true)
     await flush()
     expect(results.classList.contains('is-open')).toBe(false)
     // Nothing left to close: the next Escape belongs to the dialog.
-    expect(window.prksCreateForms?.dismissInnerLayer('folder-modal')).toBe(false)
+    expect(dismissDialogInnerLayer('folder-modal')).toBe(false)
   })
 
   it('keeps the parent list open when focus returns to the picker before the blur collapse', async () => {
@@ -352,7 +358,7 @@ describe('create form keyboard completion', () => {
       install()
       const w = stubs()
       w.fetchFolders = async () => [{ id: 'F-A', title: 'Alpha', parent_id: null }]
-      await window.prksCreateForms?.refreshFolderValidation()
+      await window.prksRefreshFolderModalValidation?.()
       show('folder-modal')
       const search = input('folder-parent-search')
       type(search, 'Alp')

@@ -10,6 +10,7 @@
  */
 import { nextTick, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import { useDialogLifecycle } from '../../modal/dialogs'
 import { parseRoute } from '../../routing/route-model'
 import { fieldValue, setFieldValue } from './dom'
 import { useInlineCombobox } from './new-file/combobox'
@@ -370,6 +371,14 @@ async function onSave(): Promise<void> {
 
 onMounted(() => {
   runtime().prksBindRoleCreditPicker?.(PREFIX)
+})
+
+// The dialog stays inert until both catalogues and the opener's Person or
+// File load.
+useDialogLifecycle({
+  opened: (opening) => prepare(opening.isCurrent),
+  focusInitial,
+  dismissInnerLayer: closeOpenList,
 })
 
 defineExpose({ prepare, focusInitial, closeOpenList })

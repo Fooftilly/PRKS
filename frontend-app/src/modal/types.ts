@@ -41,10 +41,21 @@ export interface PrksModalHostApi {
   ownsDialog: (id: string) => boolean
   /** Shows one owned dialog as a new opening; returns its generation. */
   showDialog: (id: string) => number
+  /**
+   * Runs the form's steps for that opening (prepare, baseline, focus), after
+   * the opener has set its own state.
+   */
+  beginOpening: (id: string) => void
   /** Shows an owned dialog again without starting a new opening. */
   restoreDialog: (id: string) => void
   /** Hides every owned dialog. */
   hideDialogs: () => void
-  /** Keeps an owned dialog inert while its opening prepares. */
-  setDialogInert: (id: string, on: boolean) => void
+  /** `closeModals` finished: the closed dialogs drop their drafts. */
+  dialogsClosed: () => void
+  /** True when an owned dialog's fields differ from its opening's baseline. */
+  isDialogDirty: (id: string) => boolean
+  /** Takes an owned dialog's fields as its baseline now. */
+  captureDialogBaseline: (id: string) => void
+  /** Drops every owned dialog's baseline. */
+  resetDialogBaselines: () => void
 }

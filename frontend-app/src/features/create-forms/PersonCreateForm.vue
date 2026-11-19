@@ -2,7 +2,8 @@
 import { ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
-import { fieldValue } from './dom'
+import { useDialogLifecycle } from '../../modal/dialogs'
+import { fieldValue, setFieldValue } from './dom'
 import { createPersonSaveGate } from './person-save'
 import { createPersonDurably, finishPersonCreate, type PersonPayload } from './submit'
 import { createSubmitKeyHandler, focusField } from './keyboard'
@@ -94,7 +95,30 @@ async function onSave(): Promise<void> {
   })
 }
 
-function afterReset(): void {
+const FIELD_IDS = [
+  'person-fname',
+  'person-lname',
+  'person-aliases',
+  'person-about',
+  'person-birth-date',
+  'person-death-date',
+  'person-image-url',
+  'person-link-wikipedia',
+  'person-link-stanford',
+  'person-link-iep',
+  'person-links-other',
+] as const
+
+/**
+ * Every opening starts blank, with aliases following the names again. The
+ * profile editor in the right panel is a separate form and is not touched.
+ */
+function resetForOpening(): void {
+  window._personAliasesManual = false
+  for (const id of FIELD_IDS) {
+    setFieldValue(id, '')
+    document.getElementById(id)?.removeAttribute('aria-invalid')
+  }
   // New opening: allow a fresh Save. An older in-flight create keeps its own
   // opening token and must not clear this busy flag when it settles.
   personBusy.value = false
@@ -106,7 +130,7 @@ function focusInitial(): void {
   focusField('person-fname')
 }
 
-defineExpose({ afterReset, focusInitial })
+useDialogLifecycle({ opened: resetForOpening, focusInitial })
 </script>
 
 <template>
