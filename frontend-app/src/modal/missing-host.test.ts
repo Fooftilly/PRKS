@@ -18,6 +18,15 @@ interface ModalCloseSlice {
   prksCaptureModalBaseline: CaptureFn
 }
 
+/** A host stub that renders no feature dialogs. */
+const noDialogs = {
+  ownsDialog: () => false,
+  showDialog: () => 0,
+  restoreDialog: () => {},
+  hideDialogs: () => {},
+  setDialogInert: () => {},
+}
+
 describe('dirty modal close before the dialog host loads', () => {
   let closes = 0
   let slice: ModalCloseSlice
@@ -87,6 +96,7 @@ describe('dirty modal close before the dialog host loads', () => {
       isConfirmOpen: () => false,
       isUnsavedConfirmOpen: () => false,
       handleEscape: () => {},
+      ...noDialogs,
     }
     const dialog = (window as Window & {
       prksConfirmDialog?: (options?: { title?: string }) => Promise<boolean>
@@ -121,6 +131,7 @@ describe('dirty modal close before the dialog host loads', () => {
       isConfirmOpen: () => false,
       isUnsavedConfirmOpen: () => false,
       handleEscape: () => {},
+      ...noDialogs,
     }
 
     expect(slice.requestModalClose('button')).toBe(false)

@@ -5,8 +5,9 @@
     <SettingsSurface />
   </Teleport>
   <CommandPalette />
-  <ModalHost />
-  <CreateFormsHost />
+  <ModalHost>
+    <CreateFormsHost />
+  </ModalHost>
   <WorkspaceShell />
   <AppChrome />
 </template>

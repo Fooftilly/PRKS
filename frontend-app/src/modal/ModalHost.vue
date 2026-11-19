@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../components/PrksButton.vue'
+import { hideDialogs, ownsDialog, restoreDialog, setDialogInert, showDialog } from './dialogs'
 import { restoreConfirmFocus, tabbableIn } from './focus'
 import type {
   ModalConfirmOptions,
@@ -296,6 +297,11 @@ const api: PrksModalHostApi = {
   isConfirmOpen: () => session.value != null,
   isUnsavedConfirmOpen: () => unsavedOpen.value,
   handleEscape,
+  ownsDialog,
+  showDialog,
+  restoreDialog,
+  hideDialogs,
+  setDialogInert,
 }
 
 onMounted(() => {
@@ -311,6 +317,8 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
+    <!-- Feature dialogs (the create forms, #1036), each a ModalDialog. -->
+    <slot />
     <div
       id="prks-modal-unsaved-confirm"
       class="prks-modal-unsaved-confirm"

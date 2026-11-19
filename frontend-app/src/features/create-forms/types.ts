@@ -1,12 +1,11 @@
 /**
- * Bridge from the classic modal shells to the Vue create forms.
+ * The classic opener's hooks into the Vue create forms (#1036).
  *
- * Temporary adapter (#1036). `ModalHost` paints confirm, alert, prompt, and
- * unsaved dismissal only. Folder, Person, Person Group, and Playlist bodies
- * teleport into the shells in `frontend/index.html`, and so do New File's
- * body and footer, the Saved View body and title, the Link Person to Work
- * body, and the Edit Profile Using Template body. Retire this object when
- * those shells move into the Vue host. Settings stays on its own shell.
+ * `ModalHost` renders every create-form dialog (a `ModalDialog` per form)
+ * and owns which one is open, so the shells are Vue's. `openModal` and
+ * `closeModals` in `ui.js` still run each dialog's per-opening steps
+ * (prepare, baseline, focus, reset on close) through this object. Retire it
+ * when those steps move into the forms. Settings stays on its own shell.
  * Saved View, Playlist and the person template have no unsaved-changes
  * confirm (`ui.js`).
  */

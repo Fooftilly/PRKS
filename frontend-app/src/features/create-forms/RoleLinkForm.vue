@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * Link Person to Work (#1036). Temporary adapter: `CreateFormsHost`
- * teleports this body into the classic `#role-modal` shell.
+ * Link Person to Work (#1036). ModalHost renders it as the body of the
+ * `#role-modal` ModalDialog.
  *
  * Vue owns the pickers, the role choice, the busy state and the messages.
  * The shared role-credit picker (`role-link` prefix), person quick-create,

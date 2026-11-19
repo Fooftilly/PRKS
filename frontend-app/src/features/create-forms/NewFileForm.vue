@@ -2,9 +2,9 @@
 /**
  * New File (Work) create form (#1036).
  *
- * The body teleports into `#work-modal-vue` and the footer (status, Cancel,
- * Create File) into `#work-modal-footer-vue`; the dialog shell and header
- * stay in `frontend/index.html` until ModalHost mounts feature forms. Text
+ * ModalHost renders it as the body of the `#work-modal` ModalDialog. The
+ * footer (status, Cancel, Create File) is portalled into that dialog's own
+ * sticky `#work-modal-footer`, outside the scrolling body. Text
  * fields are uncontrolled inputs, as in the other create forms: the dirty
  * snapshot and the shared widgets (doc-type menu, status segments, credit
  * picker) read and write them in the DOM.
@@ -544,7 +544,7 @@ defineExpose({ prepare, focusInitial, closeOpenList })
     </details>
   </div>
 
-  <Teleport to="#work-modal-footer-vue">
+  <Teleport defer to="#work-modal-footer">
     <p id="upload-status-msg" class="upload-status" :class="{ hidden: !state.status.value }" role="status">{{ state.status.value }}</p>
     <PrksButton id="work-modal-cancel" variant="secondary" @click="onCancel">Cancel</PrksButton>
     <!--

@@ -45,7 +45,8 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("LIBRARY_LINKS", sidebar)
         self.assertLess(catalog.find("href: '#/recent'"), catalog.find("href: '#/views'"))
         self.assertEqual(catalog.count("href: '#/views'"), 1)
-        self.assertIn('id="saved-view-modal"', html)
+        self.assertNotIn('id="saved-view-modal"', html)
+        self.assertIn('<ModalDialog id="saved-view-modal" :title="savedViewTitle">', _read(_CREATE_HOST))
         app = _read(_APP)
         self.assertIn("saved-views", app)
         self.assertIn("saved-view-detail", app)
@@ -272,19 +273,19 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertIn("never cached work membership", agents)
 
     def test_dialog_is_the_vue_form(self):
-        """The Saved View dialog body and title are Vue, teleported into the
-        classic shell. The form installs the openers (#1036)."""
+        """The Saved View dialog is Vue: ModalHost renders its shell, whose
+        heading reads the form's exposed title. The form installs the openers
+        (#1036)."""
         html = _read(_INDEX)
-        at = html.index('id="saved-view-modal"')
-        shell = html[at: html.index("</div>\n\n", at)]
-        self.assertIn('id="saved-view-modal-vue"', shell)
-        self.assertIn('id="saved-view-modal-title"', shell)
-        self.assertNotIn('id="saved-view-name"', shell)
+        self.assertNotIn('id="saved-view-modal"', html)
+        self.assertNotIn('id="saved-view-name"', html)
         host = _read(_CREATE_HOST)
-        self.assertIn('<Teleport to="#saved-view-modal-vue">', host)
+        self.assertIn('<ModalDialog id="saved-view-modal" :title="savedViewTitle">', host)
+        self.assertIn("savedViewRef.value?.title", host)
         self.assertIn("'saved-view-modal': () => savedViewRef.value", host)
         form = _read(_SV)
-        self.assertIn('<Teleport to="#saved-view-modal-title">', form)
+        self.assertNotIn("<Teleport", form)
+        self.assertIn("defineExpose({ open: openWith, focusInitial, title })", form)
         for name in (
             "window.prksOpenSavedViewModal = openWith",
             "window.prksOpenSavedViewModalFromCurrentSearch = openFromSearch",

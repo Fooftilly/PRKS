@@ -50,7 +50,7 @@ async function clickSave(): Promise<void> {
 
 beforeEach(() => {
   document.body.innerHTML =
-    '<div id="saved-view-modal" class="modal hidden"><h3 id="saved-view-modal-title"></h3>' +
+    '<div id="saved-view-modal" class="modal hidden">' +
     '<div id="saved-view-modal-vue" class="modal-body"></div></div><div id="app"></div>'
   h = {
     records: { create: vi.fn(async () => ({ id: 'SV-NEW' })), update: vi.fn(async () => ({})) },
@@ -79,7 +79,7 @@ beforeEach(() => {
   window.prksAlertDialog = async (opts) => {
     h.alerts.push(opts)
   }
-  // Mounted inside the shell body, as CreateFormsHost teleports it.
+  // Mounted inside a dialog body, as ModalDialog renders it.
   wrapper = mount(SavedViewForm, { attachTo: '#saved-view-modal-vue' })
 })
 
@@ -114,7 +114,7 @@ describe('Saved View form', () => {
     window.prksOpenSavedViewModalFromCurrentSearch?.('#/search?q=critical%20theory&author=Adorno')
     await flush()
     expect(h.opened).toEqual(['saved-view-modal'])
-    expect(document.getElementById('saved-view-modal-title')?.textContent).toBe('Save View')
+    expect((wrapper as unknown as { vm?: { title?: string } } | undefined)?.vm?.title).toBe('Save View')
     expect(input('saved-view-q').value).toBe('critical theory')
     expect(input('saved-view-author').value).toBe('Adorno')
     expect(document.getElementById('saved-view-q-label')?.textContent?.trim()).toBe('Keywords')
@@ -190,7 +190,7 @@ describe('Saved View form', () => {
     window.location.hash = '#/views/SV-MAIN'
     window.prksOpenSavedViewModalForCurrentView?.()
     await flush()
-    expect(document.getElementById('saved-view-modal-title')?.textContent).toBe('Edit Saved View')
+    expect((wrapper as unknown as { vm?: { title?: string } } | undefined)?.vm?.title).toBe('Edit Saved View')
     expect(document.getElementById('save-saved-view-btn')?.textContent?.trim()).toBe('Save changes')
     expect(input('saved-view-name').value).toBe('Main View')
     expect(input('saved-view-tag').value).toBe('T')

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import FolderCreateForm from './FolderCreateForm.vue'
 import GroupCreateForm from './GroupCreateForm.vue'
 import NewFileForm from './NewFileForm.vue'
@@ -8,6 +8,7 @@ import PersonTemplateForm from './PersonTemplateForm.vue'
 import PlaylistCreateForm from './PlaylistCreateForm.vue'
 import RoleLinkForm from './RoleLinkForm.vue'
 import SavedViewForm from '../saved-views/SavedViewForm.vue'
+import ModalDialog from '../../modal/ModalDialog.vue'
 import { snapshotModalFields } from './snapshot'
 import { CREATE_FORM_MODAL_IDS, type CreateFormModalId, type PrksCreateFormsApi } from './types'
 
@@ -22,6 +23,9 @@ const newFileRef = ref<InstanceType<typeof NewFileForm> | null>(null)
 const savedViewRef = ref<InstanceType<typeof SavedViewForm> | null>(null)
 const roleLinkRef = ref<InstanceType<typeof RoleLinkForm> | null>(null)
 const personTemplateRef = ref<InstanceType<typeof PersonTemplateForm> | null>(null)
+
+/** Saved View's heading follows its mode (new or edit). */
+const savedViewTitle = computed(() => savedViewRef.value?.title ?? '')
 
 function modalRoot(modalId: string): HTMLElement | null {
   const el = document.getElementById(modalId)
@@ -114,34 +118,38 @@ onBeforeUnmount(() => {
 
 <template>
   <!--
-    Temporary adapter (#1036). ModalHost does not mount feature forms yet,
-    so these bodies teleport into the classic shells. Retire the teleport
-    when the host grows a feature-form slot. New File also teleports its
-    footer into the shell, and Saved View its title. Settings keeps its own
-    shell.
+    ModalHost renders this inside its own layer (#1036): each form is the
+    body of a ModalDialog shell, and openModal / closeModals reach the shells
+    through window.prksModalHost. Settings keeps its classic shell.
   -->
-  <Teleport to="#folder-modal-vue">
-    <FolderCreateForm ref="folderRef" />
-  </Teleport>
-  <Teleport to="#person-modal-vue">
-    <PersonCreateForm ref="personRef" />
-  </Teleport>
-  <Teleport to="#group-modal-vue">
-    <GroupCreateForm ref="groupRef" />
-  </Teleport>
-  <Teleport to="#playlist-modal-vue">
-    <PlaylistCreateForm ref="playlistRef" />
-  </Teleport>
-  <Teleport to="#work-modal-vue">
+  <ModalDialog
+    id="work-modal"
+    title="New File"
+    dialog-class="modal-wide modal--create-file"
+    body-class="modal-body--scroll"
+    with-footer
+  >
     <NewFileForm ref="newFileRef" />
-  </Teleport>
-  <Teleport to="#saved-view-modal-vue">
+  </ModalDialog>
+  <ModalDialog id="folder-modal" title="Add New Folder">
+    <FolderCreateForm ref="folderRef" />
+  </ModalDialog>
+  <ModalDialog id="playlist-modal" title="New playlist">
+    <PlaylistCreateForm ref="playlistRef" />
+  </ModalDialog>
+  <ModalDialog id="saved-view-modal" :title="savedViewTitle">
     <SavedViewForm ref="savedViewRef" />
-  </Teleport>
-  <Teleport to="#role-modal-vue">
-    <RoleLinkForm ref="roleLinkRef" />
-  </Teleport>
-  <Teleport to="#person-template-modal-vue">
+  </ModalDialog>
+  <ModalDialog id="group-modal" title="New people group">
+    <GroupCreateForm ref="groupRef" />
+  </ModalDialog>
+  <ModalDialog id="person-modal" title="Add New Person">
+    <PersonCreateForm ref="personRef" />
+  </ModalDialog>
+  <ModalDialog id="person-template-modal" title="Edit Profile Using Template">
     <PersonTemplateForm ref="personTemplateRef" />
-  </Teleport>
+  </ModalDialog>
+  <ModalDialog id="role-modal" title="Link Person to Work">
+    <RoleLinkForm ref="roleLinkRef" />
+  </ModalDialog>
 </template>

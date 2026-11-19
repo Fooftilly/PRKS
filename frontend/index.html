@@ -147,79 +147,9 @@
         </div>
     </div>
 
-    <div id="work-modal" class="modal modal-wide modal--create-file hidden" aria-labelledby="work-modal-title">
-        <div class="modal-header">
-            <h3 id="work-modal-title">New File</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')" aria-label="Close">&times;</button>
-        </div>
-        <!-- Vue create form and its footer (#1036). The shell stays until ModalHost mounts feature forms. -->
-        <div id="work-modal-vue" class="modal-body modal-body--scroll"></div>
-        <div id="work-modal-footer-vue" class="modal-footer modal-footer--sticky prks-form-actions"></div>
-    </div>
-
-    <div id="folder-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3>Add New Folder</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="folder-modal-vue" class="modal-body"></div>
-    </div>
-
-    <div id="playlist-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3>New playlist</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="playlist-modal-vue" class="modal-body"></div>
-    </div>
-
-    <div id="saved-view-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3 id="saved-view-modal-title"></h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue Saved View form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="saved-view-modal-vue" class="modal-body"></div>
-    </div>
-
-    <div id="group-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3>New people group</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="group-modal-vue" class="modal-body"></div>
-    </div>
-
-    <div id="person-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3>Add New Person</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue create form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="person-modal-vue" class="modal-body"></div>
-    </div>
-    <div id="person-template-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3>Edit Profile Using Template</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue person template form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="person-template-modal-vue" class="modal-body"></div>
-    </div>
-
-    <div id="role-modal" class="modal hidden">
-        <div class="modal-header">
-            <h3>Link Person to Work</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
-        </div>
-        <!-- Vue Link Person to Work form (#1036). Shell stays until ModalHost mounts feature forms. -->
-        <div id="role-modal-vue" class="modal-body"></div>
-    </div>
-
-
+    <!-- New File, Folder, Playlist, Saved View, Person Group, Person, the
+         person template and Link Person to Work dialogs are rendered by the
+         Vue modal host (ModalDialog.vue, #1036). -->
 
     <script src="/vendor/lucide/lucide.min.js"></script>
     <script src="/js/icons.js"></script>
