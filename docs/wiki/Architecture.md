@@ -38,7 +38,7 @@ PRKS threaded HTTP server
 
 The normal process entry point is `prks_app.py`. Backend modules under `backend/` own storage, migrations, API/server behavior, synchronization families, PDF processing, backup/restore, indexing, logging, and research-network operations.
 
-The shipped UI shell under `frontend/js/` is still the legacy vanilla-JavaScript SPA. New UI is introduced from `frontend-app/` (Vue 3, TypeScript, Vite). The Python server serves the committed production bundle in `frontend/vue/` with the rest of `frontend/`. Running PRKS does not require Node.
+The UI is Vue 3 (TypeScript, Vite) under `frontend-app/`: every route page, the sidebar and ribbon, Settings, the command palette and the dialogs. The classic scripts under `frontend/js/` remain the runtime underneath: route and TabContext coordination, durable local-first writes and sync, offline reads, and engines such as the PDF reader and the note editor. `docs/frontend-migration-boundaries.md` lists who owns what. The Python server serves the committed production bundle in `frontend/vue/` with the rest of `frontend/`. Running PRKS does not require Node.
 
 ## Backend boundaries
 
@@ -62,9 +62,9 @@ PostgreSQL is the only Library store (PG-C2). Library writes run inside `library
 
 Important frontend areas include:
 
-- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle. The app mounts from a hidden host and teleports Settings performance diagnostics and the workspace shell into the legacy page. TanStack Query holds that disposable server snapshot only. The workspace shell renders a read-only projection; it does not own tabs, focus, or split state.
-- `frontend/js/app.js` and `navigation.js` — legacy app shell and route/navigation behavior.
-- `components/` — route-level UI surfaces.
+- `frontend-app/` — Vue 3 + TypeScript source. Production output is the committed `frontend/vue/` bundle. It renders the route pages (`src/features/`, presented through `src/route-surface/`), the app chrome, Settings, the command palette and the dialogs (`src/modal/`). TanStack Query holds disposable server snapshots only. The workspace shell renders a read-only projection; it does not own tabs, focus, or split state.
+- `frontend/js/app.js` and `navigation.js` — route resolution and navigation: the coordinator that hands each route to its Vue page.
+- `components/` — per-route classic runtime: data loading, durable writes and the bridges each Vue page calls.
 - `tab-context.js` and `workspace-*.js` — in-app tabs, split view, pane layout, and persistence.
 - `local-store.js`, `sync-runtime.js`, and domain `*-state.js` modules — durable local-first intent and reconciliation.
 - `offline-store.js` / `offline-runtime.js` — disposable offline read projections and availability behavior.

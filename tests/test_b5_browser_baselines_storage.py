@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -110,6 +111,58 @@ class TestB5StorageGuard(unittest.TestCase):
                 StorageConfig.for_testing(str(storage)), register=False
             )
             bound.release()
+
+
+class TestB5WriteHeaders(unittest.TestCase):
+    """Writes carry Origin and the Library epoch, so seeding is admitted."""
+
+    def setUp(self):
+        self.addCleanup(setattr, harness, "_LIBRARY_EPOCH", harness._LIBRARY_EPOCH)
+        harness._LIBRARY_EPOCH = None
+        self.sent = []
+
+        class _Response:
+            def __init__(self, headers):
+                self.headers = headers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        def fake_urlopen(req, timeout=None):
+            self.sent.append((req.get_method(), req.full_url, dict(req.header_items())))
+            return _Response({"PRKS-Library-Epoch": "epoch-7"})
+
+        patcher = mock.patch.object(harness.urllib.request, "urlopen", fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_first_write_reads_the_epoch_then_sends_it_with_origin(self):
+        harness._http_json("POST", "http://127.0.0.1:8123/api/works", {"title": "x"})
+        harness._http_json("PATCH", "http://127.0.0.1:8123/api/works/1", {"title": "y"})
+        self.assertEqual(
+            [(m, u) for m, u, _h in self.sent],
+            [
+                ("GET", "http://127.0.0.1:8123/api/session"),
+                ("POST", "http://127.0.0.1:8123/api/works"),
+                ("PATCH", "http://127.0.0.1:8123/api/works/1"),
+            ],
+        )
+        for _m, _u, headers in self.sent[1:]:
+            self.assertEqual(headers.get("Origin"), "http://127.0.0.1:8123")
+            self.assertEqual(headers.get("Prks-library-epoch"), "epoch-7")
+
+    def test_reads_send_neither_header(self):
+        harness._http_json("GET", "http://127.0.0.1:8123/api/works")
+        self.assertEqual(len(self.sent), 1)
+        headers = self.sent[0][2]
+        self.assertNotIn("Origin", headers)
+        self.assertNotIn("Prks-library-epoch", headers)
 
 
 if __name__ == "__main__":
