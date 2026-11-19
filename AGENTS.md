@@ -16,7 +16,6 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 - `tests/ux_tour/AGENTS.md`: UX Interaction Tour safety, interaction, artifact, and isolation policy.
 - `DESIGN.md`: canonical UI/interaction design authority. For UI work, read the relevant sections for the affected component rather than loading the whole document by default.
 - `docs/agent-context/sync-map.md`: routing map for the large local-first/offline specifications.
-- `docs/agent-workflows/cursor-projects.md`: recommended Cursor Projects delegation workflow; reference it for project/coordinator operation rather than treating it as an always-on engineering rule.
 - `docs/agent-workflows/github-discussions.md`: decision/proposal discussion lifecycle, maintainer approval boundary, duplicate investigation coordination, and issue handoff; load it when opening, assessing, or converting a GitHub Discussion, not for unrelated code tasks.
 - `docs/agent-workflows/issue-dependencies.md`: who may record native Blocked by issue relationships and how to run, audit and revoke the dependency writer workflow; load it only when recording or reviewing issue dependencies.
 - `docs/agent-workflows/project-3.md`: GitHub Project #3 contract (lifecycle Status, Execution, native workflows, view filters, archival, credentials); load it only when changing Project #3 configuration or its automation.
@@ -25,7 +24,7 @@ PRKS keeps detailed rules close to the code they govern so agents do not need un
 - `docs/agent-workflows/project3-triage.md`: maintainer-approved, dry-run-first batch Agent/Status/Execution edits for existing Project #3 issues; never infer approval or roadmap safety from ownership.
 
 Nested `AGENTS.md` files refine these root rules for their directory scope.
-When both apply, Cursor's more-specific nested instructions take precedence.
+When both apply, the more-specific nested instructions take precedence.
 Do not encode conflicting overrides of load-bearing root invariants (storage
 safety, privacy/logging, issue taxonomy, etc.); keep nested files additive
 refinements and routers instead of relying on root precedence to win a conflict.

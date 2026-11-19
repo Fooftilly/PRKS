@@ -111,7 +111,13 @@ class PeopleVueContracts(unittest.TestCase):
         self.assertIn("async function savePersonProfileDraft(", people)
         self.assertIn("function prksBindPersonProfileDraft(", people)
         self.assertIn("async function deletePerson(explicitCtx, explicitGeneration)", people)
-        self.assertIn("new Event('input'", people)
+        # Edit using template fills the Vue editor's v-model through input
+        # events; that form is the Vue person template (#1036).
+        template = (
+            ROOT / "frontend-app" / "src" / "features" / "create-forms" / "person-template" / "template.ts"
+        ).read_text()
+        self.assertIn("new Event('input'", template)
+        self.assertNotIn("PERSON_STANDARD_TEMPLATE_FIELDS", people)
         sidebar = people[people.index("function renderPersonProfileDetailsSidebarHtml") : people.index("const PRKS_PERSON_PROFILE_FIELDS")]
         self.assertIn("Edit profile", sidebar)
         self.assertIn("Done", sidebar)

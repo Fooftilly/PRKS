@@ -284,7 +284,7 @@ class FrontendSavedViewsTests(unittest.TestCase):
         self.assertNotIn('id="saved-view-name"', shell)
         host = _read(_CREATE_HOST)
         self.assertIn('<Teleport to="#saved-view-modal-vue">', host)
-        self.assertIn("savedViewRef.value?.focusInitial()", host)
+        self.assertIn("'saved-view-modal': () => savedViewRef.value", host)
         form = _read(_SV)
         self.assertIn('<Teleport to="#saved-view-modal-title">', form)
         for name in (

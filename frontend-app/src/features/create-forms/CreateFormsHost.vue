@@ -4,11 +4,12 @@ import FolderCreateForm from './FolderCreateForm.vue'
 import GroupCreateForm from './GroupCreateForm.vue'
 import NewFileForm from './NewFileForm.vue'
 import PersonCreateForm from './PersonCreateForm.vue'
+import PersonTemplateForm from './PersonTemplateForm.vue'
 import PlaylistCreateForm from './PlaylistCreateForm.vue'
 import RoleLinkForm from './RoleLinkForm.vue'
 import SavedViewForm from '../saved-views/SavedViewForm.vue'
 import { snapshotModalFields } from './snapshot'
-import { CREATE_FORM_MODAL_IDS, type PrksCreateFormsApi } from './types'
+import { CREATE_FORM_MODAL_IDS, type CreateFormModalId, type PrksCreateFormsApi } from './types'
 
 const OWNED = new Set<string>(CREATE_FORM_MODAL_IDS)
 const baselines = new Map<string, string>()
@@ -20,10 +21,23 @@ const playlistRef = ref<InstanceType<typeof PlaylistCreateForm> | null>(null)
 const newFileRef = ref<InstanceType<typeof NewFileForm> | null>(null)
 const savedViewRef = ref<InstanceType<typeof SavedViewForm> | null>(null)
 const roleLinkRef = ref<InstanceType<typeof RoleLinkForm> | null>(null)
+const personTemplateRef = ref<InstanceType<typeof PersonTemplateForm> | null>(null)
 
 function modalRoot(modalId: string): HTMLElement | null {
   const el = document.getElementById(modalId)
   return el instanceof HTMLElement ? el : null
+}
+
+/** Each owned dialog's form, for focusing its first field on open. */
+const focusTargets: Record<CreateFormModalId, () => { focusInitial: () => void } | null> = {
+  'folder-modal': () => folderRef.value,
+  'person-modal': () => personRef.value,
+  'group-modal': () => groupRef.value,
+  'playlist-modal': () => playlistRef.value,
+  'work-modal': () => newFileRef.value,
+  'saved-view-modal': () => savedViewRef.value,
+  'role-modal': () => roleLinkRef.value,
+  'person-template-modal': () => personTemplateRef.value,
 }
 
 function refreshFolderValidation(): Promise<void> {
@@ -69,13 +83,7 @@ const api: PrksCreateFormsApi = {
     return newFileRef.value?.prepare(stillOpening) ?? Promise.resolve()
   },
   focusInitial(modalId) {
-    if (modalId === 'folder-modal') folderRef.value?.focusInitial()
-    else if (modalId === 'person-modal') personRef.value?.focusInitial()
-    else if (modalId === 'group-modal') groupRef.value?.focusInitial()
-    else if (modalId === 'playlist-modal') playlistRef.value?.focusInitial()
-    else if (modalId === 'work-modal') newFileRef.value?.focusInitial()
-    else if (modalId === 'saved-view-modal') savedViewRef.value?.focusInitial()
-    else if (modalId === 'role-modal') roleLinkRef.value?.focusInitial()
+    focusTargets[modalId as CreateFormModalId]?.()?.focusInitial()
   },
   dismissInnerLayer(modalId) {
     if (modalId === 'folder-modal') return folderRef.value?.closeParentList() ?? false
@@ -109,8 +117,8 @@ onBeforeUnmount(() => {
     Temporary adapter (#1036). ModalHost does not mount feature forms yet,
     so these bodies teleport into the classic shells. Retire the teleport
     when the host grows a feature-form slot. New File also teleports its
-    footer into the shell, and Saved View its title. The person template and
-    Settings stay on their shells.
+    footer into the shell, and Saved View its title. Settings keeps its own
+    shell.
   -->
   <Teleport to="#folder-modal-vue">
     <FolderCreateForm ref="folderRef" />
@@ -132,5 +140,8 @@ onBeforeUnmount(() => {
   </Teleport>
   <Teleport to="#role-modal-vue">
     <RoleLinkForm ref="roleLinkRef" />
+  </Teleport>
+  <Teleport to="#person-template-modal-vue">
+    <PersonTemplateForm ref="personTemplateRef" />
   </Teleport>
 </template>
