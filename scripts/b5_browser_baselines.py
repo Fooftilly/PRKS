@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -314,17 +315,39 @@ def _assert_loopback_http_url(url: str) -> str:
     return urlunparse(("http", netloc, path, "", parsed.query, ""))  # NOSONAR python:S5332
 
 
+_LIBRARY_EPOCH: str | None = None
+
+
+def _remember_epoch(headers) -> None:
+    global _LIBRARY_EPOCH
+    epoch = headers.get("PRKS-Library-Epoch") if headers is not None else None
+    if epoch:
+        _LIBRARY_EPOCH = str(epoch)
+
+
 def _http_json(method: str, url: str, payload=None, timeout: float = 60.0):
     data = None
     headers = {}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
+    if method != "GET":
+        # A write needs a same-origin Origin (else 403 origin_not_allowed) and
+        # the Library epoch it was made for (else 400 LIBRARY_EPOCH_REQUIRED);
+        # every admitted response carries the current epoch.
+        parts = urllib.parse.urlsplit(url)
+        origin = "%s://%s" % (parts.scheme, parts.netloc)
+        headers["Origin"] = origin
+        if _LIBRARY_EPOCH is None:
+            _http_json("GET", origin + "/api/session", timeout=timeout)
+        if _LIBRARY_EPOCH is not None:
+            headers["PRKS-Library-Epoch"] = _LIBRARY_EPOCH
     req = urllib.request.Request(
         _assert_loopback_http_url(url), data=data, method=method, headers=headers
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:  # nosec B310
+            _remember_epoch(res.headers)
             raw = res.read().decode("utf-8")
             if not raw:
                 return None

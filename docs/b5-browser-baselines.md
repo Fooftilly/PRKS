@@ -11,15 +11,15 @@ Stacked on cleanup-only #453 (`cursor/b5-final-purge-228c`).
 
 | Field | Value |
 | --- | --- |
-| Measured git HEAD | `59d65a2cafe5286e4fe063213d6530625ce20c6b` |
-| App | `python prks_app.py --testing --port 46743` |
+| Measured git HEAD | `02845f151387e479f3f2f3dfdbd8bab557f915dd` |
+| App | `python prks_app.py --testing --port 46565` |
 | Storage | temp `PRKS_STORAGE` (never repo `data/` / live production tree); recreate with the harness |
-| Client harness | Playwright Chromium channel=`None`, viewport 1400×900, headless |
+| Client harness | Playwright Chromium channel=`chrome`, viewport 1400×900, headless |
 | Playwright browser version | `153.0.8010.12` |
-| User agent | `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36` |
-| OS | `Linux-6.18.44-fc-v70-x86_64-with-glibc2.39` |
-| Python | `3.13.16` |
-| CPU | `Intel(R) Xeon(R) Processor @ 2.80GHz` |
+| User agent | `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36` |
+| OS | `Linux-6.18.44-fc-v653-x86_64-with-glibc2.39` |
+| Python | `3.13.18` |
+| CPU | `Intel(R) Xeon(R) Processor @ 2.30GHz` |
 | Timing | leave `#/tags`, then `performance.now()` until focused-ctx generation bump + route root |
 | Server diagnostics | `GET /api/diagnostics/performance` after client scenarios |
 | Leak probes | global live Resize/Intersection/MutationObserver; long-lived listeners on connected window/document/body/shell/tile/tab-root hosts; `__prksResearchGraphLiveCount`; Work-card lazy-thumb tracked targets |
@@ -55,26 +55,26 @@ warmup policy, and raw samples live in the committed JSON next to this file.
 
 | Scenario | Method | Result |
 | --- | --- | --- |
-| Initial client load | Navigation Timing on `/` | duration **510.2** ms; DCL **505.5** ms; FP **224.0** ms; FCP **224.0** ms; transfer 95728 |
-| Route → Folder Library | leave to #/tags, prksNavigate, wait generation bump + route root | **81.1** ms; n=5; warmup dropped 1 |
-| Route → Recent | leave to #/tags, prksNavigate, wait generation bump + route root | **40.2** ms; n=5; warmup dropped 1 |
-| Route → Progress | leave to #/tags, prksNavigate, wait generation bump + route root | **105.9** ms; n=5; warmup dropped 1 |
-| Route → People | leave to #/tags, prksNavigate, wait generation bump + route root | **32.7** ms; n=5; warmup dropped 1 |
-| Route → Concepts | leave to #/tags, prksNavigate, wait generation bump + route root | **37.1** ms; n=5; warmup dropped 1 |
-| Route → Graph chrome | leave to #/tags, prksNavigate, wait generation bump + route root | **97.7** ms; n=5; warmup dropped 1 |
-| Route → Folder detail | leave to #/tags, prksNavigate, wait generation bump + route root | **70.5** ms; n=5; warmup dropped 1 |
-| Tab switching | activateTab between parked Folders and Recent; settle on destination view root | **46.4** ms; n=6; warmup dropped 1 |
-| Main/Secondary split open | prksNavigate(folder-detail, {target:'tile'}); settle on Secondary lastResolvedRoute folder-detail + view root | **141.6** ms; n=1 |
-| Secondary nav while split | in-place prksNavigate(person-detail/concept-detail, {tabId: secondary}); people/concepts indexes are not tile-capable. Settle on Secondary lastResolvedRoute + view root | **52.9** ms; n=3; warmup dropped 1 |
-| Large folder collection | leave to #/tags, prksNavigate, wait generation bump + route root | **181.3** ms; n=5; warmup dropped 1; 140 cards |
-| Search `Batch` | leave to #/tags, prksNavigate, wait generation bump + route root | **113.1** ms; n=5; warmup dropped 1 |
-| PDF open (cold) | first prksNavigate(Work A) until focused ctx work/pdf.workId match and a page under ctx.root | **736.4** ms; n=1 |
-| PDF cold reopen after folders | reopen Work A after folders — cold route replacement, not warm resume | **602.3** ms; n=3; label: cold reopen |
-| PDF warm resume (`prksResumeWarmTabContext`) | warm-park via activateTab(folders) then prksResumeWarmTabContext via activateTab(Work A) | **58.8** ms; n=5; warmup dropped 1 |
-| PDF close (cold unmount) | navigate away to folders (cold unmount of current route) | **67.9** ms; n=3; warmup dropped 1 |
-| Work A→B (dest work/pdf.workId) | hash A↔B until focused ctx work id + pdf.workId match dest and a page exists under ctx.root | **609.8** ms; n=6 |
-| Research Notes mount | leave tags, open Work A until notes/EasyMDE settle | **639.7** ms; n=3; warmup dropped 1 |
-| Research Graph mount (cy) | leave to #/tags, prksNavigate, wait generation bump + route root | **123.9** ms; n=5; warmup dropped 1 |
+| Initial client load | Navigation Timing on `/` | duration **544.3** ms; DCL **528.0** ms; FP **164.0** ms; FCP **200.0** ms; transfer 13035 |
+| Route → Folder Library | leave to #/tags, prksNavigate, wait generation bump + route root | **60.6** ms; n=5; warmup dropped 1 |
+| Route → Recent | leave to #/tags, prksNavigate, wait generation bump + route root | **34.2** ms; n=5; warmup dropped 1 |
+| Route → Progress | leave to #/tags, prksNavigate, wait generation bump + route root | **74.0** ms; n=5; warmup dropped 1 |
+| Route → People | leave to #/tags, prksNavigate, wait generation bump + route root | **31.7** ms; n=5; warmup dropped 1 |
+| Route → Concepts | leave to #/tags, prksNavigate, wait generation bump + route root | **32.5** ms; n=5; warmup dropped 1 |
+| Route → Graph chrome | leave to #/tags, prksNavigate, wait generation bump + route root | **33.4** ms; n=5; warmup dropped 1 |
+| Route → Folder detail | leave to #/tags, prksNavigate, wait generation bump + route root | **71.0** ms; n=5; warmup dropped 1 |
+| Tab switching | activateTab between parked Folders and Recent; settle on destination view root | **37.8** ms; n=6; warmup dropped 1 |
+| Main/Secondary split open | prksNavigate(folder-detail, {target:'tile'}); settle on Secondary lastResolvedRoute folder-detail + view root | **127.8** ms; n=1 |
+| Secondary nav while split | in-place prksNavigate(person-detail/concept-detail, {tabId: secondary}); people/concepts indexes are not tile-capable. Settle on Secondary lastResolvedRoute + view root | **51.3** ms; n=3; warmup dropped 1 |
+| Large folder collection | leave to #/tags, prksNavigate, wait generation bump + route root | **120.3** ms; n=5; warmup dropped 1; 140 cards |
+| Search `Batch` | leave to #/tags, prksNavigate, wait generation bump + route root | **97.6** ms; n=5; warmup dropped 1 |
+| PDF open (cold) | first prksNavigate(Work A) until focused ctx work/pdf.workId match and a page under ctx.root | **642.9** ms; n=1 |
+| PDF cold reopen after folders | reopen Work A after folders — cold route replacement, not warm resume | **508.8** ms; n=3; label: cold reopen |
+| PDF warm resume (`prksResumeWarmTabContext`) | warm-park via activateTab(folders) then prksResumeWarmTabContext via activateTab(Work A) | **43.3** ms; n=5; warmup dropped 1 |
+| PDF close (cold unmount) | navigate away to folders (cold unmount of current route) | **57.4** ms; n=3; warmup dropped 1 |
+| Work A→B (dest work/pdf.workId) | hash A↔B until focused ctx work id + pdf.workId match dest and a page exists under ctx.root | **538.2** ms; n=6 |
+| Research Notes mount | leave tags, open Work A until notes/EasyMDE settle | **525.0** ms; n=3; warmup dropped 1 |
+| Research Graph mount (cy) | leave to #/tags, prksNavigate, wait generation bump + route root | **73.6** ms; n=5; warmup dropped 1 |
 
 Warm-resume invariants (measured rows, not warmup):
 
@@ -108,28 +108,28 @@ describe the *current* mount and are omitted from the leak table.
 
 | Probe | Pre | Post | Δ |
 | --- | --- | --- | --- |
-| `domNodes` | 3476 | 3476 | 0 |
+| `domNodes` | 3592 | 3592 | 0 |
 | `canvases` | 0 | 0 | 0 |
 | `pdfHosts` | 0 | 0 | 0 |
 | `easyMde` | 0 | 0 | 0 |
 | `researchGraphLive` | 0 | 0 | 0 |
-| `cleanupCount` | 4 | 4 | 0 |
+| `cleanupCount` | 5 | 5 | 0 |
 | `timerCount` | 0 | 0 | 0 |
 | `thumbObserverPresent` | True | True | 0 |
-| `thumbTrackedTargets` | 16 | 16 | 0 |
-| `thumbTrackedConnected` | 16 | 16 | 0 |
+| `thumbTrackedTargets` | 15 | 15 | 0 |
+| `thumbTrackedConnected` | 15 | 15 | 0 |
 | `thumbTrackedDisconnected` | 0 | 0 | 0 |
-| `thumbObservingAttr` | 16 | 16 | 0 |
+| `thumbObservingAttr` | 15 | 15 | 0 |
 | `resizeObserverLive` | 3 | 3 | 0 |
 | `intersectionObserverLive` | 1 | 1 | 0 |
-| `mutationObserverLive` | 1 | 1 | 0 |
-| `longLivedListenerLive` | 80 | 80 | 0 |
+| `mutationObserverLive` | 49 | 71 | 22 |
+| `longLivedListenerLive` | 90 | 90 | 0 |
 
 ### Graph surface (`#/graph`)
 
 | Probe | Pre | Post | Δ |
 | --- | --- | --- | --- |
-| `domNodes` | 1589 | 1589 | 0 |
+| `domNodes` | 1706 | 1706 | 0 |
 | `canvases` | 3 | 3 | 0 |
 | `pdfHosts` | 0 | 0 | 0 |
 | `easyMde` | 0 | 0 | 0 |
@@ -143,98 +143,98 @@ describe the *current* mount and are omitted from the leak table.
 | `thumbObservingAttr` | 0 | 0 | 0 |
 | `resizeObserverLive` | 4 | 4 | 0 |
 | `intersectionObserverLive` | 1 | 1 | 0 |
-| `mutationObserverLive` | 3 | 3 | 0 |
-| `longLivedListenerLive` | 102 | 102 | 0 |
+| `mutationObserverLive` | 51 | 73 | 22 |
+| `longLivedListenerLive` | 112 | 112 | 0 |
 
 ## Server diagnostics after client scenarios
 
 ```json
 {
   "counters": {
-    "db_read": 1005,
-    "db_write": 284,
-    "pdf_file_stat_files": 1534,
-    "pdf_file_stat_rows": 9574,
+    "db_read": 2050,
+    "db_write": 1819,
+    "pdf_file_stat_files": 1910,
+    "pdf_file_stat_rows": 12110,
     "thumbnail_cache_hits": 0,
-    "thumbnail_cache_misses": 12
+    "thumbnail_cache_misses": 18
   },
-  "measured_for_seconds": 49,
+  "measured_for_seconds": 42,
   "requests": {
-    "response_bytes": 1003062,
-    "slow": 4,
-    "total": 877
+    "response_bytes": 1225485,
+    "slow": 3,
+    "total": 1116
   },
   "topRoutesByCount": [
     {
-      "avg_ms": 19.7,
+      "avg_ms": 7.8,
+      "count": 235,
+      "method": "GET",
+      "p50_ms": 6.8,
+      "p95_ms": 15.2,
+      "route": "/api/:unknown",
+      "slow_count": 0
+    },
+    {
+      "avg_ms": 14.7,
       "count": 142,
       "method": "POST",
-      "p50_ms": 17.9,
-      "p95_ms": 27.9,
+      "p50_ms": 9.7,
+      "p95_ms": 24.7,
       "route": "/api/works",
-      "slow_count": 0
+      "slow_count": 1
     },
     {
-      "avg_ms": 4.0,
+      "avg_ms": 14.6,
       "count": 72,
       "method": "GET",
-      "p50_ms": 3.4,
-      "p95_ms": 8.7,
-      "route": "/api/works/:id/annotations-snapshot",
-      "slow_count": 0
-    },
-    {
-      "avg_ms": 2.7,
-      "count": 72,
-      "method": "GET",
-      "p50_ms": 2.5,
-      "p95_ms": 3.7,
-      "route": "/api/works/:id/notes-state",
-      "slow_count": 0
-    },
-    {
-      "avg_ms": 0.8,
-      "count": 72,
-      "method": "GET",
-      "p50_ms": 0.6,
-      "p95_ms": 1.9,
+      "p50_ms": 13.4,
+      "p95_ms": 25.8,
       "route": "/api/pdfs/:pdf",
       "slow_count": 0
     },
     {
-      "avg_ms": 8.4,
-      "count": 45,
+      "avg_ms": 12.8,
+      "count": 72,
       "method": "GET",
-      "p50_ms": 8.1,
-      "p95_ms": 14.2,
-      "route": "/api/tags",
+      "p50_ms": 11.2,
+      "p95_ms": 23.9,
+      "route": "/api/works/:id/annotations-snapshot",
       "slow_count": 0
     },
     {
-      "avg_ms": 3.8,
+      "avg_ms": 5.3,
+      "count": 72,
+      "method": "GET",
+      "p50_ms": 4.7,
+      "p95_ms": 8.1,
+      "route": "/api/works/:id/notes-state",
+      "slow_count": 0
+    },
+    {
+      "avg_ms": 17.0,
+      "count": 52,
+      "method": "GET",
+      "p50_ms": 16.3,
+      "p95_ms": 24.6,
+      "route": "/api/folders/:id",
+      "slow_count": 0
+    },
+    {
+      "avg_ms": 8.3,
       "count": 45,
       "method": "GET",
-      "p50_ms": 3.4,
-      "p95_ms": 6.0,
+      "p50_ms": 7.6,
+      "p95_ms": 13.0,
       "route": "/api/concepts",
       "slow_count": 0
     },
     {
-      "avg_ms": 18.7,
+      "avg_ms": 18.9,
       "count": 44,
       "method": "GET",
       "p50_ms": 18.0,
-      "p95_ms": 28.0,
+      "p95_ms": 27.2,
       "route": "/api/works",
-      "slow_count": 0
-    },
-    {
-      "avg_ms": 2.9,
-      "count": 42,
-      "method": "GET",
-      "p50_ms": 2.7,
-      "p95_ms": 4.6,
-      "route": "/api/works/:id/people-state",
       "slow_count": 0
     }
   ]

@@ -64,6 +64,25 @@ Vue reads from classic code belongs to a row whose classic owner file is
 listed and whose reason covers it. A new crossing gets a row here with its
 owner on each side, or it is migration debt.
 
+## KEEP / MOVE / RETIRE (#1033)
+
+Every crossing in this file has one of these decisions:
+
+- **KEEP**: every row in "Classic to Vue", "Vue to classic runtime services"
+  and "Host and object markers". The row's last column is the reason. Each one
+  is a single owner that both worlds call, such as the route coordinator, the
+  durable queue, the PDF and EasyMDE runtimes, or a shared rule like icons,
+  dates or comboboxes. It is not a classic renderer kept alive for a surface
+  that Vue already paints.
+- **MOVE**: the dialogs marked MOVED in the dialog inventory are done. The one
+  open MOVE is the bulk edit sheet for selected Works (#1325).
+- **RETIRE**: everything under "Retired by the final audit" and in "Shell
+  chrome" is gone. Rule for a future crossing: a Vue publication with no
+  classic reader is dead, and it is removed rather than kept.
+
+Known debt inside a KEEP row is tracked in its own issue, not left in the
+row: the combobox keyboard model never disconnects its observers (#1327).
+
 ## Classic to Vue (Vue registers, classic calls)
 
 | Global | Registered by | Called by | Why it stays |
