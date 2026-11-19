@@ -1,6 +1,7 @@
 """Conservative docs-only PR scope for required CI checks (#643).
 
-Only A/M changes to an explicit audited subset of Wiki Markdown qualify. Missing/invalid baselines,
+Only A/M changes to an explicit audited subset of Wiki Markdown, or to an
+explicit audited set of external analysis-tool config files, qualify. Missing/invalid baselines,
 renames, deletes, workflow or test changes, and unreadable diffs fail closed to
 ordinary full validation across the required CI workflows.
 
@@ -31,6 +32,14 @@ AUDITED_DOC_FILES = frozenset({
     "docs/wiki/Offline-and-Sync.md",
     "docs/wiki/Troubleshooting.md",
 })
+# Root config files read only by external services (Codacy, PR-Agent).
+# Audited: no test, script, runtime module or build step reads them, so a
+# change cannot alter any CI suite's outcome. Files that tests read as
+# fixtures (.mergify.yml, .coderabbit.yaml, .greptile/*) are deliberately absent.
+AUDITED_CONFIG_FILES = frozenset({
+    ".codacy.yml",
+    ".pr_agent.toml",
+})
 DEFAULT_SCOPE = "docs"
 POSTGRES_SCOPE = "postgres"
 SCOPES = (DEFAULT_SCOPE, POSTGRES_SCOPE)
@@ -54,9 +63,22 @@ def is_approved_markdown(path: str) -> bool:
     return path in AUDITED_DOC_FILES
 
 
+def is_audited_config(path: str) -> bool:
+    """An external analysis-tool config file that no CI suite reads."""
+    return path in AUDITED_CONFIG_FILES
+
+
 def is_postgres_irrelevant_markdown(path: str) -> bool:
     """Any plain Markdown file: the PostgreSQL suites never read one."""
     return _is_plain_relative(path) and path.endswith(".md")
+
+
+def _approved_docs(path: str) -> bool:
+    return is_approved_markdown(path) or is_audited_config(path)
+
+
+def _approved_postgres(path: str) -> bool:
+    return is_postgres_irrelevant_markdown(path) or is_audited_config(path)
 
 
 def changed_documentation(
@@ -68,9 +90,9 @@ def changed_documentation(
     checkout may be HEAD; comparing event base to HEAD still includes the PR.
     """
     if scope == DEFAULT_SCOPE:
-        approved = is_approved_markdown
+        approved = _approved_docs
     elif scope == POSTGRES_SCOPE:
-        approved = is_postgres_irrelevant_markdown
+        approved = _approved_postgres
     else:
         return None
     if not _SHA.fullmatch(base):

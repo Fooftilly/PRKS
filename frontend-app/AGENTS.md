@@ -7,7 +7,7 @@ These rules apply to `frontend-app/` on top of the root `AGENTS.md`.
 ## Ownership
 
 - `docs/frontend-migration-boundaries.md` lists every remaining classic/Vue crossing with its owner on each side. A new crossing goes there, or it is migration debt. Delete compatibility code once its last consumer has crossed.
-- New UI goes in `frontend-app/src/`. Folder, Person, Person Group and Playlist create forms (`src/features/create-forms/`) teleport into the classic modal shells until `ModalHost` mounts those shells.
+- New UI goes in `frontend-app/src/`. The Folder, Person, Person Group, Playlist, New File, Link Person to Work and Edit Profile Using Template bodies (`src/features/create-forms/`) and the Saved View body (`src/features/saved-views/`) teleport into the classic modal shells until `ModalHost` mounts those shells. Settings keeps its own shell with a Vue body.
 - Never add a second route, workspace, durable-operation, offline or server-state model. No Vue Router, Pinia, second QueryClient or second workspace snapshot.
 - TanStack Query orchestrates disposable server reads where adopted; it never owns durable operations or acts as an offline queue. VueUse is for generic browser lifecycle only.
 - Settings content is `src/features/settings/`; `#settings-modal`, its open/close/Escape/focus return, device and library persistence (`/api/settings`), backup, restore and cache operations stay classic.

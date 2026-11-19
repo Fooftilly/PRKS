@@ -507,8 +507,8 @@ function openModal(id, options) {
     // ordered behind that creation by the dependency mechanism.
     // `person-modal` has NO connectivity guard: creating a Person is
     // durable-first, so the modal opens and saves with or without the server.
-    // `person-template-modal` never had one either -- it edits an unsaved local
-    // draft and performs no canonical mutation of its own.
+    // `person-template-modal` never had one either -- it fills the unsaved
+    // profile editor draft and performs no canonical mutation of its own.
     if (typeof window.prksCloseTagsAliasModal === 'function') {
         window.prksCloseTagsAliasModal();
     }
