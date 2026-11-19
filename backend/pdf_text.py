@@ -190,7 +190,9 @@ def _page_fingerprints(pdf_path: str) -> List[Dict[str, Any]]:
                 "rect": str(page.rect),
                 "text": raw if isinstance(raw, str) else "",
                 "pixels": hashlib.sha256(pixmap.samples).hexdigest(),
-                "links": sorted(json.dumps({k: str(v) for k, v in link.items()}, sort_keys=True)
+                # A link's xref/id name its PDF object, which a repair may renumber.
+                "links": sorted(json.dumps({k: str(v) for k, v in link.items() if k not in ("xref", "id")},
+                                           sort_keys=True)
                                 for link in page.get_links()),
                 "annots": sorted(json.dumps([str(annot.type), str(annot.rect), annot.info.get("content", "")])
                                  for annot in page.annots()),

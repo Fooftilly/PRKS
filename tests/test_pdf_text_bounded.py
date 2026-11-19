@@ -8,6 +8,7 @@ PyMuPDF is ``PDFTextExtractorUnavailable`` so the job is retried.
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -125,7 +126,7 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
         self.assertFalse(same_pages_bounded(source, self.write("bad.pdf", b"%PDF-1.4 junk"), 30))
 
     def drawn(self, name: str, *, drawing: bool = False, image: bool = False,
-              annot: bool = False, link: bool = False) -> str:
+              annot: bool = False, link: bool = False, shift_objects: int = 0) -> str:
         """One page with the same text; optionally a red drawing, an image, a note or a link."""
         import pymupdf
 
@@ -140,6 +141,8 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
             page.insert_image(pymupdf.Rect(100, 200, 300, 400), pixmap=pixmap)
         if annot:
             page.add_text_annot((300, 100), "a reader's note")
+        for _ in range(shift_objects):
+            doc.get_new_xref()  # later objects get other numbers
         if link:
             page.insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(72, 60, 200, 80),
                               "uri": "https://example.invalid/"})
@@ -155,6 +158,25 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
                 full = self.drawn(f"{lost}.pdf", **{lost: True})
                 self.assertEqual(pdf_text.extract_pdf(full).text.strip(), "same words")
                 self.assertFalse(same_pages_bounded(full, bare, 30))
+
+    def test_the_same_link_under_another_object_number_is_the_same_page(self) -> None:
+        import pymupdf
+
+        first = self.drawn("link-a.pdf", link=True)
+        second = self.drawn("link-b.pdf", link=True, shift_objects=3)
+        xrefs = []
+        for path in (first, second):
+            with pymupdf.open(path) as doc:
+                xrefs.append(doc[0].get_links()[0]["xref"])
+        self.assertNotEqual(xrefs[0], xrefs[1])
+        self.assertTrue(same_pages_bounded(first, second, 30))
+
+    @unittest.skipUnless(shutil.which("qpdf"), "qpdf is not installed")
+    def test_a_real_qpdf_linearization_of_links_and_notes_is_the_same_page(self) -> None:
+        source = self.drawn("rich.pdf", drawing=True, image=True, annot=True, link=True)
+        copy = source + ".lin"
+        subprocess.run(["qpdf", "--linearize", source, copy], check=True)  # nosec B603 B607 - fixture
+        self.assertTrue(same_pages_bounded(source, copy, 30))
 
     def test_a_scan_that_lost_its_image_is_not_the_same_page(self) -> None:
         import pymupdf
