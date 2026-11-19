@@ -9,7 +9,7 @@ import PlaylistCreateForm from './PlaylistCreateForm.vue'
 import RoleLinkForm from './RoleLinkForm.vue'
 import SavedViewForm from '../saved-views/SavedViewForm.vue'
 import { snapshotModalFields } from './snapshot'
-import { CREATE_FORM_MODAL_IDS, type PrksCreateFormsApi } from './types'
+import { CREATE_FORM_MODAL_IDS, type CreateFormModalId, type PrksCreateFormsApi } from './types'
 
 const OWNED = new Set<string>(CREATE_FORM_MODAL_IDS)
 const baselines = new Map<string, string>()
@@ -26,6 +26,18 @@ const personTemplateRef = ref<InstanceType<typeof PersonTemplateForm> | null>(nu
 function modalRoot(modalId: string): HTMLElement | null {
   const el = document.getElementById(modalId)
   return el instanceof HTMLElement ? el : null
+}
+
+/** Each owned dialog's form, for focusing its first field on open. */
+const focusTargets: Record<CreateFormModalId, () => { focusInitial: () => void } | null> = {
+  'folder-modal': () => folderRef.value,
+  'person-modal': () => personRef.value,
+  'group-modal': () => groupRef.value,
+  'playlist-modal': () => playlistRef.value,
+  'work-modal': () => newFileRef.value,
+  'saved-view-modal': () => savedViewRef.value,
+  'role-modal': () => roleLinkRef.value,
+  'person-template-modal': () => personTemplateRef.value,
 }
 
 function refreshFolderValidation(): Promise<void> {
@@ -71,14 +83,7 @@ const api: PrksCreateFormsApi = {
     return newFileRef.value?.prepare(stillOpening) ?? Promise.resolve()
   },
   focusInitial(modalId) {
-    if (modalId === 'folder-modal') folderRef.value?.focusInitial()
-    else if (modalId === 'person-modal') personRef.value?.focusInitial()
-    else if (modalId === 'group-modal') groupRef.value?.focusInitial()
-    else if (modalId === 'playlist-modal') playlistRef.value?.focusInitial()
-    else if (modalId === 'work-modal') newFileRef.value?.focusInitial()
-    else if (modalId === 'saved-view-modal') savedViewRef.value?.focusInitial()
-    else if (modalId === 'role-modal') roleLinkRef.value?.focusInitial()
-    else if (modalId === 'person-template-modal') personTemplateRef.value?.focusInitial()
+    focusTargets[modalId as CreateFormModalId]?.()?.focusInitial()
   },
   dismissInnerLayer(modalId) {
     if (modalId === 'folder-modal') return folderRef.value?.closeParentList() ?? false
