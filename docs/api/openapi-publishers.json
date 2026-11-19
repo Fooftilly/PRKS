@@ -274,6 +274,19 @@
             "default": null,
             "description": "Stable machine-readable code when the domain provides one.",
             "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Human-readable explanation sent with admission and route refusals.",
+            "title": "Message"
           }
         },
         "required": [
