@@ -97,6 +97,7 @@ from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_m
 if TYPE_CHECKING:
     from backend.domain.identity.request_context import RequestContext
     from backend.library import PostgresLibrary
+    from backend.web.settings import HttpServerSettings
 
 LOGGER = logging.getLogger("prks.server")
 
@@ -998,27 +999,37 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def parse_request(self):
         ok = super().parse_request()
         if ok:
-            try:
-                parsed = urlparse(getattr(self, "path", "") or "")
-                path = parsed.path or "/"
-                if path.startswith("/api/"):
-                    method = (getattr(self, "command", "") or "GET").upper()
-                    route = safe_route(path)
-                    begin_request(
-                        method,
-                        route,
-                        excluded=is_excluded_route(route) or is_excluded_route(path),
-                    )
-            except Exception:
-                pass
-            if _url_holds_nul(getattr(self, "path", "") or ""):
-                # Before any route or static file: no identifier or query PRKS
-                # stores can hold NUL, psycopg refuses to bind one (a 500
-                # before) and os.path refuses it for a static file.
-                self.close_connection = True
-                self._reject_request(400, "invalid_request", "url_nul")
-                return False
+            return self._prks_after_parse()
         return ok
+
+    def _prks_after_parse(self) -> bool:
+        """Start the request's performance record and refuse a URL holding NUL.
+
+        Runs once the request line and headers are parsed, on either transport
+        (``backend.web.asgi`` calls it too). False when the request has been
+        answered.
+        """
+        try:
+            parsed = urlparse(getattr(self, "path", "") or "")
+            path = parsed.path or "/"
+            if path.startswith("/api/"):
+                method = (getattr(self, "command", "") or "GET").upper()
+                route = safe_route(path)
+                begin_request(
+                    method,
+                    route,
+                    excluded=is_excluded_route(route) or is_excluded_route(path),
+                )
+        except Exception:
+            pass
+        if _url_holds_nul(getattr(self, "path", "") or ""):
+            # Before any route or static file: no identifier or query PRKS
+            # stores can hold NUL, psycopg refuses to bind one (a 500
+            # before) and os.path refuses it for a static file.
+            self.close_connection = True
+            self._reject_request(400, "invalid_request", "url_nul")
+            return False
+        return True
 
     def handle_one_request(self):
         # Set by a route that answers before reading its whole body (end_headers).
@@ -1026,14 +1037,18 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         try:
             super().handle_one_request()
         finally:
-            try:
-                finish_request(request_id=getattr(self, "_prks_request_id", "") or "")
-            except Exception:
-                pass
-            try:
-                clear_request()
-            except Exception:
-                pass
+            self._prks_finish_request()
+
+    def _prks_finish_request(self) -> None:
+        """Close the request's performance record (either transport)."""
+        try:
+            finish_request(request_id=getattr(self, "_prks_request_id", "") or "")
+        except Exception:
+            pass
+        try:
+            clear_request()
+        except Exception:
+            pass
 
     def send_response(self, code, message=None):
         try:
@@ -2342,7 +2357,24 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
 
 
 
-def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None):
+def make_server(address: tuple[str, int], http: "HttpServerSettings | None" = None) -> Any:
+    """Bind the HTTP server for ``http.transport`` (#1329); the caller sets its ``prks_*``.
+
+    ``stdlib`` is ``PRKSThreadingTCPServer``; ``uvicorn`` is
+    ``backend.web.asgi.UvicornServing``, imported only when selected. Both run
+    the same ``PRKSHandler`` dispatch.
+    """
+    from backend.web.settings import TRANSPORT_UVICORN, HttpServerSettings
+
+    http = http or HttpServerSettings()
+    if http.transport == TRANSPORT_UVICORN:
+        from backend.web.asgi import UvicornServing
+
+        return UvicornServing(address, threads=http.threads)
+    return PRKSThreadingTCPServer(address, PRKSHandler)
+
+
+def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None, http=None):
     if _bound_storage is None:
         raise RuntimeError("storage is not bound; call bind_storage() before run_server()")
     host = normalize_listen_host(host)
@@ -2350,7 +2382,7 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     _validate_listen_port(port)
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
-    with PRKSThreadingTCPServer((host, port), PRKSHandler) as httpd:
+    with make_server((host, port), http) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
         httpd.prks_access_gate = LibraryAccessGate()
@@ -2365,9 +2397,10 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(
-            "server_starting bind_scope=%s port=%s",
+            "server_starting bind_scope=%s port=%s transport=%s",
             safe_bind_scope(host),
             port,
+            safe_log_label(http.transport if http is not None else "stdlib"),
         )
         if jobs is not None:
             # Runs the embedded worker while serving and stops it gracefully

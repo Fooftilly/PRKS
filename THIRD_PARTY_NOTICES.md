@@ -34,7 +34,7 @@ Generated JavaScript and WebAssembly are not relicensed by the PRKS root license
 ## Packages installed separately
 
 Runtime Python dependencies are pinned in [requirements.txt](requirements.txt):
-PyMuPDF, Pillow, pydantic, psycopg, psycopg-binary, psycopg-pool and argon2-cffi.
+PyMuPDF, Pillow, pydantic, psycopg, psycopg-binary, psycopg-pool, argon2-cffi and uvicorn.
 They remain subject to their upstream licenses.
 **PyMuPDF** is distributed under an AGPL option or commercial license; the
 PRKS root license is not a commercial PyMuPDF license.
@@ -47,6 +47,7 @@ PostgreSQL and identity runtime components added for the #630 deployment:
 | `psycopg-binary` | LGPL-3.0-only for Psycopg's code ([package metadata](https://pypi.org/project/psycopg-binary/3.3.8/)); its self-contained binary wheels also bundle native libraries such as `libpq`, which retain their own license and notice requirements |
 | `psycopg-pool` | LGPL-3.0-only ([package metadata](https://pypi.org/project/psycopg-pool/3.3.3/)) |
 | `argon2-cffi` | MIT ([package metadata](https://pypi.org/project/argon2-cffi/25.1.0/)) |
+| `uvicorn` | BSD-3-Clause ([package metadata](https://pypi.org/project/uvicorn/0.54.0/)); installs `h11` (MIT) and `click` (BSD-3-Clause) |
 
 These are package-level notices, not a relicensing of bundled `libpq`,
 cryptographic libraries, or transitive Python dependencies. Preserve all

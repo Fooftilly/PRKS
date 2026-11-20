@@ -453,6 +453,13 @@ if __name__ == "__main__":
         except StorageRootError as exc:
             print(f"PRKS cannot select its storage root: {exc.message}", file=sys.stderr)
             raise SystemExit(2) from None
+        from backend.web.settings import HttpServerSettings, HttpSettingsError
+
+        try:
+            http_settings = HttpServerSettings.from_env(os.environ)
+        except HttpSettingsError as exc:
+            print(f"PRKS cannot start its HTTP server: {exc.message}", file=sys.stderr)
+            raise SystemExit(2) from None
     # Authentication settings, the pool and the schema, before the root is
     # touched.
     with startup_phase("startup_identity_config"):
@@ -484,4 +491,5 @@ if __name__ == "__main__":
             jobs.bind_root(config.root)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    run_server(port=port, host=args.host, auth=auth, jobs=jobs, readiness=readiness_for(auth, config.root))
+    run_server(port=port, host=args.host, auth=auth, jobs=jobs, readiness=readiness_for(auth, config.root),
+               http=http_settings)

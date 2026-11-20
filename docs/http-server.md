@@ -7,6 +7,14 @@ rather than harden it behind a reverse proxy. This document picks the stack
 and the process model. Phase B (the migration) starts only on the
 maintainer's go.
 
+## Migration status
+
+Phase B1 adds the Uvicorn transport behind `PRKS_HTTP_SERVER=uvicorn`
+(`backend/web/`). The stdlib server stays the default until B2 flips it;
+`PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the threads that run PRKS
+request work. `PRKS_TEST_HTTP_TRANSPORT=uvicorn` runs the PostgreSQL HTTP
+suites over the new transport. B3 deletes the stdlib server.
+
 ## Decision
 
 | Question | Answer |

@@ -60,7 +60,7 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
         status_line, _, rest = raw.partition(b"\r\n")
         self.assertIn(b" 408 ", status_line)
         self.assertEqual(json.loads(rest.partition(b"\r\n\r\n")[2])["reason"], "upload_timeout")
-        self.assertIn(b"Connection: close", rest)
+        self.assertIn(b"connection: close", rest.lower())
         self.assertLess(elapsed, 5)
         self.assertTrue(restored.is_set())
         assert self.server_module._bound_storage is not None
