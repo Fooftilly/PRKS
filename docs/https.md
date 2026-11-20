@@ -30,9 +30,14 @@ the path or the file's contents.
 With TLS on, PRKS treats the site as HTTPS:
 
 - the session and sign-in device cookies are `Secure`;
-- every response sends `Strict-Transport-Security: max-age=31536000`
-  (browsers then refuse plain HTTP to that host name for a year; it does not
-  cover other subdomains);
+- every response PRKS itself writes sends
+  `Strict-Transport-Security: max-age=31536000` (browsers then refuse plain
+  HTTP to that host name for a year; it does not cover other subdomains). The
+  exception is the `400 Bad Request` Uvicorn sends on its own for a request it
+  cannot parse (a malformed request line or headers, duplicate `Host`), before
+  PRKS sees the request: that answer carries no HSTS. Browsers that already hold
+  the header keep it, so this only matters if you need every response to carry
+  it; put a proxy such as Caddy in front for that;
 - the cross-site check expects the request's own `https` origin. Set
   `PRKS_PUBLIC_ORIGIN` only when browsers use a different name or port than
   the one PRKS serves.

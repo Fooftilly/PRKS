@@ -207,6 +207,7 @@ its own TLS (`PRKS_TLS_CERT_FILE`, [docs/https.md](https.md)) and
 `origin_not_allowed` before the request is counted or authenticated.
 
 Cookies are `Secure` when `PRKS_PUBLIC_ORIGIN` is an `https` origin and when
-PRKS serves HTTPS itself; responses over its own TLS also send
-`Strict-Transport-Security: max-age=31536000`. The public origin's host
+PRKS serves HTTPS itself; responses PRKS writes over its own TLS also send
+`Strict-Transport-Security: max-age=31536000` (not the `400` Uvicorn
+sends itself for a request it cannot parse; see [https.md](https.md)). The public origin's host
 is accepted as a request host without listing it in `PRKS_TRUSTED_HOSTS`.

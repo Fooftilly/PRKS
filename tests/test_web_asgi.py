@@ -807,6 +807,20 @@ class TlsTransportTests(unittest.TestCase):
                 self.assertEqual(got, status)
                 self.assertEqual(headers.get("strict-transport-security"), server_module.HSTS_VALUE)
 
+    def test_uvicorns_own_parser_400_carries_no_hsts(self):
+        # The documented boundary (docs/https.md): Uvicorn answers a request it
+        # cannot parse before PRKS runs, so that 400 has no HSTS header.
+        raw = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+        with client_context(self.cert).wrap_socket(raw, server_hostname="127.0.0.1") as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: 127.0.0.1\r\n\r\n")
+            received = b""
+            with contextlib.suppress(OSError):
+                while chunk := sock.recv(4096):
+                    received += chunk
+        head = received.split(b"\r\n\r\n", 1)[0].lower()
+        self.assertTrue(head.startswith(b"http/1.1 400"), received[:40])
+        self.assertNotIn(b"strict-transport-security", head)
+
     def test_the_busy_answer_over_tls_carries_hsts(self):
         for https, expected in ((True, server_module.HSTS_VALUE.encode("ascii")), (False, None)):
             sent = []
