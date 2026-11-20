@@ -344,6 +344,16 @@ async function aFolderInsideALocalFolderWaitsForIt() {
     assert.equal(tree.find(f => f.title === "Child").parent_id, parent.entity_id);
 }
 
+async function aFolderTagChangeWaitsForALocalFolder() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Tagged" });
+    const tag = { id: "T-1", name: "Reading", color: null, aliases: [] };
+    const added = await store.coalesceFolderTag(created.entity_id, "T-1", true, false, 0, tag);
+    assert.equal(added.operation, "ADD_FOLDER_TAG");
+    assert.deepEqual(added.depends_on, [created.op_id],
+        "a Tag change on an unacknowledged Folder waits for its create");
+}
+
 /* ---- fields ---- */
 
 async function fieldEditsCoalesceAndCancel() {
@@ -546,6 +556,7 @@ async function main() {
     await aRefusedParentCreationDoesNotHideExistingSubfolders();
     await anEmptyTitleBecomesThePlaceholder();
     await aFolderInsideALocalFolderWaitsForIt();
+    await aFolderTagChangeWaitsForALocalFolder();
     await fieldEditsCoalesceAndCancel();
     await movingIsAFieldEditThatWaitsForALocalParent();
     await aWorksFolderIsAScalarThatCancels();
