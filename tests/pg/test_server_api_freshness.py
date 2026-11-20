@@ -354,7 +354,7 @@ class ShellTests(FreshnessTestCase):
         self.assertNotIn("'unsafe-inline'", script_src)
         self.assertNotIn("'unsafe-eval'", script_src)
         self.assertIn("frame-ancestors 'none'", policy)
-        directives = dict(part.split(" ", 1) for part in policy.split("; "))
+        directives = {name: value for name, _, value in (part.partition(" ") for part in policy.split("; "))}
         # The YouTube player and its oEmbed lookup are the only other site.
         self.assertEqual(directives["frame-src"], "https://www.youtube.com")
         self.assertIn("https://www.youtube.com", directives["connect-src"].split())
