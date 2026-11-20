@@ -18,10 +18,14 @@ request work; up to 8 requests per thread wait for one,
 and further requests get an immediate 503 with `Retry-After`. Compose passes
 `PRKS_HTTP_THREADS` to `web`.
 
-What is left of step 8 below: `PRKSHandler` still subclasses
-`http.server.SimpleHTTPRequestHandler` (for header parsing and the static
-frontend files), so the `http.server` import stays until the handler no
-longer depends on it.
+`PRKSHandler` no longer subclasses `http.server.SimpleHTTPRequestHandler`:
+its base is `backend.web.handler_base.HttpHandlerBase` (response head,
+plain-text `send_error`, static frontend files with `Last-Modified` and
+`If-Modified-Since`), and nothing imports `http.server`. Only regular files
+beneath the frontend directory are served, each resolved with its symlinks
+(the shell too): `/` and unknown paths get `index.html`, any other directory
+answers 404, and directory listings are not served. That completes step 8
+below.
 
 ## Decision
 
@@ -133,7 +137,7 @@ starlette 1.10.0, cheroot 11.1.2, waitress 3.0.2.
 5. **Streaming responses.** NDJSON progress and PDF Range answers are sync generators wrapped in `StreamingResponse`. A client disconnect does **not** interrupt a blocking `next()` already running. Starlette advances a sync iterator with `anyio.to_thread.run_sync`, whose thread is not cancelled, so cleanup waits until that step returns. Backup progress can hold work while its generator runs, so each step must block for a bounded time only: progress waits poll with a short timeout and check a cancellation flag that the adapter sets on disconnect and on shutdown. The generator's `finally` releases what it holds. A real-socket test drops the client mid-stream and proves the generator's cleanup ran, its thread returned to the limiter, and graceful shutdown finished within the stop grace. Range parsing stays PRKS's `parse_byte_range`.
 6. **Static files.** Served by the adapter with today's cache rules and SPA fallback, not by Starlette's `StaticFiles`, whose cache and fallback rules differ.
 7. **Lifecycle.** `prks_app.py serve` runs `uvicorn.Server` in the same process, with `server_header=False`, a keep-alive timeout and `timeout_graceful_shutdown`. On stop it closes the listener, drains in-flight requests up to the existing stop grace, stops the embedded worker (now driven from the ASGI lifespan) and closes the pool. The root lease and start-generation bump are unchanged, because the process model is unchanged. Uvicorn's own signal handling is replaced by PRKS's `SignalStop` so that there is one stop path.
-8. **Delete.** Remove `PRKSHandler`, `PRKSThreadingTCPServer` and the `http.server` import. Keep no fallback.
+8. **Delete.** Remove `PRKSThreadingTCPServer` and the `http.server` import, and move `PRKSHandler` (which stays the request dispatcher) onto a PRKS-owned base class. Keep no fallback.
 
 ## Platforms
 

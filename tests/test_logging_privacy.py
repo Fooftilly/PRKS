@@ -299,12 +299,12 @@ class TestAccessLogging(unittest.TestCase):
         self.assertNotIn(SECRET_TITLE, text)
         self.assertNotIn(".pdf", text)
 
-    def test_stdlib_log_message_does_not_interpolate(self):
+    def test_log_error_does_not_interpolate(self):
         handler = _bare_handler()
         with _capture_formatted("prks.server") as records:
-            handler.log_message('"%s" %s %s', f"GET /api/search?q={SECRET_QUERY} HTTP/1.1", "200", "-")
+            handler.log_error('"%s" %s', f"GET /api/search?q={SECRET_QUERY} HTTP/1.1", "404")
         text = _formatted_text(records)
-        self.assertIn("stdlib_http_message", text)
+        self.assertIn("http_error", text)
         self.assertNotIn(SECRET_QUERY, text)
 
     def test_request_access_omits_arbitrary_non_api_path(self):

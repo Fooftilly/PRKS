@@ -1,6 +1,6 @@
-"""The HTTP transport that serves PRKS (#1329, ``docs/http-server.md``).
+"""The HTTP server that serves PRKS (#1329, ``docs/http-server.md``).
 
-``settings`` reads the transport settings. ``asgi`` serves the existing
-``backend.server.PRKSHandler`` dispatch under Uvicorn; it is imported only
-when that transport is selected, so the stdlib transport loads no Uvicorn.
+``settings`` reads the server settings, ``asgi`` serves
+``backend.server.PRKSHandler`` dispatch under Uvicorn, and ``handler_base``
+is the response surface that handler writes to.
 """

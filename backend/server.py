@@ -1,5 +1,4 @@
 from backend import work_note_sync, work_source_sync
-import http.server
 import json
 import gzip
 import os
@@ -92,6 +91,7 @@ from backend.domain.maintenance.upload import (
 )
 from backend.person_image import identify_cached_portrait_subtype
 from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
+from backend.web.handler_base import HttpHandlerBase
 
 if TYPE_CHECKING:
     from backend.domain.identity.request_context import RequestContext
@@ -237,7 +237,7 @@ _JSON_BODY_REJECTED = object()
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 frontend_dir = os.path.join(base_dir, "frontend")
 
-# Ensure frontend dir exists so http.server doesn't crash on startup
+# Ensure the frontend dir exists so static serving has a root at startup
 os.makedirs(frontend_dir, exist_ok=True)
 
 _bound_storage: StorageConfig | None = None
@@ -756,21 +756,14 @@ def _skip_to(stream, offset: int) -> None:
         offset -= len(chunk)
 
 
-class PRKSHandler(http.server.SimpleHTTPRequestHandler):
-    extensions_map = {
-        **getattr(http.server.SimpleHTTPRequestHandler, "extensions_map", {}),
-        ".webmanifest": "application/manifest+json",
-    }
-
+class PRKSHandler(HttpHandlerBase):
+    #: Set per request by the code that builds the handler (``backend.web.asgi``).
+    _prks_request_id: str = ""
     # Non-fingerprinted JS/CSS must revalidate so users don't get stale app versions.
     _STATIC_REVALIDATE_EXTS = frozenset({".css", ".js", ".map"})
     _STATIC_LONG_CACHE_EXTS = frozenset(
         {".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff2"}
     )
-
-    def __init__(self, *args, **kwargs):
-        self._prks_request_id = uuid.uuid4().hex[:12]
-        super().__init__(*args, directory=frontend_dir, **kwargs)
 
     def _request_context(self) -> dict:
         parsed = urlparse(getattr(self, "path", "") or "")
@@ -995,18 +988,11 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
     def _parse_client_error_payload(self, data):
         return client_error_log_fields(data)
 
-    def parse_request(self):
-        ok = super().parse_request()
-        if ok:
-            return self._prks_after_parse()
-        return ok
-
     def _prks_after_parse(self) -> bool:
         """Start the request's performance record and refuse a URL holding NUL.
 
-        Runs once the request line and headers are parsed, on either transport
-        (``backend.web.asgi`` calls it too). False when the request has been
-        answered.
+        Runs once the request line and headers are parsed
+        (``backend.web.asgi``). False when the request has been answered.
         """
         try:
             parsed = urlparse(getattr(self, "path", "") or "")
@@ -1030,16 +1016,8 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             return False
         return True
 
-    def handle_one_request(self):
-        # Set by a route that answers before reading its whole body (end_headers).
-        self._prks_unread_body = False
-        try:
-            super().handle_one_request()
-        finally:
-            self._prks_finish_request()
-
     def _prks_finish_request(self) -> None:
-        """Close the request's performance record (either transport)."""
+        """Close the request's performance record."""
         try:
             finish_request(request_id=getattr(self, "_prks_request_id", "") or "")
         except Exception:
@@ -1127,13 +1105,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
 
     def log_error(self, format, *args):
         LOGGER.debug(
-            "stdlib_http_error request_id=%s",
-            safe_log_id(getattr(self, "_prks_request_id", "")),
-        )
-
-    def log_message(self, format, *args):
-        LOGGER.debug(
-            "stdlib_http_message request_id=%s",
+            "http_error request_id=%s",
             safe_log_id(getattr(self, "_prks_request_id", "")),
         )
 
@@ -1178,19 +1150,34 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             with self._library_access(parsed_path):
                 self.handle_api_get(parsed_path)
         else:
-            requested = unquote(parsed_path.path or '/')
-            safe_rel = requested.lstrip('/')
-            frontend_root = os.path.realpath(frontend_dir)
-            candidate = os.path.realpath(os.path.join(frontend_root, safe_rel))
-            if not (candidate == frontend_root or candidate.startswith(frontend_root + os.sep)):
-                self.send_error(404, "Not Found")
-                return
-            # Serve matching files or fallback to index.html for SPA hash routing
-            if not os.path.exists(candidate):
+            self._serve_frontend(parsed_path)
+
+    def _serve_frontend(self, parsed_path, *, head=False):
+        """A file of the frontend, ``index.html`` for ``/`` and unknown paths (SPA routes), else 404.
+
+        Every path is resolved (symlinks included) and must stay beneath the
+        frontend directory, the shell too. Only regular files are served:
+        no directory index besides ``/``, and never a listing.
+        """
+        frontend_root = os.path.realpath(frontend_dir)
+
+        def inside(path):
+            return path.startswith(frontend_root + os.sep)
+
+        requested = unquote(parsed_path.path or '/')
+        candidate = os.path.realpath(os.path.join(frontend_root, requested.lstrip('/')))
+        if candidate != frontend_root and not inside(candidate):
+            self.send_error(404, "Not Found")
+            return
+        if candidate == frontend_root or not os.path.exists(candidate):
+            if candidate != frontend_root:
+                # end_headers picks the shell's Cache-Control by path.
                 self.path = '/index.html'
-            else:
-                self.path = parsed_path.path
-            super().do_GET()
+            candidate = os.path.realpath(os.path.join(frontend_root, 'index.html'))
+        if not inside(candidate) or not os.path.isfile(candidate):
+            self.send_error(404, "Not Found")
+            return
+        self.send_static_file(candidate, head=head)
 
     def do_HEAD(self):
         if not self._validate_request_host():
@@ -1206,18 +1193,7 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
             with self._library_access(parsed_path):
                 self.handle_api_head(parsed_path)
         else:
-            requested = unquote(parsed_path.path or '/')
-            safe_rel = requested.lstrip('/')
-            frontend_root = os.path.realpath(frontend_dir)
-            candidate = os.path.realpath(os.path.join(frontend_root, safe_rel))
-            if not (candidate == frontend_root or candidate.startswith(frontend_root + os.sep)):
-                self.send_error(404, "Not Found")
-                return
-            if not os.path.exists(candidate):
-                self.path = '/index.html'
-            else:
-                self.path = parsed_path.path
-            super().do_HEAD()
+            self._serve_frontend(parsed_path, head=True)
 
     def do_POST(self):
         if not self._validate_request_host():

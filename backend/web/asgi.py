@@ -1,11 +1,10 @@
-"""Serve PRKS under Uvicorn, running today's ``PRKSHandler`` unchanged (#1329 Phase B).
+"""Serve PRKS under Uvicorn: ``PRKSHandler`` dispatch over ASGI (#1329).
 
-This is the migration shim of ``docs/http-server.md``. Uvicorn owns the
+Uvicorn owns the
 sockets, HTTP parsing, keep-alive and slow clients on its event loop. Each
 request runs on its own daemon thread, bounded by ``PRKS_HTTP_THREADS``, where
-an :class:`_AsgiHandler` (a ``PRKSHandler`` built without a socket) runs the
-same ``do_*`` dispatch, admission, controllers and static files as the stdlib
-transport:
+an :class:`_AsgiHandler` (a ``PRKSHandler`` built from the ASGI scope) runs
+the ``do_*`` dispatch, admission, controllers and static files:
 
 - ``rfile`` pulls the ASGI request body chunk by chunk. A read waits at most
   the connection's timeout (``settimeout``, which ``TimedBody`` sets for
@@ -58,7 +57,7 @@ DEFAULT_BODY_IDLE_SECONDS = 60.0
 GRACEFUL_SHUTDOWN_SECONDS = 30
 #: Seconds an idle keep-alive connection stays open.
 KEEP_ALIVE_SECONDS = 5
-#: The stdlib server's request limits, kept: header count and line length.
+#: Request limits: header count and line length.
 MAX_HEADERS = 100
 MAX_LINE_BYTES = 65536
 #: The largest request head (request line, headers and their line breaks,
@@ -343,7 +342,7 @@ def _target(scope: Scope) -> str:
 class _AsgiHandler(server_module.PRKSHandler):
     """A ``PRKSHandler`` for one ASGI request: same dispatch, no socket."""
 
-    def __init__(  # pylint: disable=super-init-not-called
+    def __init__(
         self,
         scope: Scope,
         server: "UvicornServing",
@@ -351,10 +350,9 @@ class _AsgiHandler(server_module.PRKSHandler):
         wfile: _ResponseWriter,
         connection: _Connection,
     ) -> None:
-        # Deliberately not BaseRequestHandler.__init__: it would read a socket.
+        super().__init__()
         self._prks_request_id = uuid.uuid4().hex[:12]
-        self.directory = server_module.frontend_dir
-        self.server = server  # type: ignore[assignment]
+        self.server = server
         client = scope.get("client") or ("", 0)
         self.client_address = (str(client[0]), int(client[1]))
         self.command = str(scope.get("method", "GET")).upper()
@@ -364,14 +362,14 @@ class _AsgiHandler(server_module.PRKSHandler):
         self.raw_requestline = self.requestline.encode("latin-1", "replace") + b"\r\n"
         self.close_connection = True
         self.headers = _headers(scope)
-        self.rfile = rfile  # type: ignore[assignment]
-        self.wfile = wfile  # type: ignore[assignment]
-        self.connection = connection  # type: ignore[assignment]
-        self.request = connection  # type: ignore[assignment]
+        self.rfile = rfile
+        self.wfile = wfile
+        self.connection = connection
+        self.request = connection
         self._prks_unread_body = False
 
     def run(self) -> None:
-        """What ``handle_one_request`` does after the stdlib parsed the request."""
+        """Check the request head, then dispatch to ``do_<METHOD>``."""
         try:
             head_bytes = len(self.raw_requestline) + 2 + sum(
                 len(name) + len(value) + 4 for name, value in self.headers.items()
@@ -497,7 +495,7 @@ class PrksAsgiApp:
             writer.finish()
         except (BrokenPipeError, ConnectionResetError):
             pass
-        except Exception as exc:  # the stdlib server printed these and closed
+        except Exception as exc:  # logged metadata-only; the connection closes
             LOGGER.error(
                 "http_request_failed error_type=%s request_id=%s",
                 safe_error_type(exc),

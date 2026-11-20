@@ -11,6 +11,7 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -171,6 +172,65 @@ class UvicornTransportTests(unittest.TestCase):
         status, fallback, _ = self.request("GET", "/no/such/route")
         self.assertEqual(status, 200)
         self.assertEqual(fallback, body)
+
+    def test_static_files_carry_type_length_cache_and_last_modified(self):
+        for path, content_type, cache in (
+            ("/css/", None, None),  # a directory without index.html: 404, never a listing
+            ("/manifest.webmanifest", "application/manifest+json", "public, max-age=3600"),
+            ("/favicon.svg", "image/svg+xml", "public, max-age=604800, immutable"),
+            ("/sw.js", "text/javascript", "no-cache"),
+        ):
+            with self.subTest(path=path):
+                status, body, headers = self.request("GET", path)
+                if content_type is None:
+                    self.assertEqual(status, 404)
+                    self.assertEqual(headers.get("content-type"), "text/plain; charset=utf-8")
+                    self.assertEqual(headers.get("connection"), "close")
+                    continue
+                self.assertEqual(status, 200)
+                self.assertEqual(headers.get("content-type"), content_type)
+                self.assertEqual(headers.get("content-length"), str(len(body)))
+                self.assertEqual(headers.get("cache-control"), cache)
+                self.assertTrue(headers.get("last-modified"))
+                with open(os.path.join(server_module.frontend_dir, path.lstrip("/")), "rb") as f:
+                    self.assertEqual(body, f.read())
+
+    def test_static_head_has_no_body_and_unchanged_files_answer_304(self):
+        status, body, headers = self.request("HEAD", "/favicon.svg")
+        self.assertEqual((status, body), (200, b""))
+        self.assertGreater(int(headers["content-length"]), 0)
+        status, body, _ = self.request("GET", "/favicon.svg", headers={"If-Modified-Since": headers["last-modified"]})
+        self.assertEqual((status, body), (304, b""))
+        # If-None-Match takes precedence: no 304 from the date alone.
+        status, _, _ = self.request(
+            "GET", "/favicon.svg", headers={"If-Modified-Since": headers["last-modified"], "If-None-Match": '"x"'}
+        )
+        self.assertEqual(status, 200)
+
+    def test_symlinks_out_of_the_frontend_are_not_followed(self):
+        with tempfile.TemporaryDirectory() as frontend, tempfile.TemporaryDirectory() as outside:
+            secret = os.path.join(outside, "secret.html")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("<html>outside the frontend")
+            os.mkdir(os.path.join(frontend, "app"))
+            with open(os.path.join(frontend, "app", "index.html"), "w", encoding="utf-8") as handle:
+                handle.write("<html>a subdirectory index")
+            os.symlink(secret, os.path.join(frontend, "index.html"))
+            os.symlink(secret, os.path.join(frontend, "leak.html"))
+            with mock.patch.object(server_module, "frontend_dir", frontend):
+                for path in ("/", "/no/such/route", "/index.html", "/leak.html", "/app", "/app/"):
+                    with self.subTest(path=path):
+                        status, body, _ = self.request("GET", path)
+                        self.assertEqual(status, 404)
+                        self.assertNotIn(b"outside", body)
+                        self.assertNotIn(b"subdirectory", body)
+                status, body, _ = self.request("GET", "/app/index.html")
+                self.assertEqual((status, body), (200, b"<html>a subdirectory index"))
+
+    def test_a_path_outside_the_frontend_is_404(self):
+        status, body, _ = self.request("GET", "/%2e%2e/backend/server.py")
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"import", body)
 
     def test_post_outside_api_is_405_and_unknown_method_501(self):
         self.assertEqual(self.request("POST", "/index.html", body=b"{}")[0], 405)
