@@ -115,12 +115,18 @@ class _Receiver:
     still pauses a client the handler is not reading. After the body it keeps
     waiting, and ``gone`` is set once the client disconnects (or the request
     task ends, as on a forced shutdown).
+
+    Once the response starts, body the handler left unread is dropped rather
+    than queued (:meth:`discard_body`). Otherwise a full queue would stop the
+    receiver from ever seeing ``http.disconnect``: a GET carrying a body that
+    its handler never reads would keep streaming to a client that has gone.
     """
 
     def __init__(self, receive: Receive) -> None:
         self._receive = receive
         self.messages: asyncio.Queue[Message] = asyncio.Queue(maxsize=1)
         self.gone = threading.Event()
+        self._discard = asyncio.Event()
 
     async def run(self) -> None:
         try:
@@ -128,11 +134,27 @@ class _Receiver:
                 message = await self._receive()
                 if message.get("type") != "http.request":
                     self.gone.set()
-                    await self.messages.put(message)
+                    if not self._discard.is_set():
+                        await self._put(message)
                     return
-                await self.messages.put(message)
+                if not self._discard.is_set():
+                    await self._put(message)
         finally:
             self.gone.set()
+
+    async def _put(self, message: Message) -> None:
+        """Queue ``message``, or drop it if :meth:`discard_body` runs first."""
+        put = asyncio.ensure_future(self.messages.put(message))
+        discard = asyncio.ensure_future(self._discard.wait())
+        try:
+            await asyncio.wait({put, discard}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            put.cancel()
+            discard.cancel()
+
+    async def discard_body(self) -> None:
+        """The response has started: drop request body the handler did not read."""
+        self._discard.set()
 
 
 class _RequestBody:
@@ -193,10 +215,11 @@ class _RequestBody:
 class _ResponseWriter:
     """``wfile``: the handler's raw HTTP/1 response, sent as ASGI messages."""
 
-    def __init__(self, bridge: _Bridge, send: Send, gone: threading.Event) -> None:
+    def __init__(self, bridge: _Bridge, send: Send, receiver: _Receiver) -> None:
         self._bridge = bridge
         self._send_message = send
-        self._gone = gone
+        self._receiver = receiver
+        self._gone = receiver.gone
         self._head = bytearray()
         self.started = False
 
@@ -234,6 +257,7 @@ class _ResponseWriter:
             key = name.strip().lower()
             if key and key not in _DROPPED_RESPONSE_HEADERS:
                 headers.append((key, value.strip()))
+        self._bridge.call(self._receiver.discard_body)
         self._send({"type": "http.response.start", "status": status, "headers": headers})
         self.started = True
 
@@ -356,7 +380,7 @@ class PrksAsgiApp:
     ) -> None:
         bridge = _Bridge(loop)
         connection = _Connection()
-        writer = _ResponseWriter(bridge, send, receiver.gone)
+        writer = _ResponseWriter(bridge, send, receiver)
         handler: Optional[_AsgiHandler] = None
         try:
             handler = _AsgiHandler(scope, self._server, _RequestBody(bridge, receiver, connection), writer, connection)

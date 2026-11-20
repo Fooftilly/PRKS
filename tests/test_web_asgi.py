@@ -207,6 +207,37 @@ class UvicornTransportTests(unittest.TestCase):
             sock.close()
             self.assertTrue(ended.wait(3), "the stream kept writing after the client left")
 
+    def test_disconnect_ends_a_stream_whose_request_body_is_unread(self):
+        # A GET handler never reads rfile. Body chunks it leaves unread must
+        # not stop the adapter from seeing the client leave.
+        ended = threading.Event()
+
+        def stream(handler):
+            handler.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n")
+            try:
+                for _ in range(400):
+                    handler.wfile.write(b"tick\n")
+                    time.sleep(0.05)
+            except BrokenPipeError:
+                ended.set()
+                raise
+
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", stream):
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock.sendall(
+                b"GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n"
+            )
+            for part in (b"hello", b"world", b"again"):
+                sock.sendall(b"%x\r\n%s\r\n" % (len(part), part))
+                time.sleep(0.05)
+            received = b""
+            while b"tick" not in received:
+                chunk = sock.recv(4096)
+                self.assertTrue(chunk, "the stream closed before its first line")
+                received += chunk
+            sock.close()
+            self.assertTrue(ended.wait(3), "the stream kept writing after the client left")
+
     def test_trace_logging_never_records_request_targets(self):
         root = logging.getLogger()
         handler = _Collect()
