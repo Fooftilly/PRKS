@@ -28,13 +28,17 @@ from __future__ import annotations
 import json
 import os
 import resource
+import re
 import shutil
+import subprocess
 import threading
 from typing import Any, BinaryIO, Callable, Optional, TypeVar
 from unittest import mock
 
 from backend.domain.objects import ingest
 from backend.domain.search import text as search_text
+from backend.pdf_linearize import is_pdf_linearized
+from backend.pdf_text import same_pages_bounded
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
@@ -47,7 +51,7 @@ from tests.pg.test_http_processing import ProcessingHttpTestCase
 # ``None`` for a case the upload refuses, so nothing after it runs.
 EXPECTED: dict[str, Optional[tuple[str, int, bool]]] = {
     "valid": ("indexed", 200, True),
-    "truncated": ("empty", 200, False),  # MuPDF repairs it to one blank page; qpdf refuses it
+    "truncated": ("empty", 200, False),  # MuPDF repairs it to one blank page; qpdf 11 refuses it
     "damaged_xref": ("indexed", 200, True),  # qpdf exits 3 (warnings); its repaired copy shows the same pages
     "encrypted": ("failed", 404, False),
     "zero_pages": ("empty", 404, False),
@@ -59,6 +63,21 @@ EXPECTED: dict[str, Optional[tuple[str, int, bool]]] = {
     "header_then_garbage": ("failed", 404, False),
     "not_a_pdf": None,
 }
+# qpdf 12 repairs these where qpdf 11 refuses them (exit 2). Its copy then
+# passes the same-pages check (exit 3, ``ok-repaired``), so it is used.
+# Production images (Debian trixie) and CI runners ship qpdf 12.
+REPAIRED_BY_QPDF_12 = frozenset({"truncated"})
+
+
+def qpdf_major() -> int:
+    """The installed qpdf's major version, from ``qpdf --version``."""
+    out = subprocess.run(["qpdf", "--version"], capture_output=True, text=True, check=True, timeout=30).stdout
+    found = re.search(r"qpdf version (\d+)\.", out)
+    if found is None:
+        raise AssertionError(f"unrecognised qpdf --version output: {out!r}")
+    return int(found.group(1))
+
+
 # Bounds far above what each case takes locally (all well under a second).
 EXTRACT_SECONDS = 10.0
 LINEARIZE_SECONDS = 10.0
@@ -244,9 +263,18 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
             self.assertEqual(stored.linearize, "missing-qpdf")
             self.assertEqual(stored.working, stored.source)
             return
+        if case.name in REPAIRED_BY_QPDF_12 and qpdf_major() >= 12:
+            self.assertEqual(stored.linearize, "ok-repaired")
+            linearized = True
         self.assertEqual(stored.linearize in ("ok", "ok-repaired"), linearized, stored.linearize)
         self.assertEqual(stored.working != stored.source, linearized)
         if not linearized:
             self.assertIn(stored.linearize, ("qpdf-failed", "qpdf-warnings", "already"))
         with self.objects.local_path(stored.working.key) as path:
             self.assertGreater(os.path.getsize(path), 0)
+            if stored.linearize == "ok-repaired":
+                # A copy qpdf repaired is kept only when it is linearized and
+                # shows the same pages as the upload: recheck both here.
+                self.assertTrue(is_pdf_linearized(path))
+                with self.objects.local_path(stored.source.key) as source_path:
+                    self.assertTrue(same_pages_bounded(source_path, path, LINEARIZE_SECONDS))
