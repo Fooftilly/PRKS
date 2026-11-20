@@ -54,4 +54,6 @@ def temporary_pair(test) -> tuple[str, str]:
 
 def client_context(cert_file: str) -> ssl.SSLContext:
     """A client context that trusts only ``cert_file`` and checks the host name."""
-    return ssl.create_default_context(cafile=cert_file)
+    context = ssl.create_default_context(cafile=cert_file)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
