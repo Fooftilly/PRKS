@@ -18,10 +18,12 @@ request work; up to 8 requests per thread wait for one,
 and further requests get an immediate 503 with `Retry-After`. Compose passes
 `PRKS_HTTP_THREADS` to `web`.
 
-What is left of step 8 below: `PRKSHandler` still subclasses
-`http.server.SimpleHTTPRequestHandler` (for header parsing and the static
-frontend files), so the `http.server` import stays until the handler no
-longer depends on it.
+`PRKSHandler` no longer subclasses `http.server.SimpleHTTPRequestHandler`:
+its base is `backend.web.handler_base.HttpHandlerBase` (response head,
+plain-text `send_error`, static frontend files with `Last-Modified` and
+`If-Modified-Since`), and nothing imports `http.server`. A frontend directory
+without `index.html` answers 404; directory listings are not served. That
+completes step 8 below.
 
 ## Decision
 
