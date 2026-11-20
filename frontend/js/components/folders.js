@@ -809,7 +809,9 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
 
     // New needs no catalogue: wire it before the catalogue read so a click
     // on the already-visible button is never dropped while that read runs.
+    // It still answers only while this editor owns the Work.
     newBtn.onclick = () => {
+        if (!folderStill()) return;
         window.__prksPendingWorkFolderAttach = {
             workId: wid,
             tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',

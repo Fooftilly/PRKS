@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import time
 import unittest
 from urllib.parse import urlparse
 
@@ -263,12 +262,13 @@ class ModalLifecycleTests(unittest.TestCase):
         page.route("**/api/folders*", hold_catalogue)
         edit = page.locator("#prks-work-folder-edit-btn")
         edit.wait_for(state="visible", timeout=10000)
-        edit.click()
+        with page.expect_request(
+            lambda r: r.method == "GET" and urlparse(r.url).path == "/api/folders",
+            timeout=10000,
+        ):
+            edit.click()
         new_btn = page.locator("#prks-work-folder-new-btn")
         new_btn.wait_for(state="visible", timeout=10000)
-        deadline = time.time() + 10
-        while time.time() < deadline and not held:
-            page.wait_for_timeout(50)
         self.assertTrue(held, "the folder editor never read the catalogue")
         try:
             page.locator("#prks-work-folder-search").fill("Early Work Folder")
