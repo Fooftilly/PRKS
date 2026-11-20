@@ -61,10 +61,18 @@ KEEP_ALIVE_SECONDS = 5
 #: The stdlib server's request limits, kept: header count and line length.
 MAX_HEADERS = 100
 MAX_LINE_BYTES = 65536
-#: The largest request head (request line and headers) h11 buffers while it
-#: arrives in pieces. h11's own default is 16 KiB, which would refuse a head
-#: sent in fragments that the same head sent at once passes.
-MAX_REQUEST_HEAD_BYTES = MAX_LINE_BYTES
+#: The largest request head (request line, headers and their line breaks,
+#: measured as ``name: value``) PRKS accepts; a larger one is answered 431.
+#: The adapter enforces it on the parsed head, so the answer does not depend on
+#: how the bytes arrived.
+MAX_REQUEST_HEAD_BYTES = 65536
+#: h11's buffer for a head still arriving. It is twice the limit above: h11
+#: checks only incomplete data, so a head just over the limit must still parse
+#: (whether sent at once or in pieces) for the adapter to answer 431. Past this,
+#: h11 answers 400 itself, again for either sending pattern, since Uvicorn
+#: reads at most 64 KiB at a time. h11's default (16 KiB) refused fragmented
+#: heads that passed when sent at once.
+H11_HEAD_BUFFER_BYTES = 2 * MAX_REQUEST_HEAD_BYTES
 #: Requests that may wait for a PRKS thread, per thread. Past that the
 #: server answers 503 at once, so a flood cannot grow the wait list without
 #: bound (``limit_concurrency`` stays unset: it also counts idle keep-alive
@@ -334,7 +342,10 @@ class _AsgiHandler(server_module.PRKSHandler):
     def run(self) -> None:
         """What ``handle_one_request`` does after the stdlib parsed the request."""
         try:
-            if len(self.headers) > MAX_HEADERS or any(
+            head_bytes = len(self.raw_requestline) + 2 + sum(
+                len(name) + len(value) + 4 for name, value in self.headers.items()
+            )
+            if len(self.headers) > MAX_HEADERS or head_bytes > MAX_REQUEST_HEAD_BYTES or any(
                 len(name) + len(value) + 4 > MAX_LINE_BYTES for name, value in self.headers.items()
             ):
                 self.send_error(431, "Request header fields too large")
@@ -524,7 +535,7 @@ class UvicornServing:
             server_header=False,
             date_header=True,
             timeout_keep_alive=KEEP_ALIVE_SECONDS,
-            h11_max_incomplete_event_size=MAX_REQUEST_HEAD_BYTES,
+            h11_max_incomplete_event_size=H11_HEAD_BUFFER_BYTES,
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
 

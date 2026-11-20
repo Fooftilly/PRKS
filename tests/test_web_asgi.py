@@ -420,22 +420,50 @@ class UvicornTransportTests(unittest.TestCase):
             time.sleep(0.2)
         self.assertEqual(ran, [], "a request ran after its client had left")
 
-    def test_a_large_head_sent_in_pieces_is_accepted(self):
+    def _head_of(self, size):
+        """A ``GET /healthz`` head of exactly ``size`` bytes, in lines of ~900 bytes."""
+        head = b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+        index = 0
+        while len(head) + 2 < size:
+            room = size - len(head) - 2 - len(b"X-H%02d: \r\n" % index)
+            head += b"X-H%02d: %s\r\n" % (index, b"v" * max(1, min(900, room)))
+            index += 1
+        head += b"\r\n"
+        self.assertEqual(len(head), size)
+        return head
+
+    def _status_of(self, head, piece):
         sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
-        self.addCleanup(sock.close)
-        value = b"v" * 20000  # over h11's 16 KiB default, under PRKS's 64 KiB
-        sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Big: ")
-        for start in range(0, len(value), 5000):  # the head stays incomplete past 16 KiB
-            sock.sendall(value[start:start + 5000])
-            time.sleep(0.05)
-        sock.sendall(b"\r\nConnection: close\r\n\r\n")
-        response = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            response += chunk
-        self.assertTrue(response.startswith(b"HTTP/1.1 200"), response[:80])
+        try:
+            try:
+                for start in range(0, len(head), piece):
+                    sock.sendall(head[start:start + piece])
+                    if piece < len(head):
+                        time.sleep(0.01)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # refused before the head ended; the answer is already sent
+            response = b""
+            while b"\r\n" not in response:
+                try:
+                    chunk = sock.recv(4096)
+                except ConnectionResetError:
+                    break
+                if not chunk:
+                    break
+                response += chunk
+            return int(response.split(b" ", 2)[1])
+        finally:
+            sock.close()
+
+    def test_the_head_limit_does_not_depend_on_how_the_bytes_arrive(self):
+        limit = asgi.MAX_REQUEST_HEAD_BYTES
+        cases = ((limit - 200, 200), (limit, 200), (limit + 1, 431), (72694, 431),
+                 (3 * limit, 400))  # past h11's buffer: h11 refuses it, for either pattern too
+        for size, expected in cases:
+            head = self._head_of(size)
+            for piece in (len(head), 4096, 1000):  # at once, then in fragments
+                with self.subTest(size=size, piece=piece):
+                    self.assertEqual(self._status_of(head, piece), expected)
 
     def test_idle_keep_alive_connections_do_not_refuse_requests(self):
         idle = []
