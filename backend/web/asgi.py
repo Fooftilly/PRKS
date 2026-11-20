@@ -479,8 +479,9 @@ class _Workers:
         while job is not None:
             try:
                 job()
-            except BaseException:  # noqa: BLE001 - _run reports its own errors; keep the thread
-                LOGGER.exception("http_worker_job_failed")
+            except Exception as exc:  # noqa: BLE001 - _run reports its own errors; keep the thread
+                # Metadata only, like _run: no traceback or message in the log.
+                LOGGER.error("http_worker_job_failed error_type=%s", safe_error_type(exc))
             with self._lock:
                 if self._closed:
                     return
