@@ -40,7 +40,8 @@ With TLS on, PRKS treats the site as HTTPS:
 Browsers reach PRKS by the name on the certificate. An IP literal or
 `localhost` needs no further setting; a DNS name such as `prks.home.arpa` must
 be listed in `PRKS_TRUSTED_HOSTS`, or PRKS answers 421 (it checks `Host` on
-every request).
+every request). The host of `PRKS_PUBLIC_ORIGIN`, when it is set, is accepted
+without listing it there.
 
 Plain HTTP is not served on the TLS port: one process speaks either HTTP or
 HTTPS. HTTP/2 is not offered.
