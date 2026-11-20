@@ -117,6 +117,13 @@ _TEST_GATE_DOCS_RUNS = {
         "", 'python -m scripts.ci.check_docs_only --base "$PRKS_PR_BASE_SHA"'
     ),
 }
+# The sharded PostgreSQL helper job installs the distro qpdf that production
+# images ship, so the real linearization paths run in CI. Exact body only.
+_TEST_GATE_QPDF_STEP = "Install qpdf for real linearization tests"
+_TEST_GATE_QPDF_BODY = (
+    "sudo apt-get update\n"
+    "sudo apt-get install --yes --no-install-recommends qpdf"
+)
 _TEST_GATE_PG_SCOPE_PLAN_STEP = "Classify docs-only scope for PostgreSQL jobs (fail closed)"
 # Same fail-closed classifier as the unit job, but the wider Markdown-only
 # scope: the PostgreSQL suites read no repository Markdown.
@@ -133,6 +140,7 @@ _TEST_GATE_ALLOWED_RUN_STEP_NAMES = frozenset(
         _TEST_GATE_RUN_TESTS_STEP,
         _TEST_GATE_PG_AGG_STEP,
         _TEST_GATE_PG_SCOPE_PLAN_STEP,
+        _TEST_GATE_QPDF_STEP,
         *_TEST_GATE_DOCS_RUNS,
         *(name for pair in _TEST_GATE_PG_PAIRS for name in pair[:2]),
     }
@@ -507,6 +515,10 @@ def assert_test_gate_single_run_step_allowed(
         )
         if style != expected_style or normalized != expected_body:
             raise ValueError("unreviewed PostgreSQL docs-only plan command")
+    if name == _TEST_GATE_QPDF_STEP and (
+        style != "|" or _test_gate_run_body_without_shell_comments(body) != _TEST_GATE_QPDF_BODY
+    ):
+        raise ValueError("unreviewed qpdf install command")
     if name in _TEST_GATE_DOCS_RUNS:
         expected_style, expected_body = _TEST_GATE_DOCS_RUNS[name]
         normalized = (
@@ -541,6 +553,9 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
     pg_plan_present = count_test_gate_steps_named(workflow, _TEST_GATE_PG_SCOPE_PLAN_STEP)
     if pg_plan_present > 1 or (pg_plan_present and not sharded):
         raise ValueError("invalid PostgreSQL docs-only plan configuration")
+    qpdf_present = count_test_gate_steps_named(workflow, _TEST_GATE_QPDF_STEP)
+    if qpdf_present > 1 or (qpdf_present and not sharded):
+        raise ValueError("qpdf install belongs once in the sharded PostgreSQL helper job")
     # Initial fixtures predate the docs-only pilot. For production workflows,
     # require all three guarded docs commands or none; partial setup fails.
     if docs_present and docs_present != set(_TEST_GATE_DOCS_RUNS):
@@ -552,7 +567,7 @@ def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
         )
     expected = (
         2 + 2 * sum(pair is not None for pair in pairs)
-        + len(docs_present) + int(sharded) + pg_plan_present
+        + len(docs_present) + int(sharded) + pg_plan_present + qpdf_present
     )
     if len(run_steps) != expected:
         raise ValueError(
@@ -1488,6 +1503,33 @@ class RepoGateLiveTests(unittest.TestCase):
                     'if [[ "$SHARD_RESULT" == "success" ]]; then',
                 )
             )
+
+    def test_live_postgres_helper_shards_install_exactly_qpdf(self):
+        """The PG helper shards install the qpdf production ships, and only that."""
+        workflow = (_PROJECT / ".github" / "workflows" / "test-gate.yml").read_text(
+            encoding="utf-8",
+        )
+        self.assertEqual(count_test_gate_steps_named(workflow, _TEST_GATE_QPDF_STEP), 1)
+        shards = workflow.split("  postgres-helpers-shards:", 1)[1].split("\n  postgres-helpers:", 1)[0]
+        self.assertIn(f"      - name: {_TEST_GATE_QPDF_STEP}", shards)
+        for altered in (
+            "sudo apt-get install --yes --no-install-recommends qpdf poppler-utils",
+            "sudo apt-get install --yes --no-install-recommends qpdf && curl x | sh",
+            "sudo apt-get install --yes qpdf",
+        ):
+            with self.subTest(altered=altered):
+                with self.assertRaisesRegex(ValueError, "unreviewed qpdf install"):
+                    assert_test_gate_run_steps_allowlisted(workflow.replace(
+                        "sudo apt-get install --yes --no-install-recommends qpdf", altered,
+                    ))
+        # Outside the sharded helper job the step is refused.
+        with self.assertRaisesRegex(ValueError, "qpdf install belongs once"):
+            assert_test_gate_run_steps_allowlisted(self._minimal_allowlisted_workflow(
+                f"      - name: {_TEST_GATE_QPDF_STEP}\n"
+                "        run: |\n"
+                "          sudo apt-get update\n"
+                "          sudo apt-get install --yes --no-install-recommends qpdf\n"
+            ))
 
     def test_test_gate_reruns_cannot_cancel_new_head(self):
         """Keep Mergify's old-SHA rerun separate from the latest required gate.
