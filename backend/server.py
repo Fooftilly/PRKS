@@ -1150,19 +1150,34 @@ class PRKSHandler(HttpHandlerBase):
             with self._library_access(parsed_path):
                 self.handle_api_get(parsed_path)
         else:
-            requested = unquote(parsed_path.path or '/')
-            safe_rel = requested.lstrip('/')
-            frontend_root = os.path.realpath(frontend_dir)
-            candidate = os.path.realpath(os.path.join(frontend_root, safe_rel))
-            if not (candidate == frontend_root or candidate.startswith(frontend_root + os.sep)):
-                self.send_error(404, "Not Found")
-                return
-            # Serve matching files or fall back to index.html for SPA hash routing
-            if not os.path.exists(candidate):
+            self._serve_frontend(parsed_path)
+
+    def _serve_frontend(self, parsed_path, *, head=False):
+        """A file of the frontend, ``index.html`` for ``/`` and unknown paths (SPA routes), else 404.
+
+        Every path is resolved (symlinks included) and must stay beneath the
+        frontend directory, the shell too. Only regular files are served:
+        no directory index besides ``/``, and never a listing.
+        """
+        frontend_root = os.path.realpath(frontend_dir)
+
+        def inside(path):
+            return path.startswith(frontend_root + os.sep)
+
+        requested = unquote(parsed_path.path or '/')
+        candidate = os.path.realpath(os.path.join(frontend_root, requested.lstrip('/')))
+        if candidate != frontend_root and not inside(candidate):
+            self.send_error(404, "Not Found")
+            return
+        if candidate == frontend_root or not os.path.exists(candidate):
+            if candidate != frontend_root:
                 # end_headers picks the shell's Cache-Control by path.
                 self.path = '/index.html'
-                candidate = os.path.join(frontend_root, 'index.html')
-            self.send_static_file(candidate)
+            candidate = os.path.realpath(os.path.join(frontend_root, 'index.html'))
+        if not inside(candidate) or not os.path.isfile(candidate):
+            self.send_error(404, "Not Found")
+            return
+        self.send_static_file(candidate, head=head)
 
     def do_HEAD(self):
         if not self._validate_request_host():
@@ -1178,18 +1193,7 @@ class PRKSHandler(HttpHandlerBase):
             with self._library_access(parsed_path):
                 self.handle_api_head(parsed_path)
         else:
-            requested = unquote(parsed_path.path or '/')
-            safe_rel = requested.lstrip('/')
-            frontend_root = os.path.realpath(frontend_dir)
-            candidate = os.path.realpath(os.path.join(frontend_root, safe_rel))
-            if not (candidate == frontend_root or candidate.startswith(frontend_root + os.sep)):
-                self.send_error(404, "Not Found")
-                return
-            if not os.path.exists(candidate):
-                # end_headers picks the shell's Cache-Control by path.
-                self.path = '/index.html'
-                candidate = os.path.join(frontend_root, 'index.html')
-            self.send_static_file(candidate, head=True)
+            self._serve_frontend(parsed_path, head=True)
 
     def do_POST(self):
         if not self._validate_request_host():

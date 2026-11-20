@@ -11,6 +11,7 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -205,6 +206,26 @@ class UvicornTransportTests(unittest.TestCase):
             "GET", "/favicon.svg", headers={"If-Modified-Since": headers["last-modified"], "If-None-Match": '"x"'}
         )
         self.assertEqual(status, 200)
+
+    def test_symlinks_out_of_the_frontend_are_not_followed(self):
+        with tempfile.TemporaryDirectory() as frontend, tempfile.TemporaryDirectory() as outside:
+            secret = os.path.join(outside, "secret.html")
+            with open(secret, "w", encoding="utf-8") as handle:
+                handle.write("<html>outside the frontend")
+            os.mkdir(os.path.join(frontend, "app"))
+            with open(os.path.join(frontend, "app", "index.html"), "w", encoding="utf-8") as handle:
+                handle.write("<html>a subdirectory index")
+            os.symlink(secret, os.path.join(frontend, "index.html"))
+            os.symlink(secret, os.path.join(frontend, "leak.html"))
+            with mock.patch.object(server_module, "frontend_dir", frontend):
+                for path in ("/", "/no/such/route", "/index.html", "/leak.html", "/app", "/app/"):
+                    with self.subTest(path=path):
+                        status, body, _ = self.request("GET", path)
+                        self.assertEqual(status, 404)
+                        self.assertNotIn(b"outside", body)
+                        self.assertNotIn(b"subdirectory", body)
+                status, body, _ = self.request("GET", "/app/index.html")
+                self.assertEqual((status, body), (200, b"<html>a subdirectory index"))
 
     def test_a_path_outside_the_frontend_is_404(self):
         status, body, _ = self.request("GET", "/%2e%2e/backend/server.py")

@@ -140,17 +140,15 @@ class HttpHandlerBase:
     # -- static files --------------------------------------------------------
 
     def send_static_file(self, file_path: str, *, head: bool = False) -> None:
-        """Answer with the file at ``file_path`` (already checked by the caller).
+        """Answer with the regular file at ``file_path`` (resolved and checked by the caller).
 
-        A directory is served through its ``index.html`` or answered 404:
-        directory listings are never served. ``If-Modified-Since`` (without
+        Anything else (a directory included) is answered 404: no index and no
+        listing is served from here. ``If-Modified-Since`` (without
         ``If-None-Match``) answers 304 when the file has not changed.
         """
-        if os.path.isdir(file_path):
-            file_path = os.path.join(file_path, "index.html")
-            if not os.path.isfile(file_path):
-                self.send_error(HTTPStatus.NOT_FOUND, "File not found")
-                return
+        if not os.path.isfile(file_path):
+            self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+            return
         try:
             f: BinaryIO = open(file_path, "rb")
         except OSError:
