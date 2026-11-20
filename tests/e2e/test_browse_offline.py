@@ -198,6 +198,9 @@ class BrowseOfflineTests(unittest.TestCase):
         ids = server.ids
         o._open_work_from_home(page, WORK_A_TITLE)
         o._wait_entity_cached(page, 'work', ids['work_a'])
+        # The Work-open ACK bumps Recent's generation; fetch Recent after it
+        # retires, or its cache write is refused (see cache_all).
+        o._drain_durable(page, message='Work-open operation did not retire before Recent warm-up')
         self.recent(page)
         o._wait_list_cached(page, 'recent:index')
         self.offline(page, context)
