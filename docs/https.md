@@ -153,10 +153,23 @@ volume: it holds Caddy's certificates and account key. The `edge` subnet is an
 example; choose one that is free on the host, and keep
 `PRKS_TRUSTED_PROXIES` equal to Caddy's address on it.
 
-Caddy on the host instead of in Compose works the same way: keep
-`PRKS_PUBLISH_HOST=127.0.0.1`, point `reverse_proxy` at `127.0.0.1:8080`, and
-set `PRKS_TRUSTED_PROXIES=127.0.0.1`. Every local process can then reach the
-port as a trusted proxy, so use this only on a machine you alone control.
+**With Docker Compose, run Caddy in Compose as above, not on the host.**
+`PRKS_TRUSTED_PROXIES` must match the address PRKS sees as the connection's
+peer, and through a published port that is not the host's `127.0.0.1`: Docker
+forwards the connection, so `web` sees the bridge network's gateway (such as
+`172.18.0.1`). That gateway is not Caddy's own address; trusting it would also
+trust anything else Docker forwards through it, and trusting `127.0.0.1`
+instead matches nothing, so every sign-in would count against one shared
+address and users could throttle each other. The dedicated `edge` network gives
+Caddy an address that is its alone.
+
+Caddy on the host works for a **direct run** of PRKS (no Docker): run
+`python prks_app.py --host 127.0.0.1`, point `reverse_proxy` at
+`127.0.0.1:8080`, and set `PRKS_TRUSTED_PROXIES=127.0.0.1`. PRKS then sees
+Caddy's connections from `127.0.0.1`, and believes Caddy's `X-Forwarded-For`
+(`tests/pg/test_http_admission.py`, `ProxyTests`, checks exactly this
+topology). Every local process can also reach the port as a trusted proxy, so
+use this only on a machine you alone control.
 
 Do not combine the two: with Caddy in front, leave `PRKS_TLS_CERT_FILE` and
 `PRKS_TLS_KEY_FILE` unset.
