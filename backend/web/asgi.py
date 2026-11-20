@@ -61,6 +61,27 @@ KEEP_ALIVE_SECONDS = 5
 #: The stdlib server's request limits, kept: header count and line length.
 MAX_HEADERS = 100
 MAX_LINE_BYTES = 65536
+#: The largest request head (request line, headers and their line breaks,
+#: measured as ``name: value``) PRKS accepts; a larger one is answered 431.
+#: The adapter enforces it on the parsed head, so the answer does not depend on
+#: how the bytes arrived.
+MAX_REQUEST_HEAD_BYTES = 65536
+#: h11's buffer for a head still arriving. It is twice the limit above: h11
+#: checks only incomplete data, so a head just over the limit must still parse
+#: (whether sent at once or in pieces) for the adapter to answer 431. Past this,
+#: h11 answers 400 itself, again for either sending pattern, since Uvicorn
+#: reads at most 64 KiB at a time. h11's default (16 KiB) refused fragmented
+#: heads that passed when sent at once.
+H11_HEAD_BUFFER_BYTES = 2 * MAX_REQUEST_HEAD_BYTES
+#: Requests that may wait for a PRKS thread, per thread. Past that the
+#: server answers 503 at once, so a flood cannot grow the wait list without
+#: bound (``limit_concurrency`` stays unset: it also counts idle keep-alive
+#: connections, ``docs/http-server.md``).
+QUEUE_PER_THREAD = 8
+#: Request body a request waiting for a thread may have buffered while the
+#: receiver keeps watching for a disconnect (see :class:`_Receiver`).
+QUEUED_BODY_BYTES = 65536
+_BUSY_BODY = b'{"error":"server_busy"}'
 
 _DROPPED_RESPONSE_HEADERS = frozenset({b"server", b"date"})
 #: Uvicorn loggers that log request data at TRACE (below DEBUG).
@@ -116,6 +137,13 @@ class _Receiver:
     waiting, and ``gone`` is set once the client disconnects (or the request
     task ends, as on a forced shutdown).
 
+    While the request still waits for a thread, body messages that arrive
+    behind a full queue are merged into the queued one, up to
+    :data:`QUEUED_BODY_BYTES`, so the receiver keeps reading and sees a client
+    that leaves (Uvicorn reports that only through a later ``receive()``).
+    Past that bound it waits as above; such a request then ends at its first
+    body read once it runs.
+
     Once the response starts, body the handler left unread is dropped rather
     than queued (:meth:`discard_body`). Otherwise a full queue would stop the
     receiver from ever seeing ``http.disconnect``: a GET carrying a body that
@@ -126,7 +154,15 @@ class _Receiver:
         self._receive = receive
         self.messages: asyncio.Queue[Message] = asyncio.Queue(maxsize=1)
         self.gone = threading.Event()
+        #: Set on ``http.disconnect`` only (not when the task merely ends), for
+        #: code on the loop: a request still waiting for a thread is dropped.
+        self.disconnected = asyncio.Event()
         self._discard = asyncio.Event()
+        self._serving = False
+
+    def start_serving(self) -> None:
+        """The request has a thread: hand body over one message at a time."""
+        self._serving = True
 
     async def run(self) -> None:
         try:
@@ -134,6 +170,7 @@ class _Receiver:
                 message = await self._receive()
                 if message.get("type") != "http.request":
                     self.gone.set()
+                    self.disconnected.set()
                     if not self._discard.is_set():
                         await self._put(message)
                     return
@@ -144,6 +181,8 @@ class _Receiver:
 
     async def _put(self, message: Message) -> None:
         """Queue ``message``, or drop it if :meth:`discard_body` runs first."""
+        if not self._serving and self._merged(message):
+            return
         put = asyncio.ensure_future(self.messages.put(message))
         discard = asyncio.ensure_future(self._discard.wait())
         try:
@@ -151,6 +190,20 @@ class _Receiver:
         finally:
             put.cancel()
             discard.cancel()
+
+    def _merged(self, message: Message) -> bool:
+        """Append ``message``'s body to the queued one, within the bound."""
+        if not self.messages.full() or message.get("type") != "http.request":
+            return False
+        held = self.messages.get_nowait()
+        body = held.get("body", b"") + message.get("body", b"")
+        if held.get("type") != "http.request" or len(body) > QUEUED_BODY_BYTES:
+            self.messages.put_nowait(held)
+            return False
+        self.messages.put_nowait(
+            {"type": "http.request", "body": body, "more_body": message.get("more_body", False)}
+        )
+        return True
 
     async def discard_body(self) -> None:
         """The response has started: drop request body the handler did not read."""
@@ -320,7 +373,10 @@ class _AsgiHandler(server_module.PRKSHandler):
     def run(self) -> None:
         """What ``handle_one_request`` does after the stdlib parsed the request."""
         try:
-            if len(self.headers) > MAX_HEADERS or any(
+            head_bytes = len(self.raw_requestline) + 2 + sum(
+                len(name) + len(value) + 4 for name, value in self.headers.items()
+            )
+            if len(self.headers) > MAX_HEADERS or head_bytes > MAX_REQUEST_HEAD_BYTES or any(
                 len(name) + len(value) + 4 > MAX_LINE_BYTES for name, value in self.headers.items()
             ):
                 self.send_error(431, "Request header fields too large")
@@ -345,30 +401,83 @@ class PrksAsgiApp:
     def __init__(self, server: "UvicornServing", threads: int) -> None:
         self._server = server
         self._threads = threads
+        # Requests running or waiting for a thread. Counted synchronously
+        # before any await, so a burst cannot slip past the bound while slot
+        # acquisitions are still pending.
+        self._max_admitted = threads + threads * QUEUE_PER_THREAD
+        self._admitted = 0
         self._slots: Optional[asyncio.Semaphore] = None
+
+    @property
+    def admitted(self) -> int:
+        """Requests running or waiting for a thread."""
+        return self._admitted
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http":
             return  # lifespan is off; no WebSocket routes
         if self._slots is None:
             self._slots = asyncio.Semaphore(self._threads)
-        loop = asyncio.get_running_loop()
-        async with self._slots:
-            done: asyncio.Future[None] = loop.create_future()
-            receiver = _Receiver(receive)
-            watch = asyncio.ensure_future(receiver.run())
-            thread = threading.Thread(
-                target=self._run,
-                args=(loop, done, scope, receiver, send),
-                name="prks-http",
-                daemon=True,
-            )
-            thread.start()
+        if self._admitted >= self._max_admitted:
+            await _send_busy(send)
+            return
+        self._admitted += 1
+        # The receiver starts before the wait for a thread, so a client that
+        # leaves while queued is seen (Uvicorn reports it only via receive())
+        # and its request is dropped instead of run for nobody. Body messages
+        # wait in the receiver's queue meanwhile; none is lost.
+        receiver = _Receiver(receive)
+        watch = asyncio.ensure_future(receiver.run())
+        try:
+            acquired = await self._acquire_unless_disconnected(receiver)
+            if not acquired:
+                return
+            receiver.start_serving()
             try:
-                await done
+                await self._serve(scope, receiver, send)
             finally:
-                watch.cancel()
-                receiver.gone.set()
+                self._slots.release()
+        finally:
+            self._admitted -= 1
+            watch.cancel()
+            receiver.gone.set()
+
+    async def _acquire_unless_disconnected(self, receiver: _Receiver) -> bool:
+        """Take a thread slot; False (holding none) if the client leaves first."""
+        assert self._slots is not None
+        acquire = asyncio.ensure_future(self._slots.acquire())
+        left = asyncio.ensure_future(receiver.disconnected.wait())
+        acquired = False
+        try:
+            await asyncio.wait({acquire, left}, return_when=asyncio.FIRST_COMPLETED)
+            if not acquire.done():
+                acquire.cancel()
+            # Settle the acquisition without awaiting its result, so a
+            # cancellation of this task itself is never caught here.
+            await asyncio.wait({acquire})
+            acquired = not acquire.cancelled() and acquire.exception() is None
+        finally:
+            left.cancel()
+            if not acquire.done():
+                acquire.cancel()  # Semaphore.acquire hands back a slot it was given
+            elif acquired and receiver.disconnected.is_set():
+                self._slots.release()  # acquired as the client left: run nothing
+                acquired = False
+            elif not acquired and not acquire.cancelled() and acquire.exception() is None:
+                self._slots.release()  # this task was cancelled after the slot was taken
+        return acquired
+
+    async def _serve(self, scope: Scope, receiver: _Receiver, send: Send) -> None:
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+        thread = threading.Thread(
+            target=self._run,
+            args=(loop, done, scope, receiver, send),
+            name="prks-http",
+            daemon=True,
+        )
+        thread.start()
+        await done
 
     def _run(
         self,
@@ -397,6 +506,24 @@ class PrksAsgiApp:
         finally:
             with contextlib.suppress(RuntimeError):  # the loop has closed
                 loop.call_soon_threadsafe(_resolve, done)
+
+
+async def _send_busy(send: Send) -> None:
+    """503 for a request over the wait-list bound, without starting a thread."""
+    LOGGER.info("request_rejected reason=server_busy")
+    await send({
+        "type": "http.response.start",
+        "status": 503,
+        "headers": [
+            (b"content-type", b"application/json; charset=utf-8"),
+            (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
+            (b"cache-control", b"no-store"),
+            (b"retry-after", b"1"),
+            (b"x-content-type-options", b"nosniff"),
+            (b"connection", b"close"),
+        ],
+    })
+    await send({"type": "http.response.body", "body": _BUSY_BODY, "more_body": False})
 
 
 def _resolve(done: "asyncio.Future[None]") -> None:
@@ -430,14 +557,16 @@ class UvicornServing:
         self.server_address: tuple[str, int] = self._socket.getsockname()[:2]
         self._threads = threads
         self._server: Optional[_Server] = None
+        self.app: Optional[PrksAsgiApp] = None
         self._lock = threading.Lock()
         self._stop_requested = False
         self._stopped = threading.Event()
         self._closed = False
 
     def _config(self) -> uvicorn.Config:
+        self.app = PrksAsgiApp(self, self._threads)
         return uvicorn.Config(
-            PrksAsgiApp(self, self._threads),
+            self.app,
             http="h11",
             loop="asyncio",
             ws="none",
@@ -449,6 +578,7 @@ class UvicornServing:
             server_header=False,
             date_header=True,
             timeout_keep_alive=KEEP_ALIVE_SECONDS,
+            h11_max_incomplete_event_size=H11_HEAD_BUFFER_BYTES,
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
 

@@ -183,7 +183,7 @@ class TestMalformedTrustedHostsAbortListen(unittest.TestCase):
             pass
 
     def test_malformed_trusted_hosts_never_constructs_server(self):
-        with patch.object(server_module, "PRKSThreadingTCPServer") as ctor:
+        with patch.object(server_module, "make_server") as ctor:
             with patch.dict(
                 os.environ, {"PRKS_TRUSTED_HOSTS": "https://evil.example"}, clear=False
             ):

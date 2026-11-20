@@ -64,7 +64,7 @@ class HttpAuthTestCase(IdentityTestCase):
     """Fresh PostgreSQL identity + a PRKS server on its Library per test."""
 
     #: The HTTP transport serve() started: "stdlib" or "uvicorn" (#1329).
-    transport = "stdlib"
+    transport = "uvicorn"
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -125,7 +125,7 @@ class HttpAuthTestCase(IdentityTestCase):
         module = self.server_module
         if auth is _SENTINEL:
             auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
-        # PRKS_TEST_HTTP_TRANSPORT=uvicorn runs this suite over Uvicorn (#1329).
+        # Uvicorn is the default; PRKS_TEST_HTTP_TRANSPORT=stdlib runs this suite over the stdlib server until #1329 Phase B3 deletes it.
         from backend.web.settings import ENV_SERVER, HttpServerSettings
 
         http = HttpServerSettings.from_env({ENV_SERVER: os.environ.get("PRKS_TEST_HTTP_TRANSPORT", "")})

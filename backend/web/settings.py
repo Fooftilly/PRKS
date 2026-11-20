@@ -1,7 +1,8 @@
 """HTTP transport settings, read once at startup (#1329).
 
-``PRKS_HTTP_SERVER`` selects the transport while both exist: ``stdlib`` (the
-default until the switch) or ``uvicorn``. ``PRKS_HTTP_THREADS`` bounds the
+``PRKS_HTTP_SERVER`` selects the transport while both exist: ``uvicorn`` (the
+default since #1329 Phase B2) or ``stdlib``, kept only until Phase B3 deletes
+it. ``PRKS_HTTP_THREADS`` bounds the
 threads that run PRKS request work under Uvicorn. Invalid values refuse to
 start; nothing falls back silently.
 """
@@ -33,13 +34,13 @@ class HttpSettingsError(ValueError):
 
 @dataclass(frozen=True)
 class HttpServerSettings:
-    transport: str = TRANSPORT_STDLIB
+    transport: str = TRANSPORT_UVICORN
     threads: int = DEFAULT_THREADS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "HttpServerSettings":
         raw_transport = env.get(ENV_SERVER, "").strip().lower()
-        transport = raw_transport or TRANSPORT_STDLIB
+        transport = raw_transport or TRANSPORT_UVICORN
         if transport not in TRANSPORTS:
             raise HttpSettingsError(
                 f"{ENV_SERVER} must be one of {', '.join(TRANSPORTS)}."

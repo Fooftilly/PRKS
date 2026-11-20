@@ -5,6 +5,7 @@ HTTP suite over this transport when ``PRKS_TEST_HTTP_TRANSPORT=uvicorn``.
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import logging
 import os
@@ -43,8 +44,12 @@ class _Collect(logging.Handler):
 
 
 class HttpSettingsTests(unittest.TestCase):
-    def test_defaults_keep_the_stdlib_transport(self):
-        self.assertEqual(HttpServerSettings.from_env({}), HttpServerSettings("stdlib", DEFAULT_THREADS))
+    def test_defaults_select_the_uvicorn_transport(self):
+        self.assertEqual(HttpServerSettings.from_env({}), HttpServerSettings("uvicorn", DEFAULT_THREADS))
+        self.assertEqual(HttpServerSettings(), HttpServerSettings("uvicorn", DEFAULT_THREADS))
+
+    def test_stdlib_stays_selectable_until_it_is_deleted(self):
+        self.assertEqual(HttpServerSettings.from_env({ENV_SERVER: "stdlib"}).transport, "stdlib")
 
     def test_uvicorn_and_threads(self):
         settings = HttpServerSettings.from_env({ENV_SERVER: " Uvicorn ", ENV_THREADS: "8"})
@@ -65,7 +70,7 @@ class HttpSettingsTests(unittest.TestCase):
             self.assertIn("PRKS_HTTP_", caught.exception.message)
 
     def test_stdlib_transport_does_not_import_uvicorn(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
+        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings(transport="stdlib"))
         httpd.server_close()
         self.assertIsInstance(httpd, server_module.PRKSThreadingTCPServer)
         # This module imports Uvicorn, so check the import in a fresh process.
@@ -75,7 +80,7 @@ class HttpSettingsTests(unittest.TestCase):
             f"apply_isolated_test_env({_PROJECT!r})\n"
             "from backend import server\n"
             "from backend.web.settings import HttpServerSettings\n"
-            "server.make_server(('127.0.0.1', 0), HttpServerSettings()).server_close()\n"
+            "server.make_server(('127.0.0.1', 0), HttpServerSettings(transport='stdlib')).server_close()\n"
             "sys.exit(1 if 'uvicorn' in sys.modules or 'backend.web.asgi' in sys.modules else 0)\n"
         )
         result = subprocess.run([sys.executable, "-c", probe], cwd=_PROJECT, timeout=60, check=False)
@@ -101,6 +106,33 @@ class UvicornTransportTests(unittest.TestCase):
         self.port = self.httpd.server_address[1]
         self._wait_listening()
 
+    def _start_server(self, threads=4):
+        """Another Uvicorn transport, configured like setUp's; returns its port."""
+        httpd = server_module.make_server(
+            ("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn", ENV_THREADS: str(threads)})
+        )
+        httpd.prks_bind_host = "127.0.0.1"
+        httpd.prks_trusted_hosts = frozenset()
+        httpd.prks_access_gate = server_module.LibraryAccessGate()
+        httpd.prks_auth = None
+        httpd.prks_jobs = None
+        httpd.prks_readiness = None
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        port = httpd.server_address[1]
+        self.other_httpd = httpd
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                if self.request("GET", "/healthz", port=port)[0] == 200:
+                    return port
+            except OSError:
+                time.sleep(0.05)
+        self.fail("the second Uvicorn transport did not start")
+
     def _wait_listening(self):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -112,9 +144,9 @@ class UvicornTransportTests(unittest.TestCase):
                 time.sleep(0.05)
         self.fail("the Uvicorn transport did not start")
 
-    def request(self, method, path, headers=None, body=None, conn=None):
+    def request(self, method, path, headers=None, body=None, conn=None, port=None):
         own = conn is None
-        conn = conn or http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn = conn or http.client.HTTPConnection("127.0.0.1", port or self.port, timeout=10)
         try:
             conn.request(method, path, body=body, headers=headers or {})
             response = conn.getresponse()
@@ -273,6 +305,353 @@ class UvicornTransportTests(unittest.TestCase):
             [r for r in records if "secret-term" in r.getMessage()],
             "a request target reached the logs",
         )
+
+    def test_saturated_threads_queue_requests_instead_of_refusing_them(self):
+        # PRKS_HTTP_THREADS bounds PRKS work; limit_concurrency stays unset,
+        # so a request over the bound waits for a thread rather than a 503.
+        release = threading.Event()
+        started = threading.Semaphore(0)
+        original = asgi._AsgiHandler.do_GET
+
+        def slow_or_normal(handler):
+            if handler.path != "/slow":
+                return original(handler)
+            started.release()
+            release.wait(10)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "4")
+            handler.end_headers()
+            handler.wfile.write(b"slow")
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal):
+            slow = [threading.Thread(target=self.request, args=("GET", "/slow"), daemon=True) for _ in range(4)]
+            for thread in slow:
+                thread.start()
+            for _ in slow:  # all four PRKS threads are busy
+                self.assertTrue(started.acquire(timeout=5))
+            result = {}
+            waiting = threading.Thread(
+                target=lambda: result.update(status=self.request("GET", "/healthz")[0]), daemon=True
+            )
+            waiting.start()
+            waiting.join(0.5)
+            self.assertTrue(waiting.is_alive(), "a fifth request ran while every thread was busy")
+            release.set()
+            waiting.join(5)
+            self.assertEqual(result.get("status"), 200)
+            for thread in slow:
+                thread.join(5)
+
+    def test_requests_past_the_wait_list_bound_get_503_at_once(self):
+        # 4 threads x QUEUE_PER_THREAD (patched to 1) = 4 may wait; the next is refused.
+        release = threading.Event()
+        started = threading.Semaphore(0)
+        original = asgi._AsgiHandler.do_GET
+
+        def slow_or_normal(handler):
+            if handler.path != "/slow":
+                return original(handler)
+            started.release()
+            release.wait(10)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(asgi, "QUEUE_PER_THREAD", 1):
+            port = self._start_server()
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal):
+            busy = [threading.Thread(target=self.request, args=("GET", "/slow", None, None, None, port), daemon=True)
+                    for _ in range(4)]
+            for thread in busy:
+                thread.start()
+            for _ in busy:
+                self.assertTrue(started.acquire(timeout=5))
+            statuses = []
+            waiters = [threading.Thread(target=lambda: statuses.append(self.request("GET", "/healthz", port=port)[0]),
+                                        daemon=True) for _ in range(4)]
+            for thread in waiters:
+                thread.start()
+            deadline = time.monotonic() + 5
+            while self.other_httpd.app.admitted < 8:  # four running, four waiting
+                self.assertLess(time.monotonic(), deadline, "the waiters never reached the wait list")
+                time.sleep(0.01)
+            status, body, headers = self.request("GET", "/healthz", port=port)
+            self.assertEqual(status, 503)
+            self.assertIn(b"server_busy", body)
+            self.assertEqual(headers.get("retry-after"), "1")
+            release.set()
+            for thread in busy + waiters:
+                thread.join(5)
+            self.assertEqual(statuses, [200, 200, 200, 200])
+
+    def test_a_burst_on_free_threads_cannot_pass_the_wait_list_bound(self):
+        # Driven at the ASGI level so the burst is exact: every request enters
+        # before any slot acquisition has run. 1 thread + 1 waiter admitted.
+        async def burst():
+            release = asyncio.Event()
+            served = []
+            statuses = []
+
+            async def hold(scope, receiver, send):
+                served.append(scope["path"])
+                await release.wait()
+
+            async def receive():
+                await asyncio.Event().wait()  # the client never sends or leaves
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                if message["type"] == "http.response.start":
+                    statuses.append(message["status"])
+
+            with mock.patch.object(asgi, "QUEUE_PER_THREAD", 1):
+                app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            scope = {"type": "http", "path": "/burst"}
+            calls = [asyncio.ensure_future(app(scope, receive, send)) for _ in range(20)]
+            await asyncio.sleep(0.2)
+            seen = (list(statuses), list(served))
+            release.set()
+            await asyncio.wait_for(asyncio.gather(*calls), 5)
+            return seen, served, app._admitted
+
+        (refused, running), served, admitted = asyncio.run(burst())
+        self.assertEqual(refused, [503] * 18)
+        self.assertEqual(running, ["/burst"])
+        self.assertEqual(served, ["/burst", "/burst"])
+        self.assertEqual(admitted, 0)
+
+    def test_a_queued_request_whose_client_leaves_mid_body_never_runs(self):
+        # Two body messages fill the one-slot queue; the disconnect behind
+        # them must still be seen while the request waits for a thread.
+        async def scenario():
+            release = asyncio.Event()
+            served = []
+
+            async def hold(scope, receiver, send):
+                served.append(scope["path"])
+                if scope["path"] == "/first":
+                    await release.wait()
+
+            async def idle():
+                await asyncio.Event().wait()
+                return {"type": "http.disconnect"}
+
+            messages = [
+                {"type": "http.request", "body": b"a" * 1000, "more_body": True},
+                {"type": "http.request", "body": b"b" * 1000, "more_body": True},
+                {"type": "http.disconnect"},
+            ]
+
+            async def leaving():
+                if messages:
+                    return messages.pop(0)
+                return await idle()
+
+            async def send(message):
+                pass
+
+            app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, idle, send))
+            await asyncio.sleep(0.05)
+            queued = asyncio.ensure_future(app({"type": "http", "path": "/upload"}, leaving, send))
+            await asyncio.sleep(0.1)
+            dropped_while_queued = queued.done()
+            release.set()
+            await first
+            await asyncio.wait_for(queued, 2)
+            return served, dropped_while_queued, app.admitted
+
+        served, dropped, admitted = asyncio.run(scenario())
+        self.assertTrue(dropped, "the request stayed queued after its client left")
+        self.assertEqual(served, ["/first"])
+        self.assertEqual(admitted, 0)
+
+    def test_a_queued_request_keeps_its_whole_body(self):
+        # 1000-byte chunks are merged while queued; 40000-byte ones pass the
+        # QUEUED_BODY_BYTES bound, so the receiver waits on the full queue.
+        for size in (1000, 40000):
+            with self.subTest(chunk=size):
+                bodies, expected = asyncio.run(self._queued_upload(size))
+                self.assertEqual(bodies, [expected])
+
+    async def _queued_upload(self, size):
+        release = asyncio.Event()
+        bodies = []
+
+        async def hold(scope, receiver, send):
+            if scope["path"] == "/first":
+                await release.wait()
+                return
+            body = b""
+            while True:
+                message = await receiver.messages.get()
+                body += message.get("body", b"")
+                if not message.get("more_body", False):
+                    break
+            bodies.append(body)
+
+        async def idle():
+            await asyncio.Event().wait()
+            return {"type": "http.disconnect"}
+
+        chunks = [b"a" * size, b"b" * size, b"c" * size]
+        messages = [{"type": "http.request", "body": c, "more_body": i < 2} for i, c in enumerate(chunks)]
+
+        async def uploading():
+            if messages:
+                return messages.pop(0)
+            return await idle()
+
+        async def send(message):
+            pass
+
+        app = asgi.PrksAsgiApp(mock.Mock(), 1)
+        app._serve = hold
+        first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, idle, send))
+        await asyncio.sleep(0.05)
+        queued = asyncio.ensure_future(app({"type": "http", "path": "/upload"}, uploading, send))
+        await asyncio.sleep(0.1)
+        release.set()
+        await first
+        await asyncio.wait_for(queued, 2)
+        return bodies, b"".join(chunks)
+
+    def test_cancelling_a_queued_request_keeps_the_thread_slot(self):
+        async def scenario():
+            release = asyncio.Event()
+            served = []
+
+            async def hold(scope, receiver, send):
+                served.append(scope["path"])
+                if scope["path"] == "/first":
+                    await release.wait()
+
+            async def receive():
+                await asyncio.Event().wait()
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                pass
+
+            app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, receive, send))
+            await asyncio.sleep(0.05)
+            queued = asyncio.ensure_future(app({"type": "http", "path": "/cancelled"}, receive, send))
+            await asyncio.sleep(0.05)
+            queued.cancel()
+            release.set()
+            await first
+            await asyncio.gather(queued, return_exceptions=True)
+            await asyncio.wait_for(app({"type": "http", "path": "/after"}, receive, send), 2)
+            return served, queued.cancelled(), app._admitted
+
+        served, cancelled, admitted = asyncio.run(scenario())
+        self.assertTrue(cancelled, "the cancellation was swallowed")
+        self.assertEqual(served, ["/first", "/after"])
+        self.assertEqual(admitted, 0)
+
+    def test_a_request_whose_client_leaves_while_queued_never_runs(self):
+        release = threading.Event()
+        started = threading.Semaphore(0)
+        ran = []
+        original = asgi._AsgiHandler.do_GET
+
+        def routes(handler):
+            if handler.path == "/abandoned":
+                ran.append(handler.path)
+            if handler.path != "/slow":
+                return original(handler)
+            started.release()
+            release.wait(10)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", routes):
+            busy = [threading.Thread(target=self.request, args=("GET", "/slow"), daemon=True) for _ in range(4)]
+            for thread in busy:
+                thread.start()
+            for _ in busy:  # every thread is held
+                self.assertTrue(started.acquire(timeout=5))
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock.sendall(b"GET /abandoned HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            time.sleep(0.3)  # it is waiting for a thread
+            sock.close()
+            time.sleep(0.3)  # the disconnect reaches the receiver
+            release.set()
+            for thread in busy:
+                thread.join(5)
+            self.assertEqual(self.request("GET", "/healthz")[0], 200)
+            time.sleep(0.2)
+        self.assertEqual(ran, [], "a request ran after its client had left")
+
+    def _head_of(self, size):
+        """A ``GET /healthz`` head of exactly ``size`` bytes, in lines of ~900 bytes."""
+        head = b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+        index = 0
+        while len(head) + 2 < size:
+            room = size - len(head) - 2 - len(b"X-H%02d: \r\n" % index)
+            head += b"X-H%02d: %s\r\n" % (index, b"v" * max(1, min(900, room)))
+            index += 1
+        head += b"\r\n"
+        self.assertEqual(len(head), size)
+        return head
+
+    def _status_of(self, head, piece):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            try:
+                for start in range(0, len(head), piece):
+                    sock.sendall(head[start:start + piece])
+                    if piece < len(head):
+                        time.sleep(0.01)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # refused before the head ended; the answer is already sent
+            response = b""
+            while b"\r\n" not in response:
+                try:
+                    chunk = sock.recv(4096)
+                except ConnectionResetError:
+                    break
+                if not chunk:
+                    break
+                response += chunk
+            return int(response.split(b" ", 2)[1])
+        finally:
+            sock.close()
+
+    def test_the_head_limit_does_not_depend_on_how_the_bytes_arrive(self):
+        limit = asgi.MAX_REQUEST_HEAD_BYTES
+        # Past h11's buffer the head is refused either way: h11 answers 400 if
+        # a read leaves it incomplete, PRKS 431 if one read held all of it.
+        cases = ((limit - 200, {200}), (limit, {200}), (limit + 1, {431}), (72694, {431}),
+                 (3 * limit, {400, 431}))
+        for size, expected in cases:
+            head = self._head_of(size)
+            for piece in (len(head), 4096, 1000):  # at once, then in fragments
+                with self.subTest(size=size, piece=piece):
+                    self.assertIn(self._status_of(head, piece), expected)
+
+    def test_idle_keep_alive_connections_do_not_refuse_requests(self):
+        idle = []
+        self.addCleanup(lambda: [c.close() for c in idle])
+        for _ in range(40):  # ten times the thread limit
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            self.assertEqual(self.request("GET", "/healthz", conn=conn)[0], 200)
+            idle.append(conn)  # left open, idle, between requests
+        started = time.monotonic()
+        self.assertEqual(self.request("GET", "/healthz")[0], 200)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(self.request("GET", "/healthz", conn=idle[0])[0], 200)  # still reusable
 
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}

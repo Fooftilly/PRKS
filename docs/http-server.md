@@ -1,19 +1,23 @@
-# Production HTTP server (#1329 Phase A)
+# Production HTTP server (#1329)
 
-Status: **proposed**, waiting for the maintainer's review. This settles the
-pre-1.0 question in `docs/postgresql-architecture.md` §4.5 (PG20, decision 9,
-risk R9). The maintainer decided on 2026-11-19 to replace the stdlib server
-rather than harden it behind a reverse proxy. This document picks the stack
-and the process model. Phase B (the migration) starts only on the
-maintainer's go.
+Status: **accepted** (#1330, merged 2026-11-19); Phase B (the migration) is in
+progress, see "Migration status". This settles the pre-1.0 question in
+`docs/postgresql-architecture.md` §4.5 (PG20, decision 9, risk R9). The
+maintainer decided on 2026-11-19 to replace the stdlib server rather than
+harden it behind a reverse proxy. This document picks the stack and the
+process model.
 
 ## Migration status
 
-Phase B1 adds the Uvicorn transport behind `PRKS_HTTP_SERVER=uvicorn`
-(`backend/web/`). The stdlib server stays the default until B2 flips it;
+Phase B1 (#1335) added the Uvicorn transport (`backend/web/`). Phase B2
+makes it the default: `PRKS_HTTP_SERVER` defaults to `uvicorn`, and
+`PRKS_HTTP_SERVER=stdlib` selects the old server until B3 deletes it.
 `PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the threads that run PRKS
-request work. `PRKS_TEST_HTTP_TRANSPORT=uvicorn` runs the PostgreSQL HTTP
-suites over the new transport. B3 deletes the stdlib server.
+request work; up to 8 requests per thread wait for one, and further requests
+get an immediate 503 with `Retry-After`. Compose passes both settings to
+`web`. The PostgreSQL HTTP suites run
+over Uvicorn by default; `PRKS_TEST_HTTP_TRANSPORT=stdlib` runs them over the
+old server.
 
 ## Decision
 

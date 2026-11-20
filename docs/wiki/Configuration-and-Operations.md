@@ -11,6 +11,8 @@ For a first run, start with [Getting Started](Getting-Started.md). For backup/re
 | `PRKS_STORAGE` | If set, the data root: managed PDFs in `$PRKS_STORAGE/pdfs/`, portraits in `people/`, thumbnails in `thumbs/`, plus the `prks-root.json` marker and `.prks-maintenance/`. The Library database is PostgreSQL (`PRKS_DATABASE_URL`), never a file in the root. |
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks. Port **8070**, `data_testing/` when `PRKS_STORAGE` is unset, and refusal of `/data` and the repository `data/` tree are described in [Testing mode](Getting-Started.md#testing-mode). |
 | `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
+| `PRKS_HTTP_SERVER` | HTTP server. Default `uvicorn`. `stdlib` selects the old standard-library server, which is kept only until it is removed (#1329). Any other value stops startup. |
+| `PRKS_HTTP_THREADS` | Requests that run PRKS work at the same time under Uvicorn, from 1 to 256. Default `16`. Up to 8 more requests per thread wait for a free one; past that the server answers 503 with `Retry-After`. Idle keep-alive connections and clients still sending their headers hold no thread; a request whose body is being read (an upload) holds its thread until the body has arrived or the route's idle timeout ends it. The request head (request line and headers) may be up to 64 KiB, however it arrives. A larger one is refused: with 431 from PRKS, or with 400 when a head well past the limit (over 128 KiB) is still arriving and the HTTP parser stops it first. |
 | `PRKS_LOG_LEVEL` | Stderr log level. Default `INFO`. Changes volume, not what kinds of data may be logged. |
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
@@ -76,7 +78,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_DB_URL_FILE` | `./secrets/database_url` | Owner-only file with the full database URL. It becomes the `prks_database_url` secret that `migrate`, `web` and `worker` read through `PRKS_DATABASE_URL_FILE`. |
 | `PRKS_PUBLISH_HOST` | `127.0.0.1` | Host address the web port is published on. Leave it on loopback unless an HTTPS reverse proxy you control sits in front. |
 | `PRKS_PUBLISH_PORT` | `8080` | Host port the web port is published on. |
-| `PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`, `PRKS_TRUSTED_HOSTS` | empty | Passed to `web` (above). |
+| `PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`, `PRKS_TRUSTED_HOSTS`, `PRKS_HTTP_SERVER`, `PRKS_HTTP_THREADS` | empty | Passed to `web` (above). |
 
 ### Health endpoints
 
