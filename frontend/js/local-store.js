@@ -1651,6 +1651,8 @@
                 assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
                 const createOp = tagCreationDependency(rows, tagId,
                     'it cannot be attached to anything');
+                // A Folder this device is still creating is tagged after it exists.
+                const folderOp = folderCreationDependency(rows, folderId, 'it cannot be tagged');
                 const existing = rows.find(r => r.entity_type === 'folder' && r.entity_id === folderId &&
                     r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
                 if (existing) {
@@ -1666,7 +1668,7 @@
                 setResult(await insertEnvelopeIn(request, {
                     operation: present ? 'ADD_FOLDER_TAG' : 'REMOVE_FOLDER_TAG', entity_type: 'folder',
                     entity_id: folderId, payload: { tag_id: tagId }, base_revision: baseRevision,
-                    depends_on: createOp ? [createOp.op_id] : [],
+                    depends_on: [createOp, folderOp].filter(Boolean).map(op => op.op_id),
                 }, { tag }));
             });
         }
