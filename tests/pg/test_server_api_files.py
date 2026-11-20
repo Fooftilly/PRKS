@@ -46,8 +46,13 @@ class ManagedPdfTests(ManagedPdfTestCase):
         self.assertNotIn(work["id"], self.found(term, mode=""))
         self.assertIn(work["id"], self.found(term))
 
+    @mock.patch.dict(os.environ, {"PRKS_PDF_LINEARIZE": "0"})
     def test_a_replace_stores_a_new_object_and_swaps_the_text(self) -> None:
-        """The new PDF is a fresh immutable object: the response and the Work name its new path."""
+        """The new PDF is a fresh immutable object: the response and the Work name its new path.
+
+        Linearization is pinned off: with qpdf installed the working file is
+        the linearized copy, not the uploaded bytes this test compares.
+        """
         work = self.upload("Overwrite Work", "oldtermreplacepdf", "overwrite.pdf")
         self.run_jobs()
         self.assertIn(work["id"], self.found("oldtermreplacepdf"))
