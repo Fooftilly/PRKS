@@ -37,6 +37,8 @@ from unittest import mock
 
 from backend.domain.objects import ingest
 from backend.domain.search import text as search_text
+from backend.pdf_linearize import is_pdf_linearized
+from backend.pdf_text import same_pages_bounded
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
@@ -270,3 +272,9 @@ class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
             self.assertIn(stored.linearize, ("qpdf-failed", "qpdf-warnings", "already"))
         with self.objects.local_path(stored.working.key) as path:
             self.assertGreater(os.path.getsize(path), 0)
+            if stored.linearize == "ok-repaired":
+                # A copy qpdf repaired is kept only when it is linearized and
+                # shows the same pages as the upload: recheck both here.
+                self.assertTrue(is_pdf_linearized(path))
+                with self.objects.local_path(stored.source.key) as source_path:
+                    self.assertTrue(same_pages_bounded(source_path, path, LINEARIZE_SECONDS))
