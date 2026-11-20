@@ -732,6 +732,25 @@ class UvicornTransportTests(unittest.TestCase):
                 with self.subTest(size=size, piece=piece):
                     self.assertIn(self._status_of(head, piece), expected)
 
+    def test_keep_alive_requests_do_not_wait_for_a_delayed_ack(self):
+        # Without TCP_NODELAY on accepted sockets, head and body left as two
+        # segments and each keep-alive request took about 40 ms (Linux's
+        # delayed ACK); with it, well under a millisecond on loopback.
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+            request = b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+            took = []
+            for _ in range(21):
+                started = time.perf_counter()
+                sock.sendall(request)
+                received = b""
+                while not received.endswith(b"ok"):
+                    chunk = sock.recv(4096)
+                    self.assertTrue(chunk, "the server closed a keep-alive connection")
+                    received += chunk
+                took.append(time.perf_counter() - started)
+        took.sort()
+        self.assertLess(took[10], 0.02, f"median keep-alive request took {took[10] * 1000:.1f} ms")
+
     def test_idle_keep_alive_connections_do_not_refuse_requests(self):
         idle = []
         self.addCleanup(lambda: [c.close() for c in idle])
@@ -753,6 +772,71 @@ class UvicornTransportTests(unittest.TestCase):
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}
         self.assertEqual(self.request("GET", "/healthz", headers=headers)[0], 431)
+
+    def _closed_within(self, sock, seconds):
+        """True once the server closes ``sock`` (EOF) within ``seconds``."""
+        sock.settimeout(seconds)
+        try:
+            return sock.recv(4096) == b""
+        except (TimeoutError, socket.timeout):
+            return False
+        except ConnectionResetError:
+            return True
+
+    def test_a_late_request_head_closes_the_connection(self):
+        # Uvicorn has no head timeout of its own: without the deadline these
+        # connections stayed open for good (docs/http-server.md, Phase C).
+        with mock.patch.object(asgi, "REQUEST_HEAD_SECONDS", 0.5):
+            for opening in (b"", b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n"):
+                with self.subTest(opening=opening), socket.create_connection(("127.0.0.1", self.port)) as sock:
+                    sock.sendall(opening)
+                    self.assertTrue(self._closed_within(sock, 5), "a late head kept its connection")
+            # Meanwhile a whole request is served as usual.
+            self.assertEqual(self.request("GET", "/healthz")[0], 200)
+
+    def test_trickling_a_head_does_not_extend_its_deadline(self):
+        with mock.patch.object(asgi, "REQUEST_HEAD_SECONDS", 1.0), socket.create_connection(
+            ("127.0.0.1", self.port)
+        ) as sock:
+            started = time.monotonic()
+            closed = False
+            with contextlib.suppress(OSError):
+                for byte in b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow: " + b"a" * 60:
+                    sock.sendall(bytes([byte]))
+                    time.sleep(0.05)
+            closed = self._closed_within(sock, 5)
+            self.assertTrue(closed)
+            self.assertLess(time.monotonic() - started, 4.5)
+
+    def test_the_head_deadline_restarts_after_each_response(self):
+        with mock.patch.object(asgi, "REQUEST_HEAD_SECONDS", 0.5):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            self.addCleanup(conn.close)
+            for _ in range(3):  # 0.9 s in all, past one deadline: each restarts it
+                time.sleep(0.3)
+                self.assertEqual(self.request("GET", "/healthz", conn=conn)[0], 200)
+            assert conn.sock is not None
+            conn.sock.sendall(b"GET /healthz HTTP/1.1\r\n")  # the next head never finishes
+            self.assertTrue(self._closed_within(conn.sock, 5))
+
+    def test_a_slow_response_is_not_cut_by_the_head_deadline(self):
+        original = asgi._AsgiHandler.do_GET
+
+        def slow_or_normal(handler):
+            if handler.path != "/slow":
+                return original(handler)
+            time.sleep(1.5)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "4")
+            handler.end_headers()
+            handler.wfile.write(b"slow")
+            return None
+
+        with mock.patch.object(asgi, "REQUEST_HEAD_SECONDS", 0.5), mock.patch.object(
+            asgi._AsgiHandler, "do_GET", slow_or_normal
+        ):
+            status, body, _ = self.request("GET", "/slow")
+        self.assertEqual((status, body), (200, b"slow"))
 
 
 class TlsTransportTests(unittest.TestCase):
@@ -893,6 +977,113 @@ class ShutdownTests(unittest.TestCase):
         with self.assertRaises(OSError):
             socket.create_connection(("127.0.0.1", port), timeout=1)
 
+
+    def _serving(self):
+        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings(2))
+        for name, value in (("prks_bind_host", "127.0.0.1"), ("prks_trusted_hosts", frozenset()),
+                            ("prks_auth", None), ("prks_jobs", None), ("prks_readiness", None)):
+            setattr(httpd, name, value)
+        httpd.prks_access_gate = server_module.LibraryAccessGate()
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(httpd.server_close)
+        return httpd, thread
+
+    def _slow_get(self, started, seconds):
+        original = asgi._AsgiHandler.do_GET
+
+        def slow_or_normal(handler):
+            if handler.path != "/slow":
+                return original(handler)
+            started.set()
+            time.sleep(seconds)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "4")
+            handler.end_headers()
+            handler.wfile.write(b"slow")
+            return None
+
+        return mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal)
+
+    def _get_slow(self, port, result):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                conn.request("GET", "/slow")
+                response = conn.getresponse()
+                result.append((response.status, response.read()))
+                return
+            except ConnectionRefusedError:
+                time.sleep(0.05)
+            except OSError as exc:
+                result.append(exc)
+                return
+            finally:
+                conn.close()
+
+    def test_a_stop_lets_a_request_in_flight_finish(self):
+        started = threading.Event()
+        result: list = []
+        with self._slow_get(started, 1.0):
+            httpd, thread = self._serving()
+            client = threading.Thread(target=self._get_slow, args=(httpd.server_address[1], result))
+            client.start()
+            self.assertTrue(started.wait(5), "the slow request never started")
+            began = time.monotonic()
+            httpd.shutdown()  # waits for serving to end
+            took = time.monotonic() - began
+            client.join(10)
+        self.assertEqual(result, [(200, b"slow")])
+        self.assertGreater(took, 0.5, "the stop did not wait for the request in flight")
+        self.assertFalse(thread.is_alive() and (thread.join(5) or thread.is_alive()))
+
+    def test_a_stop_ends_within_the_grace_when_a_request_outlives_it(self):
+        started = threading.Event()
+        result: list = []
+        with mock.patch.object(asgi, "GRACEFUL_SHUTDOWN_SECONDS", 1), self._slow_get(started, 5.0):
+            httpd, thread = self._serving()
+            client = threading.Thread(target=self._get_slow, args=(httpd.server_address[1], result))
+            client.start()
+            self.assertTrue(started.wait(5), "the slow request never started")
+            began = time.monotonic()
+            httpd.shutdown()
+            took = time.monotonic() - began
+            client.join(10)
+        self.assertLess(took, 4, "the stop waited past its grace for a request")
+        self.assertNotEqual(result, [(200, b"slow")])
+        self.assertFalse(thread.is_alive() and (thread.join(5) or thread.is_alive()))
+
+    def test_repeated_servers_leave_no_request_threads_behind(self):
+        def request_threads():
+            return [t for t in threading.enumerate() if t.name == "prks-http"]
+
+        before = len(request_threads())
+        for _ in range(3):
+            httpd, thread = self._serving()
+            port = httpd.server_address[1]
+            conns = []
+            for _ in range(4):  # several at once, so the pool grows past one thread
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        conn.request("GET", "/healthz")
+                        break
+                    except ConnectionRefusedError:
+                        self.assertLess(time.monotonic(), deadline, "the server never answered")
+                        time.sleep(0.05)
+                        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conns.append(conn)
+            for conn in conns:
+                self.assertEqual(conn.getresponse().status, 200)
+                conn.close()
+            httpd.shutdown()
+            thread.join(5)
+        deadline = time.monotonic() + 5
+        while len(request_threads()) > before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(len(request_threads()), before, "request threads outlived their server")
 
 if __name__ == "__main__":
     unittest.main()
