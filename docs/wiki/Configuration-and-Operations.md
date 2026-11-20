@@ -76,7 +76,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_DATA_DIR` | `./data` | Host directory mounted at `/data` as the data root. Create it before the first `up`. |
 | `PRKS_DB_PASSWORD_FILE` | `./secrets/db_password` | Owner-only file with the `prks` role's password. Only `db` gets it. PostgreSQL reads it only when it creates the database. |
 | `PRKS_DB_URL_FILE` | `./secrets/database_url` | Owner-only file with the full database URL. It becomes the `prks_database_url` secret that `migrate`, `web` and `worker` read through `PRKS_DATABASE_URL_FILE`. |
-| `PRKS_PUBLISH_HOST` | `127.0.0.1` | Host address the web port is published on. Leave it on loopback unless an HTTPS reverse proxy you control sits in front. |
+| `PRKS_PUBLISH_HOST` | `127.0.0.1` | Host address the web port is published on. Leave it on loopback unless PRKS serves HTTPS itself (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`). Behind a reverse proxy, publish no port and let the proxy reach `web` on the Compose network ([HTTPS](https://github.com/Fooftilly/PRKS/blob/master/docs/https.md)). |
 | `PRKS_PUBLISH_PORT` | `8080` | Host port the web port is published on. |
 | `PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`, `PRKS_TRUSTED_HOSTS`, `PRKS_HTTP_THREADS` | empty | Passed to `web` (above). |
 | `PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE` | empty | Passed to `web` (above): paths inside the container. Mount the files with an override file ([HTTPS](https://github.com/Fooftilly/PRKS/blob/master/docs/https.md)); the `web` health check then probes over `https`. |
