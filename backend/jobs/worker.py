@@ -94,6 +94,11 @@ LISTEN_APPLICATION_NAME = "prks-worker-listen"
 # a stop (the thread is a daemon and exits once its connect returns).
 LISTEN_CONNECT_TIMEOUT = 10
 _LISTEN_CLOSE_WAIT = 2.0
+# How often a listening connection checks for a stop between notifications.
+# Every stop waits up to this long for the listener, so it bounds how fast a
+# worker (and a web process with an embedded worker) shuts down. An idle
+# check is one socket wait, so a short interval costs nothing measurable.
+_LISTEN_STOP_CHECK_SECONDS = 0.1
 
 # The start check: True once the process may claim, False while setup is
 # pending; raises StartRefused when the process must not run yet (retryable)
@@ -184,7 +189,7 @@ class _Listener:
                     # is covered by the claim that follows any wake.
                     self._wake.set()
                     while not self._closing.is_set():
-                        for _ in conn.notifies(timeout=0.5, stop_after=1):
+                        for _ in conn.notifies(timeout=_LISTEN_STOP_CHECK_SECONDS, stop_after=1):
                             self._wake.set()
             except psycopg.Error as exc:
                 LOGGER.warning("job_listen_failed error=%s", type(exc).__name__)
