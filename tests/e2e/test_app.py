@@ -14123,7 +14123,6 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
             lambda r: (
                 r.request.method == "PATCH" and urlparse(r.url).path == "/api/settings"
             ),
-            timeout=10000,
         ) as saved:
             page.fill("#annotation-author-input", "Persisted Author")
         self.assertTrue(saved.value.ok)
