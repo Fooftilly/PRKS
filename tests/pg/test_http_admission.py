@@ -443,7 +443,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
         headers = Message()
         request = session_api.HttpRequest(
             method="GET", path="/api/tags", headers=headers, peer="192.0.2.7",
-            request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+            request_host=("127.0.0.1", self.port), scheme="http", parse_origin=parse_request_origin,
             read_json=lambda: {},
         )
         outcome = session_api.handle(self.auth, request)
@@ -451,7 +451,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
         self.assertEqual((outcome.status, outcome.body["error"]), (401, "not_authenticated"))
         mapped = session_api.handle(self.auth, session_api.HttpRequest(
             method="GET", path="/api/tags", headers=headers, peer="::ffff:127.0.0.1",
-            request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+            request_host=("127.0.0.1", self.port), scheme="http", parse_origin=parse_request_origin,
             read_json=lambda: {},
         ))
         self.assertIsInstance(mapped, session_api.Admitted)
@@ -464,7 +464,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
         def admitted(path: str, method: str = "GET"):
             outcome = session_api.handle(self.auth, session_api.HttpRequest(
                 method=method, path=path, headers=Message(), peer="127.0.0.1",
-                request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+                request_host=("127.0.0.1", self.port), scheme="http", parse_origin=parse_request_origin,
                 read_json=lambda: {},
             ))
             assert isinstance(outcome, session_api.Admitted), outcome
@@ -487,7 +487,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
         def admit(path: str, route_fences_epoch: bool):
             return session_api.handle(self.auth, session_api.HttpRequest(
                 method="POST", path=path, headers=headers, peer="127.0.0.1",
-                request_host=("127.0.0.1", self.port), parse_origin=parse_request_origin,
+                request_host=("127.0.0.1", self.port), scheme="http", parse_origin=parse_request_origin,
                 read_json=lambda: {}, route_fences_epoch=route_fences_epoch,
             ))
 

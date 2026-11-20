@@ -53,13 +53,13 @@ Reports are especially useful when they involve issues such as:
 
 PRKS has built-in sign-in. By default (`PRKS_AUTH=session`) every account signs in with a password, and every `/api/` request needs a signed-in session and is checked against the account's role in the Library (owner, editor or reader). The exceptions are the sign-in routes themselves (`POST /api/login`, `GET /api/session`, `POST /api/logout`), the application's static page and assets, and the `/healthz` and `/readyz` probes, which answer only a status code; none of them returns Library data. The other mode, `loopback-owner`, acts as the owner without a password. The server starts it only for a disposable testing instance (`--testing`) bound to a loopback address, and answers only loopback peers. Sign-in is described in [docs/login-security.md](docs/login-security.md).
 
-Direct runs bind to loopback by default, and Docker Compose publishes to host loopback by default. PRKS serves plain HTTP. Exposing it beyond a trusted network is supported only behind an HTTPS reverse proxy, configured as the README and [Security and Operations](docs/wiki/Security-and-Operations.md) describe (`PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`).
+Direct runs bind to loopback by default, and Docker Compose publishes to host loopback by default. PRKS serves plain HTTP unless `PRKS_TLS_CERT_FILE` and `PRKS_TLS_KEY_FILE` are set, when it serves HTTPS itself (`Secure` cookies, `Strict-Transport-Security`, an `https` origin check). Exposing it beyond a trusted network is supported only over HTTPS: behind an HTTPS reverse proxy (`PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`; recommended for the internet), or with PRKS's own TLS, configured as [docs/https.md](docs/https.md) and [Security and Operations](docs/wiki/Security-and-Operations.md) describe. PRKS does not obtain or renew certificates; keeping its certificate valid, and restarting after renewal, is the operator's part.
 
 A bypass of sign-in, sessions, the sign-in attempt limits, the Library role checks or the cross-origin checks is a security issue and should be reported privately, as should a bypass of the documented network, Host, storage or input-validation protections. Reports that only show one of the following are not, by themselves, considered vulnerabilities:
 
 - a `loopback-owner` testing instance acting as its owner for loopback clients, as documented;
 - password guessing within the documented attempt limits;
-- an attack that needs PRKS exposed over plain HTTP, or behind a proxy configured other than as documented (for example a `PRKS_TRUSTED_PROXIES` entry that is not the proxy).
+- an attack that needs PRKS exposed over plain HTTP, behind a proxy configured other than as documented (for example a `PRKS_TRUSTED_PROXIES` entry that is not the proxy), or serving an expired, untrusted or leaked certificate.
 
 ## Security Updates
 

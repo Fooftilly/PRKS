@@ -100,7 +100,7 @@ browser.
 ## Sessions
 
 A session cookie `prks_session` (256-bit random token; `HttpOnly`,
-`SameSite=Strict`, `Path=/`, `Secure` when the public origin is HTTPS) names
+`SameSite=Strict`, `Path=/`, `Secure` over HTTPS) names
 one row of `prks.sessions`, which keeps only the token's SHA-256. A session
 ends after `PRKS_SESSION_IDLE_DAYS` without use, at sign-out, when its user is
 disabled, or when its Library membership is removed.
@@ -200,9 +200,13 @@ page itself: `Sec-Fetch-Site`, when sent, must be `same-origin`, and the
 `Origin` header must be the expected origin. Without an `Origin`,
 `Sec-Fetch-Site: same-origin` is required. The expected origin is
 `PRKS_PUBLIC_ORIGIN` when set (and then only it), otherwise
-`http://<the Host the request was sent to>`. `X-Forwarded-Host`,
+`https://<the Host the request was sent to>` when PRKS served the request over
+its own TLS (`PRKS_TLS_CERT_FILE`, [docs/https.md](https.md)) and
+`http://<the Host>` otherwise. `X-Forwarded-Host`,
 `X-Forwarded-Proto` and `Forwarded` are never read. Anything else gets 403
 `origin_not_allowed` before the request is counted or authenticated.
 
-Cookies are `Secure` when `PRKS_PUBLIC_ORIGIN` is an `https` origin. Its host
+Cookies are `Secure` when `PRKS_PUBLIC_ORIGIN` is an `https` origin and when
+PRKS serves HTTPS itself; responses over its own TLS also send
+`Strict-Transport-Security: max-age=31536000`. The public origin's host
 is accepted as a request host without listing it in `PRKS_TRUSTED_HOSTS`.

@@ -33,7 +33,7 @@ If Docker is running, remember that container bind address and host publish addr
 
 The normal default is loopback only. LAN access requires an explicit non-loopback bind/publish configuration.
 
-Before doing that, remember that sign-in protects the Library but PRKS serves plain HTTP. Beyond a trusted network, put it behind an HTTPS reverse proxy (see [Security and Operations](Security-and-Operations.md)).
+Before doing that, remember that sign-in protects the Library but PRKS serves plain HTTP unless its own TLS is set up. Beyond a trusted network, serve HTTPS: behind a reverse proxy such as Caddy, or with `PRKS_TLS_CERT_FILE` and `PRKS_TLS_KEY_FILE` (see [Security and Operations](Security-and-Operations.md)).
 
 ## Search results are missing/stale
 
