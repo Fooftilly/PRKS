@@ -1060,7 +1060,9 @@ class ShutdownTests(unittest.TestCase):
         def request_threads():
             return [t for t in threading.enumerate() if t.name == "prks-http"]
 
-        before = len(request_threads())
+        # Threads an earlier test left winding down may exit meanwhile, so
+        # count only the ones this test's servers started.
+        before = set(request_threads())
         for _ in range(3):
             httpd, thread = self._serving()
             port = httpd.server_address[1]
@@ -1082,10 +1084,13 @@ class ShutdownTests(unittest.TestCase):
                 conn.close()
             httpd.shutdown()
             thread.join(5)
+        def started_here():
+            return [t for t in request_threads() if t not in before]
+
         deadline = time.monotonic() + 5
-        while len(request_threads()) > before and time.monotonic() < deadline:
+        while started_here() and time.monotonic() < deadline:
             time.sleep(0.05)
-        self.assertEqual(len(request_threads()), before, "request threads outlived their server")
+        self.assertEqual(started_here(), [], "request threads outlived their server")
 
 if __name__ == "__main__":
     unittest.main()
