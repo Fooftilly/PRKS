@@ -826,8 +826,11 @@ function prksRunClickAction(event) {
 
 function prksRunKeyAction(event) {
     // Enter or Space activates a `role="button"` element that is not a button.
+    // A real control inside it (a chip's Remove button) keeps its own keys.
     const activator = prksActionTarget(event, '[data-prks-key-activate]');
-    if (activator && (event.key === 'Enter' || event.key === ' ')) {
+    const control = prksActionTarget(event, 'button, a[href], input, select, textarea');
+    const nested = !!(activator && control && control !== activator && activator.contains(control));
+    if (activator && !nested && (event.key === 'Enter' || event.key === ' ')) {
         event.preventDefault();
         activator.click();
         return;

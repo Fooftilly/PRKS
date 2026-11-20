@@ -30,6 +30,13 @@ export const VIDEO_IFRAME_ALLOW =
 
 export const VIDEO_IFRAME_TITLE = 'Video player'
 
+/**
+ * PRKS sends `Referrer-Policy: no-referrer` (#1305), but YouTube's embedded
+ * player needs to know the embedding site. The frame sends the PRKS origin
+ * only, never the page URL.
+ */
+export const VIDEO_IFRAME_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+
 export interface WorkVideoSource {
   readonly provider: string
   readonly providerId: string

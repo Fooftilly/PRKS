@@ -335,18 +335,18 @@ class ShellTests(FreshnessTestCase):
         )["id"]
         file_path = self.ok(self.get(f"/api/works/{work_id}"))["file_path"]
         cases = (
-            ("shell", "/", []),
-            ("shell file", "/index.html", []),
-            ("json", "/api/works", []),
-            ("error", "/api/no-such-endpoint", []),
-            ("static", "/vue/prks-vue.js", []),
-            ("file", file_path, []),
-            ("range", file_path, [("Range", "bytes=0-9")]),
+            ("shell", "/", [], 200),
+            ("shell file", "/index.html", [], 200),
+            ("json", "/api/works", [], 200),
+            ("error", "/api/no-such-endpoint", [], 404),
+            ("static", "/vue/prks-vue.js", [], 200),
+            ("file", file_path, [], 200),
+            ("range", file_path, [("Range", "bytes=0-9")], 206),
         )
-        for label, path, headers in cases:
+        for label, path, headers, status in cases:
             with self.subTest(label):
                 res = self.get(path, headers)
-                self.assertIn(res.status, (200, 206, 404), label)
+                self.assertEqual(res.status, status, label)
                 for name, value in server_module.SECURITY_HEADERS:
                     self.assertEqual(res.header(name), [value], f"{label}: {name}")
         policy = server_module.CONTENT_SECURITY_POLICY
