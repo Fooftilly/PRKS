@@ -198,6 +198,10 @@ class BrowseOfflineTests(unittest.TestCase):
         ids = server.ids
         o._open_work_from_home(page, WORK_A_TITLE)
         o._wait_entity_cached(page, 'work', ids['work_a'])
+        # Let the open event be acknowledged first. Its acknowledgement bumps
+        # the Recent generation, so a /api/recent fetched while it is still
+        # queued is (correctly) never cached, and recent:index would not exist.
+        o._drain_durable(page, 'the Work open event never retired')
         self.recent(page)
         o._wait_list_cached(page, 'recent:index')
         self.offline(page, context)
