@@ -2,7 +2,7 @@
 
 Uvicorn owns the
 sockets, HTTP parsing, keep-alive and slow clients on its event loop. Each
-request runs on its own daemon thread, bounded by ``PRKS_HTTP_THREADS``, where
+request runs on a reused daemon thread, bounded by ``PRKS_HTTP_THREADS``, where
 an :class:`_AsgiHandler` (a ``PRKSHandler`` built from the ASGI scope) runs
 the ``do_*`` dispatch, admission, controllers and static files:
 
@@ -33,6 +33,7 @@ import asyncio
 import contextlib
 import http.client
 import logging
+import queue
 import socket
 import threading
 import uuid
@@ -40,6 +41,7 @@ from types import TracebackType
 from typing import Any, Awaitable, Callable, Iterator, Optional
 
 import uvicorn
+from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from backend import server as server_module
 from backend.log_safety import safe_error_type, safe_log_id
@@ -57,6 +59,11 @@ DEFAULT_BODY_IDLE_SECONDS = 60.0
 GRACEFUL_SHUTDOWN_SECONDS = 30
 #: Seconds an idle keep-alive connection stays open.
 KEEP_ALIVE_SECONDS = 5
+#: Seconds a client has to send a whole request head: from the connection's
+#: start (after the TLS handshake) and from the end of each response. Uvicorn
+#: has no such limit, so a client could hold a connection forever with a
+#: half-sent head, or with no bytes at all (see :class:`_HeadTimeoutH11`).
+REQUEST_HEAD_SECONDS = 15
 #: Request limits: header count and line length.
 MAX_HEADERS = 100
 MAX_LINE_BYTES = 65536
@@ -273,13 +280,15 @@ class _ResponseWriter:
         self._receiver = receiver
         self._gone = receiver.gone
         self._head = bytearray()
+        self._pending_start: Optional[Message] = None
+        self._held: Optional[bytes] = None
         self.started = False
 
     def write(self, data: bytes | bytearray | memoryview) -> int:
         chunk = bytes(data)
         if self.started:
             if chunk:
-                self._body(chunk, more=True)
+                self._body(chunk)
             return len(chunk)
         self._head += chunk
         end = self._head.find(b"\r\n\r\n")
@@ -289,16 +298,19 @@ class _ResponseWriter:
             self._head.clear()
             self._start(head)
             if rest:
-                self._body(rest, more=True)
+                self._body(rest)
         return len(chunk)
 
     def flush(self) -> None:
-        pass
+        """Send what is held now (a stream flushes each line)."""
+        if self._pending_start is not None or self._held is not None:
+            self._send(self._take_held(more=True))
 
     def finish(self) -> None:
         """End the body. Without a response, Uvicorn answers 500 itself."""
         if self.started:
-            self._body(b"", more=False)
+            held = self._take_held(more=False)
+            self._send(held or {"type": "http.response.body", "body": b"", "more_body": False})
 
     def _start(self, head: bytes) -> None:
         lines = head.split(b"\r\n")
@@ -309,18 +321,46 @@ class _ResponseWriter:
             key = name.strip().lower()
             if key and key not in _DROPPED_RESPONSE_HEADERS:
                 headers.append((key, value.strip()))
-        self._bridge.call(self._receiver.discard_body)
-        self._send({"type": "http.response.start", "status": status, "headers": headers})
+        # Held until the first body chunk, flush() or the end, and sent with
+        # it: each crossing to the event loop costs a round trip, and most
+        # responses are a head and one body write (docs/http-server.md).
+        self._pending_start = {"type": "http.response.start", "status": status, "headers": headers}
         self.started = True
 
-    def _body(self, data: bytes, *, more: bool) -> None:
-        self._send({"type": "http.response.body", "body": data, "more_body": more})
+    def _body(self, data: bytes) -> None:
+        # The newest chunk is held back until the next write, flush() or the
+        # end, so a head and a one-write body leave in one crossing with the
+        # end of the body. Earlier chunks go out as each new one arrives.
+        previous = self._take_held(more=True)
+        self._held = data
+        if previous is not None:
+            self._send(previous)
 
-    def _send(self, message: Message) -> None:
+    def _take_held(self, *, more: bool) -> Optional[Message]:
+        held, self._held = self._held, None
+        if held is None:
+            return None
+        return {"type": "http.response.body", "body": held, "more_body": more}
+
+    def _send(self, message: Optional[Message] = None) -> None:
         if self._gone.is_set():  # Uvicorn would drop the bytes without an error
             raise BrokenPipeError("client disconnected")
+        messages: list[Message] = []
+        start = self._pending_start
+        if start is not None:
+            self._pending_start = None
+            messages.append(start)
+        if message is not None:
+            messages.append(message)
+
+        async def deliver() -> None:
+            if start is not None:
+                await self._receiver.discard_body()
+            for each in messages:
+                await self._send_message(each)
+
         try:
-            self._bridge.call(lambda: self._send_message(message))
+            self._bridge.call(deliver)
         except OSError as exc:  # uvicorn's ClientDisconnected is an OSError
             raise BrokenPipeError("client disconnected") from exc
 
@@ -395,8 +435,48 @@ class _AsgiHandler(server_module.PRKSHandler):
             self._prks_finish_request()
 
 
+class _Workers:
+    """Reused daemon threads that run PRKS request work.
+
+    Starting a thread per request cost about a third of a millisecond of
+    every request (``docs/http-server.md``, baseline). The threads are daemons,
+    like the per-request threads were, so a request stuck past the stop grace
+    never holds the process open. The ``PRKS_HTTP_THREADS`` slots bound the
+    work; a new thread starts only when no thread is idle, which after the
+    first requests happens only if a request's task was cancelled while its
+    work still runs.
+    """
+
+    def __init__(self) -> None:
+        self._jobs: "queue.SimpleQueue[Callable[[], None]]" = queue.SimpleQueue()
+        self._lock = threading.Lock()
+        self._idle = 0
+
+    def submit(self, job: Callable[[], None]) -> None:
+        with self._lock:
+            start = self._idle == 0
+            if not start:
+                self._idle -= 1  # that idle thread takes this job
+        self._jobs.put(job)
+        if start:
+            threading.Thread(target=self._loop, args=(True,), name="prks-http", daemon=True).start()
+
+    def _loop(self, claimed: bool) -> None:
+        # ``claimed``: a job was queued for this thread when it started.
+        while True:
+            if not claimed:
+                with self._lock:
+                    self._idle += 1
+            claimed = False
+            job = self._jobs.get()
+            try:
+                job()
+            except BaseException:  # noqa: BLE001 - _run reports its own errors; keep the thread
+                LOGGER.exception("http_worker_job_failed")
+
+
 class PrksAsgiApp:
-    """The ASGI application: one bounded thread per request."""
+    """The ASGI application: request work on bounded, reused threads."""
 
     def __init__(self, server: "UvicornServing", threads: int) -> None:
         self._server = server
@@ -407,6 +487,7 @@ class PrksAsgiApp:
         self._max_admitted = threads + threads * QUEUE_PER_THREAD
         self._admitted = 0
         self._slots: Optional[asyncio.Semaphore] = None
+        self._workers = _Workers()
 
     @property
     def admitted(self) -> int:
@@ -470,13 +551,7 @@ class PrksAsgiApp:
     async def _serve(self, scope: Scope, receiver: _Receiver, send: Send) -> None:
         loop = asyncio.get_running_loop()
         done: asyncio.Future[None] = loop.create_future()
-        thread = threading.Thread(
-            target=self._run,
-            args=(loop, done, scope, receiver, send),
-            name="prks-http",
-            daemon=True,
-        )
-        thread.start()
+        self._workers.submit(lambda: self._run(loop, done, scope, receiver, send))
         await done
 
     def _run(
@@ -533,6 +608,63 @@ def _resolve(done: "asyncio.Future[None]") -> None:
         done.set_result(None)
 
 
+class _HeadTimeoutH11(H11Protocol):
+    """Uvicorn's h11 protocol, closing a connection whose request head is late.
+
+    The deadline (:data:`REQUEST_HEAD_SECONDS`) starts when the connection is
+    made and again when each response completes, and ends when a whole head
+    has arrived. Bytes that arrive in between do not extend it, so trickling a
+    head byte by byte does not help. Keep-alive is unchanged: an idle
+    connection still closes after :data:`KEEP_ALIVE_SECONDS`.
+    """
+
+    _head_deadline: Optional[asyncio.TimerHandle] = None
+
+    def connection_made(self, transport: asyncio.Transport) -> None:  # type: ignore[override]
+        super().connection_made(transport)
+        # asyncio sets TCP_NODELAY only on sockets whose ``proto`` is
+        # IPPROTO_TCP, and an accepted socket reports 0. Without it, the
+        # response head and body leave as two segments, and on a keep-alive
+        # connection the second waits for the client's delayed ACK: about
+        # 40 ms per request (docs/http-server.md, baseline).
+        sock = transport.get_extra_info("socket")
+        if sock is not None and sock.family in (socket.AF_INET, socket.AF_INET6):
+            with contextlib.suppress(OSError):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self._arm_head_deadline()
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        self._cancel_head_deadline()
+        super().connection_lost(exc)
+
+    def handle_events(self) -> None:
+        cycle = self.cycle
+        super().handle_events()
+        if self.cycle is not cycle:  # a whole head arrived: a new request
+            self._cancel_head_deadline()
+
+    def on_response_complete(self) -> None:
+        # Armed first: a pipelined head already buffered is handled inside
+        # super(), and its handle_events cancels the deadline again.
+        if not self.transport.is_closing():
+            self._arm_head_deadline()
+        super().on_response_complete()
+
+    def _arm_head_deadline(self) -> None:
+        self._cancel_head_deadline()
+        self._head_deadline = self.loop.call_later(REQUEST_HEAD_SECONDS, self._head_late)
+
+    def _cancel_head_deadline(self) -> None:
+        if self._head_deadline is not None:
+            self._head_deadline.cancel()
+            self._head_deadline = None
+
+    def _head_late(self) -> None:
+        self._head_deadline = None
+        if not self.transport.is_closing():
+            self.transport.close()  # connection_lost records it with h11
+
+
 class _Server(uvicorn.Server):
     @contextlib.contextmanager
     def capture_signals(self) -> Iterator[None]:
@@ -579,7 +711,7 @@ class UvicornServing:
         self.app = PrksAsgiApp(self, self._threads)
         return uvicorn.Config(
             self.app,
-            http="h11",
+            http=_HeadTimeoutH11,
             loop="asyncio",
             ws="none",
             lifespan="off",
