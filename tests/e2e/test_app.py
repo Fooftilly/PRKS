@@ -351,8 +351,13 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         # CSP, so Chromium reports the probe's handler as refused (#1305).
         # That refusal is the policy working; any other console error still
         # fails the test.
+        # Only the two parsers' reports count (the classic head bundle carries
+        # both in the packaged build); a refusal from anywhere else still fails.
+        parsers = ("/vendor/dompurify/purify.min.js)", "/vendor/easymde/easymde.min.js)",
+                   "/js/prks-classic-head.bundle.js)")
         refused = [entry for entry in collector.console_errors
-                   if entry.startswith("Executing inline event handler violates")]
+                   if entry.startswith("Executing inline event handler violates")
+                   and entry.endswith(parsers)]
         self.assertTrue(refused, "the CSP never saw the probe's inline handler")
         collector.console_errors[:] = [
             entry for entry in collector.console_errors if entry not in refused
