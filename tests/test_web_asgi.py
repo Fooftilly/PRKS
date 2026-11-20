@@ -123,6 +123,7 @@ class UvicornTransportTests(unittest.TestCase):
         self.addCleanup(httpd.server_close)
         self.addCleanup(httpd.shutdown)
         port = httpd.server_address[1]
+        self.other_httpd = httpd
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             try:
@@ -374,7 +375,10 @@ class UvicornTransportTests(unittest.TestCase):
                                         daemon=True) for _ in range(4)]
             for thread in waiters:
                 thread.start()
-            time.sleep(0.5)  # let all four reach the wait list
+            deadline = time.monotonic() + 5
+            while self.other_httpd.app.admitted < 8:  # four running, four waiting
+                self.assertLess(time.monotonic(), deadline, "the waiters never reached the wait list")
+                time.sleep(0.01)
             status, body, headers = self.request("GET", "/healthz", port=port)
             self.assertEqual(status, 503)
             self.assertIn(b"server_busy", body)
@@ -420,6 +424,99 @@ class UvicornTransportTests(unittest.TestCase):
         self.assertEqual(running, ["/burst"])
         self.assertEqual(served, ["/burst", "/burst"])
         self.assertEqual(admitted, 0)
+
+    def test_a_queued_request_whose_client_leaves_mid_body_never_runs(self):
+        # Two body messages fill the one-slot queue; the disconnect behind
+        # them must still be seen while the request waits for a thread.
+        async def scenario():
+            release = asyncio.Event()
+            served = []
+
+            async def hold(scope, receiver, send):
+                served.append(scope["path"])
+                if scope["path"] == "/first":
+                    await release.wait()
+
+            async def idle():
+                await asyncio.Event().wait()
+                return {"type": "http.disconnect"}
+
+            messages = [
+                {"type": "http.request", "body": b"a" * 1000, "more_body": True},
+                {"type": "http.request", "body": b"b" * 1000, "more_body": True},
+                {"type": "http.disconnect"},
+            ]
+
+            async def leaving():
+                if messages:
+                    return messages.pop(0)
+                return await idle()
+
+            async def send(message):
+                pass
+
+            app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, idle, send))
+            await asyncio.sleep(0.05)
+            queued = asyncio.ensure_future(app({"type": "http", "path": "/upload"}, leaving, send))
+            await asyncio.sleep(0.1)
+            dropped_while_queued = queued.done()
+            release.set()
+            await first
+            await asyncio.wait_for(queued, 2)
+            return served, dropped_while_queued, app.admitted
+
+        served, dropped, admitted = asyncio.run(scenario())
+        self.assertTrue(dropped, "the request stayed queued after its client left")
+        self.assertEqual(served, ["/first"])
+        self.assertEqual(admitted, 0)
+
+    def test_a_queued_request_keeps_its_whole_body(self):
+        async def scenario():
+            release = asyncio.Event()
+            bodies = []
+
+            async def hold(scope, receiver, send):
+                if scope["path"] == "/first":
+                    await release.wait()
+                    return
+                body = b""
+                while True:
+                    message = await receiver.messages.get()
+                    body += message.get("body", b"")
+                    if not message.get("more_body", False):
+                        break
+                bodies.append(body)
+
+            async def idle():
+                await asyncio.Event().wait()
+                return {"type": "http.disconnect"}
+
+            chunks = [b"a" * 1000, b"b" * 1000, b"c" * 1000]
+            messages = [{"type": "http.request", "body": c, "more_body": i < 2} for i, c in enumerate(chunks)]
+
+            async def uploading():
+                if messages:
+                    return messages.pop(0)
+                return await idle()
+
+            async def send(message):
+                pass
+
+            app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, idle, send))
+            await asyncio.sleep(0.05)
+            queued = asyncio.ensure_future(app({"type": "http", "path": "/upload"}, uploading, send))
+            await asyncio.sleep(0.1)
+            release.set()
+            await first
+            await asyncio.wait_for(queued, 2)
+            return bodies, b"".join(chunks)
+
+        bodies, expected = asyncio.run(scenario())
+        self.assertEqual(bodies, [expected])
 
     def test_cancelling_a_queued_request_keeps_the_thread_slot(self):
         async def scenario():
