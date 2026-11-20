@@ -655,13 +655,18 @@ class ShutdownTests(unittest.TestCase):
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         port = httpd.server_address[1]
+        served = False
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
+        while not served and time.monotonic() < deadline:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
             try:
-                socket.create_connection(("127.0.0.1", port), timeout=1).close()
-                break
+                conn.request("GET", "/healthz")
+                served = conn.getresponse().status == 200
             except OSError:
                 time.sleep(0.05)
+            finally:
+                conn.close()
+        self.assertTrue(served, "the server never answered before shutdown")
         httpd.shutdown()
         self.assertFalse(thread.is_alive() and (thread.join(5) or thread.is_alive()))
         httpd.server_close()
