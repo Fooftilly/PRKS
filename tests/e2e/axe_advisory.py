@@ -156,7 +156,9 @@ def scan(page, selector: str, label: str) -> dict:
             "Missing pinned axe-core JS. Run npm ci --ignore-scripts in frontend-app first."
         )
     if not page.evaluate("() => !!(window.axe && window.axe.run)"):
-        page.add_script_tag(path=str(AXE_JS))
+        # The CSP refuses an injected <script> (#1305); DevTools evaluation is
+        # not subject to it.
+        page.evaluate(AXE_JS.read_text(encoding="utf-8") + "\n;undefined")
     if label == "shell":
         verify_missing_button_name_canary(page)
     return sanitized_report(label, page.evaluate(AXE_QUERY, selector))

@@ -17,6 +17,7 @@ import base64
 from collections.abc import Callable
 from typing import Any, Optional
 
+from backend import server as server_module
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -328,12 +329,31 @@ class OpenEventTests(FreshnessTestCase):
 
 
 class ShellTests(FreshnessTestCase):
-    def test_every_response_forbids_mime_sniffing(self) -> None:
-        self.create_work("<html><body>sniffable</body></html>")
-        for path in ("/api/works", "/", "/index.html", "/api/no-such-endpoint"):
-            res = self.get(path)
-            self.assertIn(res.status, (200, 304, 404), path)
-            self.assertEqual(res.header("X-Content-Type-Options"), ["nosniff"], path)
+    def test_every_kind_of_response_carries_the_security_headers(self) -> None:
+        work_id = self.create_work(
+            "<html><body>sniffable</body></html>", **self.upload_fields("framed", "framed.pdf")
+        )["id"]
+        file_path = self.ok(self.get(f"/api/works/{work_id}"))["file_path"]
+        cases = (
+            ("shell", "/", []),
+            ("shell file", "/index.html", []),
+            ("json", "/api/works", []),
+            ("error", "/api/no-such-endpoint", []),
+            ("static", "/vue/prks-vue.js", []),
+            ("file", file_path, []),
+            ("range", file_path, [("Range", "bytes=0-9")]),
+        )
+        for label, path, headers in cases:
+            with self.subTest(label):
+                res = self.get(path, headers)
+                self.assertIn(res.status, (200, 206, 404), label)
+                for name, value in server_module.SECURITY_HEADERS:
+                    self.assertEqual(res.header(name), [value], f"{label}: {name}")
+        policy = server_module.CONTENT_SECURITY_POLICY
+        script_src = next(part for part in policy.split("; ") if part.startswith("script-src "))
+        self.assertNotIn("'unsafe-inline'", script_src)
+        self.assertNotIn("'unsafe-eval'", script_src)
+        self.assertIn("frame-ancestors 'none'", policy)
 
     def test_the_vue_bundle_is_served_with_the_shell(self) -> None:
         bundle = self.get("/vue/prks-vue.js")

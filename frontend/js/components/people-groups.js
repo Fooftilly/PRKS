@@ -383,7 +383,7 @@ function renderPersonGroupSummarySidebarHtml(g) {
                 <li>${nMem} member${nMem === 1 ? '' : 's'}</li>
                 <li>${nSub} subgroup${nSub === 1 ? '' : 's'}</li>
             </ul>
-            <button type="button" class="prks-btn prks-btn--primary group-sidebar__primary-btn" data-prks-role="group-mutation-control" onclick="openPersonGroupEdit()">Edit group</button>
+            <button type="button" class="prks-btn prks-btn--primary group-sidebar__primary-btn" data-prks-role="group-mutation-control" data-prks-action="person-group-edit">Edit group</button>
             <p class="route-sidebar__action"><a href="#/people/groups" class="route-sidebar__link">All groups</a></p>
         </div>`;
 }

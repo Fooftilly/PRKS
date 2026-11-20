@@ -905,7 +905,7 @@ class TlsTransportTests(unittest.TestCase):
         self.assertTrue(head.startswith(b"http/1.1 400"), received[:40])
         self.assertNotIn(b"strict-transport-security", head)
 
-    def test_the_busy_answer_over_tls_carries_hsts(self):
+    def test_the_busy_answer_carries_the_security_headers_and_hsts_over_tls(self):
         for https, expected in ((True, server_module.HSTS_VALUE.encode("ascii")), (False, None)):
             sent = []
 
@@ -917,6 +917,8 @@ class TlsTransportTests(unittest.TestCase):
             with self.subTest(https=https):
                 self.assertEqual(sent[0]["status"], 503)
                 self.assertEqual(headers.get(b"strict-transport-security"), expected)
+                for name, value in server_module.SECURITY_HEADERS:
+                    self.assertEqual(headers.get(name.lower().encode("ascii")), value.encode("ascii"))
 
     def test_the_client_sees_the_configured_certificate(self):
         conn = http.client.HTTPSConnection(

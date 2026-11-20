@@ -144,7 +144,7 @@ Everything below was read from master 02845f1.
   - request IDs and safe logging;
   - performance spans and `Server-Timing`;
   - the Library epoch header;
-  - `X-Content-Type-Options`;
+  - the security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy`; #1305);
   - static cache headers;
   - closing the connection after an unread body.
 - **Streaming responses:**

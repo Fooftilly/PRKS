@@ -209,7 +209,7 @@ class CreateFormVueContractTests(unittest.TestCase):
         ):
             self.assertNotIn(gone, people, gone)
         # The sidebar still opens it through the global the form installs.
-        self.assertIn('onclick="openPersonProfileTemplateModal()"', people)
+        self.assertIn('data-prks-action="person-template"', people)
         form = (FORMS / "PersonTemplateForm.vue").read_text(encoding="utf-8")
         self.assertIn("runtime().openPersonProfileTemplateModal = open", form)
         self.assertIn('id="person-template-feedback"', form)

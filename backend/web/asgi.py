@@ -604,7 +604,8 @@ class PrksAsgiApp:
 async def _send_busy(send: Send, *, https: bool) -> None:
     """503 for a request over the wait-list bound, without starting a thread.
 
-    Over PRKS's own TLS it carries HSTS too, like every ``PRKSHandler`` answer.
+    It carries the security headers, and HSTS over PRKS's own TLS, like every
+    ``PRKSHandler`` answer.
     """
     LOGGER.info("request_rejected reason=server_busy")
     headers = [
@@ -612,7 +613,10 @@ async def _send_busy(send: Send, *, https: bool) -> None:
         (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
         (b"cache-control", b"no-store"),
         (b"retry-after", b"1"),
-        (b"x-content-type-options", b"nosniff"),
+        *(
+            (name.lower().encode("ascii"), value.encode("ascii"))
+            for name, value in server_module.SECURITY_HEADERS
+        ),
         (b"connection", b"close"),
     ]
     if https:

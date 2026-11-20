@@ -104,6 +104,31 @@ PORT = 8080
 DEFAULT_HOST = "127.0.0.1"
 # Sent on every response served over PRKS's own TLS (#1339).
 HSTS_VALUE = "max-age=31536000"
+# Sent on every response (#1305). The policy allows only PRKS's own scripts:
+# no inline script or handler, no eval. 'wasm-unsafe-eval' lets the PDF viewer
+# compile its PDFium WebAssembly, and blob: workers and images are what that
+# viewer makes. Inline styles stay allowed: markup still sets CSS variables in
+# style attributes. Nothing may frame PRKS, and no page URL leaves in Referer.
+CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'self'",
+    "script-src 'self' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' data: blob:",
+    "worker-src 'self' blob:",
+    "media-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+))
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", CONTENT_SECURITY_POLICY),
+    ("Referrer-Policy", "no-referrer"),
+)
 # Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
 PRKS_TESTING_DEFAULT_PORT = 8070
 
@@ -1053,7 +1078,9 @@ class PRKSHandler(HttpHandlerBase):
         # Every response declares its own Content-Type; no response may be
         # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
         # class for JSON/API bodies that echo library content back to the page.
-        self.send_header("X-Content-Type-Options", "nosniff")
+        # Framing, CSP and Referer limits ride on every answer too (#1305).
+        for name, value in SECURITY_HEADERS:
+            self.send_header(name, value)
         if self._prks_scheme == "https":
             # Served over PRKS's own TLS (#1339): browsers keep to https for a
             # year. Not includeSubDomains: other hosts under the name are not ours.

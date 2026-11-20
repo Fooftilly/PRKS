@@ -706,17 +706,6 @@ function prksTogglePersonWorksEdit(explicitCtx) {
     }
 }
 
-function prksPersonAdvancedKeydown(event) {
-    if (!event || event.key !== 'Escape') return;
-    const details = event.currentTarget;
-    if (!details || !details.open) return;
-    event.preventDefault();
-    details.open = false;
-    const summary = details.querySelector('summary');
-    if (summary) summary.focus();
-}
-window.prksPersonAdvancedKeydown = prksPersonAdvancedKeydown;
-
 function prksUniquePersonWorks(person) {
     const works = Array.isArray(person && person.works) ? person.works : [];
     const byId = new Map();
@@ -752,10 +741,10 @@ function renderPersonProfileDetailsSidebarHtml(person) {
     const focused = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
     const editing = !!(focused && focused.ui && focused.ui.personDetailEditing);
     const editBtn = editing
-        ? `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" onclick="closePersonProfileEdit()">Done</button>`
-        : `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" onclick="openPersonProfileEdit()">Edit profile</button>`;
+        ? `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" data-prks-action="person-edit-close">Done</button>`
+        : `<button type="button" class="prks-btn prks-btn--primary person-sidebar__cta" data-prks-role="${PERSON_EDIT_ROLE}" data-prks-action="person-edit-open">Edit profile</button>`;
     const deleteBtn = nWorks === 0
-        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" data-prks-role="${PERSON_DELETE_ROLE}" onclick="deletePerson()">Delete person</button>`
+        ? `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" data-prks-role="${PERSON_DELETE_ROLE}" data-prks-action="person-delete">Delete person</button>`
         : `<button type="button" class="prks-btn prks-btn--danger person-sidebar__advanced-action" disabled title="Unlink all files first">Delete person</button>`;
     return `
         <div class="doc-meta-card person-sidebar-summary">
@@ -766,11 +755,11 @@ function renderPersonProfileDetailsSidebarHtml(person) {
                 <li>${nRefs} reference${nRefs === 1 ? '' : 's'}</li>
             </ul>
             ${editBtn}
-            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" onclick="prksPersonViewInGraph()">View in graph</button>
-            <details class="person-sidebar__advanced" onkeydown="prksPersonAdvancedKeydown(event)">
+            <button type="button" class="prks-btn prks-btn--secondary person-sidebar__cta" id="prks-person-view-graph" data-prks-action="person-view-graph">View in graph</button>
+            <details class="person-sidebar__advanced" data-prks-escape-closes>
                 <summary>More</summary>
                 <div class="person-sidebar__advanced-actions">
-                    <button type="button" class="prks-btn prks-btn--secondary person-sidebar__advanced-action" onclick="openPersonProfileTemplateModal()">Edit using template</button>
+                    <button type="button" class="prks-btn prks-btn--secondary person-sidebar__advanced-action" data-prks-action="person-template">Edit using template</button>
                     ${deleteBtn}
                 </div>
             </details>

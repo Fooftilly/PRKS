@@ -789,6 +789,61 @@ function initModalCloseUi() {
     }
 }
 
+/*
+ * The Content-Security-Policy refuses inline event handlers (#1305), so markup
+ * names an action instead: `data-prks-action="<name>"`, with an optional
+ * `data-prks-action-arg`. Only the actions listed here can run. The listener
+ * runs in the capture phase, as the handler on the element ran before any
+ * ancestor's listener; `stop` actions keep the click from reaching ancestors.
+ */
+const PRKS_CLICK_ACTIONS = Object.freeze({
+    'modal-close': { run: () => requestModalClose('button') },
+    'open-modal': { run: (el) => openModal(el.dataset.prksActionArg) },
+    'work-details-mode': { run: (el) => window.prksSetWorkDetailsMode(el.dataset.prksActionArg) },
+    'person-group-edit': { run: () => window.openPersonGroupEdit() },
+    'person-edit-open': { run: () => window.openPersonProfileEdit() },
+    'person-edit-close': { run: () => window.closePersonProfileEdit() },
+    'person-delete': { run: () => window.deletePerson() },
+    'person-view-graph': { run: () => window.prksPersonViewInGraph() },
+    'person-template': { run: () => window.openPersonProfileTemplateModal() },
+    'work-role-credit-edit': { stop: true, run: (el) => void prksEditRoleCreditOnWork(el) },
+    'work-role-unlink': { stop: true, run: (el) => void prksRemoveWorkRoleLink(el) },
+});
+
+function prksActionTarget(event, selector) {
+    const target = event.target;
+    return target instanceof Element ? target.closest(selector) : null;
+}
+
+function prksRunClickAction(event) {
+    const el = prksActionTarget(event, '[data-prks-action]');
+    if (!el) return;
+    const action = PRKS_CLICK_ACTIONS[el.dataset.prksAction];
+    if (!action) return;
+    if (action.stop) event.stopPropagation();
+    action.run(el, event);
+}
+
+function prksRunKeyAction(event) {
+    // Enter or Space activates a `role="button"` element that is not a button.
+    const activator = prksActionTarget(event, '[data-prks-key-activate]');
+    if (activator && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        activator.click();
+        return;
+    }
+    // Escape closes an open `<details>` menu and returns focus to its summary.
+    const details = prksActionTarget(event, 'details[data-prks-escape-closes]');
+    if (!details || event.key !== 'Escape' || !details.open) return;
+    event.preventDefault();
+    details.open = false;
+    const summary = details.querySelector('summary');
+    if (summary) summary.focus();
+}
+
+document.addEventListener('click', prksRunClickAction, true);
+document.addEventListener('keydown', prksRunKeyAction, true);
+
 function prksSetOverlayBackdropVisible(visible) {
     const el = document.getElementById('prks-overlay-backdrop');
     if (!el) return;
@@ -4808,7 +4863,7 @@ function buildWorkLinkedPersonsHtml(work, options = {}) {
                             ? ` title="Profile: ${escapeHtml(canonical)}"`
                             : '';
                     const controls = editable
-                        ? `<button type="button" class="work-linked-persons__edit-credit" aria-label="Edit name on this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" data-display-name="${escapeHtml(display)}" data-canonical-name="${escapeHtml(canonical)}" onclick="event.stopPropagation(); void prksEditRoleCreditOnWork(this);">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" onclick="event.stopPropagation(); void prksRemoveWorkRoleLink(this);">×</button>`
+                        ? `<button type="button" class="work-linked-persons__edit-credit" aria-label="Edit name on this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" data-display-name="${escapeHtml(display)}" data-canonical-name="${escapeHtml(canonical)}" data-prks-action="work-role-credit-edit">${typeof prksIcon === 'function' ? prksIcon('pencil', { size: 'sm' }) : '✎'}</button><button type="button" class="work-linked-persons__unlink" aria-label="Remove link from this file" data-work-id="${escapeHtml(wid)}" data-person-id="${escapeHtml(pid)}" data-role-type="${roleAttr}" data-order-index="${escapeHtml(oi)}" data-prks-action="work-role-unlink">×</button>`
                         : '';
                     return `<span class="work-linked-persons__chip tag"><a class="work-linked-persons__chip-link" href="#/people/${safePersonId}"${titleAttr}>${typeof prksIcon === 'function' ? prksIcon('user', { size: 'sm' }) : ''} ${escapeHtml(display)}</a>${controls}</span>`;
                 })
@@ -4986,7 +5041,7 @@ function prksWorkPanelViewShellHtml(work, parts) {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Title</h3>
-                <button type="button" onclick="prksSetWorkDetailsMode('metadata')" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit metadata</button>
+                <button type="button" data-prks-action="work-details-mode" data-prks-action-arg="metadata" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit metadata</button>
             </div>
             <div data-prks-role="work-panel-identity">
                 <p class="card-title">${escapeHtml(work.title)}</p>
@@ -5012,13 +5067,13 @@ function prksWorkPanelViewShellHtml(work, parts) {
         <div class="doc-meta-card">
             <div class="card-heading-row card-heading-row--wrap">
                 <h3>Linked Persons</h3>
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('people')">Manage relationships</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-action="work-details-mode" data-prks-action-arg="people">Manage relationships</button>
             </div>
             <div class="work-linked-persons-by-role" data-prks-role="work-people-read">${buildWorkLinkedPersonsHtml(typeof prksEffectiveWorkDetailRoles === 'function' ? prksEffectiveWorkDetailRoles(work) : work, { editable: false })}</div>
             <div class="meta-row" data-prks-role="work-people-sync" aria-live="polite"></div>
         </div>
         <div class="doc-meta-card">
-            <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('tags')">Manage tags</button></div>
+            <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-action="work-details-mode" data-prks-action-arg="tags">Manage tags</button></div>
             <div id="work-tags-list" class="tag-cloud work-tags-list" data-prks-role="work-tags-read">${renderWorkTagsChips(work, { editable: false })}</div>
         </div>
         <details class="doc-meta-card work-details-advanced">
@@ -5120,7 +5175,7 @@ function renderWorkMetaTab(work, mode = 'view') {
         <div class="doc-meta-card">
             <div class="card-heading-row">
                 <h3>Title</h3>
-                <button type="button" onclick="prksSetWorkDetailsMode('metadata')" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit metadata</button>
+                <button type="button" data-prks-action="work-details-mode" data-prks-action-arg="metadata" class="prks-btn prks-btn--ghost prks-btn--sm inline-action-btn">Edit metadata</button>
             </div>
             <p class="card-title">${escapeHtml(work.title)}</p>
             <div class="card-heading-row card-heading-row--wrap">
@@ -5151,14 +5206,14 @@ function renderWorkMetaTab(work, mode = 'view') {
         <div class="doc-meta-card">
             <div class="card-heading-row card-heading-row--wrap">
                 <h3>Linked Persons</h3>
-                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingPeople ? 'view' : 'people'}')">${managingPeople ? 'Done' : 'Manage relationships'}</button>
+                <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-action="work-details-mode" data-prks-action-arg="${managingPeople ? 'view' : 'people'}">${managingPeople ? 'Done' : 'Manage relationships'}</button>
             </div>
-            ${managingPeople ? '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm work-link-person-btn" onclick="openModal(\'role-modal\')" title="Link a person to this file">Link person</button>' : ''}
+            ${managingPeople ? '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm work-link-person-btn" data-prks-action="open-modal" data-prks-action-arg="role-modal" title="Link a person to this file">Link person</button>' : ''}
             <div class="work-linked-persons-by-role">${buildWorkLinkedPersonsHtml(typeof prksEffectiveWorkDetailRoles === 'function' ? prksEffectiveWorkDetailRoles(work) : work, { editable: managingPeople })}</div>
             <div class="meta-row" data-prks-role="work-people-sync" aria-live="polite"></div>
         </div>
         <div class="doc-meta-card">
-            <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" onclick="prksSetWorkDetailsMode('${managingTags ? 'view' : 'tags'}')">${managingTags ? 'Done' : 'Manage tags'}</button></div>
+            <div class="card-heading-row card-heading-row--wrap"><h3>Tags</h3><button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-prks-action="work-details-mode" data-prks-action-arg="${managingTags ? 'view' : 'tags'}">${managingTags ? 'Done' : 'Manage tags'}</button></div>
             <div id="work-tags-list" class="tag-cloud work-tags-list">${renderWorkTagsChips(work, { editable: managingTags })}</div>
             ${managingTags ? `<p class="tag-add-field__caption">Add a tag</p>
             <div class="tag-add-shell combobox-container">
@@ -5286,7 +5341,7 @@ function renderFolderTagsChipsHtml(folder) {
                 `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
                 `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
-                `onkeydown="if(event && (event.key==='Enter' || event.key===' ')) {event.preventDefault(); this.click();}">` +
+                `data-prks-key-activate>` +
                 `${escapeHtml(t.name)}` +
                 `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-folder-id="${escapeHtml(folder.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` +
                 `</span>`

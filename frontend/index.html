@@ -113,7 +113,7 @@
     <div id="settings-modal" class="modal modal--settings hidden">
         <div class="modal-header">
             <h3>Settings</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" data-prks-action="modal-close">&times;</button>
         </div>
         <!-- Vue settings surface. This shell keeps open, close, Escape, and focus return. -->
         <div id="prks-settings-root"></div>
@@ -125,13 +125,13 @@
     <div id="master-add-modal" class="modal hidden">
         <div class="modal-header">
             <h3>Create New Entity</h3>
-            <button class="prks-icon-btn close-btn" onclick="requestModalClose('button')">&times;</button>
+            <button class="prks-icon-btn close-btn" data-prks-action="modal-close">&times;</button>
         </div>
         <div class="modal-body modal-grid-2">
-            <button type="button" onclick="openModal('folder-modal')" class="prks-entity-choice"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
-            <button type="button" onclick="openModal('work-modal')" class="prks-entity-choice"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
-            <button type="button" onclick="openModal('person-modal')" class="prks-entity-choice"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
-            <button type="button" onclick="openModal('role-modal')" class="prks-entity-choice"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
+            <button type="button" data-prks-action="open-modal" data-prks-action-arg="folder-modal" class="prks-entity-choice"><i data-lucide="folder" class="prks-icon" aria-hidden="true"></i> New Folder</button>
+            <button type="button" data-prks-action="open-modal" data-prks-action-arg="work-modal" class="prks-entity-choice"><i data-lucide="file-plus" class="prks-icon" aria-hidden="true"></i> New File</button>
+            <button type="button" data-prks-action="open-modal" data-prks-action-arg="person-modal" class="prks-entity-choice"><i data-lucide="users" class="prks-icon" aria-hidden="true"></i> New Author</button>
+            <button type="button" data-prks-action="open-modal" data-prks-action-arg="role-modal" class="prks-entity-choice"><i data-lucide="link" class="prks-icon" aria-hidden="true"></i> Link Person to Work</button>
         </div>
     </div>
 
