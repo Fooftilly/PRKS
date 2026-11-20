@@ -85,10 +85,13 @@ class HttpSettingsTests(unittest.TestCase):
         fifo = os.path.join(os.path.dirname(cert), "key.fifo")
         os.mkfifo(fifo)  # opening it would block until a writer came
         locked = encrypted_key(os.path.dirname(key), key)
+        empty_locked = encrypted_key(os.path.dirname(key), key, passphrase="")
         cases = (
             ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: fifo}, ENV_TLS_KEY_FILE),
             # Refused, never a passphrase prompt on the terminal.
             ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: locked}, ENV_TLS_KEY_FILE),
+            # Encrypted with an empty passphrase: Uvicorn would still prompt.
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: empty_locked}, ENV_TLS_KEY_FILE),
             ({ENV_TLS_CERT_FILE: cert}, ENV_TLS_KEY_FILE),
             ({ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
             ({ENV_TLS_CERT_FILE: missing, ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),

@@ -33,12 +33,12 @@ def self_signed(directory: str) -> tuple[str, str]:
     return cert, key
 
 
-def encrypted_key(directory: str, key_file: str) -> str:
-    """``key_file`` re-encrypted with a passphrase, beside it."""
-    out = os.path.join(directory, "key-encrypted.pem")
+def encrypted_key(directory: str, key_file: str, passphrase: str = "not-asked-for") -> str:
+    """``key_file`` re-encrypted (PKCS#8, AES-256) with ``passphrase``, beside it."""
+    out = os.path.join(directory, f"key-encrypted-{len(passphrase)}.pem")
     subprocess.run(
-        [shutil.which("openssl") or "openssl", "pkey", "-in", key_file, "-out", out,
-         "-aes256", "-passout", "pass:not-asked-for"],
+        [shutil.which("openssl") or "openssl", "pkcs8", "-topk8", "-in", key_file, "-out", out,
+         "-v2", "aes-256-cbc", "-passout", f"pass:{passphrase}"],
         check=True,
         capture_output=True,
     )

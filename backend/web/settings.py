@@ -43,6 +43,13 @@ def _readable(variable: str, path: str) -> None:
         raise HttpSettingsError(f"{variable} names a file PRKS cannot read.") from None
 
 
+def _no_passphrase() -> str:
+    # Asked only for an encrypted key (even one with an empty passphrase).
+    # Uvicorn loads the key with no password, so OpenSSL would prompt on the
+    # terminal at startup: refuse it here instead.
+    raise ValueError("encrypted private key")
+
+
 def _tls_files(env: Mapping[str, str]) -> tuple[Optional[str], Optional[str]]:
     cert = env.get(ENV_TLS_CERT_FILE, "").strip()
     key = env.get(ENV_TLS_KEY_FILE, "").strip()
@@ -56,9 +63,9 @@ def _tls_files(env: Mapping[str, str]) -> tuple[Optional[str], Optional[str]]:
     _readable(ENV_TLS_CERT_FILE, cert)
     _readable(ENV_TLS_KEY_FILE, key)
     try:
-        # An empty passphrase: an encrypted key is refused here instead of
-        # OpenSSL prompting on the terminal.
-        ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(cert, key, password="")
+        ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(
+            cert, key, password=_no_passphrase
+        )
     except (ssl.SSLError, OSError, ValueError):
         raise HttpSettingsError(
             f"{ENV_TLS_CERT_FILE} and {ENV_TLS_KEY_FILE} are not a matching PEM certificate "
