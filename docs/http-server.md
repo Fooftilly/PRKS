@@ -45,8 +45,9 @@ Phase C so far:
 - **Request-head deadline.** Uvicorn has no limit on how long a client takes
   to send a request head: a connection with a half-sent head, or with no bytes
   at all, stayed open for good. A client now has `REQUEST_HEAD_SECONDS` (15 s)
-  from the connection's start, and again from the end of each response, to
-  send a whole head; trickling bytes does not extend it. Idle keep-alive still
+  from the connection's start (over TLS, from the end of the handshake,
+  which asyncio bounds at 60 s on its own), and again from the end of each
+  response, to send a whole head; trickling bytes does not extend it. Idle keep-alive still
   closes after 5 s.
 - **`TCP_NODELAY`.** asyncio sets it only on sockets whose `proto` is
   `IPPROTO_TCP`, and an accepted socket reports 0. Without it a response's
