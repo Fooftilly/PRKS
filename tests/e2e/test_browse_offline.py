@@ -154,7 +154,7 @@ class BrowseOfflineTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def all_paths(self, page):
         seen = []

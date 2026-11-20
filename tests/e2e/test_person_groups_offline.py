@@ -89,12 +89,12 @@ class PersonGroupsOfflineTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def online(self, page, context):
         context.set_offline(False)
         page.evaluate("async () => { await prksRequest('/api/settings'); }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'online'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def watch(self, page, methods, fragment='/api/person-groups'):
         """Records every canonical Group request of the given methods."""
@@ -364,7 +364,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._wait_content_contains(page, 'Group description')
         o._open_details_drawer_if_tiled(page)
         page.evaluate('openPersonGroupEdit()')
-        page.wait_for_function("!!document.querySelector('#gd-save-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#gd-save-btn')?.onclick")
         page.locator('#gd-name').fill('Unsaved name')
         page.locator('#gd-description').fill('Unsaved description')
         self.offline(page, context)
@@ -382,7 +382,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.detail(page, server.ids['person_group'])
         o._wait_content_contains(page, 'Group description')
         page.evaluate('prksTogglePersonGroupMembersEdit()')
-        page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#group-add-member-btn')?.onclick")
         page.locator('#group-add-member-search').fill('Unsaved search')
         self.offline(page, context)
         for selector in ('#group-add-member-search', '#group-add-member-btn',
@@ -403,7 +403,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
                       server.ids['person_group'])
         o._wait_entity_cached(page, 'person-group-state', server.ids['person_group'])
         page.evaluate('openPersonGroupEdit()')
-        page.wait_for_function("!!document.querySelector('#gd-save-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#gd-save-btn')?.onclick")
         page.locator('#gd-name').fill('Renamed while connected')
         self.offline(page, context)
         seen = self.watch(page, ('PATCH',))
@@ -566,7 +566,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._wait_content_contains(page, 'Group description')
         o._open_details_drawer_if_tiled(page)
         page.evaluate('openPersonGroupEdit()')
-        page.wait_for_function("!!document.querySelector('#gd-delete-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#gd-delete-btn')?.onclick")
         # Invoked directly: Delete lives in a collapsed advanced section, so
         # which markup happens to expose it is not what this proves.
         page.evaluate("() => { void document.getElementById('gd-delete-btn').onclick(); }")
@@ -589,7 +589,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         page.evaluate("id => { void prksReadPersonGroupState(id); }", gid)
         o._wait_entity_cached(page, 'person-group-state', gid)
         page.evaluate('prksTogglePersonGroupMembersEdit()')
-        page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#group-add-member-btn')?.onclick")
         page.locator('[data-remove-member]').first.click()
         page.locator('#prks-modal-confirm:not(.hidden)').wait_for()
         self.offline(page, context)
@@ -610,7 +610,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         page.evaluate("id => { void prksReadPersonGroupState(id); }", gid)
         o._wait_entity_cached(page, 'person-group-state', gid)
         page.evaluate('prksTogglePersonGroupMembersEdit()')
-        page.wait_for_function("!!document.querySelector('#group-add-member-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#group-add-member-btn')?.onclick")
         page.evaluate("pid => { document.getElementById('group-add-member-id').value = pid; }",
                       server.ids['person_b'])
         self.offline(page, context)
@@ -731,7 +731,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         o._wait_content_contains(page, o.PERSON_DISPLAY)
         o._open_details_drawer_if_tiled(page)
         page.evaluate('openPersonProfileEdit()')
-        page.wait_for_function("!!document.querySelector('#pd-group-add-btn')?.onclick")
+        page.wait_for_function("() => !!document.querySelector('#pd-group-add-btn')?.onclick")
         page.locator('#pd-group-search').fill('Draft-only group')
         page.locator('#pd-group-add-btn').click()
         page.locator('#pd-group-chips', has_text='Draft-only group').wait_for()

@@ -149,12 +149,12 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def online(self, page, context):
         context.set_offline(False)
         page.evaluate("async () => { await prksRequest('/api/settings'); }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'online'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def watch(self, page, methods, fragment='/api/playlists'):
         """Records every canonical Playlist request of the given methods."""
@@ -432,16 +432,17 @@ class PlaylistsOfflineTests(unittest.TestCase):
                         'items: [{ id: 42 }]'):
             with self.subTest(corrupt=corrupt):
                 self.cache(page, server.ids)
+                # Spliced into the source: the app's CSP refuses eval (#1305).
                 page.evaluate(
-                    """([id, corrupt]) => {
+                    """(id) => {
                         const store = window.createPrksOfflineStore();
                         return store.getEntity('playlist', id).then(row => {
                             const bad = Object.assign({}, row.value);
-                            Object.assign(bad, eval('({' + corrupt + '})'));
+                            Object.assign(bad, ({%s}));
                             return store.putEntity('playlist', id, bad, row.cachedAt);
                         });
-                    }""",
-                    [pid, corrupt],
+                    }""" % corrupt,
+                    pid,
                 )
                 context.set_offline(True)
                 self.detail(page, pid)

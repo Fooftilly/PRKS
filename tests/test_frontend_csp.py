@@ -43,6 +43,18 @@ class FrontendCspTests(unittest.TestCase):
         self.assertEqual(used - allowed, set())
         self.assertEqual(allowed - used, set(), "an allowlisted action nothing uses")
 
+    def test_e2e_page_scripts_do_not_eval(self) -> None:
+        # The CSP refuses eval in the page, and Playwright's wait_for_function
+        # evals a non-function expression there; a function string is fine.
+        bare_wait = re.compile(
+            r"""wait_for_function\(\s*[rf]?(\"\"\"|'''|"(?!")|'(?!'))(?!\s*(?:async\s*)?(?:\(|function\b|[A-Za-z_$][\w$]*\s*=>))"""
+        )
+        for path in sorted((ROOT / "tests" / "e2e").glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.name):
+                self.assertNotRegex(text, r"\beval\(|new Function\(")
+                self.assertEqual(bare_wait.findall(text), [])
+
     def test_the_action_listener_runs_before_ancestor_listeners(self) -> None:
         ui = UI.read_text(encoding="utf-8")
         self.assertIn("document.addEventListener('click', prksRunClickAction, true);", ui)

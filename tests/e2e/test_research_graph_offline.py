@@ -178,7 +178,7 @@ class ResearchGraphOfflineTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def toggle(self, page, people):
         panel = page.locator('[data-prks-role="graph-filters-panel"]')
@@ -854,7 +854,7 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         page.locator('.delete-work-btn').click()
         page.locator('#prks-modal-confirm:not(.hidden)', has_text='Delete file?').wait_for()
         page.locator('#prks-modal-confirm-ok').click()
-        page.wait_for_function('location.hash === "#/folders"')
+        page.wait_for_function('() => location.hash === "#/folders"')
         wait_for_async(page,
             """() => prksSync.store.listOperations().then(rows =>
                 rows.some(r => r.operation === 'DELETE_WORK'))""")
