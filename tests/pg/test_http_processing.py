@@ -200,15 +200,9 @@ class UploadTests(ProcessingHttpTestCase):
             raw = b""
             while chunk := sock.recv(65536):
                 raw += chunk
-        if self.transport == "uvicorn":
-            # Uvicorn treats the client's end of writing as a disconnect: the
-            # upload is abandoned and no answer is sent.
-            self.assertEqual(raw, b"")
-        else:
-            status_line, _, rest = raw.partition(b"\r\n")
-            self.assertIn(b" 400 ", status_line)
-            self.assertEqual(json.loads(rest.partition(b"\r\n\r\n")[2])["code"], "PROCESSING_UPLOAD_INCOMPLETE")
-            self.assertIn(b"connection: close", rest.lower())
+        # Uvicorn treats the client's end of writing as a disconnect: the
+        # upload is abandoned and no answer is sent.
+        self.assertEqual(raw, b"")
         self.assertEqual(self.ok(self.get("/api/processing-items"))["items"], [])
 
     def _stalled_upload(self, trickle: bool) -> tuple[bytes, float]:

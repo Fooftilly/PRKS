@@ -1,7 +1,7 @@
-"""The Uvicorn transport (#1329 Phase B): settings, and PRKSHandler served over ASGI.
+"""The Uvicorn HTTP server (#1329): settings, and PRKSHandler served over ASGI.
 
-These run without PostgreSQL. ``tests/pg/http_fixtures.py`` runs the whole
-HTTP suite over this transport when ``PRKS_TEST_HTTP_TRANSPORT=uvicorn``.
+These run without PostgreSQL; ``tests/pg/http_fixtures.py`` runs the
+PostgreSQL HTTP suites over the same server.
 """
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import http.client
 import logging
 import os
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -27,7 +26,6 @@ from backend import server as server_module  # noqa: E402
 from backend.web import asgi  # noqa: E402
 from backend.web.settings import (  # noqa: E402
     DEFAULT_THREADS,
-    ENV_SERVER,
     ENV_THREADS,
     HttpServerSettings,
     HttpSettingsError,
@@ -44,20 +42,15 @@ class _Collect(logging.Handler):
 
 
 class HttpSettingsTests(unittest.TestCase):
-    def test_defaults_select_the_uvicorn_transport(self):
-        self.assertEqual(HttpServerSettings.from_env({}), HttpServerSettings("uvicorn", DEFAULT_THREADS))
-        self.assertEqual(HttpServerSettings(), HttpServerSettings("uvicorn", DEFAULT_THREADS))
+    def test_defaults(self):
+        self.assertEqual(HttpServerSettings.from_env({}), HttpServerSettings(DEFAULT_THREADS))
+        self.assertEqual(HttpServerSettings(), HttpServerSettings(DEFAULT_THREADS))
 
-    def test_stdlib_stays_selectable_until_it_is_deleted(self):
-        self.assertEqual(HttpServerSettings.from_env({ENV_SERVER: "stdlib"}).transport, "stdlib")
+    def test_threads(self):
+        self.assertEqual(HttpServerSettings.from_env({ENV_THREADS: " 8 "}), HttpServerSettings(8))
 
-    def test_uvicorn_and_threads(self):
-        settings = HttpServerSettings.from_env({ENV_SERVER: " Uvicorn ", ENV_THREADS: "8"})
-        self.assertEqual(settings, HttpServerSettings("uvicorn", 8))
-
-    def test_invalid_values_refuse(self):
+    def test_invalid_threads_refuse(self):
         for env in (
-            {ENV_SERVER: "gunicorn"},
             {ENV_THREADS: "0"},
             {ENV_THREADS: "257"},
             {ENV_THREADS: "-1"},
@@ -67,30 +60,18 @@ class HttpSettingsTests(unittest.TestCase):
         ):
             with self.subTest(env=env), self.assertRaises(HttpSettingsError) as caught:
                 HttpServerSettings.from_env(env)
-            self.assertIn("PRKS_HTTP_", caught.exception.message)
+            self.assertIn(ENV_THREADS, caught.exception.message)
 
-    def test_stdlib_transport_does_not_import_uvicorn(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings(transport="stdlib"))
+    def test_make_server_serves_with_uvicorn(self):
+        httpd = server_module.make_server(("127.0.0.1", 0))
         httpd.server_close()
-        self.assertIsInstance(httpd, server_module.PRKSThreadingTCPServer)
-        # This module imports Uvicorn, so check the import in a fresh process.
-        probe = (
-            "import sys\n"
-            "from run_tests import apply_isolated_test_env\n"
-            f"apply_isolated_test_env({_PROJECT!r})\n"
-            "from backend import server\n"
-            "from backend.web.settings import HttpServerSettings\n"
-            "server.make_server(('127.0.0.1', 0), HttpServerSettings(transport='stdlib')).server_close()\n"
-            "sys.exit(1 if 'uvicorn' in sys.modules or 'backend.web.asgi' in sys.modules else 0)\n"
-        )
-        result = subprocess.run([sys.executable, "-c", probe], cwd=_PROJECT, timeout=60, check=False)
-        self.assertEqual(result.returncode, 0, "the stdlib transport imported Uvicorn")
+        self.assertIsInstance(httpd, asgi.UvicornServing)
 
 
 class UvicornTransportTests(unittest.TestCase):
     def setUp(self):
         self.httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn", ENV_THREADS: "4"})
+            ("127.0.0.1", 0), HttpServerSettings(4)
         )
         self.httpd.prks_bind_host = "127.0.0.1"
         self.httpd.prks_trusted_hosts = frozenset()
@@ -109,7 +90,7 @@ class UvicornTransportTests(unittest.TestCase):
     def _start_server(self, threads=4):
         """Another Uvicorn transport, configured like setUp's; returns its port."""
         httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn", ENV_THREADS: str(threads)})
+            ("127.0.0.1", 0), HttpServerSettings(threads)
         )
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()
@@ -280,7 +261,7 @@ class UvicornTransportTests(unittest.TestCase):
         self.addCleanup(root.setLevel, old_level)
         self.addCleanup(root.removeHandler, handler)
         httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn"})
+            ("127.0.0.1", 0), HttpServerSettings()
         )
         for name in ("prks_bind_host", "prks_trusted_hosts", "prks_auth", "prks_jobs", "prks_readiness"):
             setattr(httpd, name, getattr(self.httpd, name))
@@ -660,13 +641,13 @@ class UvicornTransportTests(unittest.TestCase):
 
 class ShutdownTests(unittest.TestCase):
     def test_shutdown_before_serving_returns(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn"}))
+        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
         httpd.shutdown()
         httpd.serve_forever()  # returns at once: a stop was already requested
         httpd.server_close()
 
     def test_shutdown_waits_for_serving_to_end_and_closes_the_port(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn"}))
+        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
         for name, value in (("prks_bind_host", "127.0.0.1"), ("prks_trusted_hosts", frozenset()),
                             ("prks_auth", None), ("prks_jobs", None), ("prks_readiness", None)):
             setattr(httpd, name, value)
@@ -674,13 +655,18 @@ class ShutdownTests(unittest.TestCase):
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         port = httpd.server_address[1]
+        served = False
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
+        while not served and time.monotonic() < deadline:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
             try:
-                socket.create_connection(("127.0.0.1", port), timeout=1).close()
-                break
+                conn.request("GET", "/healthz")
+                served = conn.getresponse().status == 200
             except OSError:
                 time.sleep(0.05)
+            finally:
+                conn.close()
+        self.assertTrue(served, "the server never answered before shutdown")
         httpd.shutdown()
         self.assertFalse(thread.is_alive() and (thread.join(5) or thread.is_alive()))
         httpd.server_close()
