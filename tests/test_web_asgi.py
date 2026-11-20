@@ -43,8 +43,12 @@ class _Collect(logging.Handler):
 
 
 class HttpSettingsTests(unittest.TestCase):
-    def test_defaults_keep_the_stdlib_transport(self):
-        self.assertEqual(HttpServerSettings.from_env({}), HttpServerSettings("stdlib", DEFAULT_THREADS))
+    def test_defaults_select_the_uvicorn_transport(self):
+        self.assertEqual(HttpServerSettings.from_env({}), HttpServerSettings("uvicorn", DEFAULT_THREADS))
+        self.assertEqual(HttpServerSettings(), HttpServerSettings("uvicorn", DEFAULT_THREADS))
+
+    def test_stdlib_stays_selectable_until_it_is_deleted(self):
+        self.assertEqual(HttpServerSettings.from_env({ENV_SERVER: "stdlib"}).transport, "stdlib")
 
     def test_uvicorn_and_threads(self):
         settings = HttpServerSettings.from_env({ENV_SERVER: " Uvicorn ", ENV_THREADS: "8"})
@@ -65,7 +69,7 @@ class HttpSettingsTests(unittest.TestCase):
             self.assertIn("PRKS_HTTP_", caught.exception.message)
 
     def test_stdlib_transport_does_not_import_uvicorn(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
+        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings(transport="stdlib"))
         httpd.server_close()
         self.assertIsInstance(httpd, server_module.PRKSThreadingTCPServer)
         # This module imports Uvicorn, so check the import in a fresh process.
@@ -75,7 +79,7 @@ class HttpSettingsTests(unittest.TestCase):
             f"apply_isolated_test_env({_PROJECT!r})\n"
             "from backend import server\n"
             "from backend.web.settings import HttpServerSettings\n"
-            "server.make_server(('127.0.0.1', 0), HttpServerSettings()).server_close()\n"
+            "server.make_server(('127.0.0.1', 0), HttpServerSettings(transport='stdlib')).server_close()\n"
             "sys.exit(1 if 'uvicorn' in sys.modules or 'backend.web.asgi' in sys.modules else 0)\n"
         )
         result = subprocess.run([sys.executable, "-c", probe], cwd=_PROJECT, timeout=60, check=False)
@@ -273,6 +277,56 @@ class UvicornTransportTests(unittest.TestCase):
             [r for r in records if "secret-term" in r.getMessage()],
             "a request target reached the logs",
         )
+
+    def test_saturated_threads_queue_requests_instead_of_refusing_them(self):
+        # PRKS_HTTP_THREADS bounds PRKS work; limit_concurrency stays unset,
+        # so a request over the bound waits for a thread rather than a 503.
+        release = threading.Event()
+        started = threading.Semaphore(0)
+        original = asgi._AsgiHandler.do_GET
+
+        def slow_or_normal(handler):
+            if handler.path != "/slow":
+                return original(handler)
+            started.release()
+            release.wait(10)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "4")
+            handler.end_headers()
+            handler.wfile.write(b"slow")
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal):
+            slow = [threading.Thread(target=self.request, args=("GET", "/slow"), daemon=True) for _ in range(4)]
+            for thread in slow:
+                thread.start()
+            for _ in slow:  # all four PRKS threads are busy
+                self.assertTrue(started.acquire(timeout=5))
+            result = {}
+            waiting = threading.Thread(
+                target=lambda: result.update(status=self.request("GET", "/healthz")[0]), daemon=True
+            )
+            waiting.start()
+            waiting.join(0.5)
+            self.assertTrue(waiting.is_alive(), "a fifth request ran while every thread was busy")
+            release.set()
+            waiting.join(5)
+            self.assertEqual(result.get("status"), 200)
+            for thread in slow:
+                thread.join(5)
+
+    def test_idle_keep_alive_connections_do_not_refuse_requests(self):
+        idle = []
+        self.addCleanup(lambda: [c.close() for c in idle])
+        for _ in range(40):  # ten times the thread limit
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            self.assertEqual(self.request("GET", "/healthz", conn=conn)[0], 200)
+            idle.append(conn)  # left open, idle, between requests
+        started = time.monotonic()
+        self.assertEqual(self.request("GET", "/healthz")[0], 200)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(self.request("GET", "/healthz", conn=idle[0])[0], 200)  # still reusable
 
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}

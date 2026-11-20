@@ -152,6 +152,8 @@ docker compose exec web python /app/prks_app.py admin bootstrap complete --root 
 | `PRKS_STORAGE` | If set, the data root: the root marker, managed PDFs and portraits, thumbnails and logs. |
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks (see [Testing mode](#testing-mode) above). |
 | `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
+| `PRKS_HTTP_SERVER` | HTTP server. Default `uvicorn`. `stdlib` selects the old standard-library server, which is kept only until it is removed (#1329). Any other value stops startup. |
+| `PRKS_HTTP_THREADS` | Requests that run PRKS work at the same time under Uvicorn, from 1 to 256. Default `16`. More requests wait for a free thread; slow or idle connections do not hold one. |
 | `PRKS_LOG_LEVEL` | Stderr log level. Default `INFO`. Changes volume, not what kinds of data may be logged. |
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |

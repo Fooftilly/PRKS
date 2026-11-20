@@ -14,12 +14,13 @@ from run_tests import apply_isolated_test_env  # noqa: E402
 
 apply_isolated_test_env(_PROJECT)
 
-from backend.server import PRKSHandler, PRKSThreadingTCPServer  # noqa: E402
+from backend import server as server_module  # noqa: E402
+from backend.server import PRKSHandler  # noqa: E402
 
 
 class HealthProbeTests(unittest.TestCase):
     def setUp(self):
-        self.httpd = PRKSThreadingTCPServer(("127.0.0.1", 0), PRKSHandler)
+        self.httpd = server_module.make_server(("127.0.0.1", 0))  # the default transport
         self.httpd.prks_bind_host = "127.0.0.1"
         self.httpd.prks_trusted_hosts = frozenset()
         self.httpd.prks_auth = object()  # no session; probe cannot depend on it
@@ -38,7 +39,7 @@ class HealthProbeTests(unittest.TestCase):
             response = conn.getresponse()
             status = response.status
             body = response.read()
-            fields = dict(response.getheaders())
+            fields = response.headers  # case-insensitive, as HTTP header names are
             return status, body, fields
         finally:
             conn.close()

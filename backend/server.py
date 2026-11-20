@@ -2360,9 +2360,10 @@ class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer
 def make_server(address: tuple[str, int], http: "HttpServerSettings | None" = None) -> Any:
     """Bind the HTTP server for ``http.transport`` (#1329); the caller sets its ``prks_*``.
 
-    ``stdlib`` is ``PRKSThreadingTCPServer``; ``uvicorn`` is
-    ``backend.web.asgi.UvicornServing``, imported only when selected. Both run
-    the same ``PRKSHandler`` dispatch.
+    ``uvicorn`` (the default) is ``backend.web.asgi.UvicornServing``;
+    ``stdlib`` is ``PRKSThreadingTCPServer``, kept until #1329 Phase B3 and the
+    only transport that does not import Uvicorn. Both run the same
+    ``PRKSHandler`` dispatch.
     """
     from backend.web.settings import TRANSPORT_UVICORN, HttpServerSettings
 
@@ -2380,6 +2381,9 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     host = normalize_listen_host(host)
     trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
     _validate_listen_port(port)
+    from backend.web.settings import HttpServerSettings
+
+    http = http or HttpServerSettings()
     # Setup for allowing reusing address
     socketserver.TCPServer.allow_reuse_address = True
     with make_server((host, port), http) as httpd:
@@ -2400,7 +2404,7 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
             "server_starting bind_scope=%s port=%s transport=%s",
             safe_bind_scope(host),
             port,
-            safe_log_label(http.transport if http is not None else "stdlib"),
+            safe_log_label(http.transport),
         )
         if jobs is not None:
             # Runs the embedded worker while serving and stops it gracefully
